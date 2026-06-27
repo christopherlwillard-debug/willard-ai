@@ -8,11 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video } from "lucide-react";
+import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video, HardDrive } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { useQueryClient } from "@tanstack/react-query";
 
 const COLORS = ["hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))", "hsl(var(--chart-4))", "hsl(var(--chart-5))"];
+const DISK_COLORS = ["hsl(var(--destructive))", "hsl(var(--muted))"];
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -45,9 +46,7 @@ export default function Dashboard() {
 
   const scanMutation = useStartScan({
     mutation: {
-      onSuccess: () => {
-        setScanPolling(true);
-      },
+      onSuccess: () => { setScanPolling(true); },
     },
   });
 
@@ -75,6 +74,16 @@ export default function Dashboard() {
     return <div className="text-red-500 font-mono">Failed to load dashboard data</div>;
   }
 
+  const hasDiskStats = (data as any).diskTotal != null && (data as any).diskTotal > 0;
+  const diskTotal: number = (data as any).diskTotal ?? 0;
+  const diskUsed: number = (data as any).diskUsed ?? 0;
+  const diskFree: number = (data as any).diskFree ?? 0;
+  const diskUsedPct = diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0;
+
+  const diskChartData = hasDiskStats
+    ? [{ name: "Used", value: diskUsed }, { name: "Free", value: diskFree }]
+    : [];
+
   return (
     <div className="space-y-8">
       {/* Header + Scan Now */}
@@ -92,7 +101,6 @@ export default function Dashboard() {
               <p className="text-xs text-muted-foreground font-mono">
                 {scanProgress.stage} — {scanProgress.filesScanned?.toLocaleString() ?? 0} files indexed
               </p>
-              {/* indeterminate progress bar */}
               <div className="h-1 w-64 bg-secondary rounded-full overflow-hidden">
                 <div className="h-full w-1/3 bg-primary rounded-full animate-[slide_1.5s_linear_infinite]" />
               </div>
@@ -116,7 +124,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Storage</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Indexed</CardTitle>
             <Database className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -124,6 +132,11 @@ export default function Dashboard() {
             <p className="text-xs text-muted-foreground mt-1">
               {data.totalFiles.toLocaleString()} files indexed
             </p>
+            {hasDiskStats && (
+              <p className="text-xs text-muted-foreground mt-0.5 font-mono">
+                of {formatBytes(diskTotal)} disk
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -157,27 +170,97 @@ export default function Dashboard() {
       </div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Disk Usage Ring */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-muted-foreground" />
+              Disk Usage
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {!hasDiskStats ? (
+              <div className="h-[220px] flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                <HardDrive className="w-8 h-8 opacity-30" />
+                <p className="font-mono text-xs text-center">Set NAS path in Settings<br />to show disk stats</p>
+              </div>
+            ) : (
+              <>
+                <div className="h-[180px] relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={diskChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={2}
+                        dataKey="value"
+                        startAngle={90}
+                        endAngle={-270}
+                      >
+                        {diskChartData.map((_e, i) => (
+                          <Cell key={i} fill={DISK_COLORS[i]} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(v: number) => formatBytes(v)}
+                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* Center label */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-2xl font-bold font-mono">{diskUsedPct}%</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">USED</span>
+                  </div>
+                </div>
+                <div className="space-y-2 mt-1">
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-destructive inline-block" /> Used
+                    </span>
+                    <span>{formatBytes(diskUsed)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-mono">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-muted inline-block" /> Free
+                    </span>
+                    <span className="text-green-500">{formatBytes(diskFree)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-mono border-t pt-2 mt-1">
+                    <span className="text-muted-foreground">Total</span>
+                    <span>{formatBytes(diskTotal)}</span>
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Storage Breakdown by type */}
         <Card>
           <CardHeader>
             <CardTitle>Storage Breakdown</CardTitle>
           </CardHeader>
           <CardContent>
             {data.typeBreakdown.length === 0 ? (
-              <div className="h-[260px] flex items-center justify-center text-muted-foreground font-mono text-sm">
+              <div className="h-[220px] flex items-center justify-center text-muted-foreground font-mono text-sm">
                 No data — run a scan to populate
               </div>
             ) : (
               <>
-                <div className="h-[220px]">
+                <div className="h-[180px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={data.typeBreakdown}
                         cx="50%"
                         cy="50%"
-                        innerRadius={55}
-                        outerRadius={80}
+                        innerRadius={50}
+                        outerRadius={72}
                         paddingAngle={4}
                         dataKey="sizeBytes"
                         nameKey="fileType"
@@ -193,7 +276,7 @@ export default function Dashboard() {
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                <div className="flex flex-wrap gap-3 mt-1 justify-center">
+                <div className="flex flex-wrap gap-2 mt-1 justify-center">
                   {data.typeBreakdown.map((entry, i) => (
                     <div key={entry.fileType} className="flex items-center gap-1.5 text-xs font-mono">
                       <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
@@ -207,6 +290,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
+        {/* Immich Integration */}
         <Card>
           <CardHeader>
             <CardTitle>Immich Integration</CardTitle>
@@ -240,7 +324,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Recent photos strip — 12 thumbnails, only when Immich connected */}
+      {/* Recent photos strip — only when Immich connected */}
       {data.immichConnected && (
         <Card>
           <CardHeader>

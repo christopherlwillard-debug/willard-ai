@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useSearchFiles, getSearchFilesQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
-import { Search as SearchIcon, File, Image as ImageIcon, Video, FileText, Archive } from "lucide-react";
+import { Search as SearchIcon, File, Image as ImageIcon, Video, FileText, Archive, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
 
 const FILE_TYPES = [
   { value: "all", label: "All Types" },
@@ -29,10 +31,55 @@ function fileTypeIcon(fileType: string | undefined, source: string | undefined) 
   }
 }
 
+function FileDetailSheet({ file, onClose }: { file: any; onClose: () => void }) {
+  return (
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-80">
+        <SheetHeader>
+          <SheetTitle className="font-mono text-sm break-all">{file.filename}</SheetTitle>
+        </SheetHeader>
+        <div className="mt-6 space-y-4">
+          <div className="flex items-center justify-center p-8 bg-secondary/30 rounded-lg">
+            <div className="scale-150">{fileTypeIcon(file.fileType, file.source)}</div>
+          </div>
+          <div className="space-y-3">
+            {[
+              { label: "Filename", value: file.filename },
+              { label: "Full Path", value: file.path ?? file.folder },
+              { label: "Folder", value: file.folder },
+              { label: "Type", value: file.fileType ?? "Unknown" },
+              { label: "Source", value: file.source },
+              { label: "Size", value: file.sizeBytes ? formatBytes(file.sizeBytes) : "Unknown" },
+              { label: "Modified", value: file.modifiedAt ? formatDate(file.modifiedAt) : "Unknown" },
+            ].map(({ label, value }) => (
+              <div key={label} className="space-y-0.5">
+                <p className="text-xs text-muted-foreground font-mono uppercase">{label}</p>
+                <p className="text-sm break-all">{value}</p>
+              </div>
+            ))}
+            {file.source && (
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground font-mono uppercase">Source Badge</p>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono uppercase ${
+                  file.source === "immich" ? "bg-purple-500/20 text-purple-400" : "bg-blue-500/20 text-blue-400"
+                }`}>{file.source}</span>
+              </div>
+            )}
+          </div>
+          <Button variant="outline" size="sm" className="w-full font-mono" onClick={onClose}>
+            <X className="w-3.5 h-3.5 mr-1.5" /> Close
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export default function Search() {
   const [q, setQ] = useState("");
   const [source, setSource] = useState<string>("all");
   const [fileType, setFileType] = useState<string>("all");
+  const [selectedFile, setSelectedFile] = useState<any | null>(null);
 
   const params = {
     q: q || undefined,
@@ -77,9 +124,7 @@ export default function Search() {
           </SelectTrigger>
           <SelectContent>
             {FILE_TYPES.map((t) => (
-              <SelectItem key={t.value} value={t.value}>
-                {t.label}
-              </SelectItem>
+              <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -104,6 +149,7 @@ export default function Search() {
               <span className="text-purple-400">immich: {sources.immich}</span>
             </>
           )}
+          <span className="ml-auto text-[10px] opacity-60">Click any row for details</span>
         </div>
       )}
 
@@ -141,7 +187,11 @@ export default function Search() {
               </TableRow>
             ) : (
               data.files.map((file) => (
-                <TableRow key={file.id}>
+                <TableRow
+                  key={file.id}
+                  className="cursor-pointer hover:bg-secondary/60"
+                  onClick={() => setSelectedFile(file)}
+                >
                   <TableCell>{fileTypeIcon(file.fileType, file.source)}</TableCell>
                   <TableCell className="font-medium font-mono text-sm">{file.filename}</TableCell>
                   <TableCell
@@ -156,13 +206,11 @@ export default function Search() {
                     </span>
                   </TableCell>
                   <TableCell className="text-center">
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono uppercase ${
-                        file.source === "immich"
-                          ? "bg-purple-500/20 text-purple-400"
-                          : "bg-blue-500/20 text-blue-400"
-                      }`}
-                    >
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono uppercase ${
+                      file.source === "immich"
+                        ? "bg-purple-500/20 text-purple-400"
+                        : "bg-blue-500/20 text-blue-400"
+                    }`}>
                       {file.source}
                     </span>
                   </TableCell>
@@ -178,6 +226,10 @@ export default function Search() {
           </TableBody>
         </Table>
       </div>
+
+      {selectedFile && (
+        <FileDetailSheet file={selectedFile} onClose={() => setSelectedFile(null)} />
+      )}
     </div>
   );
 }

@@ -1,9 +1,25 @@
 import { Router, type IRouter } from "express";
+import { execSync } from "child_process";
 import { db } from "@workspace/db";
 import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+function getDiskStats(dirPath: string): { total: number; used: number; free: number } | null {
+  try {
+    const output = execSync(`df -B1 "${dirPath}" 2>/dev/null | tail -1`, { timeout: 2000 }).toString().trim();
+    const parts = output.split(/\s+/);
+    if (parts.length < 4) return null;
+    const total = parseInt(parts[1]) || 0;
+    const used = parseInt(parts[2]) || 0;
+    const free = parseInt(parts[3]) || 0;
+    if (!total) return null;
+    return { total, used, free };
+  } catch {
+    return null;
+  }
+}
 
 async function getImmichStats(baseUrl: string, apiKey: string) {
   if (!baseUrl || !apiKey) return { photoCount: 0, videoCount: 0, connected: false };
@@ -56,6 +72,9 @@ router.get("/dashboard", async (_req, res) => {
     const settings = settingsRows[0];
     const immich = await getImmichStats(settings?.immichBaseUrl ?? "", settings?.immichApiKey ?? "");
 
+    const nasPath = settings?.nasBasePath || "/";
+    const diskStats = getDiskStats(nasPath);
+
     res.json({
       totalFiles: totalRow.totalFiles,
       totalSizeBytes: Number(totalRow.totalSizeBytes) || 0,
@@ -68,6 +87,9 @@ router.get("/dashboard", async (_req, res) => {
       immichPhotoCount: immich.photoCount,
       immichVideoCount: immich.videoCount,
       immichConnected: immich.connected,
+      diskTotal: diskStats?.total ?? null,
+      diskUsed: diskStats?.used ?? null,
+      diskFree: diskStats?.free ?? null,
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to get dashboard data" });

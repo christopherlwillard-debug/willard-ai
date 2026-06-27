@@ -32,11 +32,12 @@ function getFileType(ext: string): string {
 
 function getArchiveCategory(filename: string): string {
   const f = filename.toLowerCase();
-  if (f.includes("photo") || f.includes("pic") || f.includes("image")) return "photos";
-  if (f.includes("video") || f.includes("movie") || f.includes("film")) return "videos";
-  if (f.includes("backup") || f.includes("bak")) return "backups";
-  if (f.includes("doc") || f.includes("report") || f.includes("work")) return "documents";
-  return "general";
+  if (f.includes("photo") || f.includes("pic") || f.includes("image") || f.includes("img")) return "Photo Archive";
+  if (f.includes("video") || f.includes("movie") || f.includes("film") || f.includes("media")) return "Video Archive";
+  if (f.includes("backup") || f.includes("bak")) return "Document Backup";
+  if (f.includes("doc") || f.includes("report") || f.includes("work")) return "Document Backup";
+  if (f.includes("software") || f.includes("install") || f.includes("setup") || f.includes(".exe") || f.includes("app")) return "Software";
+  return "General";
 }
 
 function computeFileHash(filePath: string, fileSize: number): Promise<string | null> {

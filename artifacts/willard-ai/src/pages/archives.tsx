@@ -166,11 +166,15 @@ export default function Archives() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Categories</SelectItem>
-            <SelectItem value="photos">Photos</SelectItem>
-            <SelectItem value="videos">Videos</SelectItem>
-            <SelectItem value="backups">Backups</SelectItem>
-            <SelectItem value="documents">Documents</SelectItem>
-            <SelectItem value="general">General</SelectItem>
+            <SelectItem value="Photo Archive">Photo Archive</SelectItem>
+            <SelectItem value="Video Archive">Video Archive</SelectItem>
+            <SelectItem value="Document Backup">Document Backup</SelectItem>
+            <SelectItem value="Software">Software</SelectItem>
+            <SelectItem value="Nested Archives">Nested Archives</SelectItem>
+            <SelectItem value="Password Protected">Password Protected</SelectItem>
+            <SelectItem value="Mixed">Mixed</SelectItem>
+            <SelectItem value="Unknown">Unknown</SelectItem>
+            <SelectItem value="General">General</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex items-center gap-2">
