@@ -12,6 +12,7 @@ import {
   LogOut,
   Loader2,
   Boxes,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout } from "@workspace/api-client-react";
@@ -25,6 +26,7 @@ const navigation = [
   { name: "Archives", href: "/archives", icon: Archive },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "Operations", href: "/organize", icon: Boxes },
+  { name: "Optimize", href: "/optimize", icon: Zap },
   { name: "Cleanup", href: "/cleanup", icon: Trash2 },
   { name: "Search", href: "/search", icon: Search },
   { name: "AI Chat", href: "/chat", icon: MessageSquare },

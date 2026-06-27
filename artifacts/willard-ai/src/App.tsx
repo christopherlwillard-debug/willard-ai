@@ -13,6 +13,7 @@ import Explorer from "@/pages/explorer";
 import Archives from "@/pages/archives";
 import Documents from "@/pages/documents";
 import Organize from "@/pages/organize";
+import Optimize from "@/pages/optimize";
 import Cleanup from "@/pages/cleanup";
 import Search from "@/pages/search";
 import Chat from "@/pages/chat";
@@ -42,6 +43,7 @@ function ProtectedRoutes() {
         <Route path="/archives" component={Archives} />
         <Route path="/documents" component={Documents} />
         <Route path="/organize" component={Organize} />
+        <Route path="/optimize" component={Optimize} />
         <Route path="/cleanup" component={Cleanup} />
         <Route path="/search" component={Search} />
         <Route path="/chat" component={Chat} />

@@ -13,6 +13,7 @@ import cleanupRouter from "./cleanup";
 import immichRouter from "./immich";
 import openaiRouter from "./openai/index";
 import organizeRouter from "./organize";
+import optimizeRouter from "./optimize";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(cleanupRouter);
 router.use(immichRouter);
 router.use(openaiRouter);
 router.use(organizeRouter);
+router.use(optimizeRouter);
 
 export default router;
