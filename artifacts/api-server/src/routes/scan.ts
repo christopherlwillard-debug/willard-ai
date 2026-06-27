@@ -248,10 +248,12 @@ async function scanDirectory(dirPath: string, jobId: number) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (path.resolve(fullPath) === willardAiDir) continue;
+        // Guard against symlinked directories pointing outside NAS root
+        try { assertWithinRoot(fullPath, dirPath); } catch { continue; }
         await walk(fullPath);
       } else if (entry.isFile()) {
-        // Guard against symlink traversal: skip files that resolve outside the NAS root
-        try { assertWithinRoot(path.resolve(fullPath), path.resolve(dirPath)); } catch { continue; }
+        // Guard against symlinked files pointing outside NAS root
+        try { assertWithinRoot(fullPath, dirPath); } catch { continue; }
         let stat: fs.Stats;
         try {
           stat = fs.statSync(fullPath);
@@ -360,6 +362,9 @@ async function peekAllArchives(jobId: number) {
 
 async function runScan(jobId: number, nasPath: string) {
   const startTime = Date.now();
+  // Reserve a per-job temp dir on the NAS (or /tmp fallback). Current scan flow
+  // is in-memory only; this dir is used by future extraction jobs that will stage
+  // files here. Always cleaned up in the finally block.
   const tempDir = getTempDir(nasPath, String(jobId));
   let filesScanned = 0;
   let archivesFound = 0;

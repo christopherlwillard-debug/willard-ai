@@ -62,6 +62,20 @@ router.get("/explorer", async (req, res) => {
       return;
     }
 
+    // Secondary real-path check: targetPath now exists, so realpathSync can resolve
+    // any symlinks and confirm the canonical path is still within NAS root.
+    try {
+      const canonicalRoot = fs.realpathSync(nasPath);
+      const canonicalTarget = fs.realpathSync(targetPath);
+      if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(canonicalRoot + path.sep)) {
+        res.status(403).json({ error: "Forbidden: path resolves outside NAS root" });
+        return;
+      }
+    } catch {
+      res.status(403).json({ error: "Forbidden: unable to verify path safety" });
+      return;
+    }
+
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(targetPath, { withFileTypes: true });

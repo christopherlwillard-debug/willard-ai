@@ -20,13 +20,16 @@ export function getWillardAIDir(nasPath: string): string {
   return path.join(nasPath, "WillardAI");
 }
 
-export function assertWithinRoot(resolvedPath: string, root: string): void {
-  const normalizedRoot = path.resolve(root);
-  const normalizedResolved = path.resolve(resolvedPath);
-  if (
-    normalizedResolved !== normalizedRoot &&
-    !normalizedResolved.startsWith(normalizedRoot + path.sep)
-  ) {
+export function assertWithinRoot(targetPath: string, root: string): void {
+  // Use realpathSync to resolve symlinks before comparing — prevents symlink escape attacks.
+  // Falls back to lexical resolution if path does not exist yet.
+  let canonicalRoot: string;
+  try { canonicalRoot = fs.realpathSync(root); } catch { canonicalRoot = path.resolve(root); }
+
+  let canonicalTarget: string;
+  try { canonicalTarget = fs.realpathSync(targetPath); } catch { canonicalTarget = path.resolve(targetPath); }
+
+  if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(canonicalRoot + path.sep)) {
     throw new Error("Path traversal rejected: path is outside the allowed root");
   }
 }
@@ -63,11 +66,17 @@ export function bootstrapWillardAIDir(nasPath: string): NasDirStatusResult {
   const willardAiPath = getWillardAIDir(nasPath);
   // Root dir creation is critical — let errors propagate so callers can surface them
   fs.mkdirSync(willardAiPath, { recursive: true });
-  // Subdir creation is best-effort after root exists
+  // All 9 subdirs are required — collect failures and throw a structured error
+  const failures: string[] = [];
   for (const subdir of WILLARD_SUBDIRS) {
     try {
       fs.mkdirSync(path.join(willardAiPath, subdir), { recursive: true });
-    } catch { /* non-fatal — status will reflect missing dirs */ }
+    } catch (err) {
+      failures.push(`${subdir} (${err instanceof Error ? err.message : "unknown"})`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Could not create required subdirectories: ${failures.join(", ")}`);
   }
   return getNasDirStatus(nasPath);
 }
