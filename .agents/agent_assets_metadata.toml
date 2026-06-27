@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "sgjURByiru3c287oI90cq"
+uri = "file://artifacts/willard-mobile/assets/images/icon.png"
+type = "image"
+title = "willard-ai-app-icon"
