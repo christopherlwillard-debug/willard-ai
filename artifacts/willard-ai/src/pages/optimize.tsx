@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -20,8 +21,11 @@ import {
 import {
   Zap, Shield, CheckCircle2, SkipForward, ScanLine,
   Sparkles, TrendingDown, AlertTriangle, ChevronDown, ChevronRight,
-  Download, RotateCcw, ArrowRight, FileBox,
+  Download, RotateCcw, ArrowRight, FileBox, Play, X, CheckCheck,
+  FolderOpen,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -56,6 +60,37 @@ interface ScanResult {
   totalBytes:        number;
   totalSavingsBytes: number;
   groups:            FormatGroup[];
+}
+
+type ConversionFileStatus = "success" | "failed" | "skipped";
+
+interface ConversionFileResult {
+  filePath:       string;
+  destPath?:      string;
+  status:         ConversionFileStatus;
+  originalBytes?: number;
+  convertedBytes?: number;
+  savedBytes?:    number;
+  error?:         string;
+}
+
+interface ConversionProgress {
+  stage:       string;
+  message:     string;
+  progress:    number;
+  processed?:  number;
+  total?:      number;
+  currentFile?: string;
+}
+
+interface ConversionSummary {
+  totalFiles:      number;
+  succeeded:       number;
+  failed:          number;
+  skipped:         number;
+  totalSavedBytes: number;
+  backupDir:       string;
+  results:         ConversionFileResult[];
 }
 
 // ── Helper: status badges ─────────────────────────────────────────────────────
@@ -152,15 +187,330 @@ function SizePreview({ group }: { group: FormatGroup }) {
   );
 }
 
-// ── Confirm Selections dialog ─────────────────────────────────────────────────
+// ── Run Conversions dialog ────────────────────────────────────────────────────
 
-function ConfirmDialog({
-  open, onClose, groups, approvedExts,
+function RunConversionsDialog({
+  open,
+  onClose,
+  groups,
+  approvedExts,
 }: {
   open: boolean;
   onClose: () => void;
   groups: FormatGroup[];
   approvedExts: Set<string>;
+}) {
+  const { toast } = useToast();
+  const [backupDir, setBackupDir] = useState("");
+  const [phase, setPhase] = useState<"config" | "running" | "done">("config");
+  const [progress, setProgress] = useState<ConversionProgress | null>(null);
+  const [fileResults, setFileResults] = useState<ConversionFileResult[]>([]);
+  const [summary, setSummary]         = useState<ConversionSummary | null>(null);
+  const [runError, setRunError]       = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+
+  const approved = groups.filter(g => approvedExts.has(g.extension));
+  const totalSavings = approved.reduce((s, g) => s + g.estimatedSavingsBytes, 0);
+
+  function handleClose() {
+    if (phase === "running") return; // prevent closing while running
+    esRef.current?.close();
+    esRef.current = null;
+    setPhase("config");
+    setProgress(null);
+    setFileResults([]);
+    setSummary(null);
+    setRunError(null);
+    onClose();
+  }
+
+  async function startConversion() {
+    setRunError(null);
+    try {
+      const resp = await fetch("/api/optimize/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approvedExts: approved.map(g => g.extension),
+          backupDir: backupDir.trim() || undefined,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        setRunError((body as any).error ?? "Failed to start conversion");
+        return;
+      }
+      const job = await resp.json();
+      setPhase("running");
+      setFileResults([]);
+
+      const es = new EventSource(`/api/optimize/jobs/${job.id}/execute`);
+      esRef.current = es;
+
+      es.addEventListener("status", (e) => {
+        const data = JSON.parse(e.data) as ConversionProgress;
+        setProgress(data);
+      });
+
+      es.addEventListener("file_done", (e) => {
+        const data = JSON.parse(e.data) as ConversionFileResult & { processed: number; total: number };
+        setFileResults(prev => [data, ...prev].slice(0, 200));
+        setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
+      });
+
+      es.addEventListener("summary", (e) => {
+        const data = JSON.parse(e.data) as ConversionSummary;
+        setSummary(data);
+        setPhase("done");
+        es.close();
+        esRef.current = null;
+      });
+
+      es.addEventListener("error", (e) => {
+        const data = (e as MessageEvent).data ? JSON.parse((e as MessageEvent).data) : null;
+        const msg = data?.message ?? "Connection error";
+        setRunError(msg);
+        setPhase("done");
+        es.close();
+        esRef.current = null;
+        toast({ title: "Conversion error", description: msg, variant: "destructive" });
+      });
+    } catch (err: any) {
+      setRunError(err.message ?? "Failed to start conversion");
+    }
+  }
+
+  useEffect(() => {
+    return () => { esRef.current?.close(); };
+  }, []);
+
+  const isRunning = phase === "running";
+  const isDone    = phase === "done";
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && handleClose()}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-mono">RUN_CONVERSIONS</DialogTitle>
+          <DialogDescription className="font-mono text-xs">
+            {phase === "config"
+              ? "Originals are backed up before any conversion. Review settings before running."
+              : phase === "running"
+              ? "Conversion in progress — do not close this window."
+              : "Conversion complete. Review the results below."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* ── Config phase ── */}
+        {phase === "config" && (
+          <div className="space-y-4">
+            {/* Format summary */}
+            <div className="space-y-2">
+              {approved.map(g => (
+                <div key={g.extension} className="flex items-center justify-between border border-border rounded px-3 py-2 text-sm font-mono">
+                  <div className="flex items-center gap-2">
+                    <CategoryIcon cat={g.category} />
+                    <span className="font-bold">.{g.extension.toUpperCase()}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="text-primary">{g.targetFormat}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{g.fileCount.toLocaleString()} files</span>
+                    <span className="text-emerald-400">~{formatBytes(g.estimatedSavingsBytes)} savings</span>
+                  </div>
+                </div>
+              ))}
+              <div className="text-xs font-mono text-muted-foreground text-right pt-1">
+                {approved.length} format{approved.length !== 1 ? "s" : ""} · total estimate ~{formatBytes(totalSavings)} saved
+              </div>
+            </div>
+
+            {/* Backup dir */}
+            <div className="space-y-1.5">
+              <Label className="font-mono text-xs">Backup folder (originals saved here before conversion)</Label>
+              <div className="flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0" />
+                <Input
+                  className="font-mono text-xs h-8"
+                  placeholder="Default: NAS/WillardAI/ConversionBackups/<timestamp>"
+                  value={backupDir}
+                  onChange={e => setBackupDir(e.target.value)}
+                />
+              </div>
+              <p className="text-[10px] font-mono text-muted-foreground">
+                Leave blank to use the default backup path inside your NAS.
+              </p>
+            </div>
+
+            {/* Safety notice */}
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <p className="text-xs font-mono text-amber-400">
+                ⚠ Every original file is copied to the backup folder before conversion.
+                If ffmpeg fails for a file, the original is restored automatically.
+                Conversion of large video files may take several minutes per file.
+              </p>
+            </div>
+
+            {runError && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2">
+                <p className="text-xs font-mono text-red-400">{runError}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Running phase ── */}
+        {(isRunning || (isDone && !summary?.results.length)) && (
+          <div className="space-y-4">
+            {progress && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs font-mono text-muted-foreground">
+                  <span>{progress.message}</span>
+                  {progress.processed !== undefined && progress.total !== undefined && (
+                    <span>{progress.processed}/{progress.total}</span>
+                  )}
+                </div>
+                <Progress value={progress.progress} className="h-2" />
+                {progress.currentFile && (
+                  <p className="text-[10px] font-mono text-muted-foreground truncate" title={progress.currentFile}>
+                    {progress.currentFile.split("/").pop()}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Live file results */}
+            {fileResults.length > 0 && (
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {fileResults.map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs font-mono py-0.5">
+                    {r.status === "success" ? (
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                    ) : r.status === "failed" ? (
+                      <X className="w-3 h-3 text-red-400 shrink-0" />
+                    ) : (
+                      <SkipForward className="w-3 h-3 text-muted-foreground shrink-0" />
+                    )}
+                    <span className="truncate text-muted-foreground flex-1" title={r.filePath}>
+                      {r.filePath.split("/").pop()}
+                    </span>
+                    {r.status === "success" && r.savedBytes !== undefined && r.savedBytes > 0 && (
+                      <span className="text-emerald-400 shrink-0">-{formatBytes(r.savedBytes)}</span>
+                    )}
+                    {r.status === "failed" && r.error && (
+                      <span className="text-red-400 shrink-0 max-w-[200px] truncate" title={r.error}>{r.error}</span>
+                    )}
+                    {r.status === "skipped" && (
+                      <span className="text-muted-foreground shrink-0 text-[10px]">skipped</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {runError && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2">
+                <p className="text-xs font-mono text-red-400">{runError}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Done / summary phase ── */}
+        {isDone && summary && (
+          <div className="space-y-4">
+            {/* Stats */}
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: "Converted",  value: summary.succeeded, cls: "text-emerald-400" },
+                { label: "Failed",     value: summary.failed,    cls: "text-red-400" },
+                { label: "Skipped",    value: summary.skipped,   cls: "text-muted-foreground" },
+                { label: "Space Saved", value: formatBytes(summary.totalSavedBytes), cls: "text-emerald-400" },
+              ].map(({ label, value, cls }) => (
+                <div key={label} className="border border-border rounded p-2 text-center">
+                  <p className={`text-lg font-bold font-mono ${cls}`}>{value}</p>
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Backup dir note */}
+            <div className="rounded-md border border-border bg-secondary/30 px-3 py-2">
+              <p className="text-xs font-mono text-muted-foreground">
+                <span className="text-foreground">Originals backed up to:</span> {summary.backupDir}
+              </p>
+            </div>
+
+            {/* File results */}
+            {summary.results.length > 0 && (
+              <div className="space-y-1 max-h-56 overflow-y-auto border border-border rounded p-2">
+                {summary.results.map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs font-mono py-0.5">
+                    {r.status === "success" ? (
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                    ) : r.status === "failed" ? (
+                      <X className="w-3 h-3 text-red-400 shrink-0" />
+                    ) : (
+                      <SkipForward className="w-3 h-3 text-muted-foreground shrink-0" />
+                    )}
+                    <span className="truncate text-muted-foreground flex-1" title={r.filePath}>
+                      {r.filePath.split("/").pop()}
+                    </span>
+                    {r.status === "success" && r.savedBytes !== undefined && r.savedBytes > 0 && (
+                      <span className="text-emerald-400 shrink-0">-{formatBytes(r.savedBytes)}</span>
+                    )}
+                    {r.status === "failed" && r.error && (
+                      <span className="text-red-400 shrink-0 max-w-[200px] truncate" title={r.error}>{r.error}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter className="gap-2 flex-wrap">
+          {phase === "config" && (
+            <>
+              <Button variant="outline" size="sm" className="font-mono" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="font-mono gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                onClick={startConversion}
+                disabled={approved.length === 0}
+              >
+                <Play className="w-4 h-4" /> Run {approved.length} Conversion{approved.length !== 1 ? "s" : ""}
+              </Button>
+            </>
+          )}
+          {phase === "running" && (
+            <Button variant="outline" size="sm" className="font-mono" disabled>
+              Running…
+            </Button>
+          )}
+          {isDone && (
+            <Button size="sm" className="font-mono" onClick={handleClose}>
+              <CheckCheck className="w-4 h-4 mr-1.5" /> Done
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Confirm Selections dialog ─────────────────────────────────────────────────
+
+function ConfirmDialog({
+  open, onClose, groups, approvedExts, onRunConversions,
+}: {
+  open: boolean;
+  onClose: () => void;
+  groups: FormatGroup[];
+  approvedExts: Set<string>;
+  onRunConversions: () => void;
 }) {
   const approved = groups.filter(g => approvedExts.has(g.extension));
   const totalSavings = approved.reduce((s, g) => s + g.estimatedSavingsBytes, 0);
@@ -198,8 +548,7 @@ function ConfirmDialog({
         <DialogHeader>
           <DialogTitle className="font-mono">CONFIRM_SELECTIONS</DialogTitle>
           <DialogDescription className="font-mono text-xs">
-            Review the approved conversions below. No files will be modified until a conversion pipeline is available.
-            Export the plan to preserve your selections.
+            Review your approved conversions. Export the plan as JSON, or run the conversions now.
           </DialogDescription>
         </DialogHeader>
 
@@ -236,20 +585,22 @@ function ConfirmDialog({
           </div>
         )}
 
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-          <p className="text-xs font-mono text-amber-400">
-            ⚠ Conversion execution is not yet available. This plan documents your selections for the upcoming conversion pipeline.
-            Original files will be preserved before any conversion runs.
-          </p>
-        </div>
-
         <DialogFooter className="gap-2 flex-wrap">
           <Button variant="outline" size="sm" className="font-mono gap-1.5" onClick={onClose}>
             Close
           </Button>
           {approved.length > 0 && (
-            <Button size="sm" className="font-mono gap-1.5" onClick={exportPlan}>
+            <Button size="sm" variant="outline" className="font-mono gap-1.5" onClick={exportPlan}>
               <Download className="w-4 h-4" /> Export Plan (.json)
+            </Button>
+          )}
+          {approved.length > 0 && (
+            <Button
+              size="sm"
+              className="font-mono gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => { onClose(); onRunConversions(); }}
+            >
+              <Play className="w-4 h-4" /> Run Conversions
             </Button>
           )}
         </DialogFooter>
@@ -269,6 +620,7 @@ export default function Optimize() {
   const [aiLoading,    setAiLoading]    = useState(false);
   const [expandedExt,  setExpandedExt]  = useState<string | null>(null);
   const [confirmOpen,  setConfirmOpen]  = useState(false);
+  const [runOpen,      setRunOpen]      = useState(false);
 
   // ── Scan ──────────────────────────────────────────────────────────────────
   const scanMutation = useMutation({
@@ -395,7 +747,7 @@ export default function Optimize() {
         <div>
           <h1 className="text-3xl font-bold font-mono tracking-tight">OPTIMIZE_CENTER</h1>
           <p className="text-sm text-muted-foreground font-mono mt-1">
-            Smart media conversion recommendations — no files are modified without your confirmation
+            Smart media conversion recommendations — originals are backed up before any changes
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -405,15 +757,25 @@ export default function Optimize() {
             </Button>
           )}
           {approvedExts.size > 0 && (
-            <Button
-              variant="default"
-              size="sm"
-              className="font-mono gap-2 bg-emerald-600 hover:bg-emerald-700"
-              onClick={() => setConfirmOpen(true)}
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Confirm Selections ({approvedExts.size})
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="font-mono gap-2"
+                onClick={() => setConfirmOpen(true)}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Review ({approvedExts.size})
+              </Button>
+              <Button
+                size="sm"
+                className="font-mono gap-2 bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => setRunOpen(true)}
+              >
+                <Play className="w-4 h-4" />
+                Run Conversions ({approvedExts.size})
+              </Button>
+            </>
           )}
           <Button
             onClick={() => scanMutation.mutate()}
@@ -515,15 +877,24 @@ export default function Optimize() {
 
           {/* Batch controls */}
           {convertibleGroups.length > 0 && (
-            <div className="flex gap-2 items-center">
+            <div className="flex gap-2 items-center flex-wrap">
               <span className="text-xs font-mono text-muted-foreground">Batch:</span>
               <Button size="sm" variant="outline" className="font-mono text-xs h-7 gap-1" onClick={approveAll}>
                 <CheckCircle2 className="w-3 h-3" /> Approve All Convertible
               </Button>
               {approvedExts.size > 0 && (
-                <Button size="sm" variant="default" className="font-mono text-xs h-7 gap-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => setConfirmOpen(true)}>
-                  <CheckCircle2 className="w-3 h-3" /> Confirm Selections ({approvedExts.size})
-                </Button>
+                <>
+                  <Button size="sm" variant="outline" className="font-mono text-xs h-7 gap-1" onClick={() => setConfirmOpen(true)}>
+                    <CheckCircle2 className="w-3 h-3" /> Review ({approvedExts.size})
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="font-mono text-xs h-7 gap-1 bg-emerald-600 hover:bg-emerald-700"
+                    onClick={() => setRunOpen(true)}
+                  >
+                    <Play className="w-3 h-3" /> Run Conversions
+                  </Button>
+                </>
               )}
               <Button size="sm" variant="ghost" className="font-mono text-xs h-7 gap-1" onClick={clearSelections}>
                 <RotateCcw className="w-3 h-3" /> Clear
@@ -687,6 +1058,15 @@ export default function Optimize() {
       <ConfirmDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
+        groups={scanResult?.groups ?? []}
+        approvedExts={approvedExts}
+        onRunConversions={() => setRunOpen(true)}
+      />
+
+      {/* Run Conversions dialog */}
+      <RunConversionsDialog
+        open={runOpen}
+        onClose={() => setRunOpen(false)}
         groups={scanResult?.groups ?? []}
         approvedExts={approvedExts}
       />

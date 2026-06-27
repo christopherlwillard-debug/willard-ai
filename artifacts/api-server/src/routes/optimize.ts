@@ -1,8 +1,10 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { appSettingsTable } from "@workspace/db";
+import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
+import { spawnSync } from "child_process";
+import { desc, eq } from "drizzle-orm";
 import { assertWithinRoot } from "../lib/nas-storage";
 import { openai } from "@workspace/integrations-openai-ai-server";
 
@@ -19,6 +21,7 @@ interface FormatRule {
   category:              MediaCategory;
   reason:                string;
   targetFormat?:         string;
+  targetExt?:            string; // actual file extension for output
   qualityLoss?:          QualityLoss;
   estimatedSavingsRatio?: number; // 0-1 fraction of space potentially saved
 }
@@ -64,21 +67,24 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   // ── Image conversion candidates ────────────────────────────────────────────
   bmp: {
     status: "convert", category: "image",
-    targetFormat: "WebP or PNG",
+    targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "none",
     estimatedSavingsRatio: 0.72,
     reason: "Uncompressed bitmap — converting to PNG (lossless) or WebP saves 65–80% with zero quality loss",
   },
   tiff: {
     status: "convert", category: "image",
-    targetFormat: "WebP or PNG",
+    targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "none",
     estimatedSavingsRatio: 0.55,
     reason: "TIFF files are typically uncompressed — converting to WebP or PNG saves 40–60% with no visible quality loss",
   },
   tif: {
     status: "convert", category: "image",
-    targetFormat: "WebP or PNG",
+    targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "none",
     estimatedSavingsRatio: 0.55,
     reason: "TIFF files are typically uncompressed — converting to WebP or PNG saves 40–60% with no visible quality loss",
@@ -86,6 +92,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   png: {
     status: "convert", category: "image",
     targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.30,
     reason: "WebP provides 25–35% better compression than PNG with near-identical visual quality",
@@ -93,6 +100,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   jpg: {
     status: "convert", category: "image",
     targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.27,
     reason: "WebP provides 25–30% better compression than JPEG at equivalent visual quality",
@@ -100,6 +108,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   jpeg: {
     status: "convert", category: "image",
     targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.27,
     reason: "WebP provides 25–30% better compression than JPEG at equivalent visual quality",
@@ -107,6 +116,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   gif: {
     status: "convert", category: "image",
     targetFormat: "WebP",
+    targetExt: "webp",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.42,
     reason: "WebP supports animation and delivers 40%+ space savings over GIF with better color depth",
@@ -116,6 +126,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   avi: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.62,
     reason: "AVI is a legacy container — H.265 MP4 saves 55–70% with near-identical quality",
@@ -123,6 +134,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   wmv: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.65,
     reason: "WMV is a legacy Windows format — H.265 MP4 saves 60–70% with equivalent quality",
@@ -130,6 +142,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   flv: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.60,
     reason: "Flash Video is obsolete — H.265 MP4 saves 55–65% with equivalent quality",
@@ -137,6 +150,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   mpeg: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.72,
     reason: "MPEG-1/2 uses outdated codecs — H.265 saves 65–75% space at similar visual quality",
@@ -144,6 +158,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   mpg: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.72,
     reason: "MPEG is an older format — H.265 MP4 saves 65–75% space at similar visual quality",
@@ -151,6 +166,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   m2ts: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.55,
     reason: "Blu-ray container — H.265 MP4 saves 50–60% with near-identical quality",
@@ -158,6 +174,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   ts: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.52,
     reason: "Transport stream format — H.265 MP4 saves 45–55% with near-identical quality",
@@ -169,6 +186,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   mkv: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.40,
     reason: "MKV with H.264 content — re-encoding to H.265 saves 35–45% space",
@@ -176,6 +194,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   rmvb: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.55,
     reason: "RealMedia is a legacy format — H.265 MP4 saves 50–60% with equivalent quality",
@@ -183,6 +202,7 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   asf: {
     status: "convert", category: "video",
     targetFormat: "MP4 (H.265/HEVC)",
+    targetExt: "mp4",
     qualityLoss: "minimal",
     estimatedSavingsRatio: 0.60,
     reason: "ASF/WMV container — H.265 MP4 saves 55–65% with equivalent quality",
@@ -249,6 +269,67 @@ function walkForOptimize(
       counter.total++;
     }
   }
+}
+
+/** Walk NAS collecting files whose extension matches approvedExts (skips WillardAI dir and backup dir). */
+function walkForConversion(
+  dir: string,
+  approvedExtSet: Set<string>,
+  results: Array<{ fullPath: string; ext: string }>,
+  skipDirs: Set<string>,
+): void {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".") && !skipDirs.has(fullPath)) {
+        walkForConversion(fullPath, approvedExtSet, results, skipDirs);
+      }
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).slice(1).toLowerCase();
+      if (approvedExtSet.has(ext)) {
+        results.push({ fullPath, ext });
+      }
+    }
+  }
+}
+
+// ── Conversion helpers ─────────────────────────────────────────────────────────
+
+/** Convert an image to webp using ffmpeg. Returns null on success, error string on failure. */
+function convertImage(srcPath: string, destPath: string): string | null {
+  const result = spawnSync("ffmpeg", [
+    "-y",
+    "-i", srcPath,
+    "-quality", "85",
+    destPath,
+  ], { encoding: "utf8", stdio: "pipe", timeout: 120_000 });
+  if (result.status !== 0) {
+    const stderr = (result.stderr ?? "").slice(-500);
+    return `ffmpeg exited ${result.status}: ${stderr}`;
+  }
+  return null;
+}
+
+/** Convert a video to H.265 MP4 using ffmpeg. Returns null on success, error string on failure. */
+function convertVideo(srcPath: string, destPath: string): string | null {
+  const result = spawnSync("ffmpeg", [
+    "-y",
+    "-i", srcPath,
+    "-c:v", "libx265",
+    "-crf", "28",
+    "-preset", "medium",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-movflags", "+faststart",
+    destPath,
+  ], { encoding: "utf8", stdio: "pipe", timeout: 3_600_000 }); // 1h max per video
+  if (result.status !== 0) {
+    const stderr = (result.stderr ?? "").slice(-500);
+    return `ffmpeg exited ${result.status}: ${stderr}`;
+  }
+  return null;
 }
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -369,6 +450,297 @@ Write only the summary paragraph. No headers, no bullet points, no markdown.`;
     res.json({ summary });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "AI summary failed" });
+  }
+});
+
+// ── Conversion job endpoints ───────────────────────────────────────────────────
+
+/** POST /optimize/run — create a new conversion job. */
+router.post("/optimize/run", async (req, res) => {
+  try {
+    const { approvedExts, backupDir } = req.body as {
+      approvedExts: string[];
+      backupDir?: string;
+    };
+
+    if (!Array.isArray(approvedExts) || approvedExts.length === 0) {
+      res.status(400).json({ error: "approvedExts must be a non-empty array of extensions" });
+      return;
+    }
+
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const settings = settingsRows[0] as any ?? {};
+    const nasPath = (settings.nasPath ?? "").trim();
+    if (!nasPath || !fs.existsSync(nasPath)) {
+      res.status(400).json({ error: "NAS path is not configured or not accessible" });
+      return;
+    }
+
+    // Validate all extensions are known convert-status rules
+    for (const ext of approvedExts) {
+      const rule = FORMAT_RULES[ext.toLowerCase()];
+      if (!rule || rule.status !== "convert") {
+        res.status(400).json({ error: `Extension "${ext}" is not a convertible format` });
+        return;
+      }
+    }
+
+    // Resolve backup dir (default: WillardAI/ConversionBackups/<timestamp>)
+    const resolvedBackupDir = backupDir?.trim()
+      || path.join(nasPath, "WillardAI", "ConversionBackups", new Date().toISOString().slice(0, 19).replace(/:/g, "-"));
+
+    // Validate backup dir is within NAS root
+    try { assertWithinRoot(path.resolve(resolvedBackupDir), path.resolve(nasPath)); }
+    catch { res.status(400).json({ error: "Backup directory must be within the NAS root" }); return; }
+
+    const [job] = await db.insert(conversionJobsTable).values({
+      status:       "pending",
+      approvedExts: approvedExts.map(e => e.toLowerCase()),
+      backupDir:    resolvedBackupDir,
+      nasPath,
+      totalFiles:   0,
+    }).returning();
+
+    res.status(201).json(job);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to create conversion job" });
+  }
+});
+
+/** GET /optimize/jobs — list recent conversion jobs. */
+router.get("/optimize/jobs", async (_req, res) => {
+  try {
+    const jobs = await db.select().from(conversionJobsTable)
+      .orderBy(desc(conversionJobsTable.createdAt))
+      .limit(20);
+    res.json(jobs);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to list jobs" });
+  }
+});
+
+/** GET /optimize/jobs/:id — get a single conversion job. */
+router.get("/optimize/jobs/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    res.json(job);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to get job" });
+  }
+});
+
+/**
+ * GET /optimize/jobs/:id/execute — SSE stream that executes the conversion job.
+ * Streams events: status | file_done | summary | error
+ */
+router.get("/optimize/jobs/:id/execute", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const send = (event: string, data: object) => {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
+  };
+
+  try {
+    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
+    if (job.status === "running") { send("error", { message: "Job is already running" }); res.end(); return; }
+    if (job.status === "done" || job.status === "failed") {
+      send("error", { message: `Job already ${job.status}` }); res.end(); return;
+    }
+
+    const nasPath     = job.nasPath;
+    const backupDir   = job.backupDir!;
+    const approvedExtSet = new Set<string>((job.approvedExts as string[]).map(e => e.toLowerCase()));
+
+    await db.update(conversionJobsTable).set({ status: "running" }).where(eq(conversionJobsTable.id, id));
+    send("status", { stage: "scanning", message: "Scanning NAS for files to convert…", progress: 2 });
+
+    // Collect all matching files (skip backup dir and WillardAI dir)
+    const skipDirs = new Set<string>([
+      path.resolve(backupDir),
+      path.resolve(path.join(nasPath, "WillardAI")),
+    ]);
+    const filesToConvert: Array<{ fullPath: string; ext: string }> = [];
+    walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, skipDirs);
+
+    const totalFiles = filesToConvert.length;
+    await db.update(conversionJobsTable).set({ totalFiles }).where(eq(conversionJobsTable.id, id));
+
+    if (totalFiles === 0) {
+      send("status", { stage: "done", message: "No files found to convert", progress: 100 });
+      await db.update(conversionJobsTable).set({
+        status: "done",
+        processedFiles: 0,
+        succeededFiles: 0,
+        failedFiles: 0,
+        skippedFiles: 0,
+        completedAt: new Date(),
+        resultJson: { files: [] },
+      }).where(eq(conversionJobsTable.id, id));
+      send("summary", { totalFiles: 0, succeeded: 0, failed: 0, skipped: 0, results: [] });
+      res.end();
+      return;
+    }
+
+    send("status", { stage: "converting", message: `Found ${totalFiles} file${totalFiles !== 1 ? "s" : ""} to convert`, progress: 5, totalFiles });
+
+    // Ensure backup dir exists
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    let succeeded = 0;
+    let failed    = 0;
+    let skipped   = 0;
+    const results: Array<{
+      filePath: string;
+      status:   "success" | "failed" | "skipped";
+      originalBytes?: number;
+      convertedBytes?: number;
+      error?: string;
+    }> = [];
+
+    for (let i = 0; i < filesToConvert.length; i++) {
+      const { fullPath, ext } = filesToConvert[i];
+      const rule = FORMAT_RULES[ext];
+      const targetExt = rule?.targetExt ?? (rule?.category === "video" ? "mp4" : "webp");
+      const category  = rule?.category ?? "other";
+
+      // Progress percentage: 5–95% during file processing
+      const progress = 5 + Math.round(((i) / totalFiles) * 90);
+      const shortName = path.basename(fullPath);
+      send("status", {
+        stage: "converting",
+        message: `[${i + 1}/${totalFiles}] ${shortName}`,
+        progress,
+        currentFile: fullPath,
+        processed: i,
+        total: totalFiles,
+      });
+
+      // Skip if file no longer exists (may have been moved/deleted since scan)
+      if (!fs.existsSync(fullPath)) {
+        skipped++;
+        results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
+        continue;
+      }
+
+      let originalBytes = 0;
+      try { originalBytes = fs.statSync(fullPath).size; } catch { /* best effort */ }
+
+      // ── Backup original ──────────────────────────────────────────────────────
+      const relPath     = path.relative(path.resolve(nasPath), path.resolve(fullPath));
+      const backupPath  = path.join(backupDir, relPath);
+      try {
+        fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+        fs.copyFileSync(fullPath, backupPath);
+      } catch (backupErr: any) {
+        failed++;
+        const errMsg = `Backup failed: ${backupErr.message}`;
+        results.push({ filePath: fullPath, status: "failed", error: errMsg });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "failed", error: errMsg, processed: i + 1, total: totalFiles });
+        continue;
+      }
+
+      // ── Convert ──────────────────────────────────────────────────────────────
+      const stem      = path.basename(fullPath, path.extname(fullPath));
+      const dir       = path.dirname(fullPath);
+      const destPath  = path.join(dir, `${stem}.${targetExt}`);
+
+      // If destination already exists with same name (e.g. .webp next to .png), skip
+      if (fs.existsSync(destPath) && destPath !== fullPath) {
+        skipped++;
+        // Clean up the backup copy since we didn't convert
+        try { fs.unlinkSync(backupPath); } catch { /* best effort */ }
+        results.push({ filePath: fullPath, status: "skipped", error: `Output already exists: ${path.basename(destPath)}` });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "skipped", error: `Output already exists: ${path.basename(destPath)}`, processed: i + 1, total: totalFiles });
+        continue;
+      }
+
+      let convertError: string | null = null;
+      if (category === "image") {
+        convertError = convertImage(fullPath, destPath);
+      } else if (category === "video") {
+        convertError = convertVideo(fullPath, destPath);
+      } else {
+        convertError = `Unsupported category for conversion: ${category}`;
+      }
+
+      if (convertError) {
+        // Remove any partial output
+        try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch { /* best effort */ }
+        // Restore original from backup
+        try { fs.copyFileSync(backupPath, fullPath); } catch { /* best effort */ }
+        failed++;
+        results.push({ filePath: fullPath, status: "failed", error: convertError });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "failed", error: convertError.slice(0, 300), processed: i + 1, total: totalFiles });
+        continue;
+      }
+
+      // ── Remove original (backup is already in place) ─────────────────────────
+      try { fs.unlinkSync(fullPath); } catch { /* original may already be gone */ }
+
+      let convertedBytes = 0;
+      try { convertedBytes = fs.statSync(destPath).size; } catch { /* best effort */ }
+
+      succeeded++;
+      results.push({ filePath: fullPath, status: "success", originalBytes, convertedBytes });
+      await db.update(conversionJobsTable).set({ processedFiles: i + 1, succeededFiles: succeeded }).where(eq(conversionJobsTable.id, id));
+      send("file_done", {
+        filePath: fullPath,
+        destPath,
+        status: "success",
+        originalBytes,
+        convertedBytes,
+        savedBytes: Math.max(0, originalBytes - convertedBytes),
+        processed: i + 1,
+        total: totalFiles,
+      });
+    }
+
+    // ── Final summary ─────────────────────────────────────────────────────────
+    const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
+    const resultJson = { files: results, totalSaved };
+
+    await db.update(conversionJobsTable).set({
+      status:         "done",
+      processedFiles: totalFiles,
+      succeededFiles: succeeded,
+      failedFiles:    failed,
+      skippedFiles:   skipped,
+      completedAt:    new Date(),
+      resultJson,
+    }).where(eq(conversionJobsTable.id, id));
+
+    send("status", { stage: "done", message: "Conversion complete", progress: 100 });
+    send("summary", {
+      totalFiles,
+      succeeded,
+      failed,
+      skipped,
+      totalSavedBytes: totalSaved,
+      backupDir,
+      results: results.slice(0, 200), // cap payload
+    });
+    res.end();
+  } catch (e: any) {
+    try {
+      await db.update(conversionJobsTable).set({ status: "failed", error: e.message ?? "Unknown error" }).where(eq(conversionJobsTable.id, id));
+    } catch { /* best effort */ }
+    send("error", { message: e.message ?? "Conversion failed" });
+    res.end();
   }
 });
 
