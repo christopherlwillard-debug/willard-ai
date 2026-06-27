@@ -260,21 +260,12 @@ async function scanDirectory(dirPath: string, jobId: number) {
 
         // Images and videos are managed by Immich — skip local indexing to avoid duplication
         if (IMMICH_TYPES.has(fileType)) {
-          if (fileType === "archive") {
-            archiveBatch.push({
-              path: fullPath,
-              filename: entry.name,
-              sizeBytes: stat.size,
-              modifiedAt: stat.mtime,
-              folder,
-              category: getArchiveCategory(entry.name),
-              peekStatus: "pending",
-            });
-          }
           continue;
         }
 
-        // Hash only non-media files (docs, archives, audio, code, etc.)
+        // Compute SHA-256 content hash for duplicate detection.
+        // Files over HASH_SIZE_LIMIT (500 MB) are skipped (hash stays null).
+        // Read errors are caught inside computeFileHash and also produce null.
         const contentHash = await computeFileHash(fullPath, stat.size);
 
         fileBatch.push({
