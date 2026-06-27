@@ -1282,17 +1282,18 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       opLog(`MOVE_OK [sha256]: ${sf.fullPath} → ${destFile} (hash=${record.sourceHash.slice(0, 16)}…)`);
 
+      // Checkpoint after every move so rollback always has a complete record of moved files
+      try {
+        await db.update(organizationJobsTable)
+          .set({ fileMoves: fileMoves as any })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        opLog(`WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}`);
+      }
+
       if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
         const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, progress: pct });
-        // Checkpoint: persist fileMoves to DB every 5 moves so Recovery Center has current state after a crash
-        try {
-          await db.update(organizationJobsTable)
-            .set({ fileMoves: fileMoves as any })
-            .where(eq(organizationJobsTable.id, id));
-        } catch (e: any) {
-          opLog(`WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}`);
-        }
       }
     }
 
@@ -1784,18 +1785,19 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       newMoves.push(record);
       moved++;
 
+      // Checkpoint after every new move so rollback always has a complete record
+      const merged = [...existingMoves, ...newMoves];
+      try {
+        await db.update(organizationJobsTable)
+          .set({ fileMoves: merged as any })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        send("log", { message: `WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}` });
+      }
+
       if ((i + 1) % 5 === 0 || moved + skippedAlready + conflictSkipped + excluded >= sourceFiles.length) {
         const pct = 26 + Math.round(((moved + skippedAlready + conflictSkipped + excluded) / total) * 55);
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved: existingMoves.length + moved, skippedAlready, progress: pct });
-        // Checkpoint with merged moves
-        const merged = [...existingMoves, ...newMoves];
-        try {
-          await db.update(organizationJobsTable)
-            .set({ fileMoves: merged as any })
-            .where(eq(organizationJobsTable.id, id));
-        } catch (e: any) {
-          send("log", { message: `WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}` });
-        }
       }
     }
 
