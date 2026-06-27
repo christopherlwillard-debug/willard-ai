@@ -48,6 +48,8 @@ export * from './listArchivesParams';
 export * from './listDocumentsFileType';
 export * from './listDocumentsParams';
 export * from './listFolderParams';
+export * from './nasDirStatus';
+export * from './nasSubdirStatus';
 export * from './nasTestInput';
 export * from './nasTestResult';
 export * from './okResult';

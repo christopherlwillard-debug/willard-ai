@@ -223,6 +223,9 @@ importers:
       pino-http:
         specifier: ^10.5.0
         version: 10.5.0
+      rotating-file-stream:
+        specifier: ^3.2.9
+        version: 3.2.9
       tar:
         specifier: ^7.5.17
         version: 7.5.17
@@ -5352,6 +5355,10 @@ packages:
     resolution: {integrity: sha512-RFnrW4lhXA3s3eqHDZvN654g8OTjzRfqpIRJYczCGB6HzphckVAi/Qh4tbPUbRuDi7s1Llv8g/NspLkttY3gTA==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
+
+  rotating-file-stream@3.2.9:
+    resolution: {integrity: sha512-i9i0KkHh12ryl4xtELg+0gyoFre2PJ9RcQQLzquWsiqygyYsrZLckrqqYrthhnJZGZb4g+KUHtcoWYVq34gaug==}
+    engines: {node: '>=14.0'}
 
   router@2.2.0:
     resolution: {integrity: sha512-nLTrUKm2UyiL7rlhapu/Zl45FwNgkZGaCpZbIHajDYgwlJCOzLSk+cIPAnsEqV955GjILJnKbdQC1nVPz+gAYQ==}
@@ -11617,6 +11624,8 @@ snapshots:
     optionalDependencies:
       '@rollup/rollup-linux-x64-gnu': 4.62.2
       fsevents: 2.3.3
+
+  rotating-file-stream@3.2.9: {}
 
   router@2.2.0:
     dependencies:

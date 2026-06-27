@@ -292,6 +292,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/NasTestResult"
 
+  /settings/nas-dir-status:
+    get:
+      operationId: getNasDirStatus
+      tags: [settings]
+      summary: Check WillardAI directory structure status on NAS
+      responses:
+        "200":
+          description: NAS directory status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NasDirStatus"
+
+  /settings/reinit-nas-dirs:
+    post:
+      operationId: reinitNasDirs
+      tags: [settings]
+      summary: Recreate any missing WillardAI subdirectories on NAS
+      responses:
+        "200":
+          description: Updated directory status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NasDirStatus"
+        "400":
+          description: NAS path not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
   # ── Scan ──────────────────────────────────────────────────────────────────
   /scan:
     post:
@@ -944,6 +976,42 @@ components:
           type: string
       required:
         - path
+
+    NasSubdirStatus:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        exists:
+          type: boolean
+      required:
+        - name
+        - path
+        - exists
+
+    NasDirStatus:
+      type: object
+      properties:
+        nasPath:
+          type: string
+        willardAiPath:
+          type: string
+        exists:
+          type: boolean
+        allPresent:
+          type: boolean
+        subdirs:
+          type: array
+          items:
+            $ref: "#/components/schemas/NasSubdirStatus"
+      required:
+        - nasPath
+        - willardAiPath
+        - exists
+        - allPresent
+        - subdirs
 
     NasTestResult:
       type: object

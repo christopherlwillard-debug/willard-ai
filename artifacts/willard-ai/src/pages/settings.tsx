@@ -11,6 +11,8 @@ import {
   useListSessions, getListSessionsQueryKey,
   useRevokeSession,
   useRevokeOtherSessions,
+  useGetNasDirStatus, getGetNasDirStatusQueryKey,
+  useReinitNasDirs,
 } from "@workspace/api-client-react";
 import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -20,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2 } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -282,6 +284,7 @@ export default function Settings() {
       </Card>
 
       <SecuritySection />
+      <StorageSection />
     </div>
   );
 }
@@ -495,6 +498,107 @@ function SecuritySection() {
           )}
         </Card>
       </div>
+    </>
+  );
+}
+
+function StorageSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: dirStatus, isLoading } = useGetNasDirStatus({
+    query: { queryKey: getGetNasDirStatusQueryKey() },
+  });
+
+  const reinitMutation = useReinitNasDirs({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Directories reinitialized" });
+        queryClient.invalidateQueries({ queryKey: getGetNasDirStatusQueryKey() });
+      },
+      onError: () => toast({ title: "Failed to reinitialize directories", variant: "destructive" }),
+    },
+  });
+
+  return (
+    <>
+      <div className="pt-4">
+        <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
+          <HardDrive className="w-5 h-5 text-primary" />
+          NAS STORAGE
+        </h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          App data stored on the NAS under <code className="bg-secondary px-1 rounded font-mono text-xs">WillardAI/</code>
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HardDrive className="w-4 h-4" /> WillardAI Directory Status
+          </CardTitle>
+          <CardDescription>
+            Logs, scan history, temp files, and reports are stored here on your NAS
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {isLoading ? (
+            <Skeleton className="h-32 w-full" />
+          ) : !dirStatus?.nasPath ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono p-3 bg-secondary/20 rounded border border-dashed">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Configure a NAS path in settings above to enable NAS storage
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground px-1">
+                <span className="truncate">{dirStatus.willardAiPath}</span>
+                {dirStatus.allPresent ? (
+                  <span className="shrink-0 text-green-500 font-bold">ALL PRESENT</span>
+                ) : (
+                  <span className="shrink-0 text-amber-500 font-bold">INCOMPLETE</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {dirStatus.subdirs.map((subdir) => (
+                  <div
+                    key={subdir.name}
+                    className={`flex items-center gap-2 px-3 py-2 rounded border text-sm font-mono ${
+                      subdir.exists
+                        ? "border-green-500/30 bg-green-500/5 text-green-400"
+                        : "border-destructive/30 bg-destructive/5 text-destructive"
+                    }`}
+                  >
+                    {subdir.exists ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span className="truncate text-xs">{subdir.name}/</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </CardContent>
+        {dirStatus?.nasPath && (
+          <CardFooter>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="font-mono"
+              disabled={reinitMutation.isPending || (dirStatus?.allPresent ?? false)}
+              onClick={() => reinitMutation.mutate()}
+            >
+              {reinitMutation.isPending ? (
+                <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Reinitializing…</>
+              ) : (
+                <><RefreshCw className="w-3.5 h-3.5 mr-2" /> REINITIALIZE_DIRS</>
+              )}
+            </Button>
+          </CardFooter>
+        )}
+      </Card>
     </>
   );
 }

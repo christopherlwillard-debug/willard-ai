@@ -5,6 +5,7 @@ import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
 import { appSettingsTable, archivesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { assertWithinRoot } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
@@ -30,12 +31,12 @@ function isArchive(filename: string): boolean {
  */
 function safeResolve(nasRoot: string, userPath: string): string | null {
   const resolved = path.resolve(nasRoot, userPath);
-  const root = path.resolve(nasRoot);
-  // Ensure resolved path starts with root + path separator (or equals root)
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+  try {
+    assertWithinRoot(resolved, nasRoot);
+    return resolved;
+  } catch {
     return null;
   }
-  return resolved;
 }
 
 router.get("/explorer", async (req, res) => {

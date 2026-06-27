@@ -42,6 +42,20 @@ export interface NasTestInput {
   path: string;
 }
 
+export interface NasSubdirStatus {
+  name: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface NasDirStatus {
+  nasPath: string;
+  willardAiPath: string;
+  exists: boolean;
+  allPresent: boolean;
+  subdirs: NasSubdirStatus[];
+}
+
 export interface NasTestResult {
   accessible: boolean;
   message: string;

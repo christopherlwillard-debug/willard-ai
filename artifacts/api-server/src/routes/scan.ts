@@ -5,6 +5,7 @@ import { desc, eq, sql, and } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
+import { getWillardAIDir, writeScanHistory } from "../lib/nas-storage";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -203,6 +204,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
   const fileBatch: any[] = [];
   const archiveBatch: any[] = [];
   let filesScanned = 0;
+  const willardAiDir = path.resolve(getWillardAIDir(dirPath));
 
   async function flushFiles() {
     if (fileBatch.length === 0) return;
@@ -244,6 +246,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (path.resolve(fullPath) === willardAiDir) continue;
         await walk(fullPath);
       } else if (entry.isFile()) {
         let stat: fs.Stats;
@@ -352,6 +355,7 @@ async function peekAllArchives(jobId: number) {
 }
 
 async function runScan(jobId: number, nasPath: string) {
+  const startTime = Date.now();
   try {
     await db.update(scanJobsTable).set({ status: "running", stage: "Initializing", startedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
 
@@ -365,9 +369,31 @@ async function runScan(jobId: number, nasPath: string) {
     await db.update(scanJobsTable).set({ stage: "Peeking archives…", filesScanned }).where(eq(scanJobsTable.id, jobId));
     await peekAllArchives(jobId);
 
-    await db.update(appSettingsTable).set({ lastScanAt: new Date(), totalFilesIndexed: filesScanned });
-    await db.update(scanJobsTable).set({ status: "completed", filesScanned, stage: "Complete", finishedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
+    const finishedAt = new Date();
+    await db.update(appSettingsTable).set({ lastScanAt: finishedAt, totalFilesIndexed: filesScanned });
+    await db.update(scanJobsTable).set({ status: "completed", filesScanned, stage: "Complete", finishedAt }).where(eq(scanJobsTable.id, jobId));
+
+    writeScanHistory(nasPath, {
+      jobId,
+      nasPath,
+      startedAt: new Date(startTime).toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      durationSeconds: Math.round((Date.now() - startTime) / 1000),
+      filesScanned,
+      status: "completed",
+      error: null,
+    });
   } catch (err) {
+    writeScanHistory(nasPath, {
+      jobId,
+      nasPath,
+      startedAt: new Date(startTime).toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationSeconds: Math.round((Date.now() - startTime) / 1000),
+      filesScanned: 0,
+      status: "failed",
+      error: err instanceof Error ? err.message : "Unknown error",
+    });
     await db.update(scanJobsTable).set({
       status: "failed",
       error: err instanceof Error ? err.message : "Unknown error",

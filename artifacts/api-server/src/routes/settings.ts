@@ -5,6 +5,8 @@ import { eq } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody, TestImmichConnectionBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
+import { bootstrapWillardAIDir, getNasDirStatus, nasLogStream } from "../lib/nas-storage";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -33,9 +35,50 @@ router.put("/settings", async (req, res) => {
       .set({ ...body })
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
+
+    if (body.nasPath && body.nasPath !== existing.nasPath) {
+      try {
+        bootstrapWillardAIDir(body.nasPath);
+        nasLogStream.setNasPath(body.nasPath).catch(() => {});
+        logger.info({ nasPath: body.nasPath }, "WillardAI directory bootstrapped on NAS");
+      } catch (err) {
+        logger.warn({ err }, "Failed to bootstrap WillardAI dir — check NAS permissions");
+      }
+    }
+
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: "Invalid request" });
+  }
+});
+
+router.get("/settings/nas-dir-status", async (_req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    if (!settings.nasPath) {
+      res.json({ nasPath: "", willardAiPath: "", exists: false, allPresent: false, subdirs: [] });
+      return;
+    }
+    const status = getNasDirStatus(settings.nasPath);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to check NAS directory status" });
+  }
+});
+
+router.post("/settings/reinit-nas-dirs", async (_req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    if (!settings.nasPath) {
+      res.status(400).json({ error: "NAS path not configured" });
+      return;
+    }
+    const result = bootstrapWillardAIDir(settings.nasPath);
+    nasLogStream.setNasPath(settings.nasPath).catch(() => {});
+    logger.info({ nasPath: settings.nasPath }, "WillardAI directories reinitialized");
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to reinitialize NAS directories" });
   }
 });
 

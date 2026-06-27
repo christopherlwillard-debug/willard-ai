@@ -4,9 +4,11 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { pool } from "@workspace/db";
+import { pool, db } from "@workspace/db";
+import { appSettingsTable } from "@workspace/db";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { bootstrapWillardAIDir, nasLogStream } from "./lib/nas-storage";
 
 const PgStore = connectPgSimple(session);
 
@@ -98,5 +100,17 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use("/api", router);
+
+// Initialize NAS log stream from persisted settings on startup
+db.select().from(appSettingsTable).limit(1).then((rows) => {
+  const nasPath = rows[0]?.nasPath;
+  if (nasPath) {
+    try {
+      bootstrapWillardAIDir(nasPath);
+    } catch { /* NAS may not be mounted yet — non-fatal */ }
+    nasLogStream.setNasPath(nasPath).catch(() => {});
+    logger.info({ nasPath }, "NAS storage initialized from persisted settings");
+  }
+}).catch(() => { /* DB not ready yet — logger will use stdout only */ });
 
 export default app;

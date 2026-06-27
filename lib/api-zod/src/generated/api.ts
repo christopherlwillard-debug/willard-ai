@@ -183,6 +183,38 @@ export const TestNasPathResponse = zod.object({
 
 
 /**
+ * @summary Check WillardAI directory structure status on NAS
+ */
+export const GetNasDirStatusResponse = zod.object({
+  "nasPath": zod.string(),
+  "willardAiPath": zod.string(),
+  "exists": zod.boolean(),
+  "allPresent": zod.boolean(),
+  "subdirs": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "exists": zod.boolean()
+}))
+})
+
+
+/**
+ * @summary Recreate any missing WillardAI subdirectories on NAS
+ */
+export const ReinitNasDirsResponse = zod.object({
+  "nasPath": zod.string(),
+  "willardAiPath": zod.string(),
+  "exists": zod.boolean(),
+  "allPresent": zod.boolean(),
+  "subdirs": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "exists": zod.boolean()
+}))
+})
+
+
+/**
  * @summary Start a NAS scan
  */
 export const StartScanResponse = zod.object({

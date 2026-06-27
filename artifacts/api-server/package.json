@@ -29,6 +29,7 @@
     "node-7z": "^3.0.0",
     "pino": "^9.14.0",
     "pino-http": "^10.5.0",
+    "rotating-file-stream": "^3.2.9",
     "tar": "^7.5.17",
     "ua-parser-js": "^2.0.10"
   },
