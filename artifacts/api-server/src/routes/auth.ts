@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
@@ -10,11 +11,19 @@ const router: IRouter = Router();
 
 const BCRYPT_ROUNDS = 12;
 
+function normalizeRecoveryKey(key: string): string {
+  return key.replace(/[\s-]/g, "").toUpperCase();
+}
+
 function generateRecoveryKey(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 4 }, () =>
-    Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("")
-  ).join("-");
+  const groups = Array.from({ length: 4 }, () =>
+    Array.from({ length: 4 }, () => {
+      const byte = randomBytes(1)[0];
+      return chars[byte % chars.length];
+    }).join("")
+  );
+  return groups.join("-");
 }
 
 function getDeviceName(req: Request): string {
@@ -23,6 +32,11 @@ function getDeviceName(req: Request): string {
   const browser = parser.getBrowser().name ?? "Unknown Browser";
   const os = parser.getOS().name ?? "Unknown OS";
   return `${browser} on ${os}`;
+}
+
+function isAuthenticated(req: Request): boolean {
+  const sess = req.session as any;
+  return sess?.authenticated === true;
 }
 
 async function getOrCreateSettings() {
@@ -38,6 +52,14 @@ export const loginRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many login attempts. Try again in 15 minutes." },
+});
+
+const recoverRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many recovery attempts. Try again in 15 minutes." },
 });
 
 router.get("/auth/status", async (req: Request, res: Response) => {
@@ -67,9 +89,10 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
       return;
     }
     const recoveryKey = generateRecoveryKey();
+    const recoveryKeyNormalized = normalizeRecoveryKey(recoveryKey);
     const [passwordHash, recoveryKeyHash] = await Promise.all([
       bcrypt.hash(password, BCRYPT_ROUNDS),
-      bcrypt.hash(recoveryKey, BCRYPT_ROUNDS),
+      bcrypt.hash(recoveryKeyNormalized, BCRYPT_ROUNDS),
     ]);
     await db.update(appSettingsTable)
       .set({ passwordHash, recoveryKeyHash })
@@ -130,7 +153,7 @@ router.post("/auth/logout", (req: Request, res: Response) => {
   });
 });
 
-router.post("/auth/recover", async (req: Request, res: Response) => {
+router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Response) => {
   try {
     const settings = await getOrCreateSettings();
     if (!settings.recoveryKeyHash) {
@@ -146,9 +169,8 @@ router.post("/auth/recover", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Password must be at least 6 characters." });
       return;
     }
-    const normalizedKey = recoveryKey.replace(/[\s-]/g, "").toUpperCase();
-    const storedHash = settings.recoveryKeyHash;
-    const valid = await bcrypt.compare(normalizedKey, storedHash);
+    const normalizedKey = normalizeRecoveryKey(recoveryKey);
+    const valid = await bcrypt.compare(normalizedKey, settings.recoveryKeyHash);
     if (!valid) {
       res.status(401).json({ error: "Invalid recovery key." });
       return;
@@ -172,6 +194,10 @@ router.post("/auth/recover", async (req: Request, res: Response) => {
 });
 
 router.get("/auth/sessions", async (req: Request, res: Response) => {
+  if (!isAuthenticated(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
   try {
     const currentSid = req.sessionID;
     const result = await pool.query<{ sid: string; sess: any; expire: Date }>(
@@ -193,6 +219,10 @@ router.get("/auth/sessions", async (req: Request, res: Response) => {
 });
 
 router.delete("/auth/sessions/:sid", async (req: Request, res: Response) => {
+  if (!isAuthenticated(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
   try {
     const { sid } = req.params;
     if (sid === req.sessionID) {
@@ -207,6 +237,10 @@ router.delete("/auth/sessions/:sid", async (req: Request, res: Response) => {
 });
 
 router.delete("/auth/sessions", async (req: Request, res: Response) => {
+  if (!isAuthenticated(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
   try {
     const currentSid = req.sessionID;
     await pool.query("DELETE FROM session WHERE sid != $1 AND expire > NOW()", [currentSid]);
@@ -217,12 +251,11 @@ router.delete("/auth/sessions", async (req: Request, res: Response) => {
 });
 
 router.post("/auth/change-password", async (req: Request, res: Response) => {
+  if (!isAuthenticated(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
   try {
-    const sess = req.session as any;
-    if (!sess?.authenticated) {
-      res.status(401).json({ error: "Not authenticated." });
-      return;
-    }
     const settings = await getOrCreateSettings();
     const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
     if (!currentPassword || !newPassword) {

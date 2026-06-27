@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -9,10 +10,16 @@ import { logger } from "./lib/logger";
 
 const PgStore = connectPgSimple(session);
 
-const sessionSecret = process.env["SESSION_SECRET"];
-if (!sessionSecret) {
-  logger.warn("SESSION_SECRET env var is not set — using insecure fallback. Set it before deploying.");
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+const envSecret = process.env["SESSION_SECRET"];
+if (!envSecret) {
+  if (process.env["NODE_ENV"] === "production") {
+    throw new Error("SESSION_SECRET env var is required in production. Set it before starting the server.");
+  }
+  logger.warn("SESSION_SECRET not set — using a random in-memory secret. Sessions will be invalidated on server restart.");
 }
+const sessionSecret = envSecret ?? randomBytes(32).toString("hex");
 
 const app: Express = express();
 
@@ -47,7 +54,7 @@ app.use(
       createTableIfMissing: true,
     }),
     name: "willard.sid",
-    secret: sessionSecret || "willard-dev-insecure-secret-change-me",
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     rolling: true,
@@ -60,15 +67,31 @@ app.use(
   }),
 );
 
+const PUBLIC_PATHS = new Set([
+  "/healthz",
+  "/auth/status",
+  "/auth/login",
+  "/auth/setup",
+  "/auth/logout",
+  "/auth/recover",
+]);
+
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {
-  const publicPaths = ["/healthz", "/auth/status", "/auth/login", "/auth/setup", "/auth/logout", "/auth/recover"];
-  if (publicPaths.some((p) => req.path === p || req.path.startsWith(p))) {
+  if (PUBLIC_PATHS.has(req.path)) {
     return next();
   }
   const sess = req.session as any;
   if (!sess?.authenticated) {
     res.status(401).json({ error: "Unauthorized" });
     return;
+  }
+  if (sess.lastSeenAt) {
+    const elapsed = Date.now() - new Date(sess.lastSeenAt as string).getTime();
+    if (elapsed > INACTIVITY_TIMEOUT_MS) {
+      req.session.destroy(() => {});
+      res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
+      return;
+    }
   }
   sess.lastSeenAt = new Date().toISOString();
   next();
