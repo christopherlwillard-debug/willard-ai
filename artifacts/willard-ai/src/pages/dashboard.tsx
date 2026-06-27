@@ -1,10 +1,14 @@
 import { useState } from "react";
-import { useGetDashboard, getGetDashboardQueryKey, useStartScan, useGetScanStatus, getGetScanStatusQueryKey } from "@workspace/api-client-react";
+import {
+  useGetDashboard, getGetDashboardQueryKey,
+  useStartScan, useGetScanStatus, getGetScanStatusQueryKey,
+  useGetImmichRecentPhotos, getGetImmichRecentPhotosQueryKey,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2 } from "lucide-react";
+import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -29,6 +33,16 @@ export default function Dashboard() {
     },
   });
 
+  const { data: recentPhotos } = useGetImmichRecentPhotos(
+    { limit: 12 },
+    {
+      query: {
+        queryKey: getGetImmichRecentPhotosQueryKey({ limit: 12 }),
+        enabled: data?.immichConnected === true,
+      },
+    }
+  );
+
   const scanMutation = useStartScan({
     mutation: {
       onSuccess: () => {
@@ -38,8 +52,8 @@ export default function Dashboard() {
   });
 
   const isScanning = data?.isScanning || (scanPolling && (scanStatus?.isRunning ?? false));
+  const scanProgress = scanStatus?.current;
 
-  // Stop polling once scan finishes
   if (scanPolling && scanStatus && !scanStatus.isRunning) {
     setScanPolling(false);
     queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
@@ -63,8 +77,9 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-start justify-between">
-        <div>
+      {/* Header + Scan Now */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-3xl font-bold font-mono tracking-tight">SYSTEM_OVERVIEW</h1>
           <p className="text-muted-foreground mt-2 font-mono text-sm">
             Last scanned: {formatDate(data.lastScanAt)} | Status:{" "}
@@ -72,10 +87,16 @@ export default function Dashboard() {
               {isScanning ? "SCANNING" : "IDLE"}
             </span>
           </p>
-          {isScanning && scanStatus?.current && (
-            <p className="text-xs text-muted-foreground font-mono mt-1">
-              {(scanStatus.current as any).stage} — {(scanStatus.current as any).filesScanned?.toLocaleString()} files indexed
-            </p>
+          {isScanning && scanProgress && (
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-muted-foreground font-mono">
+                {scanProgress.stage} — {scanProgress.filesScanned?.toLocaleString() ?? 0} files indexed
+              </p>
+              {/* indeterminate progress bar */}
+              <div className="h-1 w-64 bg-secondary rounded-full overflow-hidden">
+                <div className="h-full w-1/3 bg-primary rounded-full animate-[slide_1.5s_linear_infinite]" />
+              </div>
+            </div>
           )}
         </div>
         <Button
@@ -91,6 +112,7 @@ export default function Dashboard() {
         </Button>
       </div>
 
+      {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -134,6 +156,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {/* Charts row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
@@ -141,43 +164,45 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             {data.typeBreakdown.length === 0 ? (
-              <div className="h-[300px] flex items-center justify-center text-muted-foreground font-mono text-sm">
+              <div className="h-[260px] flex items-center justify-center text-muted-foreground font-mono text-sm">
                 No data — run a scan to populate
               </div>
             ) : (
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={data.typeBreakdown}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="sizeBytes"
-                      nameKey="fileType"
-                    >
-                      {data.typeBreakdown.map((_entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value: number) => formatBytes(value)}
-                      contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="flex flex-wrap gap-3 mt-2 justify-center">
-                  {data.typeBreakdown.map((entry, index) => (
+              <>
+                <div className="h-[220px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={data.typeBreakdown}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={80}
+                        paddingAngle={4}
+                        dataKey="sizeBytes"
+                        nameKey="fileType"
+                      >
+                        {data.typeBreakdown.map((_e, i) => (
+                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(v: number) => formatBytes(v)}
+                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex flex-wrap gap-3 mt-1 justify-center">
+                  {data.typeBreakdown.map((entry, i) => (
                     <div key={entry.fileType} className="flex items-center gap-1.5 text-xs font-mono">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
                       <span className="text-muted-foreground">{entry.fileType}</span>
                       <span>{formatBytes(entry.sizeBytes)}</span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </>
             )}
           </CardContent>
         </Card>
@@ -187,7 +212,7 @@ export default function Dashboard() {
             <CardTitle>Immich Integration</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col space-y-4">
+            <div className="space-y-3">
               <div className="flex items-center space-x-2">
                 <Activity className={`h-4 w-4 ${data.immichConnected ? "text-green-500" : "text-red-500"}`} />
                 <span className="font-mono text-sm">
@@ -195,25 +220,62 @@ export default function Dashboard() {
                 </span>
               </div>
               {data.immichConnected ? (
-                <div className="grid grid-cols-2 gap-4 mt-2">
-                  <div className="bg-secondary p-4 rounded-md">
-                    <p className="text-sm text-muted-foreground">Photos</p>
-                    <p className="text-2xl font-bold">{data.immichPhotoCount.toLocaleString()}</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-secondary p-3 rounded-md">
+                    <p className="text-xs text-muted-foreground">Photos</p>
+                    <p className="text-xl font-bold">{data.immichPhotoCount.toLocaleString()}</p>
                   </div>
-                  <div className="bg-secondary p-4 rounded-md">
-                    <p className="text-sm text-muted-foreground">Videos</p>
-                    <p className="text-2xl font-bold">{data.immichVideoCount.toLocaleString()}</p>
+                  <div className="bg-secondary p-3 rounded-md">
+                    <p className="text-xs text-muted-foreground">Videos</p>
+                    <p className="text-xl font-bold">{data.immichVideoCount.toLocaleString()}</p>
                   </div>
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground font-mono">
-                  Configure Immich in Settings to connect your photo library
+                  Configure Immich URL + API key in Settings to connect your photo library
                 </p>
               )}
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Recent photos strip — 12 thumbnails, only when Immich connected */}
+      {data.immichConnected && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-mono text-sm">RECENT_MEDIA</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-6 md:grid-cols-12 gap-2">
+              {recentPhotos
+                ? recentPhotos.slice(0, 12).map((asset) => (
+                    <div
+                      key={asset.id}
+                      className="aspect-square bg-secondary rounded overflow-hidden relative group"
+                    >
+                      {asset.thumbUrl ? (
+                        <img
+                          src={asset.thumbUrl}
+                          alt={asset.filename}
+                          className="object-cover w-full h-full group-hover:scale-105 transition-transform"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          {(asset as { type?: string }).type === "VIDEO"
+                            ? <Video className="w-4 h-4 text-muted-foreground" />
+                            : <ImageIcon className="w-4 h-4 text-muted-foreground" />}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                : [...Array(12)].map((_, i) => (
+                    <Skeleton key={i} className="aspect-square w-full rounded" />
+                  ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
