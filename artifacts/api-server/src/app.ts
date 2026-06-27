@@ -7,7 +7,7 @@ import connectPgSimple from "connect-pg-simple";
 import { pool, db } from "@workspace/db";
 
 import { appSettingsTable, organizationJobsTable } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream } from "./lib/nas-storage";
@@ -135,10 +135,20 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
 
-// Detect organize jobs that were interrupted (server died while executing or executing failed mid-resume)
+// Detect organize jobs interrupted mid-execution: "executing" status (server died) or
+// "failed" jobs that have a lastStage set (meaning they failed during execute, not during analyze).
+// Non-execution failures (e.g. analyze step) have null lastStage and are excluded.
 db.select({ id: organizationJobsTable.id, sourcePath: organizationJobsTable.sourcePath, status: organizationJobsTable.status })
   .from(organizationJobsTable)
-  .where(inArray(organizationJobsTable.status, ["executing", "failed"]))
+  .where(
+    or(
+      eq(organizationJobsTable.status, "executing"),
+      and(
+        eq(organizationJobsTable.status, "failed"),
+        isNotNull(organizationJobsTable.lastStage),
+      )
+    )
+  )
   .then((rows) => {
     if (rows.length > 0) {
       logger.warn(

@@ -66,11 +66,15 @@ export function moveFile(from: string, to: string): void {
  * Result of verifying a single file move.
  */
 export interface FileMoveRecord {
-  from:       string;
-  to:         string;
-  sourceHash: string;
-  destHash:   string;
-  verified:   boolean;
+  from:          string;
+  to:            string;
+  sourceHash:    string;
+  destHash:      string;
+  verified:      boolean;
+  /** Relative path of the source file within the staging area / source folder.
+   *  Stored so resume can identify already-moved files by source identity,
+   *  not by recomputed destination filename (which differs under rename-conflict policy). */
+  sourceRelPath?: string;
 }
 
 /**
@@ -89,12 +93,14 @@ export interface FileMoveRecord {
  * @param to            Absolute destination path (parents created automatically).
  * @param afterMoveHook Optional callback invoked between step 2 and step 3 —
  *                      used ONLY in tests to inject corruption or latency.
+ * @param sourceRelPath Optional relative path of the source (stored in record for
+ *                      resume idempotency — rename-safe alternative to dest-path matching).
  * @returns             FileMoveRecord with source/dest hashes and verified=true.
  */
 export async function verifiedMove(
   from: string,
   to:   string,
-  opts?: { afterMoveHook?: (to: string) => void | Promise<void> },
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string },
 ): Promise<FileMoveRecord> {
   // Step 1: hash source (throws on I/O error)
   const sourceHash = await sha256File(from);
@@ -117,7 +123,7 @@ export async function verifiedMove(
     );
   }
 
-  return { from, to, sourceHash, destHash, verified: true };
+  return { from, to, sourceHash, destHash, verified: true, sourceRelPath: opts?.sourceRelPath };
 }
 
 // ── Rollback ─────────────────────────────────────────────────────────────────

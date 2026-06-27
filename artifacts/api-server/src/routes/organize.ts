@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { eq, desc, inArray } from "drizzle-orm";
+import { eq, desc, inArray, or, and, isNotNull } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -1131,13 +1131,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     await db.update(organizationJobsTable).set({ status: "executing" }).where(eq(organizationJobsTable.id, id));
 
     // Stage checkpoint helper — fire-and-forget; persists lastStage + stageUpdatedAt for Recovery Center
-    const setStage = (stage: string) => {
-      db.update(organizationJobsTable)
-        .set({ lastStage: stage, stageUpdatedAt: new Date() })
-        .where(eq(organizationJobsTable.id, id))
-        .catch(() => {});
+    const setStage = async (stage: string): Promise<void> => {
+      try {
+        await db.update(organizationJobsTable)
+          .set({ lastStage: stage, stageUpdatedAt: new Date() })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        opLog(`WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}`);
+      }
     };
-    setStage("staging");
+    await setStage("staging");
     send("status", { stage: "staging", message: "Preparing staging area…", progress: 2 });
 
     const tempDir = getTempDir(nasPath, `org-${id}`);
@@ -1209,7 +1212,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       if (r.relativePath && r.destination) planDestMap.set(r.relativePath, r.destination);
     }
 
-    setStage("moving");
+    await setStage("moving");
     send("status", { stage: "moving", message: `Moving ${total} files…`, progress: 26, total });
     opLog(`MOVE_START: routing ${total} active files from frozen plan destinations (conflict policy: ${conflictPolicy})`);
 
@@ -1273,7 +1276,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // verifiedMove: compute source SHA-256 → move → compute dest SHA-256 → compare.
       // Throws immediately on mismatch so the catch block triggers rollback.
-      const record = await verifiedMove(sf.fullPath, destFile);
+      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
       fileMoves.push(record);
       moved++;
 
@@ -1283,15 +1286,18 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, progress: pct });
         // Checkpoint: persist fileMoves to DB every 5 moves so Recovery Center has current state after a crash
-        db.update(organizationJobsTable)
-          .set({ fileMoves: fileMoves as any })
-          .where(eq(organizationJobsTable.id, id))
-          .catch(() => {});
+        try {
+          await db.update(organizationJobsTable)
+            .set({ fileMoves: fileMoves as any })
+            .where(eq(organizationJobsTable.id, id));
+        } catch (e: any) {
+          opLog(`WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}`);
+        }
       }
     }
 
     // ── Stage 6: Strict verification — 100% of moved files must exist + per-dest recount ──
-    setStage("verifying");
+    await setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all moved files at destination…", progress: 83 });
 
     // Invariant: moved + conflict-skipped must equal total active routes
@@ -1337,7 +1343,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`VERIFY_DEST_OK: ${destVerification.length} destination group(s) all match`);
 
     // ── Immich rescan + import count verification ────────────────────────────
-    setStage("immich");
+    await setStage("immich");
     send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
     let immichResult: any = null;
     let immichVerification: any = null;
@@ -1541,7 +1547,15 @@ router.get("/organize/recovery", async (_req, res) => {
     const jobs = await db
       .select()
       .from(organizationJobsTable)
-      .where(inArray(organizationJobsTable.status, ["executing", "failed"]))
+      .where(
+        or(
+          eq(organizationJobsTable.status, "executing"),
+          and(
+            eq(organizationJobsTable.status, "failed"),
+            isNotNull(organizationJobsTable.lastStage),
+          )
+        )
+      )
       .orderBy(desc(organizationJobsTable.createdAt))
       .limit(50);
     res.json({ interrupted: jobs });
@@ -1646,19 +1660,27 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
       .where(eq(organizationJobsTable.id, id));
 
-    // Stage checkpoint helper for resume — fire-and-forget
-    const setStage = (stage: string) => {
-      db.update(organizationJobsTable)
-        .set({ lastStage: stage, stageUpdatedAt: new Date() })
-        .where(eq(organizationJobsTable.id, id))
-        .catch(() => {});
+    // Stage checkpoint helper for resume — awaited, non-throwing
+    const setStage = async (stage: string): Promise<void> => {
+      try {
+        await db.update(organizationJobsTable)
+          .set({ lastStage: stage, stageUpdatedAt: new Date() })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        send("log", { message: `WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}` });
+      }
     };
 
     // Existing partial moves from the interrupted run
     const existingMoves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
+    // Primary idempotency: by sourceRelPath (rename-safe — stored since last execute).
+    // Fallback: by destination path for legacy records that predate sourceRelPath.
+    const alreadyMovedRelPaths = new Set<string>(
+      existingMoves.filter((m: any) => m.sourceRelPath != null).map((m: any) => m.sourceRelPath as string)
+    );
     const alreadyMovedDests = new Set<string>(existingMoves.map(m => m.to));
 
-    setStage("staging");
+    await setStage("staging");
     send("status", { stage: "staging", message: `Resuming — ${existingMoves.length} file(s) already at destination, re-staging source…`, progress: 2 });
 
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1676,7 +1698,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
 
     if (job.sourceType === "archive") {
-      setStage("extracting");
+      await setStage("extracting");
       send("status", { stage: "extracting", message: "Re-extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) { send("error", { message: `Archive not found: ${job.sourcePath}` }); res.end(); return; }
       const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
@@ -1709,7 +1731,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     let conflictSkipped = 0;
     let excluded = 0;
 
-    setStage("moving");
+    await setStage("moving");
     send("status", { stage: "moving", message: `Moving remaining files (${existingMoves.length} already done)…`, progress: 26, total });
 
     for (let i = 0; i < sourceFiles.length; i++) {
@@ -1726,8 +1748,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
 
-      // Already moved in the interrupted run — skip
-      if (alreadyMovedDests.has(destFile)) {
+      // Already moved in the interrupted run — skip.
+      // Prefer sourceRelPath matching (rename-safe); fall back to dest-path for legacy records.
+      const alreadyMoved = alreadyMovedRelPaths.has(sf.relativePath) ||
+        (alreadyMovedRelPaths.size === 0 && alreadyMovedDests.has(destFile));
+      if (alreadyMoved) {
         skippedAlready++;
         if ((i + 1) % 5 === 0) {
           const pct = 26 + Math.round(((moved + skippedAlready + conflictSkipped + excluded) / total) * 55);
@@ -1755,7 +1780,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
 
       fs.mkdirSync(destDir, { recursive: true });
-      const record = await verifiedMove(sf.fullPath, destFile);
+      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
       newMoves.push(record);
       moved++;
 
@@ -1764,14 +1789,17 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved: existingMoves.length + moved, skippedAlready, progress: pct });
         // Checkpoint with merged moves
         const merged = [...existingMoves, ...newMoves];
-        db.update(organizationJobsTable)
-          .set({ fileMoves: merged as any })
-          .where(eq(organizationJobsTable.id, id))
-          .catch(() => {});
+        try {
+          await db.update(organizationJobsTable)
+            .set({ fileMoves: merged as any })
+            .where(eq(organizationJobsTable.id, id));
+        } catch (e: any) {
+          send("log", { message: `WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}` });
+        }
       }
     }
 
-    setStage("verifying");
+    await setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all files at destination…", progress: 85 });
 
     const allMoves: FileMoveRecord[] = [...existingMoves, ...newMoves];
