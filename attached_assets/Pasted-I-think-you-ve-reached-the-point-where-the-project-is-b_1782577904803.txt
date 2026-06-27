@@ -1,0 +1,403 @@
+I think you've reached the point where the project is becoming professionally architected. These three milestones are exactly the kind of things that prevent painful rewrites later.
+
+There are only a few things I would change before I'd call them "production ready."
+
+#16 - Password Authentication
+
+Score: 10/10
+
+I honestly wouldn't change much.
+
+The only things I'd add are:
+
+Session Management
+
+If you're logged in on another computer:
+
+Settings
+
+↓
+
+Security
+
+Current Sessions
+
+Desktop - Owensboro
+Active Now
+
+Laptop
+Yesterday
+
+Phone
+3 days ago
+
+[Log Out All]
+
+Even if you're the only user, this is nice to have.
+
+Recovery Key
+
+If you forget your password...
+
+Instead of reinstalling everything...
+
+Generate a recovery key during setup.
+
+Recovery Key
+
+AB2F-91KQ-H82L-...
+
+Store this somewhere safe.
+
+This lets you reset the password without touching the database.
+
+#17 - Store Everything on NAS
+
+I LOVE this.
+
+This is exactly how I would do it.
+
+But I'd make one change.
+
+Instead of
+
+WillardAI/
+
+logs
+
+cache
+
+temp
+
+archive-index
+
+I'd expand it slightly.
+
+WillardAI/
+
+config/
+
+database/
+
+logs/
+
+cache/
+
+temp/
+
+archive-index/
+
+reports/
+
+backups/
+
+scan-history/
+
+Why?
+
+Later you'll generate:
+
+Cleanup reports
+Storage reports
+AI reports
+Import reports
+
+Those belong in Reports.
+
+Also
+
+Database
+
+should exist even if PostgreSQL stays elsewhere initially.
+
+Later
+
+SQLite
+
+↓
+
+Postgres
+
+↓
+
+Whatever
+
+The folder already exists.
+
+#18 Organization Center
+
+This...
+
+is the feature.
+
+This is why I'd build Willard AI.
+
+I absolutely love the workflow.
+
+But I'd make it even safer.
+
+Stage 1
+
+Analyze
+
+Nothing happens.
+
+Stage 2
+
+Plan
+
+Shows
+
+Move
+
+Extract
+
+Import
+
+Skip
+
+Warnings
+Stage 3
+
+Verify
+
+Before touching anything
+
+Willard AI should verify:
+
+Enough disk space?
+
+Destination writable?
+
+Immich online?
+
+Archive corrupted?
+
+Duplicate names?
+
+Permissions?
+
+If anything fails
+
+Stop.
+
+Stage 4
+
+Stage
+
+Instead of immediately extracting
+
+Create
+
+WillardAI/temp/job-4832/
+
+Extract there.
+
+Verify.
+
+Count files.
+
+Hash files.
+
+Only then
+
+Move into final locations.
+
+That makes rollback much easier.
+
+Stage 5
+
+Execute
+
+Move.
+
+Import.
+
+Notify Immich.
+
+Stage 6
+
+Verify Again
+
+This is something almost nobody does.
+
+Check
+
+Photos expected
+
+482
+
+Photos written
+
+482
+
+Immich imported
+
+482
+
+Done.
+
+Stage 7
+
+Report
+
+Completed
+
+482 Photos
+
+13 Videos
+
+6 PDFs
+
+1 Archive
+
+0 Errors
+
+View Log
+Biggest thing I'd change
+
+This
+
+Delete original archive
+
+makes me nervous.
+
+I'd replace it with
+
+After successful extraction
+
+○ Keep original
+
+○ Move original to
+
+Archives/Processed/
+
+○ Delete
+
+Personally
+
+I'd never default to delete.
+
+Processed is much safer.
+
+I would also add
+
+Checksum verification.
+
+Example
+
+Vacation.zip
+
+Contained
+
+842 files
+
+Extracted
+
+842 files
+
+Verified
+
+842 hashes
+
+SUCCESS
+
+That protects against bad archives.
+
+One architectural addition
+
+Since you're organizing irreplaceable data
+
+I'd create
+
+Job History
+
+Every organization job
+
+Every scan
+
+Every cleanup
+
+Every import
+
+gets saved forever.
+
+Example
+
+History
+
+March 4
+
+Extracted
+
+Arizona.zip
+
+1,283 files
+
+Imported
+
+948 photos
+
+Completed
+
+View Report
+One thing I would absolutely add
+
+Since you want AI...
+
+I'd have the AI review every Organization Plan before execution.
+
+Example
+
+AI Review
+
+Confidence
+
+98%
+
+Reason
+
+Archive contains mostly camera photos.
+
+Recommended
+
+Extract
+
+↓
+
+Media/Photos
+
+No conflicts detected.
+
+or
+
+Confidence
+
+42%
+
+Reason
+
+Mixed software
+
+PDFs
+
+Photos
+
+Unknown folders
+
+Recommendation
+
+Review manually.
+
+That gives you another layer of confidence before you click Approve & Run.
+
+Overall
+
+At this point, I think your roadmap has become very coherent:
+
+#1–#17 build the secure, reliable media center.
+#18 is the flagship feature that makes Willard AI unique.
+
+The only thing I'd caution against is letting Version 2 become "fully automatic." Even years from now, I'd keep the philosophy that anything that changes your NAS should first produce a clear plan, show you exactly what's going to happen, and require your approval unless you've explicitly created an automation rule.
+
+That keeps your 7+ TB library safe while still giving you the intelligent organization capabilities you've been working toward from the beginning.

@@ -1,0 +1,364 @@
+This is actually where I would change what I suggested earlier based on everything we've learned from setting up your Immich.
+
+I would not have Willard AI own the media folders.
+
+I'd separate your data from the application's data.
+
+Here's what I'd recommend for your WD My Cloud:
+
+WD My Cloud
+│
+├── Photos/
+├── Videos/
+├── Documents/
+├── Music/
+├── Downloads/
+├── Backups/
+├── Archives/
+│
+├── Immich/
+│   ├── upload/
+│   ├── library/
+│   ├── thumbs/
+│   ├── profile/
+│   ├── encoded-video/
+│   ├── backups/
+│   └── postgres/
+│
+└── WillardAI/
+    ├── database/
+    ├── search-index/
+    ├── cache/
+    ├── logs/
+    ├── config/
+    ├── scans/
+    ├── temp/
+    ├── archive-index/
+    └── backups/
+
+Notice something important...
+
+Immich has its own folder.
+
+Willard AI has its own folder.
+
+Neither one stores files inside the other.
+
+Then Willard AI connects to Immich
+
+Like this:
+
+Willard AI
+
+↓
+
+Immich API
+
+↓
+
+Photos
+
+Albums
+
+People
+
+Places
+
+Semantic Search
+
+Willard AI never touches:
+
+thumbnails
+ML models
+transcoded videos
+face database
+
+Those belong to Immich.
+
+And Willard AI indexes everything else
+
+It indexes
+
+Documents/
+
+Music/
+
+Archives/
+
+Backups/
+
+Downloads/
+
+It can see the Photos and Videos folders if you want, but it doesn't try to understand them—that's Immich's job.
+
+When you eventually organize your NAS
+
+Suppose Willard AI finds:
+
+OldCamera.zip
+
+Inside are
+
+482 photos
+
+12 videos
+
+4 PDFs
+
+It could do this:
+
+Extract
+
+↓
+
+Photos
+
+→ Photos/
+
+↓
+
+Documents
+
+→ Documents/
+
+↓
+
+Tell Immich
+
+"Hey, new photos appeared."
+
+↓
+
+Immich imports them.
+
+Willard AI doesn't import the photos itself.
+
+It simply places them where they belong and lets Immich discover them.
+
+One thing I would change in your setup
+
+Because you already have Immich running on your WD My Cloud, I'd avoid storing another PostgreSQL database if you don't have to.
+
+Instead, I'd have Willard AI store only what it needs.
+
+For example:
+
+WillardAI
+
+database/
+
+logs/
+
+cache/
+
+archive-index/
+
+config/
+
+That database is for:
+
+archive metadata
+document index
+duplicate hashes
+settings
+scan history
+
+Not photos.
+
+Think of it this way
+
+Immich owns:
+
+Media Intelligence
+
+Willard AI owns:
+
+Everything Else
+
+They cooperate.
+
+They don't compete.
+
+I actually have one suggestion that I think fits your setup even better
+
+Instead of this:
+
+Photos/
+
+Videos/
+
+Documents/
+
+I'd organize your data like this:
+
+Media/
+    Photos/
+    Videos/
+
+Documents/
+
+Archives/
+
+Music/
+
+Backups/
+
+Downloads/
+
+WillardAI/
+
+Immich/
+
+Now it's crystal clear.
+
+Media/ = your personal media.
+Immich/ = the application that manages media.
+WillardAI/ = the application that manages your NAS knowledge and organization.
+
+That separation makes backups, migrations, and maintenance much cleaner.
+
+One final recommendation
+
+Since you've already invested time getting Immich configured correctly, I'd make this a permanent architectural rule for Willard AI:
+
+Willard AI must never modify, move, rename, or delete files inside the Immich application folders. It communicates with Immich through its API and uses its own application directory for databases, indexes, logs, and configuration. User media remains in shared media folders that both applications can access according to their responsibilities.
+
+That keeps the boundary between the two systems very clear and prevents Willard AI from accidentally interfering with Immich's internal data.
+
+but will immich get better at finding photos or videos and building folders for them ?
+
+Yes—but probably not in the way you're imagining, and that's where Willard AI becomes valuable.
+
+Immich is getting better every release. The developers are actively improving:
+
+Better semantic search ("red truck", "beach", "dog")
+Better face recognition
+Better object recognition
+Better maps and location features
+Better albums and memories
+Faster machine learning
+Better duplicate detection for media
+
+However, Immich's goal is to be a photo and video manager, not a NAS organizer.
+
+For example, Immich is unlikely to ever:
+
+Open thousands of ZIP files looking for old photos.
+Organize your Documents folder.
+Move PDFs into tax folders.
+Analyze old backup drives.
+Decide how to reorganize your Downloads folder.
+Manage software installers, ISOs, CAD files, etc.
+
+Those are outside its mission.
+
+What I think Willard AI should eventually do
+
+Imagine you have this:
+
+Photos/
+    IMG001.jpg
+    IMG002.jpg
+
+Downloads/
+    Camera Backup.zip
+
+Old Laptop/
+    DCIM/
+        3,000 photos
+
+DVD Backup/
+    Family Photos.rar
+
+Today, Immich only sees the photos that are already in its libraries.
+
+Willard AI could analyze everything and tell you:
+
+"I found:
+
+3,000 photos inside Old Laptop.
+1,200 photos inside Camera Backup.zip.
+482 photos inside Family Photos.rar.
+
+None of these are currently managed by Immich."
+
+Then you click Approve, and Willard AI:
+
+Extracts the archives.
+Places the photos into your Media/Photos structure.
+Leaves documents where they belong.
+Tells Immich to scan for new media.
+
+Immich then does what it does best:
+
+Recognizes faces.
+Finds locations.
+Builds timelines.
+Makes albums.
+Indexes everything.
+Should Immich build folders?
+
+This is an interesting question.
+
+Personally, I wouldn't want Immich physically reorganizing my folders.
+
+Instead, I'd rather have:
+
+Immich organize things virtually (albums, people, places, memories).
+Willard AI organize the actual filesystem.
+
+That gives each application a clear responsibility.
+
+For example:
+
+Media/
+    Photos/
+        2020/
+        2021/
+        2022/
+        Family/
+        Vacation/
+
+Immich doesn't need to move those files around. It can present the same photo in multiple virtual albums without changing where it's stored.
+
+I think your long-term combination is actually very powerful
+
+Willard AI becomes the librarian.
+
+Finds.
+Extracts.
+Organizes.
+Cleans.
+Structures.
+
+Immich becomes the media expert.
+
+Faces.
+Places.
+Objects.
+Search.
+Memories.
+Albums.
+
+Together, they become much more capable than either one alone.
+
+One feature I'd eventually love to see in Willard AI
+
+Instead of just saying:
+
+"Import these 3,000 photos into Immich"
+
+It could first analyze them and say:
+
+Analysis complete
+
+3,000 photos found.
+842 are already in Immich.
+217 appear to be duplicates.
+41 are blurry.
+6 are corrupted.
+Estimated new imports: 1,894.
+
+Then you decide whether to proceed.
+
+That lets Willard AI handle the messy, one-time work of organizing decades of files, while Immich focuses on being an exceptional home for your photo and video library afterward. I think that division of responsibilities plays to the strengths of both applications.

@@ -1,0 +1,521 @@
+Yes. Those are actually two things I would explicitly add to the PRD because they're fundamental design decisions, not implementation details.
+
+1. Security (Keep It Private)
+
+Since this is your personal NAS, I'd make these non-negotiable.
+
+Authentication
+✅ Login required before any page loads.
+✅ All API routes require authentication.
+✅ Support password initially, with passkeys added later.
+✅ Automatic session timeout after inactivity.
+Network Security
+
+The application is intended for:
+
+Your home network
+Or VPN access when away from home
+
+Not:
+
+Public Internet
+Port forwarding
+
+The PRD should literally say:
+
+Willard AI is designed for private deployment only. Direct Internet exposure is not supported. Remote access should occur through a VPN such as Tailscale, WireGuard, or OpenVPN.
+
+Filesystem Security
+
+The backend should:
+
+only read inside your configured NAS root
+reject any path outside that root
+reject path traversal (../)
+reject symbolic links that escape the root (unless explicitly enabled)
+Read-only V1
+
+Nothing can
+
+delete
+rename
+move
+overwrite
+extract
+
+without your approval.
+
+That protects your data.
+
+Credentials
+
+Never expose
+
+Immich API key
+NAS credentials
+database passwords
+
+to the browser.
+
+Only the backend should know them.
+
+Audit Log
+
+Every action gets logged.
+
+Example:
+
+11:41 PM
+
+User started scan
+
+Archive scanned
+
+Immich synchronized
+
+Document indexed
+
+AI searched "Arizona trip"
+
+If something goes wrong, you'll know exactly what happened.
+
+2. Everything lives on the NAS
+
+This is actually something I think is very important.
+
+Just like you did with Immich...
+
+The laptop should only be the interface.
+
+Not the storage.
+
+Instead of
+
+Laptop
+
+Database
+
+Indexes
+
+Thumbnails
+
+Cache
+
+Settings
+
+I'd do
+
+WD My Cloud
+
+/WillardAI
+
+    Database
+
+    Search Index
+
+    Cache
+
+    Configuration
+
+    Logs
+
+    Models
+
+    Archive Metadata
+
+    Scan Jobs
+
+    Temp Files
+
+Then
+
+Laptop
+
+↓
+
+Browser
+
+↓
+
+Willard AI
+
+↓
+
+WD My Cloud
+
+Everything lives there.
+
+Benefits
+
+If your laptop dies...
+
+Nothing is lost.
+
+Buy another computer.
+
+Open
+
+http://willardai.local
+
+Everything is still there.
+
+If you buy a second computer...
+
+Open the browser.
+
+Everything is there.
+
+If you reinstall Windows...
+
+Nothing to rebuild.
+
+Exactly how Immich works.
+
+I'd actually add this to the PRD
+
+Persistent Storage
+
+Willard AI stores all persistent application data on the configured NAS, not on the client computer. This includes:
+
+PostgreSQL database
+Search index
+Archive metadata
+Document metadata
+AI cache
+Logs
+Settings
+Scan jobs
+Temporary processing files
+
+The client computer is stateless and serves only as the user interface. Replacing or reinstalling the client computer must not require rebuilding the application's data.
+
+One thing I'd improve even over Immich
+
+Instead of creating folders all over the place, I'd keep everything under a single application directory, for example:
+
+WD My Cloud
+│
+├── Photos
+├── Documents
+├── Music
+├── Videos
+├── Backups
+├── Downloads
+│
+└── WillardAI
+    ├── database/
+    ├── search/
+    ├── cache/
+    ├── logs/
+    ├── config/
+    ├── scans/
+    ├── temp/
+    ├── archive-index/
+    └── backups/
+
+That way, everything Willard AI owns is contained in one folder. It makes backups, migrations, and troubleshooting much easier, and it keeps the rest of your NAS clean.
+
+I would absolutely make this a core architectural requirement rather than an implementation detail. It matches the approach you took with Immich and aligns well with your goal of having your laptop act only as the interface while your WD My Cloud remains the permanent home for both your data and the application's own libraries and indexes.
+
+#5 - Willard AI Mobile Companion
+What & Why
+A mobile companion app would let users check NAS storage stats and chat with the AI assistant from anywhere — useful for checking if something is running out of space or asking what's in an archive while away from the desk. Same backend, same API.
+Done looks like
+A new Expo mobile artifact with the Willard AI dark theme
+Dashboard screen showing key stats (storage used, file count, recent scan)
+AI Chat screen for conversational access to NAS data
+Settings screen to configure the NAS connection
+Relevant files
+lib/api-client-react/src/generated/api.ts — reuse generated hooks
+artifacts/willard-ai/src/index.css — extract color tokens for the mobile theme
+Dependencies
+Willard AI — NAS Media Center
+#4 - Content Hash for Duplicate Detection
+What & Why
+The cleanup/duplicates endpoint groups files by content_hash, but the scan engine (scan.ts) doesn't compute hashes yet — the field is always null, so no duplicates are detected. Adding SHA-256 hashing during scan (for files under ~500MB) enables real duplicate detection.
+Done looks like
+scan.ts computes SHA-256 hash for each file (streaming, skip files > 500MB)
+Hashes stored in indexed_files.content_hash
+Cleanup > Duplicates page shows real duplicate groups with wasted space
+Relevant files
+artifacts/api-server/src/routes/scan.ts — add hashing step
+lib/db/src/schema/files.ts — content_hash field already exists
+Dependencies
+Willard AI — NAS Media Center
+#2 - Real NAS File Scanning & Browsing
+What & Why
+The app currently has no files indexed because the NAS path needs to be configured and a scan triggered. The scan engine does walk the filesystem, but V1 needs testing against a real NAS path (Windows UNC path like \MYCLOUD-G1S9ZJ\Wilzard, or drive letter Z:, or a local mount). The explorer, search, archives, and documents pages all depend on the scan running first.
+Done looks like
+User can go to Settings, enter their NAS path, click Save, click Scan Now
+Scan runs and indexes files into the database
+Dashboard shows real file counts and storage breakdown
+Explorer browses real folders
+Search returns real results
+Relevant files
+artifacts/api-server/src/routes/scan.ts — scan engine
+artifacts/api-server/src/routes/settings.ts — settings persistence
+artifacts/api-server/src/routes/explorer.ts — folder listing
+artifacts/willard-ai/src/ — all pages depend on indexed data
+Dependencies
+Willard AI — NAS Media Center
+#3 - Archive Peek Enhancements
+What & Why
+The archive peek endpoint uses adm-zip which only handles .zip files. RAR and 7z archives are not yet handled. Also, the peek should cache results in the DB (already done) and show thumbnails/icons by file type within the archive.
+Done looks like
+ZIP peek works and shows file listing with type icons
+RAR support via a system library (unrar-js or similar)
+7z support
+Peek results are cached so repeated opens are instant
+The archives page shows a badge for photo/video/document counts per archive
+Relevant files
+artifacts/api-server/src/routes/archives.ts
+artifacts/willard-ai/src/pages/archives.tsx
+Dependencies
+
+I actually think these are excellent milestones. They're focused and they build on each other instead of expanding the scope.
+
+Here's how I'd prioritize them:
+
+🥇 #2 – Real NAS File Scanning & Browsing (Highest Priority)
+
+This should absolutely be first.
+
+Until this works, nothing else matters.
+
+Everything depends on:
+
+Dashboard
+Explorer
+Search
+Documents
+Archives
+Cleanup
+
+being populated with real data from your WD My Cloud.
+
+Once this works, you'll finally have:
+
+Real storage stats
+Real folders
+Real searches
+Real archive lists
+🥈 #3 – Archive Peek Enhancements
+
+This is probably the feature you've been most excited about.
+
+I'd actually expand it a little.
+
+Instead of only:
+
+ZIP
+RAR
+7z
+
+I'd support:
+
+ZIP
+RAR
+7Z
+TAR
+GZ
+ISO
+
+Then show something like:
+
+Vacation.zip
+
+📷 842 Photos
+🎥 17 Videos
+📄 6 PDFs
+📁 38 Folders
+
+Estimated Extraction
+11.8 GB
+
+That makes the Archives page much more useful.
+
+🥉 #4 – SHA-256 Duplicate Detection
+
+I like the approach of skipping files larger than 500 MB during V1.
+
+One suggestion:
+
+Use SHA-256 only for exact duplicates.
+
+Later, you can add perceptual hashing for photos (e.g., visually identical images with different filenames or sizes). Since Immich already has image intelligence, you might even leverage it for that in a future version rather than duplicating the work.
+
+#5 – Mobile Companion
+
+This is the only one I'd move later.
+
+I wouldn't build it until the desktop version feels complete.
+
+The desktop app is where you'll do:
+
+Archive analysis
+Cleanup
+Explorer
+Organization
+Storage management
+
+The mobile app is more for:
+
+Checking storage
+Running scans
+Viewing notifications
+Asking the AI questions
+
+That's a perfect Version 2 feature.
+
+One milestone I think is missing
+
+This is the one you've consistently said is your biggest goal.
+
+#6 – Organization & Extraction
+
+This should become the first major V2 milestone.
+
+For example:
+
+What & Why
+
+Build the Organization Center that safely reorganizes the NAS after user approval. It analyzes folders and archives, generates an organization plan, previews every action, and performs extraction and file moves only after explicit confirmation. Photos and videos are handed off to Immich; documents remain indexed locally.
+
+Done looks like
+
+Analyze Folder
+Analyze Archive
+Organization Plan
+Preview Changes
+Extract ZIP/RAR/7z
+Verify Extraction
+Import photos/videos into Immich
+Preserve timestamps
+Keep original archive (optional)
+Progress tracking
+Full operation log
+Rollback on failure
+
+That's the milestone that turns Willard AI from an analysis tool into an organization tool.
+
+Overall roadmap
+
+If it were my project, I'd build it like this:
+
+✅ Core Media Center (what you're building now)
+✅ Real NAS scanning
+✅ Archive enhancements
+✅ Duplicate detection
+✅ Organization & Extraction
+✅ Mobile companion
+🔮 OCR and document content search
+🔮 Smarter AI-powered organization
+
+That roadmap stays tightly aligned with your actual goals: manage, understand, and organize your WD My Cloud, while letting Immich remain the dedicated media manager. I think it's a much more focused and achievable direction than the earlier "personal operating system" concept.
+
+well i already did the mobile companion but its not a viewable thing like i was hoping so i feel that was a waste
+
+I actually don't think it was a waste—I think it was built too early.
+
+There's a difference.
+
+From what you've described, the mobile app is basically a shell because the desktop app doesn't yet have much real functionality behind it.
+
+Think about it like this:
+
+Desktop Today
+
+✓ Explorer
+✓ Search
+✓ Archives
+✓ Dashboard
+✓ AI
+✓ Cleanup
+
+↓
+
+Mobile
+
+Dashboard
+
+Search
+
+AI
+
+If the desktop isn't fully functional yet, the mobile app has almost nothing meaningful to show.
+
+If I were building this project
+
+I wouldn't touch mobile until the desktop could do things like:
+
+Browse the NAS
+Search everything
+Peek into ZIP files
+Show duplicate files
+Talk to the AI
+Display storage statistics
+Show scan progress
+
+Then the mobile app becomes incredibly useful.
+
+Imagine sitting on the couch and opening Willard AI on your phone.
+
+You ask:
+
+"Where is the video from my son's baseball game?"
+
+The AI searches:
+
+Immich
+Documents
+ZIP archives
+
+and replies with the answer.
+
+Or you get a notification:
+
+Scan finished
+
+• 482 archives found
+• 17 duplicate folders
+• 3 corrupted ZIPs
+
+Now the phone app has a real purpose.
+
+If it were my project...
+
+I'd stop putting effort into the mobile app for now.
+
+I'd focus entirely on making the desktop application amazing.
+
+Specifically:
+
+Finish NAS scanning.
+Finish Explorer.
+Finish Archive browsing.
+Finish Search.
+Finish AI.
+Finish Cleanup.
+
+Once those are solid, you already have the API that the mobile app can reuse.
+
+At that point, building the mobile app is mostly creating a new interface on top of the same backend—not reinventing the functionality.
+
+I think you've actually identified the bigger lesson
+
+The reason it feels like a waste isn't because mobile is a bad idea.
+
+It's because your core product isn't finished yet.
+
+It's the same lesson many startups learn:
+
+Build the engine first.
+Build the dashboard second.
+Build the mobile companion last.
+One thing I would tell Gordon (or whatever AI is building this)
+
+I would literally add this as a project constraint:
+
+The desktop web application is the primary product. The mobile application is a companion that consumes the same backend APIs. No mobile-only features should be implemented until the corresponding desktop feature is complete and production-ready.
+
+That keeps development focused and prevents spending time on a companion app before there's a strong product for it to accompany. I think that will save you both time and money as the project grows.
