@@ -946,3 +946,56 @@ export const ExecuteOrganizeJobParams = zod.object({
 export const ExecuteOrganizeJobResponse = zod.unknown()
 
 
+/**
+ * @summary Update plan exclusions (categories and/or specific file paths to skip)
+ */
+export const UpdateOrganizeJobPlanParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateOrganizeJobPlanBody = zod.object({
+  "excludeCategories": zod.array(zod.enum(['image', 'video', 'document', 'other'])).optional(),
+  "excludePaths": zod.array(zod.string()).optional()
+})
+
+export const UpdateOrganizeJobPlanResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Apply archive disposition (requires confirm=true; only valid after job is completed)
+ */
+export const ApplyOrganizeJobDispositionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ApplyOrganizeJobDispositionBody = zod.object({
+  "confirm": zod.boolean()
+})
+
+export const ApplyOrganizeJobDispositionResponse = zod.object({
+  "ok": zod.boolean(),
+  "dispositionResult": zod.string(),
+  "sourcePath": zod.string()
+})
+
+

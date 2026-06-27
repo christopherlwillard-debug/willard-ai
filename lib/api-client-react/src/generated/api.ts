@@ -67,7 +67,10 @@ import type {
   OpenaiMessage,
   OpenaiMessageInput,
   OrganizationJob,
+  OrganizeDispositionInput,
+  OrganizeDispositionResult,
   OrganizeJobInput,
+  OrganizePlanUpdateInput,
   ScanJob,
   ScanStatus,
   SearchFilesParams,
@@ -3946,4 +3949,146 @@ export function useExecuteOrganizeJob<TData = Awaited<ReturnType<typeof executeO
 
 
 
+
+export const getUpdateOrganizeJobPlanUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}/plan`
+}
+
+/**
+ * @summary Update plan exclusions (categories and/or specific file paths to skip)
+ */
+export const updateOrganizeJobPlan = async (id: number,
+    organizePlanUpdateInput: OrganizePlanUpdateInput, options?: RequestInit): Promise<OrganizationJob> => {
+
+  return customFetch<OrganizationJob>(getUpdateOrganizeJobPlanUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(organizePlanUpdateInput)
+  }
+);}
+
+
+
+
+export const getUpdateOrganizeJobPlanMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateOrganizeJobPlan>>, TError,{id: number;data: BodyType<OrganizePlanUpdateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateOrganizeJobPlan>>, TError,{id: number;data: BodyType<OrganizePlanUpdateInput>}, TContext> => {
+
+const mutationKey = ['updateOrganizeJobPlan'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateOrganizeJobPlan>>, {id: number;data: BodyType<OrganizePlanUpdateInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateOrganizeJobPlan(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateOrganizeJobPlanMutationResult = NonNullable<Awaited<ReturnType<typeof updateOrganizeJobPlan>>>
+    export type UpdateOrganizeJobPlanMutationBody = BodyType<OrganizePlanUpdateInput>
+    export type UpdateOrganizeJobPlanMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Update plan exclusions (categories and/or specific file paths to skip)
+ */
+export const useUpdateOrganizeJobPlan = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateOrganizeJobPlan>>, TError,{id: number;data: BodyType<OrganizePlanUpdateInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateOrganizeJobPlan>>,
+        TError,
+        {id: number;data: BodyType<OrganizePlanUpdateInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateOrganizeJobPlanMutationOptions(options));
+    }
+
+export const getApplyOrganizeJobDispositionUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}/apply-disposition`
+}
+
+/**
+ * @summary Apply archive disposition (requires confirm=true; only valid after job is completed)
+ */
+export const applyOrganizeJobDisposition = async (id: number,
+    organizeDispositionInput: OrganizeDispositionInput, options?: RequestInit): Promise<OrganizeDispositionResult> => {
+
+  return customFetch<OrganizeDispositionResult>(getApplyOrganizeJobDispositionUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(organizeDispositionInput)
+  }
+);}
+
+
+
+
+export const getApplyOrganizeJobDispositionMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof applyOrganizeJobDisposition>>, TError,{id: number;data: BodyType<OrganizeDispositionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof applyOrganizeJobDisposition>>, TError,{id: number;data: BodyType<OrganizeDispositionInput>}, TContext> => {
+
+const mutationKey = ['applyOrganizeJobDisposition'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof applyOrganizeJobDisposition>>, {id: number;data: BodyType<OrganizeDispositionInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  applyOrganizeJobDisposition(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ApplyOrganizeJobDispositionMutationResult = NonNullable<Awaited<ReturnType<typeof applyOrganizeJobDisposition>>>
+    export type ApplyOrganizeJobDispositionMutationBody = BodyType<OrganizeDispositionInput>
+    export type ApplyOrganizeJobDispositionMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Apply archive disposition (requires confirm=true; only valid after job is completed)
+ */
+export const useApplyOrganizeJobDisposition = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof applyOrganizeJobDisposition>>, TError,{id: number;data: BodyType<OrganizeDispositionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof applyOrganizeJobDisposition>>,
+        TError,
+        {id: number;data: BodyType<OrganizeDispositionInput>},
+        TContext
+      > => {
+      return useMutation(getApplyOrganizeJobDispositionMutationOptions(options));
+    }
 

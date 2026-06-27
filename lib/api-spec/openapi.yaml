@@ -1075,6 +1075,86 @@ paths:
           content:
             text/event-stream: {}
 
+  /organize/jobs/{id}/plan:
+    patch:
+      operationId: updateOrganizeJobPlan
+      tags: [organize]
+      summary: Update plan exclusions (categories and/or specific file paths to skip)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizePlanUpdateInput"
+      responses:
+        "200":
+          description: Updated job with revised plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Analyze must be run first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /organize/jobs/{id}/apply-disposition:
+    post:
+      operationId: applyOrganizeJobDisposition
+      tags: [organize]
+      summary: Apply archive disposition (requires confirm=true; only valid after job is completed)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizeDispositionInput"
+      responses:
+        "200":
+          description: Disposition applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizeDispositionResult"
+        "400":
+          description: confirm is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Job not in completed state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
 components:
   schemas:
     HealthStatus:
@@ -2063,6 +2143,41 @@ components:
             $ref: "#/components/schemas/AuthSession"
       required:
         - sessions
+
+    OrganizePlanUpdateInput:
+      type: object
+      properties:
+        excludeCategories:
+          type: array
+          items:
+            type: string
+            enum: [image, video, document, other]
+        excludePaths:
+          type: array
+          items:
+            type: string
+
+    OrganizeDispositionInput:
+      type: object
+      properties:
+        confirm:
+          type: boolean
+      required:
+        - confirm
+
+    OrganizeDispositionResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        dispositionResult:
+          type: string
+        sourcePath:
+          type: string
+      required:
+        - ok
+        - dispositionResult
+        - sourcePath
 
     OrganizeJobInput:
       type: object

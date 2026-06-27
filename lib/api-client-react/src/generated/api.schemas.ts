@@ -439,6 +439,31 @@ export interface SessionsResult {
   sessions: AuthSession[];
 }
 
+export type OrganizePlanUpdateInputExcludeCategoriesItem = typeof OrganizePlanUpdateInputExcludeCategoriesItem[keyof typeof OrganizePlanUpdateInputExcludeCategoriesItem];
+
+
+export const OrganizePlanUpdateInputExcludeCategoriesItem = {
+  image: 'image',
+  video: 'video',
+  document: 'document',
+  other: 'other',
+} as const;
+
+export interface OrganizePlanUpdateInput {
+  excludeCategories?: OrganizePlanUpdateInputExcludeCategoriesItem[];
+  excludePaths?: string[];
+}
+
+export interface OrganizeDispositionInput {
+  confirm: boolean;
+}
+
+export interface OrganizeDispositionResult {
+  ok: boolean;
+  dispositionResult: string;
+  sourcePath: string;
+}
+
 export type OrganizeJobInputSourceType = typeof OrganizeJobInputSourceType[keyof typeof OrganizeJobInputSourceType];
 
 

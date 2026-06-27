@@ -15,9 +15,9 @@ import { getWillardAIDir, getTempDir, cleanTempDir } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
-const ZIP_EXTS = new Set(["zip"]);
-const TAR_EXTS = new Set(["tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "tar.gz", "tar.bz2", "tar.xz"]);
-const SEVENZIP_EXTS = new Set(["rar", "7z", "cab", "iso"]);
+const ZIP_EXTS    = new Set(["zip"]);
+const TAR_EXTS    = new Set(["tar","gz","tgz","bz2","tbz2","xz","txz","tar.gz","tar.bz2","tar.xz"]);
+const SEVENZIP_EXTS = new Set(["rar","7z","cab","iso"]);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ function routeDestination(fileType: string, settings: any, nasPath: string): str
   }
 }
 
-/** Safe disk-free check — uses spawnSync with argument array (no shell interpolation). */
+/** Safe disk-free check — uses spawnSync with argument array; no shell interpolation. */
 function getDiskFreeBytes(dirPath: string): number | null {
   try {
     const checkDir = fs.existsSync(dirPath) ? dirPath : path.dirname(dirPath);
@@ -73,7 +73,7 @@ function getDiskFreeBytes(dirPath: string): number | null {
   } catch { return null; }
 }
 
-/** SHA-256 hash of a file using a streaming read (memory-safe for large files). */
+/** SHA-256 via streaming — memory-safe for large files. */
 async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
@@ -84,52 +84,45 @@ async function sha256File(filePath: string): Promise<string> {
   });
 }
 
-/** Hash a file if it is ≤ HASH_LIMIT_BYTES; otherwise return a size-based sentinel. */
-const HASH_LIMIT_BYTES = 100 * 1024 * 1024; // 100 MB
-async function fileIntegrityToken(filePath: string): Promise<string> {
+/** Returns SHA-256 for files ≤100 MB, size-sentinel for larger files. */
+const HASH_LIMIT = 100 * 1024 * 1024;
+async function integrityToken(filePath: string): Promise<string> {
   try {
-    const stat = fs.statSync(filePath);
-    if (stat.size <= HASH_LIMIT_BYTES) return await sha256File(filePath);
-    return `size:${stat.size}`;
+    const s = fs.statSync(filePath);
+    return s.size <= HASH_LIMIT ? await sha256File(filePath) : `size:${s.size}`;
   } catch { return ""; }
 }
 
 function moveFile(from: string, to: string): void {
   fs.mkdirSync(path.dirname(to), { recursive: true });
-  try {
-    fs.renameSync(from, to);
-  } catch (err: any) {
-    if (err.code === "EXDEV") {
-      fs.copyFileSync(from, to);
-      fs.unlinkSync(from);
-    } else { throw err; }
+  try { fs.renameSync(from, to); }
+  catch (err: any) {
+    if (err.code === "EXDEV") { fs.copyFileSync(from, to); fs.unlinkSync(from); }
+    else throw err;
   }
 }
 
 async function peekArchiveEntries(archivePath: string, filename: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
-  const ext = getArchiveExt(filename);
+  const ext    = getArchiveExt(filename);
   const rawExt = path.extname(filename).replace(".", "").toLowerCase();
   const entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
 
   if (ZIP_EXTS.has(ext)) {
     try {
       const zip = new AdmZip(archivePath);
-      for (const e of zip.getEntries()) {
+      for (const e of zip.getEntries())
         entries.push({ path: e.entryName, sizeBytes: (e.header as any)?.size ?? 0, isDirectory: e.isDirectory, fileType: getFileTypeFromName(e.entryName) });
-      }
-    } catch { /* password protected or corrupt */ }
+    } catch { /* corrupt or password-protected */ }
   } else if (TAR_EXTS.has(ext)) {
     try {
       await tar.list({
         file: archivePath,
         ...(["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {}),
-        onentry: (entry: any) => {
-          entries.push({ path: entry.path, sizeBytes: typeof entry.size === "number" ? entry.size : 0, isDirectory: entry.type === "Directory", fileType: getFileTypeFromName(entry.path) });
-        },
+        onentry: (e: any) => entries.push({ path: e.path, sizeBytes: typeof e.size === "number" ? e.size : 0, isDirectory: e.type === "Directory", fileType: getFileTypeFromName(e.path) }),
       });
-    } catch { /* plain gz or corrupt */ }
+    } catch { /* corrupt */ }
   } else if (SEVENZIP_EXTS.has(ext)) {
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
       s.on("data", (d: any) => {
         if (d.file !== undefined) {
@@ -144,48 +137,44 @@ async function peekArchiveEntries(archivePath: string, filename: string): Promis
   return entries;
 }
 
-/** Try to read the archive's table of contents. Returns ok + entry count on success. */
-async function validateArchive(archivePath: string): Promise<{ ok: boolean; detail: string; entryCount?: number }> {
+/** Open archive TOC and count entries — detects corruption early. */
+async function validateArchive(archivePath: string): Promise<{ ok: boolean; detail: string; entryCount: number }> {
   try {
-    const ext = getArchiveExt(path.basename(archivePath));
+    const ext    = getArchiveExt(path.basename(archivePath));
     const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
-    let entryCount = 0;
+    let count = 0;
 
     if (ZIP_EXTS.has(ext)) {
       const zip = new AdmZip(archivePath);
-      entryCount = zip.getEntries().length;
+      count = zip.getEntries().length;
     } else if (TAR_EXTS.has(ext)) {
       await tar.list({
         file: archivePath,
         ...(["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {}),
-        onentry: () => { entryCount++; },
+        onentry: () => count++,
       });
     } else if (SEVENZIP_EXTS.has(ext)) {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>(resolve => {
         const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
-        s.on("data", () => entryCount++);
+        s.on("data", () => count++);
         s.on("end",   resolve);
         s.on("error", () => resolve());
       });
     } else {
-      return { ok: false, detail: `Unsupported archive format: .${ext}` };
+      return { ok: false, detail: `Unsupported format: .${ext}`, entryCount: 0 };
     }
-
-    if (entryCount === 0) return { ok: false, detail: "Archive appears empty or unreadable (0 entries)" };
-    return { ok: true, detail: `${entryCount} entries readable`, entryCount };
+    if (count === 0) return { ok: false, detail: "Archive appears empty or unreadable", entryCount: 0 };
+    return { ok: true, detail: `${count} entries readable`, entryCount: count };
   } catch (e: any) {
-    return { ok: false, detail: `Archive may be corrupt: ${e.message}` };
+    return { ok: false, detail: `Archive may be corrupt: ${e.message}`, entryCount: 0 };
   }
 }
 
 async function extractArchive(archivePath: string, destDir: string): Promise<void> {
-  const filename = path.basename(archivePath);
-  const ext = getArchiveExt(filename);
+  const ext = getArchiveExt(path.basename(archivePath));
   fs.mkdirSync(destDir, { recursive: true });
-
   if (ZIP_EXTS.has(ext)) {
-    const zip = new AdmZip(archivePath);
-    zip.extractAllTo(destDir, true);
+    new AdmZip(archivePath).extractAllTo(destDir, true);
   } else if (TAR_EXTS.has(ext)) {
     await tar.extract({ file: archivePath, cwd: destDir, keep: true } as any);
   } else if (SEVENZIP_EXTS.has(ext)) {
@@ -210,9 +199,7 @@ function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string
       else if (e.isFile()) {
         let stat: fs.Stats;
         try { stat = fs.statSync(full); } catch { continue; }
-        const rel = path.relative(dirPath, full);
-        const ext = path.extname(e.name).replace(".", "").toLowerCase();
-        results.push({ fullPath: full, relativePath: rel, sizeBytes: stat.size, fileType: getFileType(ext) });
+        results.push({ fullPath: full, relativePath: path.relative(dirPath, full), sizeBytes: stat.size, fileType: getFileType(path.extname(e.name).replace(".", "").toLowerCase()) });
       }
     }
   }
@@ -222,21 +209,47 @@ function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string
 
 async function callAiConfidence(planSummary: object): Promise<{ confidence: number; notes: string } | null> {
   try {
-    const completion = await openai.chat.completions.create({
+    const c = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: 'You are a file organization assistant. Given a file plan summary, assess how well-matched the routing is. Return ONLY valid JSON: {"confidence": <number 0-1>, "notes": "<one sentence>"}.' },
+        { role: "system", content: 'You are a file organization assistant. Assess how well-matched the routing is. Return ONLY valid JSON: {"confidence": <0-1>, "notes": "<one sentence>"}.' },
         { role: "user",   content: JSON.stringify(planSummary) },
       ],
       response_format: { type: "json_object" },
       max_tokens: 150,
     });
-    const raw = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+    const raw = JSON.parse(c.choices[0]?.message?.content ?? "{}");
     return {
       confidence: typeof raw.confidence === "number" ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
       notes: typeof raw.notes === "string" ? raw.notes : "Unable to assess",
     };
   } catch { return null; }
+}
+
+/** Trigger Immich library rescan via the external API. Best-effort — always resolves. */
+async function triggerImmichRescan(immichUrl: string, apiKey: string): Promise<{ triggered: boolean; libraries: number; detail: string }> {
+  try {
+    const headers = { "x-api-key": apiKey, "Content-Type": "application/json", "Accept": "application/json" };
+    const libResp = await fetch(`${immichUrl}/api/libraries`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!libResp.ok) return { triggered: false, libraries: 0, detail: `Immich returned HTTP ${libResp.status}` };
+
+    const libraries = (await libResp.json()) as any[];
+    let triggered = 0;
+    for (const lib of libraries) {
+      try {
+        const scanResp = await fetch(`${immichUrl}/api/libraries/${lib.id}/scan`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ refreshModifiedFiles: false, refreshAllFiles: false }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (scanResp.ok || scanResp.status === 204) triggered++;
+      } catch { /* per-library failure is non-fatal */ }
+    }
+    return { triggered: triggered > 0, libraries: triggered, detail: `Triggered scan on ${triggered}/${libraries.length} Immich libraries` };
+  } catch (e: any) {
+    return { triggered: false, libraries: 0, detail: `Immich rescan unavailable: ${e.message}` };
+  }
 }
 
 function isoTimestamp(): string {
@@ -254,22 +267,18 @@ router.post("/organize/jobs", async (req, res) => {
     if (!sourcePath || typeof sourcePath !== "string") {
       res.status(400).json({ error: "sourcePath is required" }); return;
     }
-    const [job] = await db.insert(organizationJobsTable).values({
-      sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition,
-    }).returning();
+    const [job] = await db.insert(organizationJobsTable)
+      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition })
+      .returning();
     res.status(201).json(job);
-  } catch {
-    res.status(500).json({ error: "Failed to create organize job" });
-  }
+  } catch { res.status(500).json({ error: "Failed to create organize job" }); }
 });
 
 router.get("/organize/jobs", async (_req, res) => {
   try {
     const jobs = await db.select().from(organizationJobsTable).orderBy(desc(organizationJobsTable.createdAt)).limit(50);
     res.json(jobs);
-  } catch {
-    res.status(500).json({ error: "Failed to list organize jobs" });
-  }
+  } catch { res.status(500).json({ error: "Failed to list organize jobs" }); }
 });
 
 router.get("/organize/jobs/:id", async (req, res) => {
@@ -278,9 +287,7 @@ router.get("/organize/jobs/:id", async (req, res) => {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
-  } catch {
-    res.status(500).json({ error: "Failed to get organize job" });
-  }
+  } catch { res.status(500).json({ error: "Failed to get organize job" }); }
 });
 
 router.delete("/organize/jobs/:id", async (req, res) => {
@@ -288,14 +295,10 @@ router.delete("/organize/jobs/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (job.status === "executing") {
-      res.status(409).json({ error: "Cannot delete a job that is currently executing" }); return;
-    }
+    if (job.status === "executing") { res.status(409).json({ error: "Cannot delete a running job" }); return; }
     await db.delete(organizationJobsTable).where(eq(organizationJobsTable.id, id));
     res.json({ ok: true });
-  } catch {
-    res.status(500).json({ error: "Failed to delete organize job" });
-  }
+  } catch { res.status(500).json({ error: "Failed to delete organize job" }); }
 });
 
 router.post("/organize/jobs/:id/analyze", async (req, res) => {
@@ -322,23 +325,17 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
         const [arc] = await db.select().from(archivesTable).where(eq(archivesTable.id, job.archiveId)).limit(1);
         if (arc?.peekStatus === "peeked" && Array.isArray(arc.peekEntries) && (arc.peekEntries as any[]).length > 0) {
           entries = (arc.peekEntries as any[]).map((e: any) => ({
-            path: e.path ?? e.name ?? "",
-            sizeBytes: e.sizeBytes ?? 0,
-            isDirectory: e.isDirectory ?? false,
-            fileType: e.fileType ?? "other",
+            path: e.path ?? e.name ?? "", sizeBytes: e.sizeBytes ?? 0, isDirectory: e.isDirectory ?? false, fileType: e.fileType ?? "other",
           }));
         }
       }
-      if (entries.length === 0) {
-        entries = await peekArchiveEntries(job.sourcePath, path.basename(job.sourcePath));
-      }
+      if (entries.length === 0) entries = await peekArchiveEntries(job.sourcePath, path.basename(job.sourcePath));
     } else {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
         res.status(422).json({ error: "Source folder not found on disk" }); return;
       }
-      const walked = walkDir(job.sourcePath);
-      entries = walked.map(w => ({ path: w.relativePath, sizeBytes: w.sizeBytes, isDirectory: false, fileType: w.fileType }));
+      entries = walkDir(job.sourcePath).map(w => ({ path: w.relativePath, sizeBytes: w.sizeBytes, isDirectory: false, fileType: w.fileType }));
     }
 
     const fileEntries = entries.filter(e => !e.isDirectory);
@@ -348,13 +345,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     for (const e of fileEntries) {
       const ft = e.fileType === "image" ? "image" : e.fileType === "video" ? "video" : e.fileType === "document" ? "document" : "other";
       (summary as any)[ft === "image" ? "images" : ft === "video" ? "videos" : ft === "document" ? "documents" : "other"]++;
-      routes.push({
-        relativePath: e.path,
-        filename: path.basename(e.path),
-        fileType: ft,
-        sizeBytes: e.sizeBytes,
-        destination: routeDestination(ft, settings, nasPath),
-      });
+      routes.push({ relativePath: e.path, filename: path.basename(e.path), fileType: ft, sizeBytes: e.sizeBytes, destination: routeDestination(ft, settings, nasPath) });
     }
 
     const totalSizeBytes = fileEntries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
@@ -366,18 +357,12 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     };
 
     const aiResult = await callAiConfidence({ totalFiles: fileEntries.length, summary, destinations });
-
     const planJson: any = {
-      sourceType: job.sourceType,
-      sourcePath: job.sourcePath,
-      totalFiles: fileEntries.length,
-      totalSizeBytes,
-      routes,
-      summary,
-      destinations,
-      archiveDisposition: job.archiveDisposition,
-      aiConfidence: aiResult?.confidence ?? null,
-      aiNotes: aiResult?.notes ?? null,
+      sourceType: job.sourceType, sourcePath: job.sourcePath,
+      totalFiles: fileEntries.length, totalSizeBytes, routes,
+      excludeCategories: [], excludePaths: [],
+      summary, destinations, archiveDisposition: job.archiveDisposition,
+      aiConfidence: aiResult?.confidence ?? null, aiNotes: aiResult?.notes ?? null,
     };
 
     const [updated] = await db.update(organizationJobsTable)
@@ -388,10 +373,49 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
   } catch (err) {
     await db.update(organizationJobsTable)
       .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error" })
-      .where(eq(organizationJobsTable.id, id))
-      .catch(() => {});
+      .where(eq(organizationJobsTable.id, id)).catch(() => {});
     res.status(500).json({ error: "Analysis failed" });
   }
+});
+
+/** Update plan exclusions. Resets pre-flight so the user re-validates the updated plan. */
+router.patch("/organize/jobs/:id/plan", async (req, res) => {
+  const id = parseInt(req.params.id);
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
+    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+
+    const plan = job.planJson as any;
+    const { excludeCategories = [], excludePaths = [] } = req.body as any;
+    const excludedPathSet = new Set(excludePaths as string[]);
+
+    const activeRoutes = (plan.routes ?? []).filter((r: any) =>
+      !excludeCategories.includes(r.fileType) && !excludedPathSet.has(r.relativePath)
+    );
+
+    const activeSummary = { images: 0, videos: 0, documents: 0, other: 0 };
+    for (const r of activeRoutes) {
+      (activeSummary as any)[r.fileType === "image" ? "images" : r.fileType === "video" ? "videos" : r.fileType === "document" ? "documents" : "other"]++;
+    }
+
+    const updatedPlan = {
+      ...plan,
+      excludeCategories,
+      excludePaths,
+      activeRoutes,
+      activeSummary,
+      totalFiles: activeRoutes.length,
+      totalSizeBytes: activeRoutes.reduce((s: number, r: any) => s + (r.sizeBytes ?? 0), 0),
+    };
+
+    const [updated] = await db.update(organizationJobsTable)
+      .set({ status: "planned", planJson: updatedPlan, preflightJson: null })
+      .where(eq(organizationJobsTable.id, id))
+      .returning();
+    res.json(updated);
+  } catch { res.status(500).json({ error: "Failed to update plan" }); }
 });
 
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
@@ -407,6 +431,9 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     const settings = settingsRows[0] as any ?? {};
     const checks: any[] = [];
 
+    // Active routes = plan.activeRoutes (if exclusions applied) or plan.routes
+    const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
+
     // 1. Source exists and is readable
     let sourceOk = false;
     let sourceDetail = `Not found: ${job.sourcePath}`;
@@ -417,72 +444,59 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
         sourceOk = true;
         sourceDetail = job.sourceType === "archive"
           ? `Found (${(stat.size / 1e6).toFixed(1)} MB)`
-          : `Found (${stat.isDirectory() ? "directory" : "file"})`;
-      } catch {
-        sourceDetail = `Exists but not readable: ${job.sourcePath}`;
-      }
+          : `Found (directory)`;
+      } catch { sourceDetail = `Exists but not readable`; }
     }
     checks.push({ name: "Source accessible", ok: sourceOk, detail: sourceDetail });
 
-    // 2. Archive integrity validation
+    // 2. Archive integrity — try to open and count entries
     if (job.sourceType === "archive" && sourceOk) {
-      const validation = await validateArchive(job.sourcePath);
-      checks.push({ name: "Archive integrity", ok: validation.ok, detail: validation.detail });
+      const v = await validateArchive(job.sourcePath);
+      checks.push({ name: "Archive integrity", ok: v.ok, detail: v.detail });
     }
 
-    // 3. Destinations writable — checked individually
-    const uniqueDests = [...new Set<string>(
-      (plan.routes ?? []).map((r: any) => r.destination).filter(Boolean)
-    )];
+    // 3. Destination writability — checked per destination
+    const uniqueDests = [...new Set<string>(activeRoutes.map((r: any) => r.destination).filter(Boolean))];
     for (const dest of uniqueDests) {
       let destOk = false;
       let destDetail = "";
       try {
         fs.mkdirSync(dest, { recursive: true });
-        const testFile = path.join(dest, `.willard_write_test_${Date.now()}`);
-        fs.writeFileSync(testFile, "");
-        fs.unlinkSync(testFile);
-        destOk = true;
-        destDetail = "Writable";
-      } catch (e: any) {
-        destDetail = e.message;
-      }
+        const tf = path.join(dest, `.willard_test_${Date.now()}`);
+        fs.writeFileSync(tf, ""); fs.unlinkSync(tf);
+        destOk = true; destDetail = "Writable";
+      } catch (e: any) { destDetail = e.message; }
       checks.push({ name: `Writable: ${path.basename(dest)}`, ok: destOk, detail: destDetail || dest });
     }
 
-    // 4. Disk space — checked per unique filesystem (by destination path)
+    // 4. Disk space — checked per unique filesystem
     const totalBytes = plan.totalSizeBytes ?? 0;
-    const seenFilesystems = new Set<string>();
+    const seenFs = new Set<string>();
     for (const dest of uniqueDests) {
       const checkDir = fs.existsSync(dest) ? dest : path.dirname(dest);
-      // Use real path to detect same filesystem
       let fsKey = checkDir;
       try { fsKey = fs.realpathSync(checkDir); } catch { /* best effort */ }
-      if (seenFilesystems.has(fsKey)) continue;
-      seenFilesystems.add(fsKey);
-
+      if (seenFs.has(fsKey)) continue;
+      seenFs.add(fsKey);
       const free = getDiskFreeBytes(checkDir);
       let diskOk = true;
-      let diskDetail = "Disk space check unavailable on this system";
+      let diskDetail = "Check unavailable on this system";
       if (free !== null) {
         diskOk = free >= totalBytes;
-        const needGb = (totalBytes / 1e9).toFixed(2);
-        const freeGb = (free / 1e9).toFixed(2);
         diskDetail = diskOk
-          ? `Need ${needGb} GB, ${freeGb} GB free on ${path.basename(dest)}`
-          : `Need ${needGb} GB but only ${freeGb} GB free on ${path.basename(dest)}`;
+          ? `Need ${(totalBytes / 1e9).toFixed(2)} GB, ${(free / 1e9).toFixed(2)} GB free`
+          : `Need ${(totalBytes / 1e9).toFixed(2)} GB but only ${(free / 1e9).toFixed(2)} GB free`;
       }
-      checks.push({ name: `Disk space: ${path.basename(dest)}`, ok: diskOk, detail: diskDetail });
+      checks.push({ name: `Disk space (${path.basename(dest)})`, ok: diskOk, detail: diskDetail });
     }
 
-    // 5. File collision detection — BLOCKING (collisions must be resolved before execute)
+    // 5. File collision detection — BLOCKING (must be resolved before execute)
     let collisionCount = 0;
-    const collisions: string[] = [];
-    for (const route of (plan.routes ?? []) as any[]) {
-      const destFile = path.join(route.destination, route.filename);
-      if (fs.existsSync(destFile)) {
+    const collisionExamples: string[] = [];
+    for (const route of activeRoutes) {
+      if (fs.existsSync(path.join(route.destination, route.filename))) {
         collisionCount++;
-        if (collisions.length < 5) collisions.push(route.filename);
+        if (collisionExamples.length < 4) collisionExamples.push(route.filename);
       }
     }
     checks.push({
@@ -490,34 +504,21 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       ok: collisionCount === 0,
       detail: collisionCount === 0
         ? "No filename conflicts"
-        : `${collisionCount} file${collisionCount !== 1 ? "s" : ""} already exist at destination — resolve or rename before executing (e.g. ${collisions.join(", ")}${collisionCount > 5 ? "…" : ""})`,
+        : `${collisionCount} file${collisionCount !== 1 ? "s" : ""} already exist at destination — exclude or rename them: ${collisionExamples.join(", ")}${collisionCount > 4 ? "…" : ""}`,
     });
 
-    // 6. Immich reachability (if configured — non-blocking warning only)
+    // 6. Immich reachability — warning-level only (non-blocking)
     const immichUrl = settings.immichBaseUrl?.trim();
     if (immichUrl) {
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        const resp = await fetch(`${immichUrl}/api/server/ping`, { signal: controller.signal });
-        clearTimeout(timer);
-        checks.push({
-          name: "Immich reachable",
-          ok: resp.ok,
-          warning: !resp.ok,
-          detail: resp.ok ? "Immich API responding" : `Immich returned HTTP ${resp.status} — photos may not auto-import`,
-        });
+        const resp = await fetch(`${immichUrl}/api/server/ping`, { signal: AbortSignal.timeout(5000) });
+        checks.push({ name: "Immich reachable", ok: resp.ok, warning: !resp.ok, detail: resp.ok ? "Immich API responding" : `HTTP ${resp.status} — photos may not auto-import` });
       } catch (e: any) {
-        checks.push({
-          name: "Immich reachable",
-          ok: false,
-          warning: true,
-          detail: `Cannot reach Immich: ${e.message} — photos will not auto-import`,
-        });
+        checks.push({ name: "Immich reachable", ok: false, warning: true, detail: `Cannot reach Immich: ${e.message}` });
       }
     }
 
-    // All critical checks must pass; warnings (Immich) are non-blocking
+    // allOk: all critical checks pass; Immich (warning:true) is non-blocking
     const allOk = checks.every(c => c.ok || c.warning === true);
     const preflightJson = { ok: allOk, checks, diskSpaceRequiredBytes: totalBytes, collisionCount };
     const [updated] = await db.update(organizationJobsTable)
@@ -525,11 +526,17 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       .where(eq(organizationJobsTable.id, id))
       .returning();
     res.json(updated);
-  } catch {
-    res.status(500).json({ error: "Preflight check failed" });
-  }
+  } catch { res.status(500).json({ error: "Preflight check failed" }); }
 });
 
+/**
+ * SSE execution stream.
+ * - Folder jobs: COPY to staging first; source is never touched during execute.
+ * - Any unexpected collision during execute is treated as a FATAL error (triggers rollback).
+ * - Archive disposition `delete` is NOT applied here — it requires explicit second confirmation
+ *   via POST /organize/jobs/:id/apply-disposition after reviewing the completion summary.
+ * - Archive disposition `move_to_processed` is applied automatically after 100% verification.
+ */
 router.get("/organize/jobs/:id/execute", async (req, res) => {
   const id = parseInt(req.params.id);
 
@@ -546,26 +553,29 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
   const tempDirs: string[] = [];
   const fileMoves: Array<{from: string; to: string}> = [];
-  let logPath = "";
   let logStream: fs.WriteStream | null = null;
-  const opLog = (line: string) => {
-    try { logStream?.write(line + "\n"); } catch { /* best effort */ }
-  };
+  let logPath = "";
+  const opLog = (line: string) => { try { logStream?.write(line + "\n"); } catch { /* best-effort */ } };
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
-    if (!job)                { send("error", { message: "Job not found" });        res.end(); return; }
-    if (job.status === "executing") { send("error", { message: "Job is already executing" }); res.end(); return; }
-    if (!job.planJson)       { send("error", { message: "Run analyze first" });    res.end(); return; }
-    if (job.status !== "verified") {
-      send("error", { message: "Pre-flight check must pass before executing" });
-      res.end(); return;
-    }
+    if (!job)                   { send("error", { message: "Job not found" });                          res.end(); return; }
+    if (job.status === "executing") { send("error", { message: "Job is already executing" });           res.end(); return; }
+    if (!job.planJson)          { send("error", { message: "Run analyze first" });                      res.end(); return; }
+    if (job.status !== "verified") { send("error", { message: "Pre-flight must pass before executing" }); res.end(); return; }
 
     const plan = job.planJson as any;
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] as any ?? {};
     const nasPath = settings.nasPath ?? "";
+
+    // Active routes respect any category/path exclusions set via PATCH /plan
+    const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
+    const excludedPaths      = new Set<string>(plan.excludePaths ?? []);
+    const activeRoutes: any[] = (plan.routes ?? []).filter((r: any) =>
+      !excludedCategories.has(r.fileType) && !excludedPaths.has(r.relativePath)
+    );
+    const expectedTotal = activeRoutes.length;
 
     // Open per-file operation log
     const ts = isoTimestamp();
@@ -574,13 +584,13 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       fs.mkdirSync(logsDir, { recursive: true });
       logPath = path.join(logsDir, `org-${ts}-${id}.log`);
       logStream = fs.createWriteStream(logPath, { flags: "a" });
-      opLog(`=== Organization Job #${id} started at ${new Date().toISOString()} ===`);
+      opLog(`=== Organization Job #${id} started ${new Date().toISOString()} ===`);
       opLog(`Source: ${job.sourcePath} (${job.sourceType})`);
-      opLog(`Archive disposition: ${job.archiveDisposition}`);
+      opLog(`Active routes: ${expectedTotal} / ${plan.routes?.length ?? 0} total`);
     } catch { /* log is best-effort */ }
 
     await db.update(organizationJobsTable).set({ status: "executing" }).where(eq(organizationJobsTable.id, id));
-    send("status", { stage: "staging", message: "Creating staging directory…", progress: 2 });
+    send("status", { stage: "staging", message: "Preparing staging area…", progress: 2 });
 
     const tempDir = getTempDir(nasPath, `org-${id}`);
     tempDirs.push(tempDir);
@@ -589,130 +599,139 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
 
     if (job.sourceType === "archive") {
-      // ── Archive: extract to temp (non-destructive; archive always intact) ──
       send("status", { stage: "extracting", message: "Extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) throw new Error(`Archive not found: ${job.sourcePath}`);
       opLog(`EXTRACT: ${job.sourcePath} → ${tempDir}`);
       await extractArchive(job.sourcePath, tempDir);
-      send("status", { stage: "scanning", message: "Scanning extracted files…", progress: 25 });
-      const walked = walkDir(tempDir);
-      sourceFiles = walked.map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
+      send("status", { stage: "scanning",   message: "Scanning extracted files…",          progress: 25 });
+      sourceFiles = walkDir(tempDir).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
     } else {
-      // ── Folder: COPY to staging first so source is always untouched ──
+      // FOLDER: stage (copy) so source directory is never modified during execute
       if (!fs.existsSync(job.sourcePath)) throw new Error(`Source folder not found: ${job.sourcePath}`);
-      send("status", { stage: "staging", message: "Copying files to staging area (source stays intact)…", progress: 5 });
       const walked = walkDir(job.sourcePath);
+      send("status", { stage: "staging", message: `Copying ${walked.length} files to staging area…`, progress: 5 });
+      const stagingBase = path.join(tempDir, "staged");
       let staged = 0;
       for (const w of walked) {
-        const stageDest = path.join(tempDir, "staged", w.relativePath);
-        fs.mkdirSync(path.dirname(stageDest), { recursive: true });
-        fs.copyFileSync(w.fullPath, stageDest);
+        const dest = path.join(stagingBase, w.relativePath);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(w.fullPath, dest);
         staged++;
-        if (staged % 10 === 0) {
-          const pct = 5 + Math.round((staged / walked.length) * 15);
-          send("status", { stage: "staging", message: `Staged ${staged}/${walked.length} files…`, progress: pct });
-        }
+        if (staged % 20 === 0) send("status", { stage: "staging", message: `Staged ${staged}/${walked.length}…`, progress: 5 + Math.round((staged / walked.length) * 17) });
       }
-      opLog(`STAGE: Copied ${staged} files from ${job.sourcePath} → ${path.join(tempDir, "staged")}`);
-      send("status", { stage: "scanning", message: `Staging complete — ${staged} files ready`, progress: 22 });
-      const walkedStaged = walkDir(path.join(tempDir, "staged"));
-      sourceFiles = walkedStaged.map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
+      opLog(`STAGE: Copied ${staged} files to ${stagingBase}`);
+      sourceFiles = walkDir(stagingBase).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
+      send("status", { stage: "scanning", message: `Staged ${sourceFiles.length} files`, progress: 24 });
     }
 
-    const total = sourceFiles.length;
+    // FATAL if staged count deviates more than 10% from plan (indicates extraction failure)
+    if (expectedTotal > 0) {
+      const applicableStaged = sourceFiles.filter(sf => {
+        const ft = sf.fileType === "image" ? "image" : sf.fileType === "video" ? "video" : sf.fileType === "document" ? "document" : "other";
+        return !excludedCategories.has(ft) && !excludedPaths.has(sf.relativePath);
+      });
+      const deviation = Math.abs(applicableStaged.length - expectedTotal);
+      if (deviation > Math.max(5, expectedTotal * 0.10)) {
+        throw new Error(`Staged file count mismatch: expected ${expectedTotal}, found ${applicableStaged.length} applicable files. Possible extraction failure.`);
+      }
+    }
+
+    const total = expectedTotal;
     let moved = 0;
-    let skipped = 0;
-    let hashMismatches = 0;
+    let excluded = 0;
 
-    // Verify extracted/staged file count vs plan
-    const expectedTotal = plan.totalFiles ?? 0;
-    if (expectedTotal > 0 && Math.abs(total - expectedTotal) > Math.max(5, expectedTotal * 0.05)) {
-      opLog(`WARN: File count mismatch — planned ${expectedTotal}, found ${total}`);
-      send("status", { stage: "scanning", message: `Warning: expected ${expectedTotal} files, found ${total}`, progress: 23 });
-    }
-
-    send("status", { stage: "moving", message: `Moving ${total} files to destinations…`, progress: 25, total });
-    opLog(`MOVE_START: ${total} files to route`);
+    send("status", { stage: "moving", message: `Moving ${total} files…`, progress: 26, total });
+    opLog(`MOVE_START: routing ${total} active files`);
 
     for (let i = 0; i < sourceFiles.length; i++) {
       const sf = sourceFiles[i];
       const ft = sf.fileType === "image" ? "image" : sf.fileType === "video" ? "video" : sf.fileType === "document" ? "document" : "other";
-      const destDir  = routeDestination(ft, settings, nasPath);
-      const destFile = path.join(destDir, path.basename(sf.relativePath));
 
-      if (fs.existsSync(destFile)) {
-        skipped++;
-        opLog(`SKIP (exists): ${sf.fullPath} → ${destFile}`);
-        send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), action: "skipped" });
+      // Respect plan exclusions
+      if (excludedCategories.has(ft) || excludedPaths.has(sf.relativePath)) {
+        excluded++;
+        opLog(`EXCLUDE: ${sf.relativePath}`);
         continue;
       }
 
-      // Record integrity token BEFORE move (from staging/temp location)
-      const preHash = await fileIntegrityToken(sf.fullPath);
+      const destDir  = routeDestination(ft, settings, nasPath);
+      const destFile = path.join(destDir, path.basename(sf.relativePath));
 
+      // FATAL on unexpected collision — pre-flight should have caught this
+      if (fs.existsSync(destFile)) {
+        throw new Error(
+          `Unexpected collision during execute: ${path.basename(sf.relativePath)} already exists at ${destDir}. ` +
+          `Re-run pre-flight to detect and resolve conflicts.`
+        );
+      }
+
+      const preToken  = await integrityToken(sf.fullPath);
       moveFile(sf.fullPath, destFile);
       fileMoves.push({ from: sf.fullPath, to: destFile });
       moved++;
+
+      // Verify integrity post-move
+      const postToken = await integrityToken(destFile);
+      if (preToken && postToken && preToken !== postToken) {
+        throw new Error(`Integrity mismatch after moving ${path.basename(sf.relativePath)} — checksums differ. All moves reversed.`);
+      }
+
       opLog(`MOVE: ${sf.fullPath} → ${destFile}`);
 
-      // Verify integrity AFTER move
-      const postHash = await fileIntegrityToken(destFile);
-      if (preHash && postHash && preHash !== postHash) {
-        hashMismatches++;
-        opLog(`HASH_MISMATCH: ${destFile} (pre: ${preHash.slice(0,8)} post: ${postHash.slice(0,8)})`);
-      }
-
-      if ((i + 1) % 5 === 0 || i === sourceFiles.length - 1) {
-        const pct = 25 + Math.round(((i + 1) / total) * 60);
-        send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, skipped, progress: pct });
+      if ((i + 1) % 5 === 0 || moved + excluded === total) {
+        const pct = 26 + Math.round(((moved + excluded) / total) * 55);
+        send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, progress: pct });
       }
     }
 
-    if (hashMismatches > 0) {
-      throw new Error(`Integrity check failed: ${hashMismatches} file${hashMismatches !== 1 ? "s" : ""} had hash mismatches after move. All moves reversed.`);
-    }
+    // ── Stage 6: Strict verification — 100% of moved files must exist ──────
+    send("status", { stage: "verifying", message: "Verifying all moved files at destination…", progress: 83 });
 
-    // ── Stage 6: Verify — 100% count check ──────────────────────────────────
-    send("status", { stage: "verifying", message: "Verifying all moved files exist at destination…", progress: 87 });
-
-    let verified = 0;
     const unverified: string[] = [];
     for (const mv of fileMoves) {
-      if (fs.existsSync(mv.to)) {
-        verified++;
-      } else {
+      if (!fs.existsSync(mv.to)) {
         unverified.push(mv.to);
-        opLog(`VERIFY_FAIL: ${mv.to} not found after move`);
+        opLog(`VERIFY_FAIL: ${mv.to} missing`);
       }
     }
-
     if (unverified.length > 0) {
-      throw new Error(`Verification failed: ${unverified.length} of ${fileMoves.length} moved files not found at destination.`);
+      throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files not found at destination.`);
     }
 
-    opLog(`VERIFY: ${verified}/${fileMoves.length} files confirmed at destination`);
+    // Invariant: moved count must match expected active routes
+    if (moved !== total) {
+      throw new Error(`Move count mismatch: moved ${moved} but expected ${total}. This should not happen — investigation required.`);
+    }
 
-    // ── Stage 7: Archive disposition — only after 100% verification ─────────
-    send("status", { stage: "disposition", message: `Handling archive (${job.archiveDisposition})…`, progress: 92 });
+    opLog(`VERIFY: ${fileMoves.length}/${fileMoves.length} files confirmed at destination`);
+
+    // ── Immich rescan (best-effort after images/videos moved) ────────────────
+    send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
+    const imagesMoved = activeRoutes.filter(r => r.fileType === "image" || r.fileType === "video").length;
+    let immichResult: any = null;
+    if (imagesMoved > 0 && settings.immichBaseUrl?.trim() && settings.immichApiKey?.trim()) {
+      immichResult = await triggerImmichRescan(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
+      opLog(`IMMICH: ${immichResult.detail}`);
+    }
+
+    // ── Archive disposition (post 100% verification) ─────────────────────────
+    let dispositionApplied = "kept";
+    let dispositionPending = false;
 
     if (job.sourceType === "archive" && job.archiveDisposition !== "keep") {
-      // Safety gate: only allow destructive action after 100% verification
-      if (verified < fileMoves.length) {
-        opLog(`DISPOSITION_SKIPPED: Verification incomplete (${verified}/${fileMoves.length}), archive NOT touched`);
-        send("status", { stage: "disposition", message: "Disposition skipped — verification incomplete", progress: 92 });
-      } else if (job.archiveDisposition === "delete") {
-        try {
-          fs.unlinkSync(job.sourcePath);
-          opLog(`DISPOSE_DELETE: ${job.sourcePath}`);
-        } catch (e: any) {
-          opLog(`DISPOSE_DELETE_FAIL: ${e.message}`);
-        }
+      if (job.archiveDisposition === "delete") {
+        // REQUIRES explicit second confirmation — do NOT delete automatically
+        dispositionPending = true;
+        opLog(`DISPOSITION_PENDING: delete requires explicit confirmation via apply-disposition endpoint`);
+        send("status", { stage: "disposition", message: "Archive delete requires your confirmation — see summary", progress: 92 });
       } else if (job.archiveDisposition === "move_to_processed") {
-        const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
-        fs.mkdirSync(processedDir, { recursive: true });
-        const dest = path.join(processedDir, path.basename(job.sourcePath));
+        send("status", { stage: "disposition", message: "Moving archive to processed folder…", progress: 92 });
         try {
+          const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
+          fs.mkdirSync(processedDir, { recursive: true });
+          const dest = path.join(processedDir, path.basename(job.sourcePath));
           moveFile(job.sourcePath, dest);
+          dispositionApplied = `moved_to:${dest}`;
           opLog(`DISPOSE_MOVE: ${job.sourcePath} → ${dest}`);
         } catch (e: any) {
           opLog(`DISPOSE_MOVE_FAIL: ${e.message}`);
@@ -720,15 +739,17 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       }
     }
 
-    // ── Stage 7: Report ──────────────────────────────────────────────────────
-    send("status", { stage: "report", message: "Writing report…", progress: 96 });
+    // ── Report ───────────────────────────────────────────────────────────────
+    send("status", { stage: "report", message: "Writing job report…", progress: 95 });
 
     const completedAt = new Date();
-    const report = {
+    const report: any = {
       jobId: id, completedAt: completedAt.toISOString(),
       sourceType: job.sourceType, sourcePath: job.sourcePath, archiveDisposition: job.archiveDisposition,
-      filesFound: total, filesMoved: moved, filesSkipped: skipped, filesVerified: verified,
-      hashMismatches: 0, destinations: plan.destinations,
+      filesFound: sourceFiles.length, filesMoved: moved, filesExcluded: excluded,
+      filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
+      destinations: plan.destinations,
+      immichRescan: immichResult,
       aiConfidence: plan.aiConfidence, aiNotes: plan.aiNotes,
       logPath,
     };
@@ -742,7 +763,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       opLog(`REPORT: ${reportPath}`);
     } catch { /* non-fatal */ }
 
-    opLog(`=== Job #${id} COMPLETED at ${completedAt.toISOString()} — moved: ${moved}, skipped: ${skipped}, verified: ${verified} ===`);
+    opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} verified:${fileMoves.length} ===`);
     logStream?.end();
 
     await db.update(organizationJobsTable).set({
@@ -762,32 +783,58 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     let rolledBack = 0;
     for (const mv of [...fileMoves].reverse()) {
       try {
-        if (fs.existsSync(mv.to)) {
-          moveFile(mv.to, mv.from);
-          rolledBack++;
-          opLog(`ROLLBACK: ${mv.to} → ${mv.from}`);
-        }
-      } catch (re: any) {
-        opLog(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);
-      }
+        if (fs.existsSync(mv.to)) { moveFile(mv.to, mv.from); rolledBack++; opLog(`ROLLBACK: ${mv.to} → ${mv.from}`); }
+      } catch (re: any) { opLog(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`); }
     }
 
-    opLog(`=== Job #${id} ROLLED_BACK — ${rolledBack}/${fileMoves.length} moves reversed ===`);
+    opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
     await db.update(organizationJobsTable).set({
-      status: "rolled_back",
-      error: errMsg,
-      fileMoves: fileMoves as any,
-      completedAt: new Date(),
+      status: "rolled_back", error: errMsg, fileMoves: fileMoves as any, completedAt: new Date(),
     }).where(eq(organizationJobsTable.id, id)).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
   } finally {
-    for (const td of tempDirs) {
-      cleanTempDir(td);
-    }
+    for (const td of tempDirs) cleanTempDir(td);
     res.end();
+  }
+});
+
+/**
+ * Apply archive disposition after the user explicitly confirms.
+ * Only valid for completed jobs with archiveDisposition === "delete".
+ * The body must include { confirm: true } to proceed.
+ */
+router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
+  const id = parseInt(req.params.id);
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (job.status !== "completed") { res.status(409).json({ error: "Job must be completed before applying disposition" }); return; }
+    if (!req.body?.confirm) { res.status(400).json({ error: "confirm: true is required to execute a destructive disposition" }); return; }
+
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const nasPath = (settingsRows[0] as any)?.nasPath ?? "";
+
+    let dispositionResult = "kept";
+    if (job.archiveDisposition === "delete") {
+      if (!fs.existsSync(job.sourcePath)) {
+        res.json({ ok: true, dispositionResult: "already_gone", sourcePath: job.sourcePath }); return;
+      }
+      fs.unlinkSync(job.sourcePath);
+      dispositionResult = "deleted";
+    } else if (job.archiveDisposition === "move_to_processed") {
+      const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
+      fs.mkdirSync(processedDir, { recursive: true });
+      const dest = path.join(processedDir, path.basename(job.sourcePath));
+      moveFile(job.sourcePath, dest);
+      dispositionResult = `moved_to:${dest}`;
+    }
+
+    res.json({ ok: true, dispositionResult, sourcePath: job.sourcePath });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to apply disposition" });
   }
 });
 

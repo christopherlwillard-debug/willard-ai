@@ -6,6 +6,8 @@ import {
   useDeleteOrganizeJob,
   useAnalyzeOrganizeJob,
   usePreflightOrganizeJob,
+  useUpdateOrganizeJobPlan,
+  useApplyOrganizeJobDisposition,
   useListArchives,
 } from "@workspace/api-client-react";
 import type { OrganizationJob } from "@workspace/api-client-react";
@@ -15,12 +17,12 @@ import { formatBytes, formatDate } from "@/lib/format";
 import {
   Boxes, Plus, ChevronRight, CheckCircle2, XCircle, AlertTriangle, Loader2,
   Archive, FolderOpen, Trash2, Eye, Play, RotateCcw, Sparkles, HardDrive,
-  FileText, Image, Video, File, ArrowRight,
+  FileText, Image, Video, File, ArrowRight, Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -31,41 +33,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 const STEPS = ["Setup", "Analyze", "Pre-flight", "Execute", "Done"] as const;
 type Step = 0 | 1 | 2 | 3 | 4;
 
+const FILE_CATEGORIES = [
+  { key: "image",    label: "Photos / Images", icon: <Image className="w-3.5 h-3.5 text-blue-400" />,    summaryKey: "images" },
+  { key: "video",    label: "Videos",           icon: <Video className="w-3.5 h-3.5 text-purple-400" />,  summaryKey: "videos" },
+  { key: "document", label: "Documents",        icon: <FileText className="w-3.5 h-3.5 text-amber-400" />, summaryKey: "documents" },
+  { key: "other",    label: "Other Files",      icon: <File className="w-3.5 h-3.5 text-muted-foreground" />, summaryKey: "other" },
+] as const;
+
 function statusBadge(status: string) {
   const map: Record<string, { label: string; cls: string }> = {
-    pending: { label: "Pending", cls: "bg-secondary text-muted-foreground" },
-    analyzing: { label: "Analyzing", cls: "bg-blue-500/20 text-blue-400" },
-    planned: { label: "Planned", cls: "bg-blue-500/20 text-blue-400" },
-    verified: { label: "Verified", cls: "bg-amber-500/20 text-amber-400" },
-    executing: { label: "Executing", cls: "bg-primary/20 text-primary animate-pulse" },
-    completed: { label: "Completed", cls: "bg-green-500/20 text-green-400" },
-    failed: { label: "Failed", cls: "bg-destructive/20 text-destructive" },
+    pending:     { label: "Pending",     cls: "bg-secondary text-muted-foreground" },
+    analyzing:   { label: "Analyzing",   cls: "bg-blue-500/20 text-blue-400" },
+    planned:     { label: "Planned",     cls: "bg-blue-500/20 text-blue-400" },
+    verified:    { label: "Verified",    cls: "bg-amber-500/20 text-amber-400" },
+    executing:   { label: "Executing",   cls: "bg-primary/20 text-primary animate-pulse" },
+    completed:   { label: "Completed",   cls: "bg-green-500/20 text-green-400" },
+    failed:      { label: "Failed",      cls: "bg-destructive/20 text-destructive" },
     rolled_back: { label: "Rolled Back", cls: "bg-orange-500/20 text-orange-400" },
   };
   const m = map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
   return <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${m.cls}`}>{m.label}</span>;
 }
 
-function dispositionLabel(d: string) {
-  if (d === "delete") return "Delete after move";
-  if (d === "move_to_processed") return "Move to Processed/";
-  return "Keep in place";
-}
-
-function fileTypeIcon(ft: string) {
-  switch (ft) {
-    case "image": return <Image className="w-3 h-3 text-blue-400" />;
-    case "video": return <Video className="w-3 h-3 text-purple-400" />;
-    case "document": return <FileText className="w-3 h-3 text-amber-400" />;
-    default: return <File className="w-3 h-3 text-muted-foreground" />;
-  }
-}
-
-// ── Wizard ─────────────────────────────────────────────────────────────────
-
 function StepIndicator({ current }: { current: Step }) {
   return (
-    <div className="flex items-center gap-1 text-xs font-mono mb-6">
+    <div className="flex items-center gap-1 text-xs font-mono mb-6 flex-wrap">
       {STEPS.map((label, i) => (
         <div key={i} className="flex items-center gap-1">
           <span className={`px-2 py-0.5 rounded ${i === current ? "bg-primary text-primary-foreground" : i < current ? "text-green-400" : "text-muted-foreground"}`}>
@@ -78,6 +70,8 @@ function StepIndicator({ current }: { current: Step }) {
   );
 }
 
+// ── Setup Step ──────────────────────────────────────────────────────────────
+
 function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
   const { toast } = useToast();
   const [form, setForm] = useState({ sourceType: "archive", sourcePath: "", archiveId: "", archiveDisposition: "keep" });
@@ -85,21 +79,9 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
   const createMutation = useCreateOrganizeJob({
     mutation: {
       onSuccess: (job) => onCreated(job.id),
-      onError: () => toast({ title: "Failed to create job", variant: "destructive" }),
+      onError:   () => toast({ title: "Failed to create job", variant: "destructive" }),
     },
   });
-
-  const handleCreate = () => {
-    if (!form.sourcePath.trim()) { toast({ title: "Source path is required", variant: "destructive" }); return; }
-    createMutation.mutate({
-      data: {
-        sourceType: form.sourceType as "archive" | "folder",
-        sourcePath: form.sourcePath.trim(),
-        archiveId: form.archiveId ? parseInt(form.archiveId) : null,
-        archiveDisposition: form.archiveDisposition as "keep" | "move_to_processed" | "delete",
-      },
-    });
-  };
 
   const peekedArchives = archivesData?.archives?.filter(a => a.peekStatus === "peeked") ?? [];
 
@@ -133,9 +115,7 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
               const arc = peekedArchives.find(a => String(a.id) === v);
               setForm({ ...form, archiveId: v, sourcePath: arc?.path ?? form.sourcePath });
             }}>
-              <SelectTrigger className="font-mono text-xs h-8">
-                <SelectValue placeholder="— select indexed archive —" />
-              </SelectTrigger>
+              <SelectTrigger className="font-mono text-xs h-8"><SelectValue placeholder="— select indexed archive —" /></SelectTrigger>
               <SelectContent>
                 {peekedArchives.map(a => (
                   <SelectItem key={a.id} value={String(a.id)}>
@@ -152,21 +132,25 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
         <div className="space-y-2">
           <Label>After successful move, the archive should…</Label>
           <Select value={form.archiveDisposition} onValueChange={v => setForm({ ...form, archiveDisposition: v })}>
-            <SelectTrigger className="font-mono text-sm">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="keep">Keep in place (safe default)</SelectItem>
               <SelectItem value="move_to_processed">Move to WillardAI/archive-index/processed/</SelectItem>
-              <SelectItem value="delete">Delete archive (⚠ permanent)</SelectItem>
+              <SelectItem value="delete">Delete archive (⚠ requires confirmation)</SelectItem>
             </SelectContent>
           </Select>
+          {form.archiveDisposition === "delete" && (
+            <p className="text-xs text-amber-400/80 font-mono">You will be prompted to confirm deletion <em>after</em> verifying all files moved successfully.</p>
+          )}
         </div>
       )}
 
       <Button
         className="w-full font-mono font-bold"
-        onClick={handleCreate}
+        onClick={() => {
+          if (!form.sourcePath.trim()) { toast({ title: "Source path is required", variant: "destructive" }); return; }
+          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.archiveId ? parseInt(form.archiveId) : null, archiveDisposition: form.archiveDisposition as any } });
+        }}
         disabled={createMutation.isPending || !form.sourcePath.trim()}
       >
         {createMutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating…</> : "CREATE_JOB →"}
@@ -175,9 +159,12 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
   );
 }
 
+// ── Analyze Step ─────────────────────────────────────────────────────────────
+
 function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
   const analyzeMutation = useAnalyzeOrganizeJob({
     mutation: {
       onSuccess: () => {
@@ -188,14 +175,39 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
     },
   });
 
+  const updatePlanMutation = useUpdateOrganizeJobPlan({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
+        queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+      },
+      onError: () => toast({ title: "Failed to update plan", variant: "destructive" }),
+    },
+  });
+
   const plan = job.planJson as any;
   const isAnalyzing = job.status === "analyzing" || analyzeMutation.isPending;
+
+  // Local excluded categories state (mirrors planJson.excludeCategories)
+  const [excludedCats, setExcludedCats] = useState<Set<string>>(
+    () => new Set(plan?.excludeCategories ?? [])
+  );
 
   useEffect(() => {
     if (job.status === "pending") {
       analyzeMutation.mutate({ id: job.id });
     }
   }, [job.id]);
+
+  const toggleCategory = (cat: string) => {
+    const next = new Set(excludedCats);
+    if (next.has(cat)) next.delete(cat); else next.add(cat);
+    setExcludedCats(next);
+    updatePlanMutation.mutate({
+      id: job.id,
+      data: { excludeCategories: [...next], excludePaths: plan?.excludePaths ?? [] },
+    });
+  };
 
   if (isAnalyzing) {
     return (
@@ -210,25 +222,24 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
   if (!plan) {
     return (
       <div className="space-y-4">
-        {job.status === "failed" && <p className="text-destructive text-sm font-mono">{job.error}</p>}
-        <Button onClick={() => analyzeMutation.mutate({ id: job.id })} className="w-full font-mono">
-          <RotateCcw className="w-4 h-4 mr-2" /> Re-analyze
-        </Button>
+        {job.status === "failed" && <p className="text-destructive text-sm font-mono">{(job as any).error}</p>}
+        <Button onClick={() => analyzeMutation.mutate({ id: job.id })} className="w-full font-mono"><RotateCcw className="w-4 h-4 mr-2" /> Re-analyze</Button>
       </div>
     );
   }
 
-  const summary = plan.summary ?? {};
+  const summary    = plan.activeSummary ?? plan.summary ?? {};
   const confidence = typeof plan.aiConfidence === "number" ? plan.aiConfidence : null;
-  const confColor = confidence === null ? "text-muted-foreground" : confidence >= 0.8 ? "text-green-400" : confidence >= 0.5 ? "text-amber-400" : "text-destructive";
+  const confColor  = confidence === null ? "text-muted-foreground" : confidence >= 0.8 ? "text-green-400" : confidence >= 0.5 ? "text-amber-400" : "text-destructive";
+  const totalActive = plan.totalFiles ?? 0;
 
   return (
     <div className="space-y-5">
       {/* Summary stats */}
       <div className="grid grid-cols-2 gap-3">
         <div className="p-3 bg-secondary/40 rounded-lg border text-center">
-          <div className="text-2xl font-mono font-bold">{plan.totalFiles ?? 0}</div>
-          <div className="text-xs text-muted-foreground font-mono">files to move</div>
+          <div className="text-2xl font-mono font-bold">{totalActive.toLocaleString()}</div>
+          <div className="text-xs text-muted-foreground font-mono">active files</div>
         </div>
         <div className="p-3 bg-secondary/40 rounded-lg border text-center">
           <div className="text-lg font-mono font-bold">{formatBytes(plan.totalSizeBytes ?? 0)}</div>
@@ -240,51 +251,63 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
       {confidence !== null && (
         <div className="flex items-start gap-3 p-3 bg-secondary/30 rounded-lg border">
           <Sparkles className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-          <div className="space-y-1">
+          <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-muted-foreground">AI Confidence</span>
               <span className={`text-sm font-mono font-bold ${confColor}`}>{Math.round(confidence * 100)}%</span>
             </div>
-            {plan.aiNotes && <p className="text-xs text-muted-foreground italic">{plan.aiNotes}</p>}
+            {plan.aiNotes && <p className="text-xs text-muted-foreground italic mt-1">{plan.aiNotes}</p>}
           </div>
         </div>
       )}
 
-      {/* File type breakdown */}
+      {/* Category toggles — check to include, uncheck to exclude */}
       <div className="space-y-2">
-        <p className="text-xs font-mono text-muted-foreground uppercase tracking-wider">Routing Plan</p>
-        {[
-          { key: "images", type: "image", icon: <Image className="w-3.5 h-3.5 text-blue-400" />, dest: plan.destinations?.images },
-          { key: "videos", type: "video", icon: <Video className="w-3.5 h-3.5 text-purple-400" />, dest: plan.destinations?.videos },
-          { key: "documents", type: "document", icon: <FileText className="w-3.5 h-3.5 text-amber-400" />, dest: plan.destinations?.documents },
-          { key: "other", type: "other", icon: <File className="w-3.5 h-3.5 text-muted-foreground" />, dest: plan.destinations?.other },
-        ].filter(row => (summary[row.key] ?? 0) > 0).map(row => (
-          <div key={row.key} className="flex items-center gap-3 p-2.5 bg-secondary/20 rounded border border-border/40">
-            <span className="shrink-0">{row.icon}</span>
-            <span className="text-sm font-mono font-medium w-12">{(summary[row.key] ?? 0).toLocaleString()}</span>
-            <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
-            <span className="text-xs font-mono text-muted-foreground truncate" title={row.dest}>{row.dest ?? "—"}</span>
-          </div>
-        ))}
+        <p className="text-xs font-mono text-muted-foreground uppercase tracking-wider">Routing Plan — uncheck to exclude</p>
+        {FILE_CATEGORIES.map(({ key, label, icon, summaryKey }) => {
+          const count = (summary as any)[summaryKey] ?? 0;
+          const dest  = (plan.destinations as any)?.[summaryKey === "images" ? "images" : summaryKey === "videos" ? "videos" : summaryKey === "documents" ? "documents" : "other"];
+          const excluded = excludedCats.has(key);
+          if (count === 0 && !excluded) return null;
+          return (
+            <div key={key} className={`flex items-center gap-3 p-2.5 rounded border transition-opacity ${excluded ? "opacity-40 border-dashed border-muted" : "border-border/40 bg-secondary/20"}`}>
+              <Checkbox
+                id={`cat-${key}`}
+                checked={!excluded}
+                onCheckedChange={() => toggleCategory(key)}
+                disabled={updatePlanMutation.isPending}
+              />
+              <label htmlFor={`cat-${key}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                {icon}
+                <span className="text-sm font-mono font-medium w-10">{excluded ? <s>{count.toLocaleString()}</s> : count.toLocaleString()}</span>
+                <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="text-xs font-mono text-muted-foreground truncate" title={dest}>{dest ?? "—"}</span>
+              </label>
+              {excluded && <Ban className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+            </div>
+          );
+        })}
       </div>
 
-      {/* Archive disposition */}
-      <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
-        <Archive className="w-3.5 h-3.5" />
-        <span>Archive: {dispositionLabel(plan.archiveDisposition ?? "keep")}</span>
-      </div>
+      {excludedCats.size > 0 && (
+        <p className="text-xs text-amber-400/80 font-mono">
+          {excludedCats.size} categor{excludedCats.size === 1 ? "y" : "ies"} excluded — pre-flight must be re-run after changes.
+        </p>
+      )}
 
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => analyzeMutation.mutate({ id: job.id })} disabled={analyzeMutation.isPending} className="flex-1 font-mono text-xs">
+        <Button variant="outline" size="sm" className="flex-1 font-mono text-xs" onClick={() => analyzeMutation.mutate({ id: job.id })} disabled={analyzeMutation.isPending || updatePlanMutation.isPending}>
           <RotateCcw className="w-3 h-3 mr-1.5" /> Re-analyze
         </Button>
-        <Button size="sm" onClick={onDone} className="flex-1 font-mono font-bold">
-          Run Pre-flight →
+        <Button size="sm" className="flex-1 font-mono font-bold" onClick={onDone} disabled={totalActive === 0}>
+          {totalActive === 0 ? "No files selected" : "Run Pre-flight →"}
         </Button>
       </div>
     </div>
   );
 }
+
+// ── Pre-flight Step ──────────────────────────────────────────────────────────
 
 function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => void }) {
   const { toast } = useToast();
@@ -300,9 +323,8 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
   });
 
   const preflight = job.preflightJson as any;
-  const isRunning = preflightMutation.isPending;
 
-  if (isRunning) {
+  if (preflightMutation.isPending) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4 text-muted-foreground">
         <Loader2 className="w-10 h-10 animate-spin text-primary" />
@@ -314,7 +336,7 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
   if (!preflight) {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground font-mono">Click below to validate disk space, destination writability, and collision detection.</p>
+        <p className="text-sm text-muted-foreground font-mono">Validates disk space, destination writability, and file collision detection.</p>
         <Button className="w-full font-mono font-bold" onClick={() => preflightMutation.mutate({ id: job.id })}>
           <Play className="w-4 h-4 mr-2" /> RUN_CHECKS
         </Button>
@@ -323,20 +345,18 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
   }
 
   const checks = preflight.checks ?? [];
-  const allOk = preflight.ok;
+  const allOk  = preflight.ok;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="space-y-2">
         {checks.map((c: any, i: number) => (
           <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${c.ok ? "border-green-500/30 bg-green-500/5" : c.warning ? "border-amber-500/30 bg-amber-500/5" : "border-destructive/30 bg-destructive/5"}`}>
-            {c.ok ? (
-              <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
-            ) : c.warning ? (
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            ) : (
-              <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-            )}
+            {c.ok
+              ? <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
+              : c.warning
+                ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                : <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />}
             <div>
               <p className="text-sm font-mono font-medium">{c.name}</p>
               <p className="text-xs text-muted-foreground">{c.detail}</p>
@@ -346,16 +366,10 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
       </div>
 
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => preflightMutation.mutate({ id: job.id })} disabled={preflightMutation.isPending} className="flex-1 font-mono text-xs">
+        <Button variant="outline" size="sm" className="flex-1 font-mono text-xs" onClick={() => preflightMutation.mutate({ id: job.id })} disabled={preflightMutation.isPending}>
           <RotateCcw className="w-3 h-3 mr-1.5" /> Re-check
         </Button>
-        <Button
-          size="sm"
-          onClick={onDone}
-          disabled={!allOk}
-          className="flex-1 font-mono font-bold"
-          title={!allOk ? "Fix critical issues before executing" : undefined}
-        >
+        <Button size="sm" className="flex-1 font-mono font-bold" onClick={onDone} disabled={!allOk} title={!allOk ? "Fix critical issues before executing" : undefined}>
           {allOk ? "Execute →" : "Fix Issues First"}
         </Button>
       </div>
@@ -363,26 +377,25 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
   );
 }
 
-interface SseEvent { stage?: string; message?: string; progress?: number; index?: number; total?: number; filename?: string; moved?: number; skipped?: number; action?: string }
+// ── Execute Step ─────────────────────────────────────────────────────────────
+
+interface SseProgress { stage?: string; message?: string; progress?: number; index?: number; total?: number; filename?: string; moved?: number; action?: string }
 
 function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: any) => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [started, setStarted] = useState(false);
+  const [started, setStarted]   = useState(false);
   const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState("");
-  const [log, setLog] = useState<string[]>([]);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const [stage, setStage]       = useState("");
+  const [log, setLog]           = useState<string[]>([]);
+  const [done, setDone]         = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+  const esRef    = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const addLog = (msg: string) => setLog(prev => [...prev.slice(-50), msg]);
+  const addLog = (msg: string) => setLog(prev => [...prev.slice(-60), msg]);
 
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [log]);
-
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [log]);
   useEffect(() => () => { esRef.current?.close(); }, []);
 
   const startExecute = () => {
@@ -395,16 +408,16 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
     esRef.current = es;
 
     es.addEventListener("status", (e: MessageEvent) => {
-      const d: SseEvent = JSON.parse(e.data);
+      const d: SseProgress = JSON.parse(e.data);
       setStage(d.message ?? d.stage ?? "");
       if (typeof d.progress === "number" && d.progress >= 0) setProgress(d.progress);
-      addLog(`[${d.stage?.toUpperCase() ?? "INFO"}] ${d.message ?? ""}`);
+      addLog(`[${(d.stage ?? "info").toUpperCase()}] ${d.message ?? ""}`);
     });
 
     es.addEventListener("progress", (e: MessageEvent) => {
-      const d: SseEvent = JSON.parse(e.data);
+      const d: SseProgress = JSON.parse(e.data);
       if (typeof d.progress === "number" && d.progress >= 0) setProgress(d.progress);
-      if (d.filename) addLog(`${d.action === "skipped" ? "↷ skip" : "→ move"} ${d.filename}${d.action === "skipped" ? " (exists)" : ""}`);
+      if (d.filename) addLog(`→ ${d.filename}`);
     });
 
     es.addEventListener("complete", (e: MessageEvent) => {
@@ -412,7 +425,7 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
       setProgress(100);
       setStage("Complete");
       setDone(true);
-      addLog(`✓ Done — ${d.filesMoved} moved, ${d.filesSkipped} skipped`);
+      addLog(`✓ Done — ${d.filesMoved} moved, ${d.filesVerified} verified`);
       es.close();
       queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
       queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
@@ -421,18 +434,19 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
 
     es.addEventListener("error", (e: MessageEvent) => {
       let msg = "Execution failed";
-      try { msg = JSON.parse(e.data).message ?? msg; } catch { /* raw error event */ }
+      try { msg = JSON.parse(e.data).message ?? msg; } catch { /* raw error */ }
       setError(msg);
       setStarted(false);
       es.close();
       queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
       queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
-      toast({ title: "Execution failed", description: msg, variant: "destructive" });
+      toast({ title: "Execution failed — rolled back", description: msg, variant: "destructive" });
     });
   };
 
+  const plan = job.planJson as any;
+
   if (!started && !done && !error) {
-    const plan = job.planJson as any;
     return (
       <div className="space-y-5">
         <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
@@ -440,9 +454,14 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
             <AlertTriangle className="w-4 h-4" /> Ready to Execute
           </div>
           <p className="text-xs text-muted-foreground">
-            This will move <strong>{plan?.totalFiles ?? "?"} files</strong> ({formatBytes(plan?.totalSizeBytes ?? 0)}) to their destinations.
-            {plan?.archiveDisposition === "delete" && " The source archive will be <strong>permanently deleted</strong>."}
+            This will move <strong>{plan?.totalFiles?.toLocaleString() ?? "?"} files</strong> ({formatBytes(plan?.totalSizeBytes ?? 0)}) to their destinations.
+            Any unexpected collision or integrity failure will trigger automatic rollback.
           </p>
+          {plan?.archiveDisposition === "delete" && (
+            <p className="text-xs text-amber-400/80 font-mono">
+              Archive deletion will require your explicit confirmation after successful verification.
+            </p>
+          )}
         </div>
         <Button className="w-full font-mono font-bold bg-primary" onClick={startExecute}>
           <Play className="w-4 h-4 mr-2" /> EXECUTE_NOW
@@ -458,13 +477,13 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
           <span>{stage}</span>
           <span>{progress}%</span>
         </div>
-        <Progress value={progress} className="h-2" />
+        <Progress value={Math.max(0, progress)} className="h-2" />
       </div>
 
       <ScrollArea className="h-48 rounded-md border bg-secondary/20 p-3">
         <div className="space-y-0.5 font-mono text-xs">
           {log.map((line, i) => (
-            <div key={i} className={line.startsWith("✓") ? "text-green-400" : line.startsWith("↷") ? "text-muted-foreground" : "text-foreground/70"}>
+            <div key={i} className={line.startsWith("✓") ? "text-green-400" : line.startsWith("[ROLLING") ? "text-orange-400" : "text-foreground/70"}>
               {line}
             </div>
           ))}
@@ -476,13 +495,13 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
         <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm text-destructive font-mono">
           <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
           <div>
-            <p className="font-bold">Execution failed — rolled back</p>
-            <p className="text-xs mt-1">{error}</p>
+            <p className="font-bold">Execution failed — all moves rolled back</p>
+            <p className="text-xs mt-1 opacity-80">{error}</p>
           </div>
         </div>
       )}
 
-      {done && (
+      {done && !error && (
         <Button className="w-full font-mono" onClick={() => onDone(null)}>
           View Summary →
         </Button>
@@ -491,13 +510,41 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
   );
 }
 
+// ── Done Step ─────────────────────────────────────────────────────────────────
+
 function DoneStep({ job }: { job: OrganizationJob }) {
-  const result = (job as any);
-  const plan = job.planJson as any;
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [dispositionDone, setDispositionDone]   = useState(false);
+
+  const applyDispositionMutation = useApplyOrganizeJobDisposition({
+    mutation: {
+      onSuccess: (result) => {
+        setConfirmingDelete(false);
+        setDispositionDone(true);
+        queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
+        queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+        toast({ title: `Archive ${result.dispositionResult === "deleted" ? "deleted" : "disposed"}` });
+      },
+      onError: (err: any) => {
+        toast({ title: "Disposition failed", description: err?.message, variant: "destructive" });
+      },
+    },
+  });
+
+  const plan      = job.planJson as any;
   const isRolledBack = job.status === "rolled_back";
+  const needsDeleteConfirm = !isRolledBack
+    && job.archiveDisposition === "delete"
+    && job.sourceType === "archive"
+    && !dispositionDone;
+
+  const immichResult = plan?.immichRescan ?? null;
 
   return (
     <div className="space-y-5">
+      {/* Status banner */}
       <div className={`flex items-center gap-3 p-4 rounded-lg border ${isRolledBack ? "border-orange-500/40 bg-orange-500/10" : "border-green-500/40 bg-green-500/10"}`}>
         {isRolledBack
           ? <RotateCcw className="w-8 h-8 text-orange-400 shrink-0" />
@@ -512,11 +559,12 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       </div>
 
+      {/* Stats */}
       {!isRolledBack && (
         <div className="grid grid-cols-3 gap-3 text-center">
           {[
-            { label: "Moved", value: Array.isArray(job.fileMoves) ? job.fileMoves.length : "?" },
-            { label: "Total", value: plan?.totalFiles ?? "?" },
+            { label: "Moved",    value: Array.isArray(job.fileMoves) ? job.fileMoves.length : "?" },
+            { label: "Verified", value: Array.isArray(job.fileMoves) ? job.fileMoves.length : "?" },
             { label: "AI Score", value: plan?.aiConfidence != null ? `${Math.round(plan.aiConfidence * 100)}%` : "N/A" },
           ].map(s => (
             <div key={s.label} className="p-3 bg-secondary/40 rounded-lg border">
@@ -527,32 +575,85 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       )}
 
-      {job.reportPath && (
-        <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground p-2 bg-secondary/20 rounded border">
-          <HardDrive className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate" title={job.reportPath}>Report saved: {job.reportPath}</span>
+      {/* Immich rescan result */}
+      {immichResult && (
+        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichResult.triggered ? "border-blue-500/30 bg-blue-500/5 text-blue-400" : "border-muted text-muted-foreground"}`}>
+          <Image className="w-3.5 h-3.5 shrink-0" />
+          <span>{immichResult.detail}</span>
         </div>
       )}
 
-      {isRolledBack && job.error && (
+      {/* Report path */}
+      {job.reportPath && (
+        <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground p-2 bg-secondary/20 rounded border">
+          <HardDrive className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate" title={job.reportPath}>Report: {job.reportPath.split("/").slice(-2).join("/")}</span>
+        </div>
+      )}
+
+      {/* Error detail */}
+      {isRolledBack && (job as any).error && (
         <div className="text-xs font-mono text-destructive/80 p-2 bg-destructive/5 rounded border border-destructive/20">
-          {job.error}
+          {(job as any).error}
+        </div>
+      )}
+
+      {/* Delete confirmation gate — required after completion */}
+      {needsDeleteConfirm && !dispositionDone && (
+        <div className="space-y-3 p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-sm font-mono font-bold text-destructive">Archive Deletion — Confirmation Required</p>
+              <p className="text-xs text-muted-foreground">
+                All <strong>{Array.isArray(job.fileMoves) ? job.fileMoves.length : "?"} files</strong> have been verified at their destinations.
+                Permanently delete the original archive?
+              </p>
+              <p className="text-xs font-mono text-muted-foreground opacity-60 truncate" title={job.sourcePath}>{job.sourcePath}</p>
+            </div>
+          </div>
+          {confirmingDelete ? (
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="destructive"
+                className="flex-1 font-mono font-bold"
+                disabled={applyDispositionMutation.isPending}
+                onClick={() => applyDispositionMutation.mutate({ id: job.id, data: { confirm: true } })}
+              >
+                {applyDispositionMutation.isPending ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Deleting…</> : "YES — DELETE PERMANENTLY"}
+              </Button>
+              <Button size="sm" variant="outline" className="font-mono" onClick={() => setConfirmingDelete(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="outline" className="w-full font-mono border-destructive/50 text-destructive hover:bg-destructive/10" onClick={() => setConfirmingDelete(true)}>
+              I understand — confirm deletion
+            </Button>
+          )}
+        </div>
+      )}
+
+      {dispositionDone && (
+        <div className="flex items-center gap-2 p-2.5 text-xs font-mono text-green-400 border border-green-500/30 bg-green-500/5 rounded-lg">
+          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+          Archive deleted successfully.
         </div>
       )}
     </div>
   );
 }
 
-// ── Main job wizard sheet ──────────────────────────────────────────────────
+// ── Job Wizard Sheet ──────────────────────────────────────────────────────────
 
-function JobWizardSheet({ jobId, onClose }: { jobId: number | null; onClose: () => void }) {
-  const [step, setStep] = useState<Step>(0);
-  const [completeResult, setCompleteResult] = useState<any>(null);
+function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void }) {
+  const [step, setStep] = useState<Step>(1);
   const queryClient = useQueryClient();
 
-  const { data: job, isLoading } = useGetOrganizeJob(jobId!, {
+  const { data: job, isLoading } = useGetOrganizeJob(jobId, {
     query: {
-      queryKey: getGetOrganizeJobQueryKey(jobId!),
+      queryKey: getGetOrganizeJobQueryKey(jobId),
       enabled: !!jobId,
       refetchInterval: (data) => {
         const s = (data as any)?.status;
@@ -561,7 +662,6 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number | null; onClose: () 
     },
   });
 
-  // Auto-advance step based on job status
   useEffect(() => {
     if (!job) return;
     if (job.status === "pending" || job.status === "analyzing") setStep(1);
@@ -571,57 +671,32 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number | null; onClose: () 
     else if (job.status === "completed" || job.status === "rolled_back" || job.status === "failed") setStep(4);
   }, [job?.status]);
 
-  if (!jobId) return null;
-
   return (
     <Sheet open={!!jobId} onOpenChange={(open) => !open && onClose()}>
       <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
         <SheetHeader>
           <SheetTitle className="font-mono text-primary">
-            {step === 0 ? "New Organization Job" : `Job #${jobId} — ${job?.sourceType === "archive" ? "Archive" : "Folder"}`}
+            Job #{jobId} — {job?.sourceType === "archive" ? "Archive" : "Folder"}
           </SheetTitle>
         </SheetHeader>
-
         <div className="mt-6">
           <StepIndicator current={step} />
-
-          {step === 0 && (
-            <SetupStep onCreated={(id) => {
-              queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
-              onClose();
-            }} />
-          )}
-
-          {isLoading && step > 0 && (
-            <div className="space-y-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-32 w-full" /></div>
-          )}
-
-          {!isLoading && job && step === 1 && (
-            <AnalyzeStep job={job} onDone={() => setStep(2)} />
-          )}
-
-          {!isLoading && job && step === 2 && (
-            <PreflightStep job={job} onDone={() => setStep(3)} />
-          )}
-
-          {!isLoading && job && step === 3 && (
-            <ExecuteStep job={job} onDone={(result) => { setCompleteResult(result); setStep(4); }} />
-          )}
-
-          {!isLoading && job && step === 4 && (
-            <DoneStep job={job} />
-          )}
+          {isLoading && <div className="space-y-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-32 w-full" /></div>}
+          {!isLoading && job && step === 1 && <AnalyzeStep job={job} onDone={() => setStep(2)} />}
+          {!isLoading && job && step === 2 && <PreflightStep job={job} onDone={() => setStep(3)} />}
+          {!isLoading && job && step === 3 && <ExecuteStep job={job} onDone={() => setStep(4)} />}
+          {!isLoading && job && step === 4 && <DoneStep job={job} />}
         </div>
       </SheetContent>
     </Sheet>
   );
 }
 
-// ── Page ───────────────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Organize() {
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
-  const [showNew, setShowNew] = useState(false);
+  const [showNew, setShowNew]         = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -631,16 +706,11 @@ export default function Organize() {
 
   const deleteMutation = useDeleteOrganizeJob({
     mutation: {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
-        toast({ title: "Job deleted" });
-      },
-      onError: (err: any) => toast({ title: "Failed to delete", description: err?.message, variant: "destructive" }),
+      onSuccess: () => { queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() }); toast({ title: "Job deleted" }); },
+      onError:   (err: any) => toast({ title: "Failed to delete", description: err?.message, variant: "destructive" }),
     },
   });
 
-  const openJob = (id: number) => { setActiveJobId(id); setShowNew(false); };
-  const openNew = () => { setActiveJobId(null); setShowNew(true); };
   const closeSheet = () => { setActiveJobId(null); setShowNew(false); };
 
   return (
@@ -650,12 +720,11 @@ export default function Organize() {
           <h1 className="text-3xl font-bold font-mono tracking-tight">ORGANIZE_CENTER</h1>
           <p className="text-muted-foreground mt-1 font-mono text-sm">Extract archives and route files to the right destination</p>
         </div>
-        <Button onClick={openNew} className="font-mono font-bold">
+        <Button onClick={() => { setActiveJobId(null); setShowNew(true); }} className="font-mono font-bold">
           <Plus className="w-4 h-4 mr-2" /> New Job
         </Button>
       </div>
 
-      {/* Job History */}
       <div className="rounded-md border">
         <Table>
           <TableHeader>
@@ -671,13 +740,13 @@ export default function Organize() {
           <TableBody>
             {isLoading ? (
               <TableRow><TableCell colSpan={6}><Skeleton className="h-24 w-full" /></TableCell></TableRow>
-            ) : jobs?.length === 0 ? (
+            ) : (jobs?.length ?? 0) === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} className="text-center py-12">
                   <div className="flex flex-col items-center gap-3 text-muted-foreground">
                     <Boxes className="w-10 h-10 opacity-30" />
                     <p className="font-mono text-sm">No organization jobs yet</p>
-                    <Button size="sm" variant="outline" onClick={openNew} className="font-mono">
+                    <Button size="sm" variant="outline" onClick={() => setShowNew(true)} className="font-mono">
                       <Plus className="w-3.5 h-3.5 mr-1.5" /> Create First Job
                     </Button>
                   </div>
@@ -686,7 +755,7 @@ export default function Organize() {
             ) : jobs?.map((job) => {
               const plan = job.planJson as any;
               return (
-                <TableRow key={job.id} className="cursor-pointer hover:bg-secondary/30" onClick={() => openJob(job.id)}>
+                <TableRow key={job.id} className="cursor-pointer hover:bg-secondary/30" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
                   <TableCell className="font-mono text-xs max-w-[180px] truncate" title={job.sourcePath}>
                     <span className="font-medium">{job.sourcePath.split("/").pop()}</span>
                   </TableCell>
@@ -703,13 +772,11 @@ export default function Organize() {
                   <TableCell className="text-xs text-muted-foreground">{formatDate(job.createdAt)}</TableCell>
                   <TableCell>
                     <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openJob(job.id)}>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
                         <Eye className="w-3.5 h-3.5" />
                       </Button>
                       <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                        variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                         disabled={job.status === "executing" || deleteMutation.isPending}
                         onClick={() => deleteMutation.mutate({ id: job.id })}
                       >
@@ -724,7 +791,7 @@ export default function Organize() {
         </Table>
       </div>
 
-      {/* Wizard sheet for new job */}
+      {/* New job sheet */}
       {showNew && (
         <Sheet open={showNew} onOpenChange={(open) => !open && closeSheet()}>
           <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
@@ -743,10 +810,8 @@ export default function Organize() {
         </Sheet>
       )}
 
-      {/* Wizard sheet for existing job */}
-      {activeJobId && (
-        <JobWizardSheet jobId={activeJobId} onClose={closeSheet} />
-      )}
+      {/* Existing job wizard */}
+      {activeJobId && <JobWizardSheet jobId={activeJobId} onClose={closeSheet} />}
     </div>
   );
 }
