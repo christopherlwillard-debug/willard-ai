@@ -2192,6 +2192,9 @@ components:
         archiveDisposition:
           type: string
           enum: [keep, move_to_processed, delete]
+        conflictPolicy:
+          type: string
+          enum: [keep_existing, replace, rename, skip]
       required:
         - sourceType
         - sourcePath
@@ -2211,6 +2214,8 @@ components:
         archiveId:
           type: ["integer", "null"]
         archiveDisposition:
+          type: string
+        conflictPolicy:
           type: string
         planJson:
           type: ["object", "null"]
@@ -2234,4 +2239,5 @@ components:
         - sourceType
         - sourcePath
         - archiveDisposition
+        - conflictPolicy
         - createdAt

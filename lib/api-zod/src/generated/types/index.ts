@@ -69,6 +69,7 @@ export * from './organizeDispositionInput';
 export * from './organizeDispositionResult';
 export * from './organizeJobInput';
 export * from './organizeJobInputArchiveDisposition';
+export * from './organizeJobInputConflictPolicy';
 export * from './organizeJobInputSourceType';
 export * from './organizePlanUpdateInput';
 export * from './organizePlanUpdateInputExcludeCategoriesItem';

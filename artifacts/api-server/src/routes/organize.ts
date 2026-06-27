@@ -498,20 +498,21 @@ function isoTimestamp(): string {
 
 router.post("/organize/jobs", async (req, res) => {
   try {
-    const { sourceType, sourcePath, archiveId, archiveDisposition = "keep" } = req.body as any;
+    const { sourceType, sourcePath, archiveId, archiveDisposition = "keep", conflictPolicy = "keep_existing" } = req.body as any;
     if (!sourceType || !["archive","folder"].includes(sourceType)) {
       res.status(400).json({ error: "sourceType must be 'archive' or 'folder'" }); return;
     }
     if (!sourcePath || typeof sourcePath !== "string") {
       res.status(400).json({ error: "sourcePath is required" }); return;
     }
-    // archiveDisposition only meaningful for archive sources — folder jobs always keep their source
     const resolvedDisposition = sourceType === "archive" ? (archiveDisposition ?? "keep") : "keep";
     if (sourceType === "folder" && archiveDisposition && archiveDisposition !== "keep") {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
     }
+    const validPolicies = ["keep_existing", "replace", "rename", "skip"];
+    const resolvedPolicy = validPolicies.includes(conflictPolicy) ? conflictPolicy : "keep_existing";
     const [job] = await db.insert(organizationJobsTable)
-      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition })
+      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy })
       .returning();
     res.status(201).json(job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }
@@ -1127,6 +1128,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const total = expectedTotal;
     let moved = 0;
     let excluded = 0;
+    let conflictSkipped = 0;
+    const conflictPolicy: string = (job as any).conflictPolicy ?? "keep_existing";
+    const conflictResolutions: Array<{filename: string; destDir: string; action: string; resolvedTo?: string}> = [];
 
     // Build a frozen destination map from the approved plan routes.
     // Execute MUST drive moves from the plan the user reviewed + preflight verified —
@@ -1137,7 +1141,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
 
     send("status", { stage: "moving", message: `Moving ${total} files…`, progress: 26, total });
-    opLog(`MOVE_START: routing ${total} active files from frozen plan destinations`);
+    opLog(`MOVE_START: routing ${total} active files from frozen plan destinations (conflict policy: ${conflictPolicy})`);
 
     for (let i = 0; i < sourceFiles.length; i++) {
       const sf = sourceFiles[i];
@@ -1160,17 +1164,41 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         );
       }
       const destDir  = planDest;
-      const destFile = path.join(destDir, path.basename(sf.relativePath));
+      let destFile   = path.join(destDir, path.basename(sf.relativePath));
 
       // Enforce NAS root boundary — destination must be within configured nasPath
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
 
-      // FATAL on unexpected collision — pre-flight should have caught this
+      // Apply conflict policy when destination file already exists
       if (fs.existsSync(destFile)) {
-        throw new Error(
-          `Unexpected collision during execute: ${path.basename(sf.relativePath)} already exists at ${destDir}. ` +
-          `Re-run pre-flight to detect and resolve conflicts.`
-        );
+        const filename = path.basename(sf.relativePath);
+        if (conflictPolicy === "replace") {
+          fs.unlinkSync(destFile);
+          opLog(`CONFLICT_REPLACE: ${destFile} overwritten`);
+          conflictResolutions.push({ filename, destDir, action: "replace" });
+          // fall through to move normally
+        } else if (conflictPolicy === "rename") {
+          const ext  = path.extname(filename);
+          const base = filename.slice(0, filename.length - ext.length);
+          let suffix = 1;
+          while (fs.existsSync(destFile)) {
+            destFile = path.join(destDir, `${base}_${suffix}${ext}`);
+            suffix++;
+          }
+          opLog(`CONFLICT_RENAME: ${filename} → ${path.basename(destFile)}`);
+          conflictResolutions.push({ filename, destDir, action: "rename", resolvedTo: path.basename(destFile) });
+          // fall through to move with renamed path
+        } else {
+          // keep_existing or skip: leave destination untouched, skip source
+          opLog(`CONFLICT_SKIP: ${filename} already exists at ${destDir} — skipped (policy: ${conflictPolicy})`);
+          conflictResolutions.push({ filename, destDir, action: conflictPolicy });
+          conflictSkipped++;
+          if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
+            const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
+            send("progress", { index: i + 1, total, filename, moved, progress: pct });
+          }
+          continue;
+        }
       }
 
       const preToken  = await integrityToken(sf.fullPath);
@@ -1186,8 +1214,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       opLog(`MOVE: ${sf.fullPath} → ${destFile}`);
 
-      if ((i + 1) % 5 === 0 || moved + excluded === total) {
-        const pct = 26 + Math.round(((moved + excluded) / total) * 55);
+      if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
+        const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, progress: pct });
       }
     }
@@ -1195,9 +1223,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // ── Stage 6: Strict verification — 100% of moved files must exist + per-dest recount ──
     send("status", { stage: "verifying", message: "Verifying all moved files at destination…", progress: 83 });
 
-    // Invariant: moved count must match expected active routes exactly
-    if (moved !== total) {
-      throw new Error(`Move count mismatch: moved ${moved} but plan expected ${total}. Investigation required.`);
+    // Invariant: moved + conflict-skipped must equal total active routes
+    if (moved + conflictSkipped !== total) {
+      throw new Error(`Move count mismatch: moved ${moved} + skipped ${conflictSkipped} = ${moved + conflictSkipped} but plan expected ${total}. Investigation required.`);
     }
 
     // Per-file existence check
@@ -1288,11 +1316,19 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     send("status", { stage: "report", message: "Writing job report…", progress: 95 });
 
     const completedAt = new Date();
+    const conflictsTotal   = conflictResolutions.length;
+    const conflictsSkipped = conflictResolutions.filter(c => c.action === "keep_existing" || c.action === "skip").length;
+    const conflictsReplaced = conflictResolutions.filter(c => c.action === "replace").length;
+    const conflictsRenamed  = conflictResolutions.filter(c => c.action === "rename").length;
+    if (conflictsTotal > 0) opLog(`CONFLICTS: total=${conflictsTotal} skipped=${conflictsSkipped} replaced=${conflictsReplaced} renamed=${conflictsRenamed} policy=${conflictPolicy}`);
     const report: any = {
       jobId: id, completedAt: completedAt.toISOString(),
       sourceType: job.sourceType, sourcePath: job.sourcePath, archiveDisposition: job.archiveDisposition,
+      conflictPolicy,
       filesFound: sourceFiles.length, filesMoved: moved, filesExcluded: excluded,
       filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
+      conflictsTotal, conflictsSkipped, conflictsReplaced, conflictsRenamed,
+      conflictResolutions: conflictResolutions.slice(0, 200), // cap log size
       destinations: plan.destinations,
       destVerification,
       archiveCrcValidation: crcValidation,

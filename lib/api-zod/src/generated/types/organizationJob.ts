@@ -18,6 +18,7 @@ export interface OrganizationJob {
   /** @nullable */
   archiveId?: number | null;
   archiveDisposition: string;
+  conflictPolicy: string;
   /** @nullable */
   planJson?: OrganizationJobPlanJson;
   /** @nullable */

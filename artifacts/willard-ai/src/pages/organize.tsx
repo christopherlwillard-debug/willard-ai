@@ -74,7 +74,7 @@ function StepIndicator({ current }: { current: Step }) {
 
 function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
   const { toast } = useToast();
-  const [form, setForm] = useState({ sourceType: "archive", sourcePath: "", archiveId: "", archiveDisposition: "keep" });
+  const [form, setForm] = useState({ sourceType: "archive", sourcePath: "", archiveId: "", archiveDisposition: "keep", conflictPolicy: "keep_existing" });
   const { data: archivesData } = useListArchives({ limit: 200, offset: 0 });
   const createMutation = useCreateOrganizeJob({
     mutation: {
@@ -145,11 +145,27 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
         </div>
       )}
 
+      <div className="space-y-2">
+        <Label>When a destination file already exists…</Label>
+        <Select value={form.conflictPolicy} onValueChange={v => setForm({ ...form, conflictPolicy: v })}>
+          <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="keep_existing">Keep existing — skip source file (safe default)</SelectItem>
+            <SelectItem value="replace">Replace — overwrite destination with source</SelectItem>
+            <SelectItem value="rename">Rename — add suffix to source (file_1.jpg, file_2.jpg…)</SelectItem>
+            <SelectItem value="skip">Skip — same as keep existing</SelectItem>
+          </SelectContent>
+        </Select>
+        {form.conflictPolicy === "replace" && (
+          <p className="text-xs text-amber-400/80 font-mono">⚠ Existing destination files will be permanently overwritten.</p>
+        )}
+      </div>
+
       <Button
         className="w-full font-mono font-bold"
         onClick={() => {
           if (!form.sourcePath.trim()) { toast({ title: "Source path is required", variant: "destructive" }); return; }
-          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.archiveId ? parseInt(form.archiveId) : null, archiveDisposition: form.archiveDisposition as any } });
+          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.archiveId ? parseInt(form.archiveId) : null, archiveDisposition: form.archiveDisposition as any, conflictPolicy: form.conflictPolicy as any } });
         }}
         disabled={createMutation.isPending || !form.sourcePath.trim()}
       >
@@ -907,6 +923,40 @@ function DoneStep({ job }: { job: OrganizationJob }) {
             </div>
           )}
         </>
+      )}
+
+      {/* Conflict resolution summary */}
+      {!isRolledBack && report?.conflictsTotal > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Conflict Resolution ({report.conflictsTotal} file{report.conflictsTotal !== 1 ? "s" : ""})</p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {[
+              { label: "Skipped",  value: report.conflictsSkipped,  color: "text-muted-foreground" },
+              { label: "Replaced", value: report.conflictsReplaced, color: "text-amber-400" },
+              { label: "Renamed",  value: report.conflictsRenamed,  color: "text-blue-400" },
+            ].map(s => (
+              <div key={s.label} className="p-2 bg-secondary/20 rounded border">
+                <div className={`text-base font-mono font-bold ${s.color}`}>{s.value ?? 0}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {Array.isArray(report.conflictResolutions) && report.conflictResolutions.length > 0 && (
+            <ScrollArea className="h-24 rounded border bg-secondary/10 p-2">
+              <div className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                {(report.conflictResolutions as any[]).slice(0, 30).map((c: any, i: number) => (
+                  <div key={i} className="flex items-center gap-1.5 truncate">
+                    <span className={c.action === "replace" ? "text-amber-400" : c.action === "rename" ? "text-blue-400" : "text-muted-foreground/60"}>
+                      {c.action === "replace" ? "↺" : c.action === "rename" ? "→" : "✕"}
+                    </span>
+                    <span className="truncate">{c.filename}</span>
+                    {c.resolvedTo && <><span className="opacity-40">→</span><span className="text-blue-300 truncate">{c.resolvedTo}</span></>}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </div>
       )}
 
       {/* Immich verification result (from execute report) */}

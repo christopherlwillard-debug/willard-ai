@@ -9,6 +9,7 @@ export const organizationJobsTable = pgTable("organization_jobs", {
   sourcePath: text("source_path").notNull(),
   archiveId: integer("archive_id"),
   archiveDisposition: text("archive_disposition").notNull().default("keep"),
+  conflictPolicy: text("conflict_policy").notNull().default("keep_existing"),
   planJson: jsonb("plan_json"),
   preflightJson: jsonb("preflight_json"),
   fileMoves: jsonb("file_moves"),

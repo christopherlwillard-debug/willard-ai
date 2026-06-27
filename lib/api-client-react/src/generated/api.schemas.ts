@@ -481,12 +481,23 @@ export const OrganizeJobInputArchiveDisposition = {
   delete: 'delete',
 } as const;
 
+export type OrganizeJobInputConflictPolicy = typeof OrganizeJobInputConflictPolicy[keyof typeof OrganizeJobInputConflictPolicy];
+
+
+export const OrganizeJobInputConflictPolicy = {
+  keep_existing: 'keep_existing',
+  replace: 'replace',
+  rename: 'rename',
+  skip: 'skip',
+} as const;
+
 export interface OrganizeJobInput {
   sourceType: OrganizeJobInputSourceType;
   sourcePath: string;
   /** @nullable */
   archiveId?: number | null;
   archiveDisposition?: OrganizeJobInputArchiveDisposition;
+  conflictPolicy?: OrganizeJobInputConflictPolicy;
 }
 
 export type OrganizationJobStatus = typeof OrganizationJobStatus[keyof typeof OrganizationJobStatus];
@@ -524,6 +535,7 @@ export interface OrganizationJob {
   /** @nullable */
   archiveId?: number | null;
   archiveDisposition: string;
+  conflictPolicy: string;
   /** @nullable */
   planJson?: OrganizationJobPlanJson;
   /** @nullable */

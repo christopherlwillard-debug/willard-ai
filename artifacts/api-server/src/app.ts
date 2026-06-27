@@ -21,6 +21,10 @@ export async function bootstrapSessionTable(): Promise<void> {
     ) WITH (OIDS=FALSE);
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
   `);
+  await pool.query(`
+    ALTER TABLE organization_jobs
+      ADD COLUMN IF NOT EXISTS conflict_policy text NOT NULL DEFAULT 'keep_existing';
+  `);
 }
 
 const PgStore = connectPgSimple(session);

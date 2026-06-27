@@ -784,6 +784,7 @@ export const ListOrganizeJobsResponseItem = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),
@@ -808,7 +809,8 @@ export const CreateOrganizeJobBody = zod.object({
   "sourceType": zod.enum(['archive', 'folder']),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
-  "archiveDisposition": zod.enum(['keep', 'move_to_processed', 'delete']).optional()
+  "archiveDisposition": zod.enum(['keep', 'move_to_processed', 'delete']).optional(),
+  "conflictPolicy": zod.enum(['keep_existing', 'replace', 'rename', 'skip']).optional()
 })
 
 export const CreateOrganizeJobResponse = zod.object({
@@ -818,6 +820,7 @@ export const CreateOrganizeJobResponse = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),
@@ -848,6 +851,7 @@ export const GetOrganizeJobResponse = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),
@@ -890,6 +894,7 @@ export const AnalyzeOrganizeJobResponse = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),
@@ -920,6 +925,7 @@ export const PreflightOrganizeJobResponse = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),
@@ -965,6 +971,7 @@ export const UpdateOrganizeJobPlanResponse = zod.object({
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
   "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
   "planJson": zod.object({
 
 }).passthrough().nullish(),

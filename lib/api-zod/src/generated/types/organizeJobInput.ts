@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { OrganizeJobInputArchiveDisposition } from './organizeJobInputArchiveDisposition';
+import type { OrganizeJobInputConflictPolicy } from './organizeJobInputConflictPolicy';
 import type { OrganizeJobInputSourceType } from './organizeJobInputSourceType';
 
 export interface OrganizeJobInput {
@@ -14,4 +15,5 @@ export interface OrganizeJobInput {
   /** @nullable */
   archiveId?: number | null;
   archiveDisposition?: OrganizeJobInputArchiveDisposition;
+  conflictPolicy?: OrganizeJobInputConflictPolicy;
 }
