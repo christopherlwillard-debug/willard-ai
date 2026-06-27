@@ -116,6 +116,8 @@ export default function Archives() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const [minSizeMb, setMinSizeMb] = useState<string>("");
+  const [maxSizeMb, setMaxSizeMb] = useState<string>("");
   const [selectedArchiveId, setSelectedArchiveId] = useState<number | null>(null);
 
   const params = {
@@ -125,17 +127,21 @@ export default function Archives() {
     ...(categoryFilter !== "all" ? { category: categoryFilter } : {}),
     ...(dateFrom ? { dateFrom } : {}),
     ...(dateTo ? { dateTo } : {}),
+    ...(minSizeMb ? { minSize: Math.round(parseFloat(minSizeMb) * 1024 * 1024) } : {}),
+    ...(maxSizeMb ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
   };
 
   const { data, isLoading } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
 
-  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo;
+  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || !!minSizeMb || !!maxSizeMb;
 
   const clearFilters = () => {
     setStatusFilter("all");
     setCategoryFilter("all");
     setDateFrom("");
     setDateTo("");
+    setMinSizeMb("");
+    setMaxSizeMb("");
     setPage(0);
   };
 
@@ -185,6 +191,14 @@ export default function Archives() {
           <span className="text-xs text-muted-foreground font-mono">To</span>
           <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground font-mono">Min MB</span>
+          <Input type="number" min="0" placeholder="0" value={minSizeMb} onChange={(e) => { setMinSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground font-mono">Max MB</span>
+          <Input type="number" min="0" placeholder="∞" value={maxSizeMb} onChange={(e) => { setMaxSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+        </div>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="font-mono text-xs h-9">Clear</Button>
         )}
@@ -197,6 +211,7 @@ export default function Archives() {
               <TableHead className="w-10"></TableHead>
               <TableHead>Filename</TableHead>
               <TableHead>Category</TableHead>
+              <TableHead className="text-right">Files</TableHead>
               <TableHead>Location</TableHead>
               <TableHead className="text-right">Size</TableHead>
               <TableHead className="text-right">Modified</TableHead>
@@ -206,10 +221,10 @@ export default function Archives() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8}><Skeleton className="h-24 w-full" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={9}><Skeleton className="h-24 w-full" /></TableCell></TableRow>
             ) : data?.archives.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground py-8 font-mono text-sm">
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-8 font-mono text-sm">
                   {hasFilters ? "No archives match the current filters" : "No archives indexed yet — run a scan first"}
                 </TableCell>
               </TableRow>
@@ -235,6 +250,9 @@ export default function Archives() {
                 </TableCell>
                 <TableCell>
                   <span className="text-[10px] font-mono bg-secondary px-1.5 py-0.5 rounded uppercase">{archive.category ?? "general"}</span>
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                  {archive.containedFileCount != null ? archive.containedFileCount.toLocaleString() : "—"}
                 </TableCell>
                 <TableCell className="text-muted-foreground text-xs truncate max-w-[140px]" title={archive.folder ?? ""}>{archive.folder}</TableCell>
                 <TableCell className="text-right font-mono text-sm">{formatBytes(archive.sizeBytes)}</TableCell>

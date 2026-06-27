@@ -137,26 +137,42 @@ export default function Chat() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullText = "";
+      let buffer = "";
+
+      const processLine = (line: string) => {
+        if (!line.startsWith("data: ")) return;
+        const dataStr = line.substring(6).trim();
+        if (!dataStr) return;
+        try {
+          const data = JSON.parse(dataStr);
+          if (data.matchedFiles) {
+            setStreamedMatchedFiles(data.matchedFiles);
+          } else if (data.content) {
+            fullText += data.content;
+            setStreamedContent(fullText);
+          }
+        } catch { /* non-JSON line */ }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const dataStr = line.substring(6);
-            if (!dataStr) continue;
-            try {
-              const data = JSON.parse(dataStr);
-              if (data.matchedFiles) {
-                setStreamedMatchedFiles(data.matchedFiles);
-              } else if (data.content) {
-                fullText += data.content;
-                setStreamedContent(fullText);
-              }
-            } catch { /* ignore partial chunks */ }
+        // Accumulate into buffer so lines split across chunks are reassembled
+        buffer += decoder.decode(value, { stream: true });
+        // SSE events are separated by double newlines; process only complete events
+        const events = buffer.split("\n\n");
+        // The last element may be an incomplete event — keep it in the buffer
+        buffer = events.pop() ?? "";
+        for (const event of events) {
+          for (const line of event.split("\n")) {
+            processLine(line);
           }
+        }
+      }
+      // Flush any remaining buffered lines after stream closes
+      if (buffer) {
+        for (const line of buffer.split("\n")) {
+          processLine(line);
         }
       }
 

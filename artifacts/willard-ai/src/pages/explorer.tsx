@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-type SortKey = "name" | "size" | "modified";
+type SortKey = "name" | "size" | "modified" | "type";
 type SortDir = "asc" | "desc";
 
 interface FolderEntry {
@@ -18,6 +18,7 @@ interface FolderEntry {
   sizeBytes: number | null;
   modifiedAt: string | null;
   fileType?: string;
+  fileCount?: number | null;
 }
 
 function SortableHead({ label, sortKey, current, dir, onClick }: {
@@ -69,6 +70,7 @@ export default function Explorer() {
     if (sortKey === "name") cmp = a.name.localeCompare(b.name);
     else if (sortKey === "size") cmp = (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0);
     else if (sortKey === "modified") cmp = (a.modifiedAt ?? "").localeCompare(b.modifiedAt ?? "");
+    else if (sortKey === "type") cmp = ((a as FolderEntry).fileType ?? "").localeCompare((b as FolderEntry).fileType ?? "");
     // Always directories first
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
     return sortDir === "asc" ? cmp : -cmp;
@@ -105,6 +107,7 @@ export default function Explorer() {
             <TableRow>
               <TableHead className="w-10"></TableHead>
               <SortableHead label="Name" sortKey="name" current={sortKey} dir={sortDir} onClick={handleSort} />
+              <SortableHead label="Type" sortKey="type" current={sortKey} dir={sortDir} onClick={handleSort} />
               <SortableHead label="Size" sortKey="size" current={sortKey} dir={sortDir} onClick={handleSort} />
               <SortableHead label="Modified" sortKey="modified" current={sortKey} dir={sortDir} onClick={handleSort} />
             </TableRow>
@@ -113,18 +116,18 @@ export default function Explorer() {
             {currentPath !== "" && (
               <TableRow className="cursor-pointer hover:bg-secondary/50" onClick={navigateUp}>
                 <TableCell><CornerLeftUp className="h-4 w-4 text-muted-foreground" /></TableCell>
-                <TableCell className="font-medium text-muted-foreground" colSpan={3}>..</TableCell>
+                <TableCell className="font-medium text-muted-foreground" colSpan={4}>..</TableCell>
               </TableRow>
             )}
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center">
+                <TableCell colSpan={5} className="h-24 text-center">
                   <div className="space-y-2 p-4"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /></div>
                 </TableCell>
               </TableRow>
             ) : sorted.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground font-mono text-sm">
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground font-mono text-sm">
                   {currentPath === "" ? "Configure NAS path in Settings to browse files" : "Empty folder"}
                 </TableCell>
               </TableRow>
@@ -152,6 +155,11 @@ export default function Explorer() {
                     {entry.isArchive && (
                       <span className="ml-2 text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-mono">Archive</span>
                     )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-xs font-mono">
+                    {entry.isDirectory
+                      ? ((entry as FolderEntry).fileCount != null ? `${(entry as FolderEntry).fileCount} items` : "folder")
+                      : ((entry as FolderEntry).fileType ?? "file")}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground font-mono text-xs">
                     {entry.sizeBytes !== null ? formatBytes(entry.sizeBytes) : (entry.isDirectory ? "—" : "--")}
