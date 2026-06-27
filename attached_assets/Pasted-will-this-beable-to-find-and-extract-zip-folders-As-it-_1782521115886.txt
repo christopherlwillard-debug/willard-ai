@@ -1,0 +1,385 @@
+will this beable to find and extract zip folders?
+
+As it's currently written:
+
+It will find ZIP folders.
+It will inspect ZIP folders.
+It will NOT extract them yet.
+
+That's because you intentionally kept Version 1 read-only.
+
+What it does today
+
+✅ Scan your entire NAS
+
+✅ Find every:
+
+ZIP
+RAR
+7Z
+TAR
+GZ
+ISO
+
+✅ Index them
+
+✅ Show them in the Archives page
+
+✅ Peek inside without extracting
+
+✅ Count the files
+
+✅ Categorize the archive
+
+Example:
+
+Family Photos.zip
+
+Contains:
+ • 482 Photos
+ • 12 Videos
+ • 4 PDFs
+
+Category:
+Photo Archive
+What it does NOT do
+
+Right now it cannot:
+
+Extract the ZIP
+Create folders
+Write files
+Import photos into Immich
+Organize extracted files
+
+Because your architecture says:
+
+Read-only.
+
+I think you should change that
+
+Based on everything you've told me over the past week, your goal is to organize your NAS.
+
+A read-only system can't accomplish that.
+
+I would change the Organization Service.
+
+Instead of:
+
+Analyze
+
+↓
+
+Suggest
+
+↓
+
+Preview
+
+↓
+
+Coming Soon
+
+I'd make it:
+
+Analyze
+
+↓
+
+Suggest
+
+↓
+
+Preview
+
+↓
+
+Approve
+
+↓
+
+Execute
+
+↓
+
+Verify
+
+↓
+
+Log
+Example
+
+Suppose Willard AI finds:
+
+Old Laptop Backup.zip
+
+You click:
+
+Analyze
+
+It reports:
+
+Contains
+
+24,381 files
+
+482 Photos
+
+91 Videos
+
+2,381 PDFs
+
+13 Word Docs
+
+Estimated extraction
+
+68 GB
+
+Then:
+
+Suggested destination
+
+Backups/
+Old Laptop/
+
+You press:
+
+Approve
+
+Now it:
+
+Extracts
+
+↓
+
+Verifies checksums
+
+↓
+
+Logs extraction
+
+↓
+
+Imports photos to Immich
+
+↓
+
+Indexes documents
+
+↓
+
+Marks archive as processed
+
+
+Everything gets recorded.
+
+Even better...
+
+I'd add a page called
+
+Tasks
+
+Example
+
+Running Tasks
+
+Extracting:
+
+Old Laptop Backup.zip
+
+███████████░░░░░
+
+64%
+
+12,481 / 24,381 files
+
+ETA
+
+8 minutes
+Then when it's done
+
+The Event Log says:
+
+✓ Archive extracted
+
+✓ 482 photos sent to Immich
+
+✓ 91 videos detected
+
+✓ 2,381 PDFs indexed
+
+✓ Original archive preserved
+The biggest thing
+
+Don't make extraction part of the Archive Service.
+
+Make it part of the Organization Service.
+
+The Archive Service should only know how to:
+
+Open archives
+Read archives
+Peek inside
+Validate archives
+
+The Organization Service decides what to do with them.
+
+If this were my project
+
+I'd actually rename the Organization Service to:
+
+Data Management Service
+
+Because eventually it'll handle:
+
+ZIP extraction
+Folder organization
+Duplicate cleanup
+Renaming
+Moving files
+Importing media to Immich
+Future workflows
+My recommendation
+
+If your ultimate goal is "find every archive on my NAS, extract it safely, organize the contents, send photos to Immich, and index everything else", then I would absolutely expand Version 1 to include Approve → Execute → Verify → Log.
+
+That gives you a working organization tool from day one while still keeping the system safe:
+
+Nothing happens automatically.
+Every write operation requires your approval.
+Every action is logged.
+Every extraction is verified.
+The original archive can be preserved unless you explicitly choose otherwise.
+
+I think that's much closer to the Personal Data Operating System you've been envisioning than a permanently read-only design.
+
+the two biggest things i need right now is zip extractions and it to organize my drive
+
+Then I think your priorities are actually much simpler than the PRD currently reflects.
+
+From everything we've talked about over the last couple of weeks, your immediate goal is not to build the world's best AI assistant.
+
+It's to solve two real problems you've been dealing with:
+
+Thousands of ZIP archives that need to be extracted and organized.
+A messy NAS with decades of files that need to be understood and cleaned up.
+
+If those aren't first-class capabilities, Willard AI won't solve your biggest pain points.
+
+I'd change the architecture priorities
+
+Instead of treating these as future enhancements, I'd make them core services.
+
+1. Organization Service (Full Version 1)
+
+This shouldn't be a placeholder anymore.
+
+It should provide:
+
+Analyze a folder
+Analyze an archive
+Suggest an organization plan
+Preview the changes
+Extract archives
+Verify extracted files
+Log every action
+Roll back if something fails
+
+Every write operation should require your approval, but the service itself should be fully implemented.
+
+2. Archive Service (Full Version 1)
+
+Not just "peek."
+
+It should support:
+
+Find every ZIP, RAR, 7Z, TAR, GZ, and ISO
+Inspect contents
+Detect nested archives
+Detect password-protected archives
+Estimate extraction size
+Extract to a chosen destination
+Skip duplicate files
+Preserve timestamps
+Verify extraction completed successfully
+3. Organization Engine
+
+This becomes the heart of the cleanup process.
+
+Example workflow:
+
+Scan NAS
+        ↓
+Find Archives
+        ↓
+Analyze Contents
+        ↓
+Suggest Destination
+        ↓
+Preview Changes
+        ↓
+User Approves
+        ↓
+Extract
+        ↓
+Import media to Immich
+        ↓
+Index documents
+        ↓
+Verify
+        ↓
+Log
+4. Cleanup should become actionable
+
+Instead of only saying:
+
+"You have 42 duplicate folders."
+
+It should let you create a cleanup plan.
+
+For example:
+
+Cleanup Plan
+
+✓ Extract 38 archives
+✓ Merge 12 duplicate folders
+✓ Identify 4,200 duplicate files
+✓ Move screenshots into Screenshots/
+✓ Leave originals untouched until confirmed
+
+Nothing executes until you approve it.
+
+5. Make Immich part of the workflow
+
+When an archive contains media:
+
+Archive
+      ↓
+Extract
+      ↓
+Photos detected
+      ↓
+Import into Immich
+      ↓
+Wait for Immich processing
+      ↓
+Store Immich asset IDs
+      ↓
+Continue indexing documents
+
+That way Immich stays responsible for media, and Willard AI orchestrates the process.
+
+My recommendation
+
+If I were writing the Version 1 goals today, I'd rewrite them as:
+
+Explore the NAS.
+Understand what's on the NAS.
+Extract archives safely.
+Organize files with user approval.
+Delegate photos and videos to Immich.
+Provide one interface to everything.
+
+Everything else—advanced AI, OCR, semantic search, automation—can grow on top of that foundation.
+
+Given everything you've told me, I think archive extraction and intelligent organization are not optional features—they're the primary reason Willard AI exists for you right now. I'd promote them from "future milestone" to "core Version 1 capability," while still keeping deletion, moving, and other destructive operations confirmation-based and fully logged. That gives you a tool that immediately solves your current problems without sacrificing the long-term architecture you've designed.

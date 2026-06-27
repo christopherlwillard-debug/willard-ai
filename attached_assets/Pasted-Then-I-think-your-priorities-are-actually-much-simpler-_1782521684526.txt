@@ -1,0 +1,439 @@
+Then I think your priorities are actually much simpler than the PRD currently reflects.
+
+From everything we've talked about over the last couple of weeks, your immediate goal is not to build the world's best AI assistant.
+
+It's to solve two real problems you've been dealing with:
+
+Thousands of ZIP archives that need to be extracted and organized.
+A messy NAS with decades of files that need to be understood and cleaned up.
+
+If those aren't first-class capabilities, Willard AI won't solve your biggest pain points.
+
+I'd change the architecture priorities
+
+Instead of treating these as future enhancements, I'd make them core services.
+
+1. Organization Service (Full Version 1)
+
+This shouldn't be a placeholder anymore.
+
+It should provide:
+
+Analyze a folder
+Analyze an archive
+Suggest an organization plan
+Preview the changes
+Extract archives
+Verify extracted files
+Log every action
+Roll back if something fails
+
+Every write operation should require your approval, but the service itself should be fully implemented.
+
+2. Archive Service (Full Version 1)
+
+Not just "peek."
+
+It should support:
+
+Find every ZIP, RAR, 7Z, TAR, GZ, and ISO
+Inspect contents
+Detect nested archives
+Detect password-protected archives
+Estimate extraction size
+Extract to a chosen destination
+Skip duplicate files
+Preserve timestamps
+Verify extraction completed successfully
+3. Organization Engine
+
+This becomes the heart of the cleanup process.
+
+Example workflow:
+
+Scan NAS
+        ↓
+Find Archives
+        ↓
+Analyze Contents
+        ↓
+Suggest Destination
+        ↓
+Preview Changes
+        ↓
+User Approves
+        ↓
+Extract
+        ↓
+Import media to Immich
+        ↓
+Index documents
+        ↓
+Verify
+        ↓
+Log
+4. Cleanup should become actionable
+
+Instead of only saying:
+
+"You have 42 duplicate folders."
+
+It should let you create a cleanup plan.
+
+For example:
+
+Cleanup Plan
+
+✓ Extract 38 archives
+✓ Merge 12 duplicate folders
+✓ Identify 4,200 duplicate files
+✓ Move screenshots into Screenshots/
+✓ Leave originals untouched until confirmed
+
+Nothing executes until you approve it.
+
+5. Make Immich part of the workflow
+
+When an archive contains media:
+
+Archive
+      ↓
+Extract
+      ↓
+Photos detected
+      ↓
+Import into Immich
+      ↓
+Wait for Immich processing
+      ↓
+Store Immich asset IDs
+      ↓
+Continue indexing documents
+
+That way Immich stays responsible for media, and Willard AI orchestrates the process.
+
+My recommendation
+
+If I were writing the Version 1 goals today, I'd rewrite them as:
+
+Explore the NAS.
+Understand what's on the NAS.
+Extract archives safely.
+Organize files with user approval.
+Delegate photos and videos to Immich.
+Provide one interface to everything.
+
+Everything else—advanced AI, OCR, semantic search, automation—can grow on top of that foundation.
+
+Given everything you've told me, I think archive extraction and intelligent organization are not optional features—they're the primary reason Willard AI exists for you right now. I'd promote them from "future milestone" to "core Version 1 capability," while still keeping deletion, moving, and other destructive operations confirmation-based and fully logged. That gives you a tool that immediately solves your current problems without sacrificing the long-term architecture you've designed.
+
+will this be able to work with  western digital my cloud 
+
+Yes—and that's actually one of the reasons I think this project makes sense for you.
+
+We've already proven something important during your Immich setup:
+
+✅ Your WD My Cloud is accessible as a network share (Z:).
+✅ Docker can access it.
+✅ Immich is already reading media from it.
+✅ Your NAS contains all of your data in one place.
+
+That means Willard AI doesn't need to do anything special for a WD My Cloud. As long as Windows can access the share, Willard AI can too.
+
+How it would work
+WD My Cloud
+      │
+      ├── Photos
+      ├── Videos
+      ├── Documents
+      ├── ZIP Archives
+      ├── Music
+      ├── Backups
+      └── Everything Else
+             │
+             ▼
+      Willard AI
+             │
+      ├── Explorer
+      ├── Archive Service
+      ├── Organization Service
+      ├── Cleanup Service
+      ├── Search
+      └── Intelligence Engine
+             │
+             ▼
+          Immich
+      (Photos & Videos)
+For your specific setup
+
+From what we've already configured, I would point Willard AI at:
+
+Z:\
+
+or, even better, the UNC path:
+
+\\MYCLOUD-G1S9ZJ\Wilzard
+
+Using the UNC path means it isn't dependent on the drive letter being mapped.
+
+What it could do on your My Cloud
+Explore
+Photos
+Videos
+Taxes
+Construction
+Backups
+Archives
+Find every archive
+2020 Backup.zip
+Old Laptop.7z
+Family Photos.rar
+Taxes 2018.zip
+Extract them
+
+You click:
+
+Extract
+
+Willard AI would:
+
+Create the destination folder
+Extract the archive
+Verify extraction
+Log what happened
+Leave the original archive unless you choose otherwise
+Organize
+
+For example:
+
+Old Laptop Backup.zip
+
+↓
+
+482 Photos
+91 Videos
+2,381 PDFs
+14 Word docs
+
+It could suggest:
+
+Photos → Immich
+
+Documents → Documents/
+
+Receipts → Taxes/
+
+Videos → Immich
+
+Keep original ZIP
+
+You approve it.
+
+It performs the work.
+
+One thing I'd add specifically for your WD My Cloud
+
+Since it's a NAS, I'd build a Shares page.
+
+Instead of entering paths everywhere, you could configure:
+
+Wilzard
+
+Photos
+
+Backups
+
+Archives
+
+Documents
+
+Then every service references those logical names instead of hard-coded paths.
+
+I think there's one feature made for your situation
+
+I'd add an Import Center.
+
+It would monitor folders like:
+
+Incoming
+Downloads
+USB Imports
+Phone Backups
+Camera SD Cards
+
+When new content appears, Willard AI asks:
+
+"I found 1,842 new files. What would you like to do?"
+
+Options:
+
+Import media to Immich
+Extract archives
+Organize documents
+Leave everything where it is
+
+That would fit perfectly with the way you're trying to clean up years of accumulated data.
+
+One recommendation for your architecture
+
+I'd change your target from:
+
+"Supports WD My Cloud"
+
+to:
+
+"Supports any storage that is accessible through the local filesystem (network shares, mapped drives, NAS devices, or local disks)."
+
+That way your NAS Adapter doesn't know or care whether the storage is a WD My Cloud, Synology, QNAP, a Windows server, or even an external USB drive. It simply works with whatever filesystem path you configure, making Willard AI much more flexible while still working perfectly with your current My Cloud setup.
+
+Pasted text(19).txt
+Document
+
+I read through your updated PRD, and I think this is a significant improvement over the previous versions. It now directly addresses the two problems you've said matter most: archive extraction and organizing your NAS.
+
+The strongest improvements are:
+
+Data Management Service is now the heart of the application instead of a placeholder.
+Archive extraction is a first-class feature with approval, verification, rollback, and logging.
+Immich remains the media specialist, while Willard AI orchestrates everything else.
+Tasks provide a proper long-running job system.
+File History and Asset Linking will make the system much easier to trust and troubleshoot later.
+I would make one architectural change
+
+The only thing I would change is the way scanning works.
+
+Right now it sounds like:
+
+Scan Everything
+
+I'd split it into separate scan types managed by the Scan Manager.
+
+Filesystem Scan
+
+Archive Scan
+
+Document Scan
+
+Media Sync (Immich)
+
+Cleanup Scan
+
+Storage Scan
+
+Then you could run just one scan when needed instead of rescanning the whole NAS every time.
+
+Example:
+
+I just copied 200 ZIP files.
+
+Run only:
+
+Archive Scan
+
+Not the entire system.
+
+I would add one more major feature
+
+Since your biggest goal is organizing years of accumulated data, I'd add an Organization Queue.
+
+Instead of organizing one archive at a time:
+
+Analyze NAS
+
+↓
+
+Found
+
+482 ZIP files
+
+↓
+
+Build Organization Queue
+
+↓
+
+You review
+
+↓
+
+Approve Selected
+
+↓
+
+Background Tasks
+
+That lets you process hundreds of archives over days without babysitting the app.
+
+I'd also add "Confidence"
+
+Every suggestion should tell you how confident it is.
+
+For example:
+
+Suggested Destination
+
+Documents/Taxes/2018
+
+Confidence: 99%
+
+or
+
+Suggested Destination
+
+Photos/Family
+
+Confidence: 61%
+
+Reason:
+Mixed file types detected.
+
+That makes AI recommendations much easier to trust.
+
+One more thing I'd definitely add
+
+I'd introduce a Staging Area.
+
+Instead of extracting directly into your permanent folders:
+
+Extract
+
+↓
+
+Staging
+
+↓
+
+Verify
+
+↓
+
+Preview
+
+↓
+
+Approve
+
+↓
+
+Move to Final Location
+
+This protects your NAS if an archive is messy or unexpectedly huge.
+
+Overall
+
+If I were reviewing this as an engineering specification, I'd give it about 9.8/10.
+
+The only things I'd still add are:
+
+Organization Queue
+Separate scan types
+Confidence scores
+Staging Area for extractions
+
+Those aren't because the current design is wrong—they're because they make the experience safer and more scalable when you're dealing with terabytes of data.
+
+From everything we've discussed over the past few weeks, this is the first PRD that I think genuinely matches your stated goal:
+
+"I want one place that can understand, extract, organize, and manage everything on my Western Digital My Cloud while letting Immich handle photos and videos."
+
+I would stop redesigning the architecture at this point and move into implementation. Future work should be adding plugins and services—not changing the core design.
