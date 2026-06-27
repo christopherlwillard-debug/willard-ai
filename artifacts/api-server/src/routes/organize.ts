@@ -1799,10 +1799,24 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
     }
 
+    // ── Plan coverage invariant (mirrors execute route's count check) ──────────
+    // Every active planned route must be accounted for as moved (existing + new) or
+    // conflict-skipped.  If coverage is short, the re-staged source changed after the
+    // original job was planned; fail rather than silently mark incomplete work as done.
+    const allMoves: FileMoveRecord[] = [...existingMoves, ...newMoves];
+    const planCoverage = allMoves.length + conflictSkipped;
+    if (planCoverage !== total) {
+      throw new Error(
+        `Resume coverage check failed: ${allMoves.length} moved + ${conflictSkipped} conflict-skipped = ${planCoverage} ` +
+        `but plan had ${total} active route(s). ` +
+        `${total - planCoverage} planned file(s) could not be located in the re-staged source — ` +
+        `the source may have changed since the original job was planned.`
+      );
+    }
+
     await setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all files at destination…", progress: 85 });
 
-    const allMoves: FileMoveRecord[] = [...existingMoves, ...newMoves];
     const missing: string[] = [];
     for (const mv of allMoves) {
       if (!fs.existsSync(mv.to)) missing.push(mv.to);
