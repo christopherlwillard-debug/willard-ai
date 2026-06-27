@@ -14,6 +14,20 @@ function isArchive(filename: string): boolean {
   return ARCHIVE_EXTS.has(ext);
 }
 
+/**
+ * Resolve and validate that target stays within nasRoot.
+ * Returns null if the path attempts to escape the root.
+ */
+function safeResolve(nasRoot: string, userPath: string): string | null {
+  const resolved = path.resolve(nasRoot, userPath);
+  const root = path.resolve(nasRoot);
+  // Ensure resolved path starts with root + path separator (or equals root)
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    return null;
+  }
+  return resolved;
+}
+
 router.get("/explorer", async (req, res) => {
   try {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
@@ -24,8 +38,13 @@ router.get("/explorer", async (req, res) => {
       return;
     }
 
-    const relativePath = (req.query.path as string) ?? "";
-    const targetPath = relativePath ? path.join(nasPath, relativePath) : nasPath;
+    const relativePath = ((req.query.path as string) ?? "").replace(/\\/g, "/");
+    const targetPath = safeResolve(nasPath, relativePath);
+
+    if (!targetPath) {
+      res.status(400).json({ error: "Invalid path: outside NAS root" });
+      return;
+    }
 
     if (!fs.existsSync(targetPath)) {
       res.status(404).json({ error: "Folder not found" });

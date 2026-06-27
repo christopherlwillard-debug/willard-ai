@@ -1,7 +1,9 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { indexedFilesTable, archivesTable } from "@workspace/db";
-import { sql, count, gte, lte, desc, isNotNull } from "drizzle-orm";
+import { indexedFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
+import { sql, count, gte, lte, desc } from "drizzle-orm";
+import * as fs from "fs";
+import * as path from "path";
 
 const router: IRouter = Router();
 
@@ -23,31 +25,36 @@ router.get("/cleanup/duplicates", async (req, res) => {
       OFFSET ${parseInt(offset)}
     `);
 
-    const [{ totalGroups }] = await db.execute(sql`
+    const totalGroupsResult = await db.execute(sql`
       SELECT COUNT(*) as "totalGroups" FROM (
         SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
-    `) as any;
+    `);
 
-    const [{ totalWasted }] = await db.execute(sql`
+    const totalWastedResult = await db.execute(sql`
       SELECT COALESCE(SUM(t.wasted), 0) as "totalWasted" FROM (
         SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
-    `) as any;
+    `);
+
+    const totalGroups = (totalGroupsResult.rows[0] as any)?.totalGroups ?? 0;
+    const totalWasted = (totalWastedResult.rows[0] as any)?.totalWasted ?? 0;
 
     const groups = await Promise.all((dupHashes.rows as any[]).map(async (row) => {
       const files = await db.select().from(indexedFilesTable)
         .where(sql`${indexedFilesTable.contentHash} = ${row.content_hash}`)
         .limit(10);
+      const fileCount = parseInt(row.file_count);
+      const totalSize = Number(row.total_size);
       return {
         hash: row.content_hash,
-        fileCount: parseInt(row.file_count),
-        totalWastedBytes: (parseInt(row.file_count) - 1) * Number(row.total_size) / parseInt(row.file_count),
+        fileCount,
+        totalWastedBytes: fileCount > 1 ? Math.round((fileCount - 1) * (totalSize / fileCount)) : 0,
         files,
       };
     }));
 
-    res.json({ groups, totalGroups: parseInt((totalGroups as any)?.totalGroups ?? 0), totalWastedBytes: Number(totalWasted?.totalWasted ?? 0) });
+    res.json({ groups, totalGroups: parseInt(totalGroups), totalWastedBytes: Number(totalWasted) });
   } catch {
     res.status(500).json({ error: "Failed to get duplicates" });
   }
@@ -87,38 +94,112 @@ router.get("/cleanup/old-files", async (req, res) => {
 });
 
 router.get("/cleanup/empty-folders", async (_req, res) => {
-  res.json([]);
+  try {
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const nasPath = settingsRows[0]?.nasPath ?? "";
+
+    if (!nasPath || !fs.existsSync(nasPath)) {
+      res.json([]);
+      return;
+    }
+
+    const emptyFolders: { path: string; sizeBytes: number }[] = [];
+
+    function findEmptyDirs(dir: string) {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      // Recurse into subdirectories first
+      for (const e of entries) {
+        if (e.isDirectory()) {
+          findEmptyDirs(path.join(dir, e.name));
+        }
+      }
+
+      // A folder is "empty" if it has no files (may still have subdirs that are all empty)
+      const hasFiles = entries.some(e => e.isFile());
+      const hasNonEmptySubdirs = entries.some(e => {
+        if (!e.isDirectory()) return false;
+        try {
+          const sub = fs.readdirSync(path.join(dir, e.name));
+          return sub.length > 0;
+        } catch {
+          return false;
+        }
+      });
+
+      if (!hasFiles && !hasNonEmptySubdirs && dir !== nasPath) {
+        emptyFolders.push({ path: dir, sizeBytes: 0 });
+      }
+    }
+
+    findEmptyDirs(nasPath);
+
+    res.json(emptyFolders.slice(0, 200));
+  } catch {
+    res.status(500).json({ error: "Failed to find empty folders" });
+  }
 });
 
 router.get("/cleanup/summary", async (_req, res) => {
   try {
-    const [{ dupGroups }] = await db.execute(sql`
+    const dupGroupsResult = await db.execute(sql`
       SELECT COUNT(*) as "dupGroups" FROM (
         SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
-    `) as any;
-    const [{ dupWasted }] = await db.execute(sql`
+    `);
+    const dupWastedResult = await db.execute(sql`
       SELECT COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
         SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
-    `) as any;
+    `);
+
+    const dupGroups = (dupGroupsResult.rows[0] as any)?.dupGroups ?? 0;
+    const dupWasted = (dupWastedResult.rows[0] as any)?.dupWasted ?? 0;
+
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
     const [{ largeFiles }] = await db.select({ largeFiles: count() }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
     const [{ largeBytes }] = await db.select({ largeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)` }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
     const [{ oldFiles }] = await db.select({ oldFiles: count() }).from(indexedFilesTable).where(lte(indexedFilesTable.modifiedAt, cutoff));
 
+    // Count empty folders from DB-tracked paths that no longer have any files under them
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const nasPath = settingsRows[0]?.nasPath ?? "";
+    let emptyFolderCount = 0;
+    if (nasPath && fs.existsSync(nasPath)) {
+      const distinctFolders = await db.execute(sql`
+        SELECT DISTINCT folder FROM ${indexedFilesTable}
+      `);
+      for (const row of distinctFolders.rows as any[]) {
+        const folder = row.folder as string;
+        if (folder && fs.existsSync(folder)) {
+          try {
+            const entries = fs.readdirSync(folder);
+            if (entries.length === 0) emptyFolderCount++;
+          } catch { }
+        }
+      }
+    }
+
     res.json({
-      duplicateGroups: parseInt((dupGroups as any)?.dupGroups ?? 0),
-      duplicateWastedBytes: Number(dupWasted?.dupWasted ?? 0),
+      duplicateGroups: parseInt(dupGroups),
+      duplicateWastedBytes: Number(dupWasted),
       largeFileCount: largeFiles,
       largeFilesBytes: Number(largeBytes),
       oldFileCount: oldFiles,
-      emptyFolderCount: 0,
+      emptyFolderCount,
     });
   } catch {
     res.status(500).json({ error: "Failed to get cleanup summary" });
   }
 });
+
+// Unused import suppression
+void archivesTable;
 
 export default router;

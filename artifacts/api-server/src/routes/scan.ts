@@ -1,13 +1,16 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { scanJobsTable, indexedFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "crypto";
 
 const router: IRouter = Router();
 
 let currentScanJobId: number | null = null;
+
+const HASH_SIZE_LIMIT = 500 * 1024 * 1024; // 500MB - skip hashing larger files
 
 function getFileType(ext: string): string {
   const img = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "raw", "cr2", "nef", "arw"];
@@ -36,27 +39,52 @@ function getArchiveCategory(filename: string): string {
   return "general";
 }
 
+function computeFileHash(filePath: string, fileSize: number): string | null {
+  if (fileSize > HASH_SIZE_LIMIT) return null;
+  try {
+    const hash = createHash("sha256");
+    const buf = fs.readFileSync(filePath);
+    hash.update(buf);
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 async function scanDirectory(dirPath: string, jobId: number) {
-  const batchSize = 100;
-  let fileBatch: any[] = [];
-  let archiveBatch: any[] = [];
+  const batchSize = 50;
+  const fileBatch: any[] = [];
+  const archiveBatch: any[] = [];
   let filesScanned = 0;
 
-  async function flush() {
-    if (fileBatch.length > 0) {
-      await db.insert(indexedFilesTable).values(fileBatch).onConflictDoUpdate({
-        target: indexedFilesTable.path,
-        set: { sizeBytes: fileBatch[0].sizeBytes, modifiedAt: fileBatch[0].modifiedAt, indexedAt: new Date() },
-      });
-      fileBatch = [];
-    }
-    if (archiveBatch.length > 0) {
-      await db.insert(archivesTable).values(archiveBatch).onConflictDoUpdate({
-        target: archivesTable.path,
-        set: { sizeBytes: archiveBatch[0].sizeBytes, modifiedAt: archiveBatch[0].modifiedAt, indexedAt: new Date() },
-      });
-      archiveBatch = [];
-    }
+  async function flushFiles() {
+    if (fileBatch.length === 0) return;
+    // Use sql`excluded.*` references for correct per-row updates
+    await db.insert(indexedFilesTable).values([...fileBatch]).onConflictDoUpdate({
+      target: indexedFilesTable.path,
+      set: {
+        sizeBytes: sql`excluded.size_bytes`,
+        modifiedAt: sql`excluded.modified_at`,
+        fileType: sql`excluded.file_type`,
+        contentHash: sql`excluded.content_hash`,
+        indexedAt: sql`NOW()`,
+      },
+    });
+    fileBatch.length = 0;
+  }
+
+  async function flushArchives() {
+    if (archiveBatch.length === 0) return;
+    await db.insert(archivesTable).values([...archiveBatch]).onConflictDoUpdate({
+      target: archivesTable.path,
+      set: {
+        sizeBytes: sql`excluded.size_bytes`,
+        modifiedAt: sql`excluded.modified_at`,
+        category: sql`excluded.category`,
+        indexedAt: sql`NOW()`,
+      },
+    });
+    archiveBatch.length = 0;
   }
 
   async function walk(dir: string) {
@@ -82,8 +110,9 @@ async function scanDirectory(dirPath: string, jobId: number) {
         const ext = path.extname(entry.name).replace(".", "").toLowerCase();
         const fileType = getFileType(ext);
         const folder = path.dirname(fullPath);
+        const contentHash = computeFileHash(fullPath, stat.size);
 
-        const fileRecord = {
+        fileBatch.push({
           path: fullPath,
           filename: entry.name,
           extension: ext,
@@ -92,9 +121,8 @@ async function scanDirectory(dirPath: string, jobId: number) {
           modifiedAt: stat.mtime,
           folder,
           source: "local",
-        };
-
-        fileBatch.push(fileRecord);
+          contentHash,
+        });
         filesScanned++;
 
         if (fileType === "archive") {
@@ -110,15 +138,19 @@ async function scanDirectory(dirPath: string, jobId: number) {
         }
 
         if (fileBatch.length >= batchSize) {
-          await flush();
+          await flushFiles();
           await db.update(scanJobsTable).set({ filesScanned, stage: `Scanning ${folder}` }).where(eq(scanJobsTable.id, jobId));
+        }
+        if (archiveBatch.length >= batchSize) {
+          await flushArchives();
         }
       }
     }
   }
 
   await walk(dirPath);
-  await flush();
+  await flushFiles();
+  await flushArchives();
   return filesScanned;
 }
 
@@ -171,7 +203,7 @@ router.post("/scan", async (_req, res) => {
     runScan(job.id, nasPath).catch(() => { currentScanJobId = null; });
 
     res.status(202).json(job);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to start scan" });
   }
 });
