@@ -1,16 +1,28 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { scanJobsTable, indexedFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, and } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
+import AdmZip from "adm-zip";
+import * as tar from "tar";
+import Seven from "node-7z";
+import { path7za } from "7zip-bin";
 
 const router: IRouter = Router();
 
 let currentScanJobId: number | null = null;
 
-const HASH_SIZE_LIMIT = 500 * 1024 * 1024; // 500MB - skip hashing larger files
+const HASH_SIZE_LIMIT = 500 * 1024 * 1024;
+
+// File types managed by Immich — excluded from local indexing to avoid duplication
+const IMMICH_TYPES = new Set(["image", "video"]);
+
+const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "txz", "cab", "iso"]);
+const ZIP_EXTS = new Set(["zip"]);
+const TAR_EXTS = new Set(["tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "tar.gz", "tar.bz2", "tar.xz"]);
+const SEVENZIP_EXTS = new Set(["rar", "7z", "cab", "iso"]);
 
 function getFileType(ext: string): string {
   const img = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "raw", "cr2", "nef", "arw"];
@@ -30,13 +42,39 @@ function getFileType(ext: string): string {
   return "other";
 }
 
+function getFileTypeFromName(filename: string): string {
+  const ext = path.extname(filename).replace(".", "").toLowerCase();
+  return getFileType(ext);
+}
+
 function getArchiveCategory(filename: string): string {
   const f = filename.toLowerCase();
   if (f.includes("photo") || f.includes("pic") || f.includes("image") || f.includes("img")) return "Photo Archive";
   if (f.includes("video") || f.includes("movie") || f.includes("film") || f.includes("media")) return "Video Archive";
   if (f.includes("backup") || f.includes("bak")) return "Document Backup";
   if (f.includes("doc") || f.includes("report") || f.includes("work")) return "Document Backup";
-  if (f.includes("software") || f.includes("install") || f.includes("setup") || f.includes(".exe") || f.includes("app")) return "Software";
+  if (f.includes("software") || f.includes("install") || f.includes("setup") || f.includes("app")) return "Software";
+  return "General";
+}
+
+function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean): string {
+  if (isPasswordProtected) return "Password Protected";
+  const files = entries.filter((e: any) => !e.isDirectory);
+  if (files.length === 0) return "Unknown";
+
+  const counts: Record<string, number> = { image: 0, video: 0, document: 0, archive: 0, software: 0, other: 0 };
+  for (const e of files) {
+    const t = e.fileType ?? "other";
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  const total = files.length;
+  if (counts.archive / total > 0.25) return "Nested Archives";
+  if (counts.image / total > 0.55) return "Photo Archive";
+  if (counts.video / total > 0.45) return "Video Archive";
+  if (counts.document / total > 0.45) return "Document Backup";
+  if (counts.software / total > 0.35) return "Software";
+  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  if (counts[topType] / total < 0.4) return "Mixed";
   return "General";
 }
 
@@ -55,6 +93,111 @@ function computeFileHash(filePath: string, fileSize: number): Promise<string | n
   });
 }
 
+async function peekZip(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean }> {
+  const entries: any[] = [];
+  let isPasswordProtected = false;
+  try {
+    const zip = new AdmZip(filePath);
+    for (const entry of zip.getEntries()) {
+      const fileType = getFileTypeFromName(entry.entryName);
+      entries.push({
+        name: path.basename(entry.entryName),
+        path: entry.entryName,
+        sizeBytes: (entry.header as any)?.size ?? 0,
+        isDirectory: entry.isDirectory,
+        fileType,
+      });
+    }
+  } catch {
+    isPasswordProtected = true;
+  }
+  return { entries, isPasswordProtected };
+}
+
+async function peekTar(filePath: string, rawExt: string): Promise<{ entries: any[] }> {
+  const entries: any[] = [];
+  try {
+    await tar.list({
+      file: filePath,
+      ...(["gz", "tgz", "bz2", "tbz2", "xz", "txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {}),
+      onentry: (entry: any) => {
+        entries.push({
+          name: path.basename(entry.path),
+          path: entry.path,
+          sizeBytes: typeof entry.size === "number" ? entry.size : 0,
+          isDirectory: entry.type === "Directory",
+          fileType: getFileTypeFromName(entry.path),
+        });
+      },
+    });
+  } catch { /* plain .gz or corrupt */ }
+  return { entries };
+}
+
+async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean }> {
+  const entries: any[] = [];
+  let isPasswordProtected = false;
+  return new Promise((resolve) => {
+    const stream = Seven.list(filePath, { $bin: path7za, $progress: false } as any);
+    stream.on("data", (data: any) => {
+      if (data.file !== undefined) {
+        const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
+        entries.push({
+          name: path.basename(data.file),
+          path: data.file,
+          sizeBytes: typeof data.size === "number" ? data.size : 0,
+          isDirectory: isDir,
+          fileType: isDir ? "directory" : getFileTypeFromName(data.file),
+        });
+      }
+    });
+    stream.on("end", () => resolve({ entries, isPasswordProtected }));
+    stream.on("error", (err: Error) => {
+      if (/password|wrong password|encrypted/i.test(err?.message ?? "")) isPasswordProtected = true;
+      resolve({ entries, isPasswordProtected });
+    });
+  });
+}
+
+async function peekArchiveFile(archivePath: string, filename: string): Promise<{
+  entries: any[];
+  isPasswordProtected: boolean;
+  hasNestedArchives: boolean;
+  estimatedExtractionSize: number;
+  category: string;
+}> {
+  const rawExt = path.extname(filename).replace(".", "").toLowerCase();
+  const ext = filename.toLowerCase().endsWith(".tar.gz") ? "tar.gz"
+    : filename.toLowerCase().endsWith(".tar.bz2") ? "tar.bz2"
+    : filename.toLowerCase().endsWith(".tar.xz") ? "tar.xz"
+    : rawExt;
+
+  let entries: any[] = [];
+  let isPasswordProtected = false;
+
+  if (ZIP_EXTS.has(ext)) {
+    const result = await peekZip(archivePath);
+    entries = result.entries;
+    isPasswordProtected = result.isPasswordProtected;
+  } else if (TAR_EXTS.has(ext)) {
+    const result = await peekTar(archivePath, rawExt);
+    entries = result.entries;
+  } else if (SEVENZIP_EXTS.has(ext)) {
+    const result = await peek7z(archivePath);
+    entries = result.entries;
+    isPasswordProtected = result.isPasswordProtected;
+  }
+
+  const hasNestedArchives = entries.some((e: any) => {
+    const ne = path.extname(e.path).replace(".", "").toLowerCase();
+    return ARCHIVE_EXTS.has(ne);
+  });
+  const estimatedExtractionSize = entries.reduce((s: number, e: any) => s + (e.sizeBytes ?? 0), 0);
+  const category = computeCategoryFromContent(entries, isPasswordProtected);
+
+  return { entries, isPasswordProtected, hasNestedArchives, estimatedExtractionSize, category };
+}
+
 async function scanDirectory(dirPath: string, jobId: number) {
   const batchSize = 50;
   const fileBatch: any[] = [];
@@ -63,7 +206,6 @@ async function scanDirectory(dirPath: string, jobId: number) {
 
   async function flushFiles() {
     if (fileBatch.length === 0) return;
-    // Use sql`excluded.*` references for correct per-row updates
     await db.insert(indexedFilesTable).values([...fileBatch]).onConflictDoUpdate({
       target: indexedFilesTable.path,
       set: {
@@ -114,6 +256,25 @@ async function scanDirectory(dirPath: string, jobId: number) {
         const ext = path.extname(entry.name).replace(".", "").toLowerCase();
         const fileType = getFileType(ext);
         const folder = path.dirname(fullPath);
+        filesScanned++;
+
+        // Images and videos are managed by Immich — skip local indexing to avoid duplication
+        if (IMMICH_TYPES.has(fileType)) {
+          if (fileType === "archive") {
+            archiveBatch.push({
+              path: fullPath,
+              filename: entry.name,
+              sizeBytes: stat.size,
+              modifiedAt: stat.mtime,
+              folder,
+              category: getArchiveCategory(entry.name),
+              peekStatus: "pending",
+            });
+          }
+          continue;
+        }
+
+        // Hash only non-media files (docs, archives, audio, code, etc.)
         const contentHash = await computeFileHash(fullPath, stat.size);
 
         fileBatch.push({
@@ -127,7 +288,6 @@ async function scanDirectory(dirPath: string, jobId: number) {
           source: "local",
           contentHash,
         });
-        filesScanned++;
 
         if (fileType === "archive") {
           archiveBatch.push({
@@ -158,6 +318,41 @@ async function scanDirectory(dirPath: string, jobId: number) {
   return filesScanned;
 }
 
+async function peekAllArchives(jobId: number) {
+  // Peek all pending archives discovered during this scan, in batches
+  const pending = await db.select({ id: archivesTable.id, path: archivesTable.path, filename: archivesTable.filename })
+    .from(archivesTable)
+    .where(eq(archivesTable.peekStatus, "pending"));
+
+  let peeked = 0;
+  for (const archive of pending) {
+    if (!fs.existsSync(archive.path)) {
+      await db.update(archivesTable).set({ peekStatus: "unsupported" }).where(eq(archivesTable.id, archive.id));
+      peeked++;
+      continue;
+    }
+    try {
+      const { entries, isPasswordProtected, hasNestedArchives, estimatedExtractionSize, category } =
+        await peekArchiveFile(archive.path, archive.filename);
+      await db.update(archivesTable).set({
+        peekStatus: "peeked",
+        containedFileCount: entries.length,
+        isPasswordProtected,
+        hasNestedArchives,
+        estimatedExtractionSize,
+        peekEntries: entries,
+        category,
+      }).where(eq(archivesTable.id, archive.id));
+    } catch {
+      // Non-fatal: leave as pending so user can retry manually
+    }
+    peeked++;
+    if (peeked % 5 === 0) {
+      await db.update(scanJobsTable).set({ stage: `Peeking archives (${peeked}/${pending.length})` }).where(eq(scanJobsTable.id, jobId));
+    }
+  }
+}
+
 async function runScan(jobId: number, nasPath: string) {
   try {
     await db.update(scanJobsTable).set({ status: "running", stage: "Initializing", startedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
@@ -168,6 +363,9 @@ async function runScan(jobId: number, nasPath: string) {
     }
 
     const filesScanned = await scanDirectory(nasPath, jobId);
+
+    await db.update(scanJobsTable).set({ stage: "Peeking archives…", filesScanned }).where(eq(scanJobsTable.id, jobId));
+    await peekAllArchives(jobId);
 
     await db.update(appSettingsTable).set({ lastScanAt: new Date(), totalFilesIndexed: filesScanned });
     await db.update(scanJobsTable).set({ status: "completed", filesScanned, stage: "Complete", finishedAt: new Date() }).where(eq(scanJobsTable.id, jobId));

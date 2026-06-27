@@ -1,11 +1,21 @@
 import { Router, type IRouter } from "express";
 import * as fs from "fs";
 import * as path from "path";
+import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
 import { appSettingsTable, archivesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+function getFolderSizeBytes(folderPath: string): number | null {
+  // Use du with array args (no shell interpolation) for safe folder size computation
+  const result = spawnSync("du", ["-sb", folderPath], { timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
+  if (result.status !== 0 || !result.stdout) return null;
+  const first = result.stdout.toString().trim().split(/\s+/)[0];
+  const bytes = parseInt(first, 10);
+  return isNaN(bytes) ? null : bytes;
+}
 
 const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "cab"]);
 
@@ -70,12 +80,14 @@ router.get("/explorer", async (req, res) => {
 
       try {
         const stat = fs.statSync(fullPath);
-        sizeBytes = isDir ? null : stat.size;
         modifiedAt = stat.mtime.toISOString();
 
         if (isDir) {
           const children = fs.readdirSync(fullPath);
           fileCount = children.length;
+          sizeBytes = getFolderSizeBytes(fullPath);
+        } else {
+          sizeBytes = stat.size;
         }
       } catch {
         // ignore stat errors
