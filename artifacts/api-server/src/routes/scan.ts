@@ -5,7 +5,7 @@ import { desc, eq, sql, and } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
-import { getWillardAIDir, writeScanHistory } from "../lib/nas-storage";
+import { getWillardAIDir, writeScanHistory, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -205,6 +205,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
   const archiveBatch: any[] = [];
   let filesScanned = 0;
   const willardAiDir = path.resolve(getWillardAIDir(dirPath));
+  let archivesFound = 0;
 
   async function flushFiles() {
     if (fileBatch.length === 0) return;
@@ -249,6 +250,8 @@ async function scanDirectory(dirPath: string, jobId: number) {
         if (path.resolve(fullPath) === willardAiDir) continue;
         await walk(fullPath);
       } else if (entry.isFile()) {
+        // Guard against symlink traversal: skip files that resolve outside the NAS root
+        try { assertWithinRoot(path.resolve(fullPath), path.resolve(dirPath)); } catch { continue; }
         let stat: fs.Stats;
         try {
           stat = fs.statSync(fullPath);
@@ -293,6 +296,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
             category: getArchiveCategory(entry.name),
             peekStatus: "pending",
           });
+          archivesFound++;
         }
 
         if (fileBatch.length >= batchSize) {
@@ -309,7 +313,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
   await walk(dirPath);
   await flushFiles();
   await flushArchives();
-  return filesScanned;
+  return { filesScanned, archivesFound };
 }
 
 async function peekAllArchives(jobId: number) {
@@ -356,6 +360,9 @@ async function peekAllArchives(jobId: number) {
 
 async function runScan(jobId: number, nasPath: string) {
   const startTime = Date.now();
+  const tempDir = getTempDir(nasPath, String(jobId));
+  let filesScanned = 0;
+  let archivesFound = 0;
   try {
     await db.update(scanJobsTable).set({ status: "running", stage: "Initializing", startedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
 
@@ -364,7 +371,7 @@ async function runScan(jobId: number, nasPath: string) {
       return;
     }
 
-    const filesScanned = await scanDirectory(nasPath, jobId);
+    ({ filesScanned, archivesFound } = await scanDirectory(nasPath, jobId));
 
     await db.update(scanJobsTable).set({ stage: "Peeking archives…", filesScanned }).where(eq(scanJobsTable.id, jobId));
     await peekAllArchives(jobId);
@@ -380,6 +387,7 @@ async function runScan(jobId: number, nasPath: string) {
       finishedAt: finishedAt.toISOString(),
       durationSeconds: Math.round((Date.now() - startTime) / 1000),
       filesScanned,
+      archivesFound,
       status: "completed",
       error: null,
     });
@@ -390,7 +398,8 @@ async function runScan(jobId: number, nasPath: string) {
       startedAt: new Date(startTime).toISOString(),
       finishedAt: new Date().toISOString(),
       durationSeconds: Math.round((Date.now() - startTime) / 1000),
-      filesScanned: 0,
+      filesScanned,
+      archivesFound,
       status: "failed",
       error: err instanceof Error ? err.message : "Unknown error",
     });
@@ -400,6 +409,7 @@ async function runScan(jobId: number, nasPath: string) {
       finishedAt: new Date(),
     }).where(eq(scanJobsTable.id, jobId));
   } finally {
+    cleanTempDir(tempDir);
     currentScanJobId = null;
   }
 }

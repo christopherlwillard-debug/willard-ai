@@ -60,14 +60,14 @@ export function getNasDirStatus(nasPath: string): NasDirStatusResult {
 }
 
 export function bootstrapWillardAIDir(nasPath: string): NasDirStatusResult {
-  try {
-    const willardAiPath = getWillardAIDir(nasPath);
-    fs.mkdirSync(willardAiPath, { recursive: true });
-    for (const subdir of WILLARD_SUBDIRS) {
+  const willardAiPath = getWillardAIDir(nasPath);
+  // Root dir creation is critical — let errors propagate so callers can surface them
+  fs.mkdirSync(willardAiPath, { recursive: true });
+  // Subdir creation is best-effort after root exists
+  for (const subdir of WILLARD_SUBDIRS) {
+    try {
       fs.mkdirSync(path.join(willardAiPath, subdir), { recursive: true });
-    }
-  } catch {
-    // NAS unreachable or permissions denied — return status as-is
+    } catch { /* non-fatal — status will reflect missing dirs */ }
   }
   return getNasDirStatus(nasPath);
 }

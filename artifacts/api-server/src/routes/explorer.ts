@@ -53,7 +53,7 @@ router.get("/explorer", async (req, res) => {
     const targetPath = safeResolve(nasPath, relativePath);
 
     if (!targetPath) {
-      res.status(400).json({ error: "Invalid path: outside NAS root" });
+      res.status(403).json({ error: "Forbidden: path is outside NAS root" });
       return;
     }
 

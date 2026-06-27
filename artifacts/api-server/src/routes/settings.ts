@@ -42,7 +42,12 @@ router.put("/settings", async (req, res) => {
         nasLogStream.setNasPath(body.nasPath).catch(() => {});
         logger.info({ nasPath: body.nasPath }, "WillardAI directory bootstrapped on NAS");
       } catch (err) {
-        logger.warn({ err }, "Failed to bootstrap WillardAI dir — check NAS permissions");
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        logger.warn({ err, nasPath: body.nasPath }, "Failed to create WillardAI directory on NAS");
+        res.status(422).json({
+          error: `Settings saved, but WillardAI directory could not be created at '${body.nasPath}/WillardAI': ${msg}. Ensure the NAS path is mounted and writable.`,
+        });
+        return;
       }
     }
 
