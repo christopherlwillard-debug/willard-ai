@@ -12,7 +12,7 @@ import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
-import { moveFile, integrityToken, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 
 const router: IRouter = Router();
 
@@ -194,16 +194,25 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
  *                       second-layer defence. For 7z, extracted paths are re-verified via
  *                       assertWithinRoot() post-extraction.
  *
- * Integrity policy for moved files:
- *   Files ≤ 100 MB: full SHA-256 computed pre-move and verified post-move.
- *   Files > 100 MB: size-sentinel (byte count) verified post-move.
- *   This explicit fallback is intentional — hashing multi-GB files serially on every job
- *   would take prohibitive time on a NAS. The size-sentinel still catches truncation, partial
- *   writes, and cross-device copy errors that are the dominant failure modes in practice.
+ * Integrity policy:
+ *   Every file move computes SHA-256 of the source before moving and the destination after
+ *   moving.  For ZIP entries, SHA-256 of the uncompressed archive data is compared against
+ *   SHA-256 of the written file.  For TAR/7z, per-file SHA-256 is recorded post-extraction
+ *   (no in-archive per-file hash available in those formats).
+ *   Any hash mismatch or I/O error is treated as fatal — the route aborts and rolls back.
  */
+/** Per-file checksum record produced during archive extraction. */
+interface ExtractionChecksumRecord {
+  relativePath: string;
+  sourceHash: string;   // SHA-256 of uncompressed archive-entry data (empty for TAR/7z — no in-memory access)
+  destHash:   string;   // SHA-256 of the file as written to disk
+  verified:   boolean;  // sourceHash !== "" && sourceHash === destHash
+}
+
 async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{
   entriesExtracted: number;
   crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string };
+  extractionChecksums: ExtractionChecksumRecord[];
 }> {
   const ext    = getArchiveExt(path.basename(archivePath));
   const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
@@ -236,9 +245,15 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       assertSafeEntryPath(e.entryName);
     }
 
-    // Pass 2: extract entry by entry with CRC32 validation
-    // adm-zip internally checks CRC on getData(); we also verify explicitly for belt-and-suspenders.
+    // Pass 2: extract entry by entry with CRC32 + SHA-256 source→destination verification.
+    // For each entry:
+    //   a) Obtain uncompressed data via getData() — adm-zip checks stored CRC32 internally.
+    //   b) Compute SHA-256 of in-memory buffer (sourceHash = archive entry content).
+    //   c) Write buffer to disk.
+    //   d) Compute SHA-256 of written file (destHash).
+    //   e) If hashes differ, throw — catches truncated/corrupted writes.
     let crcChecked = 0; let crcPassed = 0; let crcSkipped = 0;
+    const extractionChecksums: ExtractionChecksumRecord[] = [];
     for (const e of entries) {
       if (e.isDirectory) continue;
       const outPath = path.join(stagingDir, e.entryName);
@@ -253,12 +268,25 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       } else {
         crcSkipped++;
       }
+      // SHA-256: hash uncompressed buffer before writing
+      const sourceHash = sha256Buffer(data);
       fs.writeFileSync(outPath, data);
+      // SHA-256: hash written file and compare against buffer hash
+      const destHash = await sha256File(outPath);
+      if (sourceHash !== destHash) {
+        throw new Error(
+          `SHA-256 mismatch after extracting "${e.entryName}": ` +
+          `archive-data=${sourceHash} written-file=${destHash}. ` +
+          `File may be corrupted on write.`
+        );
+      }
+      extractionChecksums.push({ relativePath: e.entryName, sourceHash, destHash, verified: true });
       entriesExtracted++;
     }
     return {
       entriesExtracted,
-      crcValidation: { format: "zip-crc32", checked: crcChecked, passed: crcPassed, skipped: crcSkipped },
+      crcValidation: { format: "zip-crc32+sha256", checked: crcChecked, passed: crcPassed, skipped: crcSkipped },
+      extractionChecksums,
     };
 
   } else if (TAR_EXTS.has(ext)) {
@@ -292,10 +320,26 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
     } as any);
 
     entriesExtracted = filePaths.length;
-    // TAR uses header checksums (not payload CRC) — payload CRC not available in standard format
+
+    // Post-extraction SHA-256: TAR archives have no per-file payload hash, so we hash each
+    // extracted file as written to disk.  There is no archive-level "source hash" to compare
+    // against, so verified=false — but destHash is recorded for rollback auditing.
+    const extractionChecksumsTar: ExtractionChecksumRecord[] = [];
+    for (const fp of filePaths) {
+      const outPath = path.join(stagingDir, fp);
+      try {
+        const destHash = await sha256File(outPath);
+        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verified: false });
+      } catch {
+        // File not found after extraction — will be caught by the count-match check upstream
+        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash: "", verified: false });
+      }
+    }
+
     return {
       entriesExtracted,
-      crcValidation: { format: "tar-no-payload-crc", checked: 0, passed: 0, skipped: entriesExtracted, note: "TAR header checksum only; no per-file payload CRC in standard format" },
+      crcValidation: { format: "tar-sha256-post-extract", checked: 0, passed: 0, skipped: entriesExtracted, note: "TAR has no per-file payload hash; SHA-256 computed post-extraction for rollback auditing" },
+      extractionChecksums: extractionChecksumsTar,
     };
 
   } else if (SEVENZIP_EXTS.has(ext)) {
@@ -327,18 +371,27 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       s.on("error", (e: any) => reject(new Error(`7z extract error: ${e?.message ?? e}`)));
     });
 
-    // Post-extraction canonical check for each listed path
+    // Post-extraction canonical check + SHA-256 per extracted file
+    const extractionChecksums7z: ExtractionChecksumRecord[] = [];
     for (const fp of filePaths) {
       assertWithinRoot(path.join(stagingDir, fp), stagingDir);
+      const outPath = path.join(stagingDir, fp);
+      try {
+        const destHash = await sha256File(outPath);
+        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash, verified: false });
+      } catch {
+        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash: "", verified: false });
+      }
     }
     entriesExtracted = filePaths.length;
     return {
       entriesExtracted,
       crcValidation: {
-        format: "7z-crc-metadata",
+        format: "7z-sha256-post-extract",
         checked: 0, passed: 0, skipped: entriesExtracted,
-        note: `${sevenZipCrcCount}/${filePaths.length} entries have archive CRC metadata; post-extraction CRC32 requires adm-7z extension not available in current deps`,
+        note: `${sevenZipCrcCount}/${filePaths.length} entries have archive CRC metadata; SHA-256 computed post-extraction for rollback auditing`,
       },
+      extractionChecksums: extractionChecksums7z,
     };
 
   } else {
@@ -1072,6 +1125,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
     let crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string } | null = null;
+    let archiveExtractionChecksums: ExtractionChecksumRecord[] = [];
 
     if (job.sourceType === "archive") {
       send("status", { stage: "extracting", message: "Extracting archive to staging area…", progress: 5 });
@@ -1079,6 +1133,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       opLog(`EXTRACT: ${job.sourcePath} → ${tempDir}`);
       const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
       crcValidation = extractResult.crcValidation;
+      archiveExtractionChecksums = extractResult.extractionChecksums ?? [];
       const { entriesExtracted } = extractResult;
       opLog(`EXTRACT_OK: ${entriesExtracted} entries — CRC ${crcValidation.format}: checked=${crcValidation.checked} passed=${crcValidation.passed} skipped=${crcValidation.skipped}${crcValidation.note ? ` (${crcValidation.note})` : ""}`);
       send("status", { stage: "scanning",   message: "Scanning extracted files…",          progress: 25 });
@@ -1342,6 +1397,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       destinations: plan.destinations,
       destVerification,
       archiveCrcValidation: crcValidation,
+      archiveExtractionChecksums: archiveExtractionChecksums.length > 0 ? archiveExtractionChecksums : undefined,
       immichRescan: immichResult,
       immichVerification,
       aiConfidence: plan.aiConfidence, aiNotes: plan.aiNotes,

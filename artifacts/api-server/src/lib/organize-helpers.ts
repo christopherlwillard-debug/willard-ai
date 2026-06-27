@@ -1,18 +1,25 @@
 /**
  * Core file-move helpers shared between the organize route and its test suite.
  * All functions are pure filesystem operations — no DB, no Express dependencies.
+ *
+ * Integrity policy:
+ *   Every file move computes SHA-256 of the source BEFORE moving and the
+ *   destination AFTER moving.  If the hashes differ, `verifiedMove` throws
+ *   immediately — the caller must roll back all completed moves.
+ *   Hash computation failures (unreadable file, I/O error) are also fatal:
+ *   an empty token means we cannot verify integrity and is treated as an error.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 
-/** Files ≤ this size receive a full SHA-256; larger files use a size-sentinel. */
-export const SHA256_LIMIT = 100 * 1024 * 1024; // 100 MB
+// ── SHA-256 ──────────────────────────────────────────────────────────────────
 
 /**
  * Streaming SHA-256 — memory-safe for large files.
  * Returns a 64-character lowercase hex string.
+ * Throws on I/O error.
  */
 export async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -25,36 +32,19 @@ export async function sha256File(filePath: string): Promise<string> {
 }
 
 /**
- * Returns a comparable integrity token for a file:
- * - Files ≤ SHA256_LIMIT: full SHA-256 hex string.
- * - Files > SHA256_LIMIT: "size:<bytes>" sentinel — still catches truncation and
- *   partial writes, which are the dominant failure modes on NAS cross-device copies.
- * - Unreadable files: empty string (verification will be skipped for that file).
+ * SHA-256 of an in-memory buffer — used to hash archive entry data before it
+ * is written to disk, enabling source-vs-destination comparison for extraction.
  */
-export async function integrityToken(filePath: string): Promise<string> {
-  try {
-    const s = fs.statSync(filePath);
-    return s.size <= SHA256_LIMIT
-      ? await sha256File(filePath)
-      : `size:${s.size}`;
-  } catch {
-    return "";
-  }
+export function sha256Buffer(buf: Buffer): string {
+  return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
-/**
- * Returns the hash method used for a given token string.
- */
-export function hashMethod(token: string): "sha256" | "size-sentinel" | "unknown" {
-  if (!token) return "unknown";
-  if (token.startsWith("size:")) return "size-sentinel";
-  return "sha256";
-}
+// ── File move helpers ─────────────────────────────────────────────────────────
 
 /**
  * Move a file from `from` to `to`, creating parent directories as needed.
- * Falls back to copy+unlink when the source and destination are on different
- * filesystems (EXDEV — cross-device link not permitted).
+ * Falls back to copy+unlink on EXDEV (cross-device) errors.
+ * Throws on any other I/O error.
  */
 export function moveFile(from: string, to: string): void {
   fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -70,61 +60,80 @@ export function moveFile(from: string, to: string): void {
   }
 }
 
+// ── Verified move ─────────────────────────────────────────────────────────────
+
 /**
  * Result of verifying a single file move.
  */
 export interface FileMoveRecord {
-  from: string;
-  to: string;
+  from:       string;
+  to:         string;
   sourceHash: string;
-  destHash: string;
-  verified: boolean;
-  hashMethod: "sha256" | "size-sentinel" | "unknown";
+  destHash:   string;
+  verified:   boolean;
 }
 
 /**
- * Move a file and verify its integrity at the destination.
+ * Move a file and verify its SHA-256 integrity at the destination.
  *
- * Throws an Error (with both hashes) if the destination hash differs from the
- * source hash — the caller must then roll back any completed moves.
+ * Steps:
+ *   1. Compute SHA-256 of the source.
+ *   2. Move the file.
+ *   3. Compute SHA-256 of the destination.
+ *   4. If hashes differ, or if either hash is empty (I/O failure), throw.
  *
- * @param from    Absolute source path (must exist).
- * @param to      Absolute destination path (parent dirs created automatically).
- * @returns       A FileMoveRecord with source/dest hashes and verification result.
+ * Any thrown error propagates to the caller so the outer try/catch can
+ * trigger rollback immediately.
+ *
+ * @param from          Absolute source path (must exist).
+ * @param to            Absolute destination path (parents created automatically).
+ * @param afterMoveHook Optional callback invoked between step 2 and step 3 —
+ *                      used ONLY in tests to inject corruption or latency.
+ * @returns             FileMoveRecord with source/dest hashes and verified=true.
  */
-export async function verifiedMove(from: string, to: string): Promise<FileMoveRecord> {
-  const sourceHash = await integrityToken(from);
+export async function verifiedMove(
+  from: string,
+  to:   string,
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void> },
+): Promise<FileMoveRecord> {
+  // Step 1: hash source (throws on I/O error)
+  const sourceHash = await sha256File(from);
+
+  // Step 2: move file
   moveFile(from, to);
-  const destHash = await integrityToken(to);
 
-  const method = hashMethod(sourceHash);
+  // Optional hook (test-only) — e.g. corrupt destination before re-hashing
+  if (opts?.afterMoveHook) await opts.afterMoveHook(to);
 
-  // Two empty tokens means both stat() calls failed — treat as unverifiable but not a failure
-  const verified = sourceHash === "" && destHash === ""
-    ? false
-    : sourceHash === destHash;
+  // Step 3: hash destination (throws on I/O error)
+  const destHash = await sha256File(to);
 
-  if (sourceHash !== "" && destHash !== "" && sourceHash !== destHash) {
+  // Step 4: compare — throw on mismatch so the caller can roll back
+  if (sourceHash !== destHash) {
     throw new Error(
-      `Integrity mismatch: ${path.basename(from)} ` +
-      `sourceHash=${sourceHash} destHash=${destHash} — ` +
-      `file may have been corrupted during the move. Rolling back.`
+      `SHA-256 mismatch after moving ${path.basename(from)}: ` +
+      `source=${sourceHash} dest=${destHash}. ` +
+      `File may be corrupted — rolling back.`
     );
   }
 
-  return { from, to, sourceHash, destHash, verified, hashMethod: method };
+  return { from, to, sourceHash, destHash, verified: true };
 }
 
+// ── Rollback ─────────────────────────────────────────────────────────────────
+
 /**
- * Roll back a list of completed moves (in reverse order).
- * Each restored file is verified against its original sourceHash.
+ * Roll back a list of completed moves in reverse (LIFO) order.
+ * After each file is restored, its SHA-256 is compared against the
+ * `sourceHash` stored in the record.  Mismatches are logged but do not
+ * prevent the remaining rollbacks from running.
  *
- * @param moves     FileMoveRecords from completed moves (in forward order).
- * @param logFn     Optional callback for each rollback event.
- * @returns         Count of successfully restored files.
+ * @param moves    FileMoveRecords produced during the forward move phase.
+ * @param logFn    Optional callback for per-file log messages.
+ * @returns        Number of files successfully restored.
  */
 export async function rollbackMoves(
-  moves: FileMoveRecord[],
+  moves:  FileMoveRecord[],
   logFn?: (msg: string) => void,
 ): Promise<number> {
   const log = logFn ?? (() => {});
@@ -139,16 +148,17 @@ export async function rollbackMoves(
       moveFile(mv.to, mv.from);
       rolledBack++;
 
-      if (mv.sourceHash) {
-        const restoredHash = await integrityToken(mv.from);
+      // Verify the restored file matches the original source hash
+      try {
+        const restoredHash = await sha256File(mv.from);
         const ok = restoredHash === mv.sourceHash;
         log(
           ok
-            ? `ROLLBACK_VERIFY_OK: ${mv.from}`
-            : `ROLLBACK_VERIFY_FAIL: ${mv.from} expected=${mv.sourceHash} got=${restoredHash}`,
+            ? `ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`
+            : `ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}`,
         );
-      } else {
-        log(`ROLLBACK: ${mv.to} → ${mv.from}`);
+      } catch (he: any) {
+        log(`ROLLBACK_HASH_ERR: ${mv.from} — ${he.message}`);
       }
     } catch (re: any) {
       log(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);

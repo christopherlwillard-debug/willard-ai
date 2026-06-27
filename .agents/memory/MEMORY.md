@@ -3,3 +3,4 @@
 - [Immich API key proxy pattern](immich-thumbnail-proxy.md) — never expose apiKey in client-visible URLs; use a server-side /api/immich/thumbnail/:type/:id proxy
 - [Vite proxy required for /api in dev](vite-proxy-api.md) — frontend dev server must proxy /api → localhost:8080 or all API calls 404 in Vite
 - [Auth architecture](auth-architecture.md) — session cookie auth pattern; bcryptjs, connect-pg-simple, rate limiting on login route
+- [SHA-256 verification testability](sha256-testability.md) — verifiedMove takes afterMoveHook to inject corruption between move and re-hash; the only way to test the mismatch throw path without mocking
