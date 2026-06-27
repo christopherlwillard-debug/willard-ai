@@ -3,20 +3,40 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Willard AI — NAS Media & Data Center API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: settings
+    description: Application settings
+  - name: scan
+    description: NAS scanning operations
+  - name: files
+    description: File index operations
+  - name: explorer
+    description: NAS folder explorer
+  - name: archives
+    description: Archive file operations
+  - name: documents
+    description: Document file operations
+  - name: storage
+    description: Storage statistics
+  - name: cleanup
+    description: Cleanup suggestions
+  - name: immich
+    description: Immich media proxy
+  - name: openai
+    description: AI assistant operations
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +44,634 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ── Settings ──────────────────────────────────────────────────────────────
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get all settings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsInput"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+
+  /settings/test-immich:
+    post:
+      operationId: testImmichConnection
+      tags: [settings]
+      summary: Test Immich connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImmichTestInput"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImmichTestResult"
+
+  # ── Scan ──────────────────────────────────────────────────────────────────
+  /scan:
+    post:
+      operationId: startScan
+      tags: [scan]
+      summary: Start a NAS scan
+      responses:
+        "202":
+          description: Scan started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanJob"
+
+  /scan/status:
+    get:
+      operationId: getScanStatus
+      tags: [scan]
+      summary: Get current scan status
+      responses:
+        "200":
+          description: Current scan status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanStatus"
+
+  /scan/history:
+    get:
+      operationId: getScanHistory
+      tags: [scan]
+      summary: Get recent scan history
+      responses:
+        "200":
+          description: Scan history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScanJob"
+
+  # ── Dashboard summary ─────────────────────────────────────────────────────
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [files]
+      summary: Get dashboard summary stats
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  # ── Files / Search ────────────────────────────────────────────────────────
+  /files/search:
+    get:
+      operationId: searchFiles
+      tags: [files]
+      summary: Search indexed files
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: fileType
+          in: query
+          schema:
+            type: string
+        - name: minSize
+          in: query
+          schema:
+            type: integer
+        - name: maxSize
+          in: query
+          schema:
+            type: integer
+        - name: after
+          in: query
+          schema:
+            type: string
+        - name: before
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [local, immich, all]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSearchResult"
+
+  # ── Explorer ──────────────────────────────────────────────────────────────
+  /explorer:
+    get:
+      operationId: listFolder
+      tags: [explorer]
+      summary: List contents of a NAS folder
+      parameters:
+        - name: path
+          in: query
+          schema:
+            type: string
+          description: Folder path relative to NAS root (empty = root)
+      responses:
+        "200":
+          description: Folder contents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderListing"
+        "404":
+          description: Folder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  # ── Archives ──────────────────────────────────────────────────────────────
+  /archives:
+    get:
+      operationId: listArchives
+      tags: [archives]
+      summary: List all indexed archive files
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: minSize
+          in: query
+          schema:
+            type: integer
+        - name: maxSize
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Archive list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchiveListResult"
+
+  /archives/{id}:
+    get:
+      operationId: getArchive
+      tags: [archives]
+      summary: Get archive details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Archive details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchiveDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /archives/{id}/peek:
+    post:
+      operationId: peekArchive
+      tags: [archives]
+      summary: Peek inside an archive without extracting
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Archive contents listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchivePeekResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  # ── Documents ─────────────────────────────────────────────────────────────
+  /documents:
+    get:
+      operationId: listDocuments
+      tags: [documents]
+      summary: List indexed documents
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: fileType
+          in: query
+          schema:
+            type: string
+            enum: [pdf, docx, xlsx, pptx, txt, other]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Document list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentListResult"
+
+  # ── Storage ───────────────────────────────────────────────────────────────
+  /storage:
+    get:
+      operationId: getStorageStats
+      tags: [storage]
+      summary: Get NAS storage statistics
+      responses:
+        "200":
+          description: Storage stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageStats"
+
+  /storage/top-folders:
+    get:
+      operationId: getTopFolders
+      tags: [storage]
+      summary: Get top 20 largest folders
+      responses:
+        "200":
+          description: Top folders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FolderStat"
+
+  /storage/top-files:
+    get:
+      operationId: getTopFiles
+      tags: [storage]
+      summary: Get top 20 largest files
+      responses:
+        "200":
+          description: Top files
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/IndexedFile"
+
+  # ── Cleanup ───────────────────────────────────────────────────────────────
+  /cleanup/duplicates:
+    get:
+      operationId: getDuplicateFiles
+      tags: [cleanup]
+      summary: Get groups of duplicate files (by hash)
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Duplicate file groups
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DuplicateGroupResult"
+
+  /cleanup/large-files:
+    get:
+      operationId: getLargeFiles
+      tags: [cleanup]
+      summary: Get files larger than 500MB
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Large files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LargeFileResult"
+
+  /cleanup/old-files:
+    get:
+      operationId: getOldFiles
+      tags: [cleanup]
+      summary: Get files not modified in 5+ years
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Old files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OldFileResult"
+
+  /cleanup/empty-folders:
+    get:
+      operationId: getEmptyFolders
+      tags: [cleanup]
+      summary: Get empty folders on the NAS
+      responses:
+        "200":
+          description: Empty folders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmptyFolder"
+
+  /cleanup/summary:
+    get:
+      operationId: getCleanupSummary
+      tags: [cleanup]
+      summary: Get cleanup summary counts
+      responses:
+        "200":
+          description: Cleanup summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupSummary"
+
+  # ── Immich proxy ──────────────────────────────────────────────────────────
+  /immich/status:
+    get:
+      operationId: getImmichStatus
+      tags: [immich]
+      summary: Get Immich connection status and stats
+      responses:
+        "200":
+          description: Immich status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImmichStatus"
+
+  /immich/recent-photos:
+    get:
+      operationId: getImmichRecentPhotos
+      tags: [immich]
+      summary: Get recent photos from Immich
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Recent photos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ImmichAsset"
+
+  /immich/albums:
+    get:
+      operationId: getImmichAlbums
+      tags: [immich]
+      summary: Get albums from Immich
+      responses:
+        "200":
+          description: Albums
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ImmichAlbum"
+
+  /immich/people:
+    get:
+      operationId: getImmichPeople
+      tags: [immich]
+      summary: Get people (faces) from Immich
+      responses:
+        "200":
+          description: People
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ImmichPerson"
+
+  # ── AI Chat ───────────────────────────────────────────────────────────────
+  /openai/conversations:
+    get:
+      operationId: listOpenaiConversations
+      tags: [openai]
+      summary: List all conversations
+      responses:
+        "200":
+          description: List of conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OpenaiConversation"
+    post:
+      operationId: createOpenaiConversation
+      tags: [openai]
+      summary: Create a new conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenaiConversationInput"
+      responses:
+        "201":
+          description: Created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenaiConversation"
+
+  /openai/conversations/{id}:
+    get:
+      operationId: getOpenaiConversation
+      tags: [openai]
+      summary: Get conversation with messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversation with messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenaiConversationWithMessages"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenaiError"
+    delete:
+      operationId: deleteOpenaiConversation
+      tags: [openai]
+      summary: Delete a conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenaiError"
+
+  /openai/conversations/{id}/messages:
+    get:
+      operationId: listOpenaiMessages
+      tags: [openai]
+      summary: List messages in a conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OpenaiMessage"
+    post:
+      operationId: sendOpenaiMessage
+      tags: [openai]
+      summary: Send a message and get a streaming AI response with NAS context
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenaiMessageInput"
+      responses:
+        "200":
+          description: SSE stream of assistant text chunks
+          content:
+            text/event-stream: {}
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +682,772 @@ components:
       required:
         - status
 
+    AppSettings:
+      type: object
+      properties:
+        nasPath:
+          type: string
+        immichBaseUrl:
+          type: string
+        immichApiKey:
+          type: string
+        lastScanAt:
+          type: ["string", "null"]
+        totalFilesIndexed:
+          type: integer
+      required:
+        - nasPath
+        - immichBaseUrl
+        - immichApiKey
+        - lastScanAt
+        - totalFilesIndexed
+
+    SettingsInput:
+      type: object
+      properties:
+        nasPath:
+          type: string
+        immichBaseUrl:
+          type: string
+        immichApiKey:
+          type: string
+
+    ImmichTestInput:
+      type: object
+      properties:
+        baseUrl:
+          type: string
+        apiKey:
+          type: string
+      required:
+        - baseUrl
+        - apiKey
+
+    ImmichTestResult:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        message:
+          type: string
+        photoCount:
+          type: ["integer", "null"]
+        videoCount:
+          type: ["integer", "null"]
+      required:
+        - connected
+        - message
+        - photoCount
+        - videoCount
+
+    ScanJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+          enum: [running, completed, failed, idle]
+        filesScanned:
+          type: integer
+        totalFiles:
+          type: ["integer", "null"]
+        stage:
+          type: string
+        startedAt:
+          type: ["string", "null"]
+        finishedAt:
+          type: ["string", "null"]
+        error:
+          type: ["string", "null"]
+      required:
+        - id
+        - status
+        - filesScanned
+        - totalFiles
+        - stage
+        - startedAt
+        - finishedAt
+        - error
+
+    ScanStatus:
+      type: object
+      properties:
+        isRunning:
+          type: boolean
+        current:
+          $ref: "#/components/schemas/ScanJob"
+        lastCompleted:
+          type: ["object", "null"]
+      required:
+        - isRunning
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalFiles:
+          type: integer
+        totalSizeBytes:
+          type: integer
+        archiveCount:
+          type: integer
+        documentCount:
+          type: integer
+        duplicateCount:
+          type: integer
+        isScanning:
+          type: boolean
+        lastScanAt:
+          type: ["string", "null"]
+        typeBreakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBreakdown"
+        immichPhotoCount:
+          type: integer
+        immichVideoCount:
+          type: integer
+        immichConnected:
+          type: boolean
+      required:
+        - totalFiles
+        - totalSizeBytes
+        - archiveCount
+        - documentCount
+        - duplicateCount
+        - isScanning
+        - lastScanAt
+        - typeBreakdown
+        - immichPhotoCount
+        - immichVideoCount
+        - immichConnected
+
+    TypeBreakdown:
+      type: object
+      properties:
+        fileType:
+          type: string
+        count:
+          type: integer
+        sizeBytes:
+          type: integer
+        percentage:
+          type: number
+      required:
+        - fileType
+        - count
+        - sizeBytes
+        - percentage
+
+    IndexedFile:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        filename:
+          type: string
+        extension:
+          type: string
+        fileType:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: ["string", "null"]
+        folder:
+          type: string
+        source:
+          type: string
+        indexedAt:
+          type: string
+      required:
+        - id
+        - path
+        - filename
+        - extension
+        - fileType
+        - sizeBytes
+        - modifiedAt
+        - folder
+        - source
+        - indexedAt
+
+    FileSearchResult:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexedFile"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - files
+        - total
+        - offset
+        - limit
+
+    FolderEntry:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        isDirectory:
+          type: boolean
+        sizeBytes:
+          type: ["integer", "null"]
+        modifiedAt:
+          type: ["string", "null"]
+        fileCount:
+          type: ["integer", "null"]
+        isArchive:
+          type: boolean
+        archiveFileCount:
+          type: ["integer", "null"]
+      required:
+        - name
+        - path
+        - isDirectory
+        - sizeBytes
+        - modifiedAt
+        - fileCount
+        - isArchive
+        - archiveFileCount
+
+    FolderListing:
+      type: object
+      properties:
+        path:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderEntry"
+        totalEntries:
+          type: integer
+      required:
+        - path
+        - entries
+        - totalEntries
+
+    ArchiveFile:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        filename:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: ["string", "null"]
+        folder:
+          type: string
+        containedFileCount:
+          type: ["integer", "null"]
+        category:
+          type: string
+        peekStatus:
+          type: string
+        isPasswordProtected:
+          type: boolean
+        hasNestedArchives:
+          type: boolean
+        estimatedExtractionSize:
+          type: ["integer", "null"]
+      required:
+        - id
+        - path
+        - filename
+        - sizeBytes
+        - modifiedAt
+        - folder
+        - containedFileCount
+        - category
+        - peekStatus
+        - isPasswordProtected
+        - hasNestedArchives
+        - estimatedExtractionSize
+
+    ArchiveListResult:
+      type: object
+      properties:
+        archives:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArchiveFile"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - archives
+        - total
+        - offset
+        - limit
+
+    ArchivePeekEntry:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        sizeBytes:
+          type: integer
+        isDirectory:
+          type: boolean
+        fileType:
+          type: string
+      required:
+        - name
+        - path
+        - sizeBytes
+        - isDirectory
+        - fileType
+
+    ArchivePeekResult:
+      type: object
+      properties:
+        archiveId:
+          type: integer
+        filename:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArchivePeekEntry"
+        totalEntries:
+          type: integer
+        isPasswordProtected:
+          type: boolean
+        hasNestedArchives:
+          type: boolean
+        estimatedExtractionSizeBytes:
+          type: integer
+        category:
+          type: string
+        photoCount:
+          type: integer
+        videoCount:
+          type: integer
+        documentCount:
+          type: integer
+      required:
+        - archiveId
+        - filename
+        - entries
+        - totalEntries
+        - isPasswordProtected
+        - hasNestedArchives
+        - estimatedExtractionSizeBytes
+        - category
+        - photoCount
+        - videoCount
+        - documentCount
+
+    ArchiveDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        filename:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: ["string", "null"]
+        folder:
+          type: string
+        containedFileCount:
+          type: ["integer", "null"]
+        category:
+          type: string
+        peekStatus:
+          type: string
+        isPasswordProtected:
+          type: boolean
+        hasNestedArchives:
+          type: boolean
+        estimatedExtractionSize:
+          type: ["integer", "null"]
+        peekEntries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArchivePeekEntry"
+      required:
+        - id
+        - path
+        - filename
+        - sizeBytes
+        - modifiedAt
+        - folder
+        - containedFileCount
+        - category
+        - peekStatus
+        - isPasswordProtected
+        - hasNestedArchives
+        - estimatedExtractionSize
+        - peekEntries
+
+    DocumentFile:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        filename:
+          type: string
+        extension:
+          type: string
+        fileType:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: ["string", "null"]
+        folder:
+          type: string
+      required:
+        - id
+        - path
+        - filename
+        - extension
+        - fileType
+        - sizeBytes
+        - modifiedAt
+        - folder
+
+    DocumentListResult:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentFile"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - documents
+        - total
+        - offset
+        - limit
+
+    StorageStats:
+      type: object
+      properties:
+        totalSizeBytes:
+          type: integer
+        fileCount:
+          type: integer
+        typeBreakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/TypeBreakdown"
+        nasPathConfigured:
+          type: boolean
+      required:
+        - totalSizeBytes
+        - fileCount
+        - typeBreakdown
+        - nasPathConfigured
+
+    FolderStat:
+      type: object
+      properties:
+        folder:
+          type: string
+        fileCount:
+          type: integer
+        totalSizeBytes:
+          type: integer
+      required:
+        - folder
+        - fileCount
+        - totalSizeBytes
+
+    DuplicateGroup:
+      type: object
+      properties:
+        hash:
+          type: string
+        fileCount:
+          type: integer
+        totalWastedBytes:
+          type: integer
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexedFile"
+      required:
+        - hash
+        - fileCount
+        - totalWastedBytes
+        - files
+
+    DuplicateGroupResult:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/DuplicateGroup"
+        totalGroups:
+          type: integer
+        totalWastedBytes:
+          type: integer
+      required:
+        - groups
+        - totalGroups
+        - totalWastedBytes
+
+    LargeFileResult:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexedFile"
+        total:
+          type: integer
+        totalSizeBytes:
+          type: integer
+      required:
+        - files
+        - total
+        - totalSizeBytes
+
+    OldFileResult:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexedFile"
+        total:
+          type: integer
+      required:
+        - files
+        - total
+
+    EmptyFolder:
+      type: object
+      properties:
+        path:
+          type: string
+        name:
+          type: string
+      required:
+        - path
+        - name
+
+    CleanupSummary:
+      type: object
+      properties:
+        duplicateGroups:
+          type: integer
+        duplicateWastedBytes:
+          type: integer
+        largeFileCount:
+          type: integer
+        largeFilesBytes:
+          type: integer
+        oldFileCount:
+          type: integer
+        emptyFolderCount:
+          type: integer
+      required:
+        - duplicateGroups
+        - duplicateWastedBytes
+        - largeFileCount
+        - largeFilesBytes
+        - oldFileCount
+        - emptyFolderCount
+
+    ImmichStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        baseUrl:
+          type: string
+        photoCount:
+          type: integer
+        videoCount:
+          type: integer
+        albumCount:
+          type: integer
+        personCount:
+          type: integer
+        error:
+          type: ["string", "null"]
+      required:
+        - connected
+        - baseUrl
+        - photoCount
+        - videoCount
+        - albumCount
+        - personCount
+        - error
+
+    ImmichAsset:
+      type: object
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        type:
+          type: string
+        thumbUrl:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - filename
+        - type
+        - thumbUrl
+        - createdAt
+
+    ImmichAlbum:
+      type: object
+      properties:
+        id:
+          type: string
+        albumName:
+          type: string
+        assetCount:
+          type: integer
+        thumbUrl:
+          type: ["string", "null"]
+      required:
+        - id
+        - albumName
+        - assetCount
+        - thumbUrl
+
+    ImmichPerson:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        assetCount:
+          type: integer
+        thumbUrl:
+          type: ["string", "null"]
+      required:
+        - id
+        - name
+        - assetCount
+        - thumbUrl
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    # OpenAI AI Assistant schemas
+    OpenaiConversation:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - createdAt
+
+    OpenaiMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversationId:
+          type: integer
+        role:
+          type: string
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - conversationId
+        - role
+        - content
+        - createdAt
+
+    OpenaiConversationInput:
+      type: object
+      properties:
+        title:
+          type: string
+      required:
+        - title
+
+    OpenaiMessageInput:
+      type: object
+      properties:
+        content:
+          type: string
+      required:
+        - content
+
+    OpenaiConversationWithMessages:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/OpenaiMessage"
+      required:
+        - id
+        - title
+        - createdAt
+        - messages
+
+    OpenaiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

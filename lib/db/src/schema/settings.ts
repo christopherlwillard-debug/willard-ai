@@ -1,0 +1,16 @@
+import { pgTable, serial, text, timestamp, integer } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+
+export const appSettingsTable = pgTable("app_settings", {
+  id: serial("id").primaryKey(),
+  nasPath: text("nas_path").notNull().default(""),
+  immichBaseUrl: text("immich_base_url").notNull().default(""),
+  immichApiKey: text("immich_api_key").notNull().default(""),
+  lastScanAt: timestamp("last_scan_at"),
+  totalFilesIndexed: integer("total_files_indexed").notNull().default(0),
+});
+
+export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });
+export type InsertAppSettings = z.infer<typeof insertAppSettingsSchema>;
+export type AppSettings = typeof appSettingsTable.$inferSelect;
