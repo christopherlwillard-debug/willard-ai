@@ -722,7 +722,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       const isBlank = !settings[key]?.trim();
       if (isBlank && activeRoutes.some((r: any) => r.fileType === category)) {
         const defaultDest = routeDestination(category, settings, nasPath);
-        checks.push({ name: label, ok: true, warning: true, detail: `No custom path set — using default: ${defaultDest}. Configure in Settings to override.` });
+        checks.push({ name: label, ok: false, detail: `No destination configured — set a custom path in Settings. Without it, files would go to the default: ${defaultDest}` });
       }
     }
 
@@ -877,7 +877,7 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
 
     const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
 
-    // Blank destination warnings
+    // ── Stage 1: Blank destination detection (blocking in preflight, warning here) ──
     const warnings: Array<{ category: string; label: string; using: string }> = [];
     const destConfigKeys = [
       { key: "photosDestination",     category: "image",    label: "Photos" },
@@ -891,47 +891,98 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
       }
     }
 
-    // Conflict detection
-    const diskConflicts: string[]  = [];
-    const intraConflicts: string[] = [];
-    const destSeen = new Map<string, string>();
-    for (const route of activeRoutes) {
-      const destPath = path.join(route.destination, route.filename);
-      if (destSeen.has(destPath)) {
-        if (intraConflicts.length < 10) intraConflicts.push(route.filename);
-      } else {
-        destSeen.set(destPath, route.relativePath);
-      }
-      if (fs.existsSync(destPath) && diskConflicts.length < 10) {
-        diskConflicts.push(route.filename);
-      }
+    // ── Stage 2: Per-file move simulation ──
+    // Build full move plan: source relativePath → destination absolute path
+    interface MoveAction {
+      source: string;       // relative path in archive/folder
+      filename: string;
+      fileType: string;
+      sizeBytes: number;
+      destinationDir: string;
+      destinationPath: string;  // absolute destination
+      conflictType: "none" | "disk" | "intra_job";
     }
 
-    // Unique destination folders that would be created
-    const foldersToCreate = [...new Set(activeRoutes.map((r: any) => r.destination))];
+    const movePlan: MoveAction[] = [];
+    const destSeen = new Map<string, string>();  // destAbsPath → first source
+    let diskConflictCount = 0;
+    let intraConflictCount = 0;
+    const diskConflictExamples: string[]  = [];
+    const intraConflictExamples: string[] = [];
 
-    // Per-type counts
+    for (const route of activeRoutes) {
+      const destPath = path.join(route.destination, route.filename);
+      let conflictType: MoveAction["conflictType"] = "none";
+
+      if (destSeen.has(destPath)) {
+        intraConflictCount++;
+        if (intraConflictExamples.length < 8) intraConflictExamples.push(route.filename);
+        conflictType = "intra_job";
+      } else {
+        destSeen.set(destPath, route.relativePath);
+        if (fs.existsSync(destPath)) {
+          diskConflictCount++;
+          if (diskConflictExamples.length < 8) diskConflictExamples.push(route.filename);
+          conflictType = "disk";
+        }
+      }
+
+      movePlan.push({
+        source: route.relativePath,
+        filename: route.filename,
+        fileType: route.fileType,
+        sizeBytes: route.sizeBytes ?? 0,
+        destinationDir: route.destination,
+        destinationPath: destPath,
+        conflictType,
+      });
+    }
+
+    // ── Stage 3: Folder creation plan ──
+    // Show which folders need to be created vs which already exist
+    const uniqueDests = [...new Set(activeRoutes.map((r: any) => r.destination))];
+    const foldersToCreate = uniqueDests.map(dir => ({
+      path: dir,
+      exists: fs.existsSync(dir),
+    }));
+
+    // ── Stage 4: Archive extraction note ──
+    const extractionNote = job.sourceType === "archive"
+      ? `Archive will be extracted to a temporary staging area, then ${activeRoutes.length} file${activeRoutes.length !== 1 ? "s" : ""} will be routed to their destinations. The original archive is NOT deleted during execution${job.archiveDisposition === "delete" ? " (deletion requires explicit confirmation after verification)" : ""}.`
+      : `Folder source — files will be copied to staging first. Source folder is never modified. ${activeRoutes.length} file${activeRoutes.length !== 1 ? "s" : ""} will be routed to their destinations.`;
+
+    // ── Stage 5: Per-type summary ──
     const byType = { images: 0, videos: 0, documents: 0, other: 0 };
     for (const r of activeRoutes) {
-      if (r.fileType === "image")    byType.images++;
+      if      (r.fileType === "image")    byType.images++;
       else if (r.fileType === "video")    byType.videos++;
       else if (r.fileType === "document") byType.documents++;
       else                                byType.other++;
     }
 
     res.json({
-      ok: diskConflicts.length === 0 && intraConflicts.length === 0,
+      ok: diskConflictCount === 0 && intraConflictCount === 0 && warnings.length === 0,
+      extractionNote,
       summary: {
         filesToProcess: activeRoutes.length,
-        foldersToCreate: foldersToCreate.length,
+        foldersTotal: uniqueDests.length,
+        foldersExisting: foldersToCreate.filter(f => f.exists).length,
+        foldersNew: foldersToCreate.filter(f => !f.exists).length,
         totalBytes: plan.totalSizeBytes ?? 0,
         byType,
         destinations: plan.destinations ?? {},
       },
-      diskConflicts,
-      diskConflictCount: diskConflicts.length,
-      intraConflicts,
-      intraConflictCount: intraConflicts.length,
+      // Full per-file move plan (capped at 200 for payload size; use summary for the rest)
+      movePlan: movePlan.slice(0, 200),
+      movePlanTotal: movePlan.length,
+      // Folder creation plan
+      foldersToCreate,
+      // Conflict details
+      diskConflictCount,
+      diskConflictExamples,
+      intraConflictCount,
+      intraConflictExamples,
+      // Blank destination warnings
       warnings,
       sourceType: job.sourceType,
     });

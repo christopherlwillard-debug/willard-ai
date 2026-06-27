@@ -587,18 +587,27 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
       const s = dryRunResult.summary ?? {};
       const hasConflicts = (dryRunResult.diskConflictCount ?? 0) + (dryRunResult.intraConflictCount ?? 0) > 0;
       const hasWarnings  = (dryRunResult.warnings ?? []).length > 0;
+      const movePlan: any[] = dryRunResult.movePlan ?? [];
+      const foldersToCreate: any[] = dryRunResult.foldersToCreate ?? [];
       return (
         <div className="space-y-4">
           <div className="flex items-center gap-2 font-mono text-sm font-bold text-blue-400">
             <FlaskConical className="w-4 h-4" /> Simulation Report
           </div>
 
+          {/* Extraction / source note */}
+          {dryRunResult.extractionNote && (
+            <p className="text-[11px] text-muted-foreground font-mono leading-relaxed bg-secondary/20 p-2.5 rounded border">
+              {dryRunResult.extractionNote}
+            </p>
+          )}
+
           {/* Summary grid */}
           <div className="grid grid-cols-3 gap-2 text-center">
             {[
-              { label: "Files",   value: (s.filesToProcess ?? 0).toLocaleString() },
-              { label: "Folders", value: (s.foldersToCreate ?? 0).toLocaleString() },
-              { label: "Size",    value: formatBytes(s.totalBytes ?? 0) },
+              { label: "Files",     value: (s.filesToProcess ?? 0).toLocaleString() },
+              { label: "New Dirs",  value: (s.foldersNew ?? 0).toLocaleString() },
+              { label: "Size",      value: formatBytes(s.totalBytes ?? 0) },
             ].map(c => (
               <div key={c.label} className="p-2 bg-secondary/40 rounded border">
                 <div className="text-sm font-mono font-bold">{c.value}</div>
@@ -630,7 +639,7 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
               {(dryRunResult.warnings as any[]).map((w: any, i: number) => (
                 <div key={i} className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/30 rounded text-xs font-mono text-amber-300">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span><strong>{w.label}</strong> destination not set — using default: <span className="opacity-70">{w.using}</span>. Configure in Settings.</span>
+                  <span><strong>{w.label}</strong> destination not set — files would go to: <span className="opacity-70">{w.using}</span>. Set in Settings to avoid this.</span>
                 </div>
               ))}
             </div>
@@ -641,23 +650,65 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
             <div className="space-y-1.5">
               {(dryRunResult.diskConflictCount ?? 0) > 0 && (
                 <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
-                  <strong>{dryRunResult.diskConflictCount} file{dryRunResult.diskConflictCount !== 1 ? "s" : ""} already exist</strong> at destination
-                  {dryRunResult.diskConflicts?.length > 0 && <span className="opacity-70"> — e.g. {dryRunResult.diskConflicts.slice(0, 3).join(", ")}</span>}
+                  <strong>{dryRunResult.diskConflictCount} file{dryRunResult.diskConflictCount !== 1 ? "s" : ""} already exist</strong> at destination — must be excluded before executing
+                  {dryRunResult.diskConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.diskConflictExamples.slice(0, 4).join(", ")}</span>}
                 </div>
               )}
               {(dryRunResult.intraConflictCount ?? 0) > 0 && (
                 <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
                   <strong>{dryRunResult.intraConflictCount} intra-job conflict{dryRunResult.intraConflictCount !== 1 ? "s" : ""}</strong> — duplicate filenames routing to same folder
-                  {dryRunResult.intraConflicts?.length > 0 && <span className="opacity-70"> — e.g. {dryRunResult.intraConflicts.slice(0, 3).join(", ")}</span>}
+                  {dryRunResult.intraConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.intraConflictExamples.slice(0, 4).join(", ")}</span>}
                 </div>
               )}
             </div>
           )}
 
+          {/* Clean state */}
           {!hasConflicts && !hasWarnings && (
             <div className="flex items-center gap-2 p-2.5 bg-green-500/10 border border-green-500/30 rounded text-xs font-mono text-green-400">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
               No conflicts or warnings — safe to execute
+            </div>
+          )}
+
+          {/* Per-file move plan preview */}
+          {movePlan.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide">
+                Move Plan {dryRunResult.movePlanTotal > movePlan.length ? `(showing ${movePlan.length} of ${dryRunResult.movePlanTotal})` : `(${movePlan.length} files)`}
+              </p>
+              <ScrollArea className="h-32 rounded border bg-secondary/10 p-2">
+                <div className="space-y-0.5 font-mono text-[10px]">
+                  {movePlan.map((m: any, i: number) => (
+                    <div key={i} className={`flex items-center gap-1 ${m.conflictType !== "none" ? "text-destructive/80" : "text-muted-foreground"}`}>
+                      <span className="shrink-0 opacity-50">{i + 1}.</span>
+                      <span className="truncate flex-1" title={m.source}>{m.source}</span>
+                      <ArrowRight className="w-2.5 h-2.5 shrink-0 opacity-40" />
+                      <span className="truncate flex-1 text-right" title={m.destinationPath}>{m.destinationDir.split("/").slice(-2).join("/")}/{m.filename}</span>
+                      {m.conflictType !== "none" && <span className="shrink-0 text-destructive text-[9px]">⚠</span>}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
+
+          {/* Folders to create */}
+          {foldersToCreate.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide">
+                Destination Folders ({foldersToCreate.filter((f: any) => !f.exists).length} new, {foldersToCreate.filter((f: any) => f.exists).length} existing)
+              </p>
+              <div className="space-y-0.5">
+                {foldersToCreate.map((f: any, i: number) => (
+                  <div key={i} className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
+                    <span className={f.exists ? "text-green-400/70" : "text-blue-400/70"}>
+                      {f.exists ? "✓" : "+"}
+                    </span>
+                    <span className="truncate" title={f.path}>{f.path.split("/").slice(-3).join("/")}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1113,7 +1164,7 @@ export default function Organize() {
         <Sheet open={showNew} onOpenChange={(open) => !open && closeSheet()}>
           <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
             <SheetHeader>
-              <SheetTitle className="font-mono text-primary">New Organization Job</SheetTitle>
+              <SheetTitle className="font-mono text-primary">New Operations Job</SheetTitle>
             </SheetHeader>
             <div className="mt-6">
               <StepIndicator current={0} />
