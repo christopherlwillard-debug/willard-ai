@@ -1579,14 +1579,19 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     const moves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     const logs: string[] = [];
     const rolledBack = await rollbackMoves(moves, line => logs.push(line));
+    const isComplete = rolledBack === moves.length;
 
+    // Only mark rolled_back when ALL moves were reversed.
+    // Partial rollback keeps failed status so the user knows manual intervention is needed.
     await db.update(organizationJobsTable).set({
-      status: "rolled_back",
-      error: `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`,
-      completedAt: new Date(),
+      status: isComplete ? "rolled_back" : "failed",
+      error: isComplete
+        ? `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`
+        : `Partial rollback: only ${rolledBack}/${moves.length} move(s) reversed — manual intervention may be required.`,
+      completedAt: isComplete ? new Date() : null,
     }).where(eq(organizationJobsTable.id, id));
 
-    res.json({ ok: true, rolledBack, total: moves.length, logs });
+    res.json({ ok: isComplete, rolledBack, total: moves.length, partial: !isComplete, logs });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Rollback failed" });
   }
@@ -1852,8 +1857,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
     const rolledBack = await rollbackMoves(newMoves, () => {});
 
+    // Restore fileMoves in DB to existingMoves so the next resume attempt starts from
+    // a clean baseline (rolled-back files are gone from disk; DB must match disk state)
     await db.update(organizationJobsTable).set({
       status: "failed",
+      fileMoves: existingMoves as any,
       error: `Resume failed: ${errMsg}. Rolled back ${rolledBack}/${newMoves.length} new move(s) from this resume pass.`,
     }).where(eq(organizationJobsTable.id, id)).catch(() => {});
 
