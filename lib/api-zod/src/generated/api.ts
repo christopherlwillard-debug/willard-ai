@@ -128,7 +128,11 @@ export const GetSettingsResponse = zod.object({
   "immichBaseUrl": zod.string(),
   "immichApiKey": zod.string(),
   "lastScanAt": zod.string().nullable(),
-  "totalFilesIndexed": zod.number()
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string()
 })
 
 
@@ -138,7 +142,11 @@ export const GetSettingsResponse = zod.object({
 export const UpdateSettingsBody = zod.object({
   "nasPath": zod.string().optional(),
   "immichBaseUrl": zod.string().optional(),
-  "immichApiKey": zod.string().optional()
+  "immichApiKey": zod.string().optional(),
+  "photosDestination": zod.string().optional(),
+  "videosDestination": zod.string().optional(),
+  "documentsDestination": zod.string().optional(),
+  "otherFilesDestination": zod.string().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -146,7 +154,11 @@ export const UpdateSettingsResponse = zod.object({
   "immichBaseUrl": zod.string(),
   "immichApiKey": zod.string(),
   "lastScanAt": zod.string().nullable(),
-  "totalFilesIndexed": zod.number()
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string()
 })
 
 
@@ -760,5 +772,177 @@ export const SendOpenaiMessageBody = zod.object({
 })
 
 export const SendOpenaiMessageResponse = zod.unknown()
+
+
+/**
+ * @summary List all organization jobs
+ */
+export const ListOrganizeJobsResponseItem = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+export const ListOrganizeJobsResponse = zod.array(ListOrganizeJobsResponseItem)
+
+
+/**
+ * @summary Create a new organization job
+ */
+export const CreateOrganizeJobBody = zod.object({
+  "sourceType": zod.enum(['archive', 'folder']),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.enum(['keep', 'move_to_processed', 'delete']).optional()
+})
+
+export const CreateOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Get a specific organization job
+ */
+export const GetOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Delete an organization job
+ */
+export const DeleteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteOrganizeJobResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Analyze source and generate organization plan with AI confidence score
+ */
+export const AnalyzeOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AnalyzeOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Run pre-flight checks (disk space, writability, collisions)
+ */
+export const PreflightOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PreflightOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Execute the organization job (SSE stream of progress events)
+ */
+export const ExecuteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ExecuteOrganizeJobResponse = zod.unknown()
 
 

@@ -11,6 +11,7 @@ import {
   Settings,
   LogOut,
   Loader2,
+  Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout } from "@workspace/api-client-react";
@@ -23,6 +24,7 @@ const navigation = [
   { name: "Explorer", href: "/explorer", icon: FolderTree },
   { name: "Archives", href: "/archives", icon: Archive },
   { name: "Documents", href: "/documents", icon: FileText },
+  { name: "Organize", href: "/organize", icon: Boxes },
   { name: "Cleanup", href: "/cleanup", icon: Trash2 },
   { name: "Search", href: "/search", icon: Search },
   { name: "AI Chat", href: "/chat", icon: MessageSquare },

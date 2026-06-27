@@ -11,6 +11,10 @@ export const appSettingsTable = pgTable("app_settings", {
   totalFilesIndexed: integer("total_files_indexed").notNull().default(0),
   passwordHash: text("password_hash"),
   recoveryKeyHash: text("recovery_key_hash"),
+  photosDestination: text("photos_destination").notNull().default(""),
+  videosDestination: text("videos_destination").notNull().default(""),
+  documentsDestination: text("documents_destination").notNull().default(""),
+  otherFilesDestination: text("other_files_destination").notNull().default(""),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

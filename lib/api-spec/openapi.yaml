@@ -32,6 +32,8 @@ tags:
     description: AI assistant operations
   - name: auth
     description: Authentication operations
+  - name: organize
+    description: Organization Center — extract, route and move files
 
 paths:
   /healthz:
@@ -901,6 +903,178 @@ paths:
           content:
             text/event-stream: {}
 
+  # ── Organize ───────────────────────────────────────────────────────────────
+  /organize/jobs:
+    get:
+      operationId: listOrganizeJobs
+      tags: [organize]
+      summary: List all organization jobs
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrganizationJob"
+    post:
+      operationId: createOrganizeJob
+      tags: [organize]
+      summary: Create a new organization job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizeJobInput"
+      responses:
+        "201":
+          description: Created job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationJob"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /organize/jobs/{id}:
+    get:
+      operationId: getOrganizeJob
+      tags: [organize]
+      summary: Get a specific organization job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Organization job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteOrganizeJob
+      tags: [organize]
+      summary: Delete an organization job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Job is currently executing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /organize/jobs/{id}/analyze:
+    post:
+      operationId: analyzeOrganizeJob
+      tags: [organize]
+      summary: Analyze source and generate organization plan with AI confidence score
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated job with planJson populated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Source not found on disk
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /organize/jobs/{id}/preflight:
+    post:
+      operationId: preflightOrganizeJob
+      tags: [organize]
+      summary: Run pre-flight checks (disk space, writability, collisions)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated job with preflightJson populated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Analyze must be run first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /organize/jobs/{id}/execute:
+    get:
+      operationId: executeOrganizeJob
+      tags: [organize]
+      summary: Execute the organization job (SSE stream of progress events)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: SSE stream of progress/status/complete/error events
+          content:
+            text/event-stream: {}
+
 components:
   schemas:
     HealthStatus:
@@ -924,12 +1098,24 @@ components:
           type: ["string", "null"]
         totalFilesIndexed:
           type: integer
+        photosDestination:
+          type: string
+        videosDestination:
+          type: string
+        documentsDestination:
+          type: string
+        otherFilesDestination:
+          type: string
       required:
         - nasPath
         - immichBaseUrl
         - immichApiKey
         - lastScanAt
         - totalFilesIndexed
+        - photosDestination
+        - videosDestination
+        - documentsDestination
+        - otherFilesDestination
 
     SettingsInput:
       type: object
@@ -939,6 +1125,14 @@ components:
         immichBaseUrl:
           type: string
         immichApiKey:
+          type: string
+        photosDestination:
+          type: string
+        videosDestination:
+          type: string
+        documentsDestination:
+          type: string
+        otherFilesDestination:
           type: string
 
     ImmichTestInput:
@@ -1869,3 +2063,60 @@ components:
             $ref: "#/components/schemas/AuthSession"
       required:
         - sessions
+
+    OrganizeJobInput:
+      type: object
+      properties:
+        sourceType:
+          type: string
+          enum: [archive, folder]
+        sourcePath:
+          type: string
+        archiveId:
+          type: ["integer", "null"]
+        archiveDisposition:
+          type: string
+          enum: [keep, move_to_processed, delete]
+      required:
+        - sourceType
+        - sourcePath
+
+    OrganizationJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+          enum: [pending, analyzing, planned, preflight, verified, executing, completed, failed, rolled_back]
+        sourceType:
+          type: string
+        sourcePath:
+          type: string
+        archiveId:
+          type: ["integer", "null"]
+        archiveDisposition:
+          type: string
+        planJson:
+          type: ["object", "null"]
+        preflightJson:
+          type: ["object", "null"]
+        fileMoves:
+          type: ["array", "null"]
+          items:
+            type: object
+        reportPath:
+          type: ["string", "null"]
+        error:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        completedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - status
+        - sourceType
+        - sourcePath
+        - archiveDisposition
+        - createdAt

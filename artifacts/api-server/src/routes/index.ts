@@ -12,6 +12,7 @@ import storageRouter from "./storage";
 import cleanupRouter from "./cleanup";
 import immichRouter from "./immich";
 import openaiRouter from "./openai/index";
+import organizeRouter from "./organize";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(storageRouter);
 router.use(cleanupRouter);
 router.use(immichRouter);
 router.use(openaiRouter);
+router.use(organizeRouter);
 
 export default router;

@@ -87,7 +87,11 @@ export default function Settings() {
   const [form, setForm] = useState({
     nasPath: "",
     immichBaseUrl: "",
-    immichApiKey: ""
+    immichApiKey: "",
+    photosDestination: "",
+    videosDestination: "",
+    documentsDestination: "",
+    otherFilesDestination: "",
   });
 
   useEffect(() => {
@@ -95,7 +99,11 @@ export default function Settings() {
       setForm({
         nasPath: settings.nasPath,
         immichBaseUrl: settings.immichBaseUrl,
-        immichApiKey: settings.immichApiKey
+        immichApiKey: settings.immichApiKey,
+        photosDestination: settings.photosDestination ?? "",
+        videosDestination: settings.videosDestination ?? "",
+        documentsDestination: settings.documentsDestination ?? "",
+        otherFilesDestination: settings.otherFilesDestination ?? "",
       });
     }
   }, [settings]);
@@ -209,6 +217,40 @@ export default function Settings() {
           </CardFooter>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center"><HardDrive className="w-5 h-5 mr-2"/> Organize Destinations</CardTitle>
+          <CardDescription>Where the Organization Center routes each file type. Leave blank to use NAS root subfolders (Photos/, Videos/, Documents/, Files/).</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {settingsLoading ? <div className="space-y-3"><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {[
+                { label: "Photos Destination", key: "photosDestination", placeholder: "e.g. /mnt/nas/Photos" },
+                { label: "Videos Destination", key: "videosDestination", placeholder: "e.g. /mnt/nas/Videos" },
+                { label: "Documents Destination", key: "documentsDestination", placeholder: "e.g. /mnt/nas/Documents" },
+                { label: "Other Files Destination", key: "otherFilesDestination", placeholder: "e.g. /mnt/nas/Files" },
+              ].map(({ label, key, placeholder }) => (
+                <div key={key} className="space-y-2">
+                  <Label>{label}</Label>
+                  <Input
+                    value={(form as any)[key]}
+                    onChange={e => setForm({ ...form, [key]: e.target.value })}
+                    placeholder={placeholder}
+                    className="font-mono text-sm"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+        <CardFooter>
+          <Button onClick={handleSave} disabled={updateMutation.isPending || settingsLoading} className="w-full font-mono font-bold">
+            {updateMutation.isPending ? "SAVING..." : "SAVE_DESTINATIONS"}
+          </Button>
+        </CardFooter>
+      </Card>
 
       <Card className="border-primary/50">
         <CardHeader>

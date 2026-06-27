@@ -66,6 +66,8 @@ import type {
   OpenaiError,
   OpenaiMessage,
   OpenaiMessageInput,
+  OrganizationJob,
+  OrganizeJobInput,
   ScanJob,
   ScanStatus,
   SearchFilesParams,
@@ -3433,4 +3435,515 @@ export const useSendOpenaiMessage = <TError = ErrorType<unknown>,
       > => {
       return useMutation(getSendOpenaiMessageMutationOptions(options));
     }
+
+export const getListOrganizeJobsUrl = () => {
+
+
+
+
+  return `/api/organize/jobs`
+}
+
+/**
+ * @summary List all organization jobs
+ */
+export const listOrganizeJobs = async ( options?: RequestInit): Promise<OrganizationJob[]> => {
+
+  return customFetch<OrganizationJob[]>(getListOrganizeJobsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListOrganizeJobsQueryKey = () => {
+    return [
+    `/api/organize/jobs`
+    ] as const;
+    }
+
+
+export const getListOrganizeJobsQueryOptions = <TData = Awaited<ReturnType<typeof listOrganizeJobs>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOrganizeJobs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListOrganizeJobsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listOrganizeJobs>>> = ({ signal }) => listOrganizeJobs({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listOrganizeJobs>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListOrganizeJobsQueryResult = NonNullable<Awaited<ReturnType<typeof listOrganizeJobs>>>
+export type ListOrganizeJobsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List all organization jobs
+ */
+
+export function useListOrganizeJobs<TData = Awaited<ReturnType<typeof listOrganizeJobs>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOrganizeJobs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListOrganizeJobsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateOrganizeJobUrl = () => {
+
+
+
+
+  return `/api/organize/jobs`
+}
+
+/**
+ * @summary Create a new organization job
+ */
+export const createOrganizeJob = async (organizeJobInput: OrganizeJobInput, options?: RequestInit): Promise<OrganizationJob> => {
+
+  return customFetch<OrganizationJob>(getCreateOrganizeJobUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(organizeJobInput)
+  }
+);}
+
+
+
+
+export const getCreateOrganizeJobMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createOrganizeJob>>, TError,{data: BodyType<OrganizeJobInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createOrganizeJob>>, TError,{data: BodyType<OrganizeJobInput>}, TContext> => {
+
+const mutationKey = ['createOrganizeJob'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createOrganizeJob>>, {data: BodyType<OrganizeJobInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createOrganizeJob(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateOrganizeJobMutationResult = NonNullable<Awaited<ReturnType<typeof createOrganizeJob>>>
+    export type CreateOrganizeJobMutationBody = BodyType<OrganizeJobInput>
+    export type CreateOrganizeJobMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Create a new organization job
+ */
+export const useCreateOrganizeJob = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createOrganizeJob>>, TError,{data: BodyType<OrganizeJobInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createOrganizeJob>>,
+        TError,
+        {data: BodyType<OrganizeJobInput>},
+        TContext
+      > => {
+      return useMutation(getCreateOrganizeJobMutationOptions(options));
+    }
+
+export const getGetOrganizeJobUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}`
+}
+
+/**
+ * @summary Get a specific organization job
+ */
+export const getOrganizeJob = async (id: number, options?: RequestInit): Promise<OrganizationJob> => {
+
+  return customFetch<OrganizationJob>(getGetOrganizeJobUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetOrganizeJobQueryKey = (id: number,) => {
+    return [
+    `/api/organize/jobs/${id}`
+    ] as const;
+    }
+
+
+export const getGetOrganizeJobQueryOptions = <TData = Awaited<ReturnType<typeof getOrganizeJob>>, TError = ErrorType<ApiError>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOrganizeJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetOrganizeJobQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOrganizeJob>>> = ({ signal }) => getOrganizeJob(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getOrganizeJob>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetOrganizeJobQueryResult = NonNullable<Awaited<ReturnType<typeof getOrganizeJob>>>
+export type GetOrganizeJobQueryError = ErrorType<ApiError>
+
+
+/**
+ * @summary Get a specific organization job
+ */
+
+export function useGetOrganizeJob<TData = Awaited<ReturnType<typeof getOrganizeJob>>, TError = ErrorType<ApiError>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOrganizeJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetOrganizeJobQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getDeleteOrganizeJobUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}`
+}
+
+/**
+ * @summary Delete an organization job
+ */
+export const deleteOrganizeJob = async (id: number, options?: RequestInit): Promise<OkResult> => {
+
+  return customFetch<OkResult>(getDeleteOrganizeJobUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteOrganizeJobMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteOrganizeJob>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteOrganizeJob'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteOrganizeJob>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteOrganizeJob(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteOrganizeJobMutationResult = NonNullable<Awaited<ReturnType<typeof deleteOrganizeJob>>>
+
+    export type DeleteOrganizeJobMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Delete an organization job
+ */
+export const useDeleteOrganizeJob = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteOrganizeJob>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteOrganizeJobMutationOptions(options));
+    }
+
+export const getAnalyzeOrganizeJobUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}/analyze`
+}
+
+/**
+ * @summary Analyze source and generate organization plan with AI confidence score
+ */
+export const analyzeOrganizeJob = async (id: number, options?: RequestInit): Promise<OrganizationJob> => {
+
+  return customFetch<OrganizationJob>(getAnalyzeOrganizeJobUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getAnalyzeOrganizeJobMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof analyzeOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof analyzeOrganizeJob>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['analyzeOrganizeJob'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof analyzeOrganizeJob>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  analyzeOrganizeJob(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AnalyzeOrganizeJobMutationResult = NonNullable<Awaited<ReturnType<typeof analyzeOrganizeJob>>>
+
+    export type AnalyzeOrganizeJobMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Analyze source and generate organization plan with AI confidence score
+ */
+export const useAnalyzeOrganizeJob = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof analyzeOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof analyzeOrganizeJob>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getAnalyzeOrganizeJobMutationOptions(options));
+    }
+
+export const getPreflightOrganizeJobUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}/preflight`
+}
+
+/**
+ * @summary Run pre-flight checks (disk space, writability, collisions)
+ */
+export const preflightOrganizeJob = async (id: number, options?: RequestInit): Promise<OrganizationJob> => {
+
+  return customFetch<OrganizationJob>(getPreflightOrganizeJobUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getPreflightOrganizeJobMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof preflightOrganizeJob>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['preflightOrganizeJob'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof preflightOrganizeJob>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  preflightOrganizeJob(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreflightOrganizeJobMutationResult = NonNullable<Awaited<ReturnType<typeof preflightOrganizeJob>>>
+
+    export type PreflightOrganizeJobMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Run pre-flight checks (disk space, writability, collisions)
+ */
+export const usePreflightOrganizeJob = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof preflightOrganizeJob>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof preflightOrganizeJob>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getPreflightOrganizeJobMutationOptions(options));
+    }
+
+export const getExecuteOrganizeJobUrl = (id: number,) => {
+
+
+
+
+  return `/api/organize/jobs/${id}/execute`
+}
+
+/**
+ * @summary Execute the organization job (SSE stream of progress events)
+ */
+export const executeOrganizeJob = async (id: number, options?: RequestInit): Promise<unknown> => {
+
+  return customFetch<unknown>(getExecuteOrganizeJobUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getExecuteOrganizeJobQueryKey = (id: number,) => {
+    return [
+    `/api/organize/jobs/${id}/execute`
+    ] as const;
+    }
+
+
+export const getExecuteOrganizeJobQueryOptions = <TData = Awaited<ReturnType<typeof executeOrganizeJob>>, TError = ErrorType<unknown>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof executeOrganizeJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getExecuteOrganizeJobQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof executeOrganizeJob>>> = ({ signal }) => executeOrganizeJob(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof executeOrganizeJob>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ExecuteOrganizeJobQueryResult = NonNullable<Awaited<ReturnType<typeof executeOrganizeJob>>>
+export type ExecuteOrganizeJobQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Execute the organization job (SSE stream of progress events)
+ */
+
+export function useExecuteOrganizeJob<TData = Awaited<ReturnType<typeof executeOrganizeJob>>, TError = ErrorType<unknown>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof executeOrganizeJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getExecuteOrganizeJobQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 

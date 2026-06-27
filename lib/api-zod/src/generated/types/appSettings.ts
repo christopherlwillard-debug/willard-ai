@@ -13,4 +13,8 @@ export interface AppSettings {
   /** @nullable */
   lastScanAt: string | null;
   totalFilesIndexed: number;
+  photosDestination: string;
+  videosDestination: string;
+  documentsDestination: string;
+  otherFilesDestination: string;
 }

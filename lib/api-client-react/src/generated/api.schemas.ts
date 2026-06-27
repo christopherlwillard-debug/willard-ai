@@ -16,12 +16,20 @@ export interface AppSettings {
   /** @nullable */
   lastScanAt: string | null;
   totalFilesIndexed: number;
+  photosDestination: string;
+  videosDestination: string;
+  documentsDestination: string;
+  otherFilesDestination: string;
 }
 
 export interface SettingsInput {
   nasPath?: string;
   immichBaseUrl?: string;
   immichApiKey?: string;
+  photosDestination?: string;
+  videosDestination?: string;
+  documentsDestination?: string;
+  otherFilesDestination?: string;
 }
 
 export interface ImmichTestInput {
@@ -429,6 +437,81 @@ export interface AuthSession {
 
 export interface SessionsResult {
   sessions: AuthSession[];
+}
+
+export type OrganizeJobInputSourceType = typeof OrganizeJobInputSourceType[keyof typeof OrganizeJobInputSourceType];
+
+
+export const OrganizeJobInputSourceType = {
+  archive: 'archive',
+  folder: 'folder',
+} as const;
+
+export type OrganizeJobInputArchiveDisposition = typeof OrganizeJobInputArchiveDisposition[keyof typeof OrganizeJobInputArchiveDisposition];
+
+
+export const OrganizeJobInputArchiveDisposition = {
+  keep: 'keep',
+  move_to_processed: 'move_to_processed',
+  delete: 'delete',
+} as const;
+
+export interface OrganizeJobInput {
+  sourceType: OrganizeJobInputSourceType;
+  sourcePath: string;
+  /** @nullable */
+  archiveId?: number | null;
+  archiveDisposition?: OrganizeJobInputArchiveDisposition;
+}
+
+export type OrganizationJobStatus = typeof OrganizationJobStatus[keyof typeof OrganizationJobStatus];
+
+
+export const OrganizationJobStatus = {
+  pending: 'pending',
+  analyzing: 'analyzing',
+  planned: 'planned',
+  preflight: 'preflight',
+  verified: 'verified',
+  executing: 'executing',
+  completed: 'completed',
+  failed: 'failed',
+  rolled_back: 'rolled_back',
+} as const;
+
+/**
+ * @nullable
+ */
+export type OrganizationJobPlanJson = { [key: string]: unknown } | null;
+
+/**
+ * @nullable
+ */
+export type OrganizationJobPreflightJson = { [key: string]: unknown } | null;
+
+export type OrganizationJobFileMovesItem = { [key: string]: unknown };
+
+export interface OrganizationJob {
+  id: number;
+  status: OrganizationJobStatus;
+  sourceType: string;
+  sourcePath: string;
+  /** @nullable */
+  archiveId?: number | null;
+  archiveDisposition: string;
+  /** @nullable */
+  planJson?: OrganizationJobPlanJson;
+  /** @nullable */
+  preflightJson?: OrganizationJobPreflightJson;
+  /** @nullable */
+  fileMoves?: OrganizationJobFileMovesItem[] | null;
+  /** @nullable */
+  reportPath?: string | null;
+  /** @nullable */
+  error?: string | null;
+  createdAt: string;
+  /** @nullable */
+  completedAt?: string | null;
 }
 
 export type SearchFilesParams = {
