@@ -6,7 +6,8 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { pool, db } from "@workspace/db";
 
-import { appSettingsTable } from "@workspace/db";
+import { appSettingsTable, organizationJobsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream } from "./lib/nas-storage";
@@ -129,5 +130,19 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
     logger.info({ nasPath }, "NAS storage initialized from persisted settings");
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
+
+// Detect organize jobs that were interrupted (server died while executing)
+db.select({ id: organizationJobsTable.id, sourcePath: organizationJobsTable.sourcePath })
+  .from(organizationJobsTable)
+  .where(eq(organizationJobsTable.status, "executing"))
+  .then((rows) => {
+    if (rows.length > 0) {
+      logger.warn(
+        { count: rows.length, ids: rows.map(r => r.id) },
+        "RECOVERY: Found interrupted organize job(s) from previous session — visit Recovery Center to resume or roll back",
+      );
+    }
+  })
+  .catch(() => {});
 
 export default app;

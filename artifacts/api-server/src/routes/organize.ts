@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -1272,6 +1272,11 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
         const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
         send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved, progress: pct });
+        // Checkpoint: persist fileMoves to DB every 5 moves so Recovery Center has current state after a crash
+        db.update(organizationJobsTable)
+          .set({ fileMoves: fileMoves as any })
+          .where(eq(organizationJobsTable.id, id))
+          .catch(() => {});
       }
     }
 
@@ -1510,6 +1515,279 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
     res.json({ ok: true, dispositionResult, sourcePath: job.sourcePath });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Failed to apply disposition" });
+  }
+});
+
+// ── Recovery Center ────────────────────────────────────────────────────────────
+
+/**
+ * List jobs that are stuck in non-terminal states.
+ * "executing" means the server likely crashed mid-run.
+ */
+router.get("/organize/recovery", async (_req, res) => {
+  try {
+    const jobs = await db
+      .select()
+      .from(organizationJobsTable)
+      .where(inArray(organizationJobsTable.status, ["executing", "failed"]))
+      .orderBy(desc(organizationJobsTable.createdAt))
+      .limit(50);
+    res.json({ interrupted: jobs });
+  } catch { res.status(500).json({ error: "Failed to query recovery data" }); }
+});
+
+/**
+ * Roll back an interrupted job using its stored (partial) fileMoves.
+ * Valid for jobs in "executing" or "failed" status only.
+ */
+router.post("/organize/jobs/:id/rollback", async (req, res) => {
+  const id = parseInt(req.params.id);
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!["executing", "failed"].includes(job.status)) {
+      res.status(409).json({ error: `Job status is '${job.status}' — only executing or failed jobs can be rolled back here` }); return;
+    }
+
+    const moves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
+    const logs: string[] = [];
+    const rolledBack = await rollbackMoves(moves, line => logs.push(line));
+
+    await db.update(organizationJobsTable).set({
+      status: "rolled_back",
+      error: `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`,
+      completedAt: new Date(),
+    }).where(eq(organizationJobsTable.id, id));
+
+    res.json({ ok: true, rolledBack, total: moves.length, logs });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Rollback failed" });
+  }
+});
+
+/**
+ * Reset an interrupted job back to "verified" so the user can re-execute.
+ * Clears partial fileMoves so a fresh run starts cleanly.
+ */
+router.post("/organize/jobs/:id/reset", async (req, res) => {
+  const id = parseInt(req.params.id);
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!["executing", "failed"].includes(job.status)) {
+      res.status(409).json({ error: `Job status is '${job.status}' — only executing or failed jobs can be reset` }); return;
+    }
+    if (!job.planJson || !job.preflightJson) {
+      res.status(409).json({ error: "Job is missing plan or preflight data — delete and recreate it" }); return;
+    }
+
+    await db.update(organizationJobsTable).set({
+      status: "verified",
+      error: null,
+      fileMoves: null,
+    }).where(eq(organizationJobsTable.id, id));
+
+    res.json({ ok: true, status: "verified" });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Reset failed" });
+  }
+});
+
+/**
+ * Resume an interrupted job from where it left off (SSE).
+ * Re-stages the source, skips files already at their destinations per stored fileMoves,
+ * moves the remaining files with SHA-256 verification, then marks the job complete.
+ */
+router.get("/organize/jobs/:id/resume", async (req, res) => {
+  const id = parseInt(req.params.id);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const send = (event: string, data: object) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const tempDirs: string[] = [];
+  const newMoves: FileMoveRecord[] = [];
+
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job)                       { send("error", { message: "Job not found" });                         res.end(); return; }
+    if (job.status !== "executing") { send("error", { message: `Cannot resume a job with status '${job.status}' — only interrupted (executing) jobs can be resumed` }); res.end(); return; }
+    if (!job.planJson)              { send("error", { message: "Job has no plan — delete and recreate it" }); res.end(); return; }
+
+    const plan = job.planJson as any;
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const settings = settingsRows[0] as any ?? {};
+    const nasPath = (settings.nasPath ?? "").trim();
+    if (!nasPath || !path.isAbsolute(nasPath)) {
+      send("error", { message: "NAS path is not configured" }); res.end(); return;
+    }
+
+    // Existing partial moves from the interrupted run
+    const existingMoves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
+    const alreadyMovedDests = new Set<string>(existingMoves.map(m => m.to));
+
+    send("status", { stage: "staging", message: `Resuming — ${existingMoves.length} file(s) already at destination, re-staging source…`, progress: 2 });
+
+    const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
+    const excludedPaths      = new Set<string>(plan.excludePaths ?? []);
+
+    const planDestMap = new Map<string, string>();
+    for (const r of (plan.routes ?? [])) {
+      if (r.relativePath && r.destination) planDestMap.set(r.relativePath, r.destination);
+    }
+
+    const tempDir = getTempDir(nasPath, `org-resume-${id}`);
+    tempDirs.push(tempDir);
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
+
+    if (job.sourceType === "archive") {
+      send("status", { stage: "extracting", message: "Re-extracting archive to staging area…", progress: 5 });
+      if (!fs.existsSync(job.sourcePath)) { send("error", { message: `Archive not found: ${job.sourcePath}` }); res.end(); return; }
+      const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
+      const { entriesExtracted } = extractResult;
+      send("status", { stage: "scanning", message: `Extracted ${entriesExtracted} entries, scanning…`, progress: 24 });
+      sourceFiles = walkDir(tempDir).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
+    } else {
+      if (!fs.existsSync(job.sourcePath)) { send("error", { message: `Source folder not found: ${job.sourcePath}` }); res.end(); return; }
+      const walked = walkDir(job.sourcePath);
+      const stagingBase = path.join(tempDir, "staged");
+      let staged = 0;
+      for (const w of walked) {
+        const dest = path.join(stagingBase, w.relativePath);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(w.fullPath, dest);
+        staged++;
+        if (staged % 20 === 0) send("status", { stage: "staging", message: `Staged ${staged}/${walked.length}…`, progress: 5 + Math.round((staged / walked.length) * 17) });
+      }
+      sourceFiles = walkDir(stagingBase).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
+    }
+
+    const activeRoutes: any[] = (plan.routes ?? []).filter((r: any) =>
+      !excludedCategories.has(r.fileType) && !excludedPaths.has(r.relativePath)
+    );
+    const total = activeRoutes.length;
+    const conflictPolicy: string = (job as any).conflictPolicy ?? "keep_existing";
+
+    let moved = 0;
+    let skippedAlready = 0;
+    let conflictSkipped = 0;
+    let excluded = 0;
+
+    send("status", { stage: "moving", message: `Moving remaining files (${existingMoves.length} already done)…`, progress: 26, total });
+
+    for (let i = 0; i < sourceFiles.length; i++) {
+      const sf = sourceFiles[i];
+      const ft = sf.fileType === "image" ? "image" : sf.fileType === "video" ? "video" : sf.fileType === "document" ? "document" : "other";
+
+      if (excludedCategories.has(ft) || excludedPaths.has(sf.relativePath)) { excluded++; continue; }
+
+      const planDest = planDestMap.get(sf.relativePath);
+      if (!planDest) { excluded++; continue; }
+
+      const destDir = planDest;
+      let destFile  = path.join(destDir, path.basename(sf.relativePath));
+
+      assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
+
+      // Already moved in the interrupted run — skip
+      if (alreadyMovedDests.has(destFile)) {
+        skippedAlready++;
+        if ((i + 1) % 5 === 0) {
+          const pct = 26 + Math.round(((moved + skippedAlready + conflictSkipped + excluded) / total) * 55);
+          send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved: existingMoves.length + moved, skippedAlready, progress: pct });
+        }
+        continue;
+      }
+
+      // Conflict handling for files not yet moved
+      if (fs.existsSync(destFile)) {
+        if (conflictPolicy === "replace") {
+          fs.unlinkSync(destFile);
+        } else if (conflictPolicy === "rename") {
+          const ext  = path.extname(path.basename(sf.relativePath));
+          const base = path.basename(sf.relativePath).slice(0, path.basename(sf.relativePath).length - ext.length);
+          let suffix = 1;
+          while (fs.existsSync(destFile)) {
+            destFile = path.join(destDir, `${base}_${suffix}${ext}`);
+            suffix++;
+          }
+        } else {
+          conflictSkipped++;
+          continue;
+        }
+      }
+
+      fs.mkdirSync(destDir, { recursive: true });
+      const record = await verifiedMove(sf.fullPath, destFile);
+      newMoves.push(record);
+      moved++;
+
+      if ((i + 1) % 5 === 0 || moved + skippedAlready + conflictSkipped + excluded >= sourceFiles.length) {
+        const pct = 26 + Math.round(((moved + skippedAlready + conflictSkipped + excluded) / total) * 55);
+        send("progress", { index: i + 1, total, filename: path.basename(sf.relativePath), moved: existingMoves.length + moved, skippedAlready, progress: pct });
+        // Checkpoint with merged moves
+        const merged = [...existingMoves, ...newMoves];
+        db.update(organizationJobsTable)
+          .set({ fileMoves: merged as any })
+          .where(eq(organizationJobsTable.id, id))
+          .catch(() => {});
+      }
+    }
+
+    send("status", { stage: "verifying", message: "Verifying all files at destination…", progress: 85 });
+
+    const allMoves: FileMoveRecord[] = [...existingMoves, ...newMoves];
+    const missing: string[] = [];
+    for (const mv of allMoves) {
+      if (!fs.existsSync(mv.to)) missing.push(mv.to);
+    }
+    if (missing.length > 0) {
+      throw new Error(`Verification failed: ${missing.length}/${allMoves.length} moved files missing at destination`);
+    }
+
+    const completedAt = new Date();
+    const checksumVerified = allMoves.filter(m => m.verified).length;
+    const report: any = {
+      jobId: id, status: "completed", completedAt: completedAt.toISOString(),
+      sourcePath: job.sourcePath, sourceType: job.sourceType,
+      moved: allMoves.length, skippedAlready, conflictSkipped, excluded,
+      checksumVerified, resumedFrom: existingMoves.length,
+    };
+
+    await db.update(organizationJobsTable).set({
+      status: "completed",
+      fileMoves: allMoves as any,
+      reportJson: report as any,
+      completedAt,
+    }).where(eq(organizationJobsTable.id, id));
+
+    send("complete", { ...report, progress: 100 });
+
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : "Unknown error";
+    send("status", { stage: "rolling_back", message: "Resume error — rolling back new moves…", progress: -1 });
+
+    // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
+    const rolledBack = await rollbackMoves(newMoves, () => {});
+
+    await db.update(organizationJobsTable).set({
+      status: "failed",
+      error: `Resume failed: ${errMsg}. Rolled back ${rolledBack}/${newMoves.length} new move(s) from this resume pass.`,
+    }).where(eq(organizationJobsTable.id, id)).catch(() => {});
+
+    send("error", { message: errMsg, rolledBack });
+  } finally {
+    for (const td of tempDirs) cleanTempDir(td);
+    res.end();
   }
 });
 

@@ -11,13 +11,14 @@ import {
   useListArchives,
 } from "@workspace/api-client-react";
 import type { OrganizationJob } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   Boxes, Plus, ChevronRight, CheckCircle2, XCircle, AlertTriangle, Loader2,
   Archive, FolderOpen, Trash2, Eye, Play, RotateCcw, Sparkles, HardDrive,
   FileText, Image, Video, File, ArrowRight, Ban, FlaskConical,
+  ShieldAlert, RefreshCw, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1139,6 +1140,277 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   );
 }
 
+// ── Recovery Center ───────────────────────────────────────────────────────────
+
+function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
+  open: boolean;
+  onClose: () => void;
+  onJobRecovered: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [actionPending, setActionPending] = useState<number | null>(null);
+  const [resumeState, setResumeState] = useState<Record<number, { stage: string; progress: number; log: string[]; done: boolean; error: string | null }>>({});
+  const esRefs = useRef<Record<number, EventSource>>({});
+
+  const { data, refetch, isLoading } = useQuery({
+    queryKey: ["organize-recovery"],
+    queryFn: async () => {
+      const resp = await fetch("/api/organize/recovery");
+      if (!resp.ok) throw new Error("Failed to fetch recovery data");
+      return resp.json() as Promise<{ interrupted: OrganizationJob[] }>;
+    },
+    enabled: open,
+    refetchInterval: open ? 8000 : false,
+  });
+
+  useEffect(() => {
+    return () => {
+      for (const es of Object.values(esRefs.current)) es.close();
+    };
+  }, []);
+
+  const interrupted = data?.interrupted ?? [];
+
+  const handleRollBack = async (jobId: number) => {
+    setActionPending(jobId);
+    try {
+      const resp = await fetch(`/api/organize/jobs/${jobId}/rollback`, { method: "POST" });
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body.error ?? "Rollback failed");
+      toast({ title: "Rolled back", description: `${body.rolledBack}/${body.total} move(s) reversed.` });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+      onJobRecovered();
+    } catch (e: any) {
+      toast({ title: "Rollback failed", description: e.message, variant: "destructive" });
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  const handleReset = async (jobId: number) => {
+    setActionPending(jobId);
+    try {
+      const resp = await fetch(`/api/organize/jobs/${jobId}/reset`, { method: "POST" });
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body.error ?? "Reset failed");
+      toast({ title: "Job reset to Verified", description: "Open the job to re-execute from the Execute step." });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+      onJobRecovered();
+    } catch (e: any) {
+      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  const handleResume = (jobId: number) => {
+    if (esRefs.current[jobId]) esRefs.current[jobId].close();
+    setResumeState(prev => ({ ...prev, [jobId]: { stage: "starting", progress: 0, log: [], done: false, error: null } }));
+
+    const es = new EventSource(`/api/organize/jobs/${jobId}/resume`);
+    esRefs.current[jobId] = es;
+
+    es.addEventListener("status", (e: MessageEvent) => {
+      const d = JSON.parse(e.data);
+      setResumeState(prev => ({
+        ...prev,
+        [jobId]: { ...prev[jobId], stage: d.stage ?? prev[jobId]?.stage, progress: d.progress ?? prev[jobId]?.progress ?? 0, log: [...(prev[jobId]?.log ?? []).slice(-20), d.message ?? ""] },
+      }));
+    });
+
+    es.addEventListener("progress", (e: MessageEvent) => {
+      const d = JSON.parse(e.data);
+      setResumeState(prev => ({
+        ...prev,
+        [jobId]: { ...prev[jobId], progress: d.progress ?? prev[jobId]?.progress ?? 0, log: [...(prev[jobId]?.log ?? []).slice(-20), `Moved ${d.moved}/${d.total} — ${d.filename ?? ""}`] },
+      }));
+    });
+
+    es.addEventListener("complete", (_e: MessageEvent) => {
+      setResumeState(prev => ({ ...prev, [jobId]: { ...prev[jobId], stage: "complete", progress: 100, done: true, error: null } }));
+      es.close();
+      toast({ title: "Job resumed and completed!" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+      onJobRecovered();
+    });
+
+    es.addEventListener("error", (e: MessageEvent) => {
+      let msg = "Resume failed";
+      try { msg = JSON.parse(e.data)?.message ?? msg; } catch { /* raw event */ }
+      setResumeState(prev => ({ ...prev, [jobId]: { ...prev[jobId], stage: "error", done: true, error: msg } }));
+      es.close();
+      toast({ title: "Resume failed", description: msg, variant: "destructive" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+    });
+  };
+
+  const cancelResume = (jobId: number) => {
+    esRefs.current[jobId]?.close();
+    setResumeState(prev => { const n = { ...prev }; delete n[jobId]; return n; });
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="font-mono text-amber-400 flex items-center gap-2">
+            <ShieldAlert className="w-5 h-5" /> RECOVERY_CENTER
+          </SheetTitle>
+        </SheetHeader>
+        <div className="mt-6 space-y-4">
+          <p className="text-xs font-mono text-muted-foreground">
+            Jobs below were interrupted — the server may have restarted while they were running.
+            Each file that was moved before the interruption is stored and can be reversed.
+          </p>
+
+          {isLoading ? (
+            <div className="space-y-2">
+              <div className="h-20 rounded-lg bg-secondary/30 animate-pulse" />
+              <div className="h-20 rounded-lg bg-secondary/30 animate-pulse" />
+            </div>
+          ) : interrupted.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
+              <CheckCircle2 className="w-10 h-10 text-green-400 opacity-50" />
+              <p className="font-mono text-sm">No interrupted jobs found</p>
+              <p className="text-xs text-center opacity-60">All jobs are in a terminal state.</p>
+            </div>
+          ) : interrupted.map((job) => {
+            const rs = resumeState[job.id];
+            const isRunning = rs && !rs.done;
+            const movesCount = Array.isArray(job.fileMoves) ? job.fileMoves.length : 0;
+            const hasResumableData = !!job.planJson && !!job.preflightJson;
+            const isPending = actionPending === job.id;
+
+            return (
+              <div key={job.id} className="border rounded-lg p-4 space-y-3 bg-amber-500/5 border-amber-500/20">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1 min-w-0">
+                    <p className="text-sm font-mono font-medium truncate" title={job.sourcePath}>
+                      {job.sourcePath.split("/").pop() ?? job.sourcePath}
+                    </p>
+                    <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground flex-wrap">
+                      <span className="flex items-center gap-1">
+                        {job.sourceType === "archive" ? <Archive className="w-3 h-3" /> : <FolderOpen className="w-3 h-3" />}
+                        {job.sourceType}
+                      </span>
+                      <span>·</span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> {formatDate(job.createdAt)}
+                      </span>
+                      {movesCount > 0 && (
+                        <>
+                          <span>·</span>
+                          <span className="text-amber-400">{movesCount} file{movesCount !== 1 ? "s" : ""} moved before crash</span>
+                        </>
+                      )}
+                    </div>
+                    {job.status === "failed" && job.error && (
+                      <p className="text-xs font-mono text-destructive/80 truncate" title={job.error}>
+                        {job.error}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                    {job.status}
+                  </span>
+                </div>
+
+                {/* Resume SSE progress */}
+                {rs && (
+                  <div className="space-y-1.5 rounded bg-secondary/30 p-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">{rs.stage}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground">{rs.progress}%</span>
+                    </div>
+                    {rs.progress >= 0 && <div className="h-1 rounded-full bg-secondary overflow-hidden"><div className="h-full bg-primary transition-all" style={{ width: `${Math.max(0, rs.progress)}%` }} /></div>}
+                    {rs.log.length > 0 && (
+                      <p className="text-[10px] font-mono text-muted-foreground truncate">{rs.log[rs.log.length - 1]}</p>
+                    )}
+                    {rs.done && rs.error && (
+                      <p className="text-[10px] font-mono text-destructive/80">{rs.error}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                {!isRunning && !rs?.done && (
+                  <div className="flex gap-2">
+                    {movesCount > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 font-mono text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                        disabled={isPending}
+                        onClick={() => handleRollBack(job.id)}
+                      >
+                        {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RotateCcw className="w-3.5 h-3.5 mr-1.5" />}
+                        Roll Back ({movesCount})
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 font-mono text-xs"
+                        disabled={isPending || !hasResumableData}
+                        onClick={() => handleReset(job.id)}
+                        title={!hasResumableData ? "No plan data — delete and recreate" : undefined}
+                      >
+                        {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+                        Reset to Verified
+                      </Button>
+                    )}
+                    {hasResumableData && movesCount > 0 && (
+                      <Button
+                        size="sm"
+                        className="flex-1 font-mono text-xs"
+                        disabled={isPending}
+                        onClick={() => handleResume(job.id)}
+                      >
+                        <Play className="w-3.5 h-3.5 mr-1.5" /> Resume
+                      </Button>
+                    )}
+                    {hasResumableData && movesCount === 0 && (
+                      <Button
+                        size="sm"
+                        className="flex-1 font-mono text-xs"
+                        disabled={isPending}
+                        onClick={() => handleResume(job.id)}
+                      >
+                        <Play className="w-3.5 h-3.5 mr-1.5" /> Resume
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {isRunning && (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="flex-1 font-mono text-xs" onClick={() => cancelResume(job.id)}>
+                      <XCircle className="w-3.5 h-3.5 mr-1.5" /> Stop
+                    </Button>
+                  </div>
+                )}
+                {rs?.done && (
+                  <Button size="sm" variant="outline" className="w-full font-mono text-xs" onClick={() => cancelResume(job.id)}>
+                    Dismiss
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+
+          <Button variant="ghost" size="sm" className="w-full font-mono text-xs text-muted-foreground" onClick={() => refetch()}>
+            <RefreshCw className="w-3 h-3 mr-1.5" /> Refresh
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ── Job Wizard Sheet ──────────────────────────────────────────────────────────
 
 function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void }) {
@@ -1189,14 +1461,27 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Organize() {
-  const [activeJobId, setActiveJobId] = useState<number | null>(null);
-  const [showNew, setShowNew]         = useState(false);
+  const [activeJobId, setActiveJobId]       = useState<number | null>(null);
+  const [showNew, setShowNew]               = useState(false);
+  const [showRecovery, setShowRecovery]     = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const { data: jobs, isLoading } = useListOrganizeJobs({
     query: { queryKey: getListOrganizeJobsQueryKey(), refetchInterval: 5000 },
   });
+
+  const { data: recoveryData } = useQuery({
+    queryKey: ["organize-recovery"],
+    queryFn: async () => {
+      const resp = await fetch("/api/organize/recovery");
+      if (!resp.ok) return { interrupted: [] };
+      return resp.json() as Promise<{ interrupted: { id: number }[] }>;
+    },
+    refetchInterval: 30000,
+  });
+
+  const interruptedCount = recoveryData?.interrupted?.length ?? 0;
 
   const deleteMutation = useDeleteOrganizeJob({
     mutation: {
@@ -1214,10 +1499,42 @@ export default function Organize() {
           <h1 className="text-3xl font-bold font-mono tracking-tight">OPERATIONS_CENTER</h1>
           <p className="text-muted-foreground mt-1 font-mono text-sm">Extract archives and route files to the right destination</p>
         </div>
-        <Button onClick={() => { setActiveJobId(null); setShowNew(true); }} className="font-mono font-bold">
-          <Plus className="w-4 h-4 mr-2" /> New Job
-        </Button>
+        <div className="flex gap-2">
+          {interruptedCount > 0 && (
+            <Button
+              variant="outline"
+              className="font-mono text-xs border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+              onClick={() => setShowRecovery(true)}
+            >
+              <ShieldAlert className="w-4 h-4 mr-2" />
+              Recovery Center
+              <span className="ml-2 bg-amber-500 text-amber-950 font-bold text-[10px] w-4 h-4 rounded-full flex items-center justify-center">{interruptedCount}</span>
+            </Button>
+          )}
+          <Button onClick={() => { setActiveJobId(null); setShowNew(true); }} className="font-mono font-bold">
+            <Plus className="w-4 h-4 mr-2" /> New Job
+          </Button>
+        </div>
       </div>
+
+      {/* Recovery Center alert banner */}
+      {interruptedCount > 0 && (
+        <button
+          className="w-full flex items-center gap-3 p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-left hover:bg-amber-500/15 transition-colors"
+          onClick={() => setShowRecovery(true)}
+        >
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-mono font-medium text-amber-400">
+              {interruptedCount} interrupted job{interruptedCount !== 1 ? "s" : ""} detected
+            </p>
+            <p className="text-xs font-mono text-muted-foreground mt-0.5">
+              {interruptedCount === 1 ? "This job was" : "These jobs were"} running when the server last restarted. Open Recovery Center to resume or roll back.
+            </p>
+          </div>
+          <ShieldAlert className="w-4 h-4 text-amber-400/60 shrink-0" />
+        </button>
+      )}
 
       <div className="rounded-md border">
         <Table>
@@ -1317,6 +1634,16 @@ export default function Organize() {
 
       {/* Existing job wizard */}
       {activeJobId && <JobWizardSheet jobId={activeJobId} onClose={closeSheet} />}
+
+      {/* Recovery Center sheet */}
+      <RecoveryCenterSheet
+        open={showRecovery}
+        onClose={() => setShowRecovery(false)}
+        onJobRecovered={() => {
+          queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ["organize-recovery"] });
+        }}
+      />
     </div>
   );
 }
