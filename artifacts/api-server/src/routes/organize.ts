@@ -46,17 +46,54 @@ function getFileTypeFromName(filename: string): string {
   return getFileType(path.extname(filename).replace(".", "").toLowerCase());
 }
 
-function routeDestination(fileType: string, settings: any, nasPath: string): string {
-  const base = (key: string, fallback: string) =>
-    settings?.[key] && String(settings[key]).trim()
-      ? String(settings[key]).trim()
-      : path.join(nasPath, fallback);
+/**
+ * Map file type to its canonical NAS destination directory.
+ *
+ * Canonical defaults (applied when no override is configured in app_settings):
+ *   image    → <nasPath>/Media/Photos
+ *   video    → <nasPath>/Media/Videos
+ *   document → <nasPath>/Documents
+ *   other    → <nasPath>/Archives/Extracted/<archiveName>  (archive source)
+ *            → <nasPath>/Files                              (folder source)
+ *
+ * User-configured paths in app_settings always take precedence over canonical defaults.
+ */
+function routeDestination(
+  fileType: string,
+  settings: any,
+  nasPath: string,
+  opts: { archiveName?: string } = {}
+): string {
+  const override = (key: string): string | null =>
+    settings?.[key] && String(settings[key]).trim() ? String(settings[key]).trim() : null;
   switch (fileType) {
-    case "image":    return base("photosDestination",    "Photos");
-    case "video":    return base("videosDestination",    "Videos");
-    case "document": return base("documentsDestination", "Documents");
-    default:         return base("otherFilesDestination", "Files");
+    case "image":    return override("photosDestination")    ?? path.join(nasPath, "Media", "Photos");
+    case "video":    return override("videosDestination")    ?? path.join(nasPath, "Media", "Videos");
+    case "document": return override("documentsDestination") ?? path.join(nasPath, "Documents");
+    default:
+      return override("otherFilesDestination")
+        ?? (opts.archiveName
+          ? path.join(nasPath, "Archives", "Extracted", opts.archiveName)
+          : path.join(nasPath, "Files"));
   }
+}
+
+/** CRC32 lookup table — computed once at module load. */
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+/** Compute CRC32 of a Buffer (same algorithm used by ZIP). */
+function crc32(buf: Buffer): number {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ buf[i]) & 0xFF];
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 /** Safe disk-free check — uses spawnSync with argument array; no shell interpolation. */
@@ -191,7 +228,10 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
  *   would take prohibitive time on a NAS. The size-sentinel still catches truncation, partial
  *   writes, and cross-device copy errors that are the dominant failure modes in practice.
  */
-async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{ entriesExtracted: number }> {
+async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{
+  entriesExtracted: number;
+  crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string };
+}> {
   const ext    = getArchiveExt(path.basename(archivePath));
   const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
   fs.mkdirSync(stagingDir, { recursive: true });
@@ -223,14 +263,30 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       assertSafeEntryPath(e.entryName);
     }
 
-    // Pass 2: extract entry by entry (never extractAllTo — it skips path validation)
+    // Pass 2: extract entry by entry with CRC32 validation
+    // adm-zip internally checks CRC on getData(); we also verify explicitly for belt-and-suspenders.
+    let crcChecked = 0; let crcPassed = 0; let crcSkipped = 0;
     for (const e of entries) {
       if (e.isDirectory) continue;
       const outPath = path.join(stagingDir, e.entryName);
       fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, e.getData());
+      const data = e.getData(); // throws internally on CRC mismatch
+      const storedCrc = (e.header as any).crc as number | undefined;
+      if (typeof storedCrc === "number" && storedCrc !== 0) {
+        const computed = crc32(data);
+        if (computed !== storedCrc)
+          throw new Error(`CRC32 mismatch: entry "${e.entryName}" computed=0x${computed.toString(16)} stored=0x${storedCrc.toString(16)}`);
+        crcChecked++; crcPassed++;
+      } else {
+        crcSkipped++;
+      }
+      fs.writeFileSync(outPath, data);
       entriesExtracted++;
     }
+    return {
+      entriesExtracted,
+      crcValidation: { format: "zip-crc32", checked: crcChecked, passed: crcPassed, skipped: crcSkipped },
+    };
 
   } else if (TAR_EXTS.has(ext)) {
     const gzipOpts = ["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {};
@@ -263,21 +319,28 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
     } as any);
 
     entriesExtracted = filePaths.length;
+    // TAR uses header checksums (not payload CRC) — payload CRC not available in standard format
+    return {
+      entriesExtracted,
+      crcValidation: { format: "tar-no-payload-crc", checked: 0, passed: 0, skipped: entriesExtracted, note: "TAR header checksum only; no per-file payload CRC in standard format" },
+    };
 
   } else if (SEVENZIP_EXTS.has(ext)) {
     const filePaths: string[] = [];
+    let sevenZipCrcCount = 0;
 
-    // Pass 1: enumerate and validate
+    // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
       const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
       s.on("data", (d: any) => {
         if (d.file === undefined) return;
-        const isDir = typeof d.attributes === "string" && d.attributes[0] === "D";
+        const isDir  = typeof d.attributes === "string" && d.attributes[0] === "D";
         const isLink = typeof d.attributes === "string" && (d.attributes.includes("L") || d.attributes.includes("l"));
         if (isLink) { reject(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
         if (!isDir) {
           try { assertSafeEntryPath(d.file); } catch (e) { reject(e); return; }
           filePaths.push(d.file);
+          if (typeof d.crc === "number" || typeof d.crc === "string") sevenZipCrcCount++;
         }
       });
       s.on("end",   resolve);
@@ -296,12 +359,18 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       assertWithinRoot(path.join(stagingDir, fp), stagingDir);
     }
     entriesExtracted = filePaths.length;
+    return {
+      entriesExtracted,
+      crcValidation: {
+        format: "7z-crc-metadata",
+        checked: 0, passed: 0, skipped: entriesExtracted,
+        note: `${sevenZipCrcCount}/${filePaths.length} entries have archive CRC metadata; post-extraction CRC32 requires adm-7z extension not available in current deps`,
+      },
+    };
 
   } else {
     throw new Error(`Unsupported archive format: .${ext}`);
   }
-
-  return { entriesExtracted };
 }
 
 function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string; sizeBytes: number; fileType: string}> {
@@ -340,6 +409,54 @@ async function callAiConfidence(planSummary: object): Promise<{ confidence: numb
       notes: typeof raw.notes === "string" ? raw.notes : "Unable to assess",
     };
   } catch { return null; }
+}
+
+/** Query Immich asset statistics — used for pre/post-move count comparison. */
+async function getImmichAssetStats(immichUrl: string, apiKey: string): Promise<{ images: number; videos: number; total: number } | null> {
+  try {
+    const headers = { "x-api-key": apiKey, "Accept": "application/json" };
+    const resp = await fetch(`${immichUrl}/api/assets/statistics`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return null;
+    const data = await resp.json() as any;
+    const images = data.images ?? 0;
+    const videos = data.videos ?? 0;
+    return { images, videos, total: images + videos };
+  } catch { return null; }
+}
+
+/**
+ * Poll Immich after rescan to verify the expected number of new assets were imported.
+ * Compares total asset count against a pre-move baseline; polls every 3 s for up to 45 s.
+ * Non-fatal: a "timeout" status means Immich is still processing, not that files were lost.
+ */
+async function verifyImmichImport(
+  immichUrl: string,
+  apiKey: string,
+  baseline: { images: number; videos: number; total: number },
+  expectedNew: number,
+  progressCb: (msg: string) => void,
+): Promise<{ expected: number; imported: number; status: "verified" | "timeout" | "error"; detail: string }> {
+  const maxWaitMs = 45_000;
+  const pollMs    = 3_000;
+  const deadline  = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, pollMs));
+    const stats = await getImmichAssetStats(immichUrl, apiKey);
+    if (!stats) return { expected: expectedNew, imported: 0, status: "error", detail: "Cannot query Immich asset statistics" };
+    const delta = stats.total - baseline.total;
+    progressCb(`Immich: ${delta}/${expectedNew} new assets confirmed…`);
+    if (delta >= expectedNew) {
+      return { expected: expectedNew, imported: delta, status: "verified", detail: `Immich confirmed ${delta} new asset${delta !== 1 ? "s" : ""} (expected ${expectedNew})` };
+    }
+  }
+
+  const finalStats = await getImmichAssetStats(immichUrl, apiKey);
+  const delta = finalStats ? finalStats.total - baseline.total : 0;
+  return {
+    expected: expectedNew, imported: delta, status: "timeout",
+    detail: `Immich import not confirmed within 45 s: ${delta}/${expectedNew} assets detected. Rescan may still be in progress — check Immich directly.`,
+  };
 }
 
 /** Trigger Immich library rescan via the external API. Best-effort — always resolves. */
@@ -458,10 +575,15 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     const summary = { images: 0, videos: 0, documents: 0, other: 0 };
     const routes: any[] = [];
 
+    // Archive stem for "other" destination scoping (e.g. "backup.tar.gz" → "backup")
+    const archiveName = job.sourceType === "archive"
+      ? path.parse(path.parse(job.sourcePath).name).name  // strips both .gz and .tar
+      : undefined;
+
     for (const e of fileEntries) {
       const ft = e.fileType === "image" ? "image" : e.fileType === "video" ? "video" : e.fileType === "document" ? "document" : "other";
       (summary as any)[ft === "image" ? "images" : ft === "video" ? "videos" : ft === "document" ? "documents" : "other"]++;
-      routes.push({ relativePath: e.path, filename: path.basename(e.path), fileType: ft, sizeBytes: e.sizeBytes, destination: routeDestination(ft, settings, nasPath) });
+      routes.push({ relativePath: e.path, filename: path.basename(e.path), fileType: ft, sizeBytes: e.sizeBytes, destination: routeDestination(ft, settings, nasPath, { archiveName }) });
     }
 
     const totalSizeBytes = fileEntries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
@@ -469,7 +591,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       images:    routeDestination("image",    settings, nasPath),
       videos:    routeDestination("video",    settings, nasPath),
       documents: routeDestination("document", settings, nasPath),
-      other:     routeDestination("other",    settings, nasPath),
+      other:     routeDestination("other",    settings, nasPath, { archiveName }),
     };
 
     const aiResult = await callAiConfidence({ totalFiles: fileEntries.length, summary, destinations });
@@ -693,6 +815,21 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     );
     const expectedTotal = activeRoutes.length;
 
+    // Archive name (stem without extensions) used for "other" destination scoping
+    const archiveName = job.sourceType === "archive"
+      ? path.parse(path.parse(job.sourcePath).name).name
+      : undefined;
+
+    // imagesMoved computed here (needed for Immich baseline before moves)
+    const imagesMoved = activeRoutes.filter(r => r.fileType === "image" || r.fileType === "video").length;
+
+    // Pre-move Immich asset baseline (for import count verification after rescan)
+    let immichBaseline: { images: number; videos: number; total: number } | null = null;
+    if (imagesMoved > 0 && settings.immichBaseUrl?.trim() && settings.immichApiKey?.trim()) {
+      immichBaseline = await getImmichAssetStats(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
+      if (immichBaseline) opLog(`IMMICH_BASELINE: images=${immichBaseline.images} videos=${immichBaseline.videos} total=${immichBaseline.total}`);
+    }
+
     // Open per-file operation log
     const ts = isoTimestamp();
     try {
@@ -713,13 +850,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     fs.mkdirSync(tempDir, { recursive: true });
 
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
+    let crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string } | null = null;
 
     if (job.sourceType === "archive") {
       send("status", { stage: "extracting", message: "Extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) throw new Error(`Archive not found: ${job.sourcePath}`);
       opLog(`EXTRACT: ${job.sourcePath} → ${tempDir}`);
-      const { entriesExtracted } = await safeExtractArchive(job.sourcePath, tempDir);
-      opLog(`EXTRACT_OK: ${entriesExtracted} entries validated and written to staging`);
+      const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
+      crcValidation = extractResult.crcValidation;
+      const { entriesExtracted } = extractResult;
+      opLog(`EXTRACT_OK: ${entriesExtracted} entries — CRC ${crcValidation.format}: checked=${crcValidation.checked} passed=${crcValidation.passed} skipped=${crcValidation.skipped}${crcValidation.note ? ` (${crcValidation.note})` : ""}`);
       send("status", { stage: "scanning",   message: "Scanning extracted files…",          progress: 25 });
       sourceFiles = walkDir(tempDir).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
     } else {
@@ -775,7 +915,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         continue;
       }
 
-      const destDir  = routeDestination(ft, settings, nasPath);
+      const destDir  = routeDestination(ft, settings, nasPath, { archiveName });
       const destFile = path.join(destDir, path.basename(sf.relativePath));
 
       // FATAL on unexpected collision — pre-flight should have caught this
@@ -848,13 +988,28 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
     opLog(`VERIFY_DEST_OK: ${destVerification.length} destination group(s) all match`);
 
-    // ── Immich rescan (best-effort after images/videos moved) ────────────────
+    // ── Immich rescan + import count verification ────────────────────────────
     send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
-    const imagesMoved = activeRoutes.filter(r => r.fileType === "image" || r.fileType === "video").length;
     let immichResult: any = null;
+    let immichVerification: any = null;
     if (imagesMoved > 0 && settings.immichBaseUrl?.trim() && settings.immichApiKey?.trim()) {
-      immichResult = await triggerImmichRescan(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
-      opLog(`IMMICH: ${immichResult.detail}`);
+      const rescanResult = await triggerImmichRescan(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
+      immichResult = rescanResult;
+      opLog(`IMMICH_RESCAN: ${rescanResult.detail}`);
+
+      if (rescanResult.triggered && immichBaseline) {
+        send("status", { stage: "immich_verify", message: `Verifying Immich import — expecting ${imagesMoved} new asset${imagesMoved !== 1 ? "s" : ""}…`, progress: 90 });
+        immichVerification = await verifyImmichImport(
+          settings.immichBaseUrl.trim(),
+          settings.immichApiKey.trim(),
+          immichBaseline,
+          imagesMoved,
+          (msg) => send("status", { stage: "immich_verify", message: msg, progress: 91 }),
+        );
+        opLog(`IMMICH_VERIFY: status=${immichVerification.status} imported=${immichVerification.imported}/${immichVerification.expected} — ${immichVerification.detail}`);
+      } else {
+        immichVerification = { expected: imagesMoved, imported: 0, status: "skipped", detail: rescanResult.detail };
+      }
     }
 
     // ── Archive disposition (post 100% verification) ─────────────────────────
@@ -893,8 +1048,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
       destinations: plan.destinations,
       destVerification,
+      archiveCrcValidation: crcValidation,
       immichRescan: immichResult,
-      immichExpectedImages: imagesMoved,   // files eligible for Immich import; rescan is async so actual import count is determined by Immich
+      immichVerification,
       aiConfidence: plan.aiConfidence, aiNotes: plan.aiNotes,
       logPath,
     };
