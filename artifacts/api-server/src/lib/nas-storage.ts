@@ -20,14 +20,32 @@ export function getWillardAIDir(nasPath: string): string {
   return path.join(nasPath, "WillardAI");
 }
 
-export function assertWithinRoot(targetPath: string, root: string): void {
-  // Use realpathSync to resolve symlinks before comparing — prevents symlink escape attacks.
-  // Falls back to lexical resolution if path does not exist yet.
-  let canonicalRoot: string;
-  try { canonicalRoot = fs.realpathSync(root); } catch { canonicalRoot = path.resolve(root); }
+/**
+ * Walk up a path to find the nearest existing ancestor, resolve it via realpathSync
+ * (dereferencing all symlinks), then reattach the remaining suffix.
+ * This prevents symlink-escape via non-existent child paths:
+ *   /nas/symlink-to-outside/newdir  → resolves parent /nas/symlink-to-outside → /outside → fail
+ */
+function canonicalizePath(p: string): string {
+  let current = path.resolve(p);
+  const parts: string[] = [];
+  // Walk upward until we find an existing ancestor
+  while (current !== path.dirname(current)) {
+    try {
+      const real = fs.realpathSync(current);
+      // Reattach any suffix parts that didn't exist on disk
+      return parts.length === 0 ? real : path.join(real, ...parts);
+    } catch {
+      parts.unshift(path.basename(current));
+      current = path.dirname(current);
+    }
+  }
+  return path.resolve(p);
+}
 
-  let canonicalTarget: string;
-  try { canonicalTarget = fs.realpathSync(targetPath); } catch { canonicalTarget = path.resolve(targetPath); }
+export function assertWithinRoot(targetPath: string, root: string): void {
+  const canonicalRoot   = canonicalizePath(root);
+  const canonicalTarget = canonicalizePath(targetPath);
 
   if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(canonicalRoot + path.sep)) {
     throw new Error("Path traversal rejected: path is outside the allowed root");

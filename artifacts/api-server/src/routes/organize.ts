@@ -981,8 +981,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     let moved = 0;
     let excluded = 0;
 
+    // Build a frozen destination map from the approved plan routes.
+    // Execute MUST drive moves from the plan the user reviewed + preflight verified —
+    // never recompute from current settings (settings can change between steps).
+    const planDestMap = new Map<string, string>();
+    for (const r of (plan.routes ?? [])) {
+      if (r.relativePath && r.destination) planDestMap.set(r.relativePath, r.destination);
+    }
+
     send("status", { stage: "moving", message: `Moving ${total} files…`, progress: 26, total });
-    opLog(`MOVE_START: routing ${total} active files`);
+    opLog(`MOVE_START: routing ${total} active files from frozen plan destinations`);
 
     for (let i = 0; i < sourceFiles.length; i++) {
       const sf = sourceFiles[i];
@@ -995,7 +1003,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         continue;
       }
 
-      const destDir  = routeDestination(ft, settings, nasPath, { archiveName });
+      // Use frozen plan destination — fall back to recomputed only if relativePath not in plan
+      // (should never happen after count-match validation above, but guard defensively)
+      const planDest = planDestMap.get(sf.relativePath);
+      if (!planDest) {
+        throw new Error(
+          `File ${sf.relativePath} has no frozen destination in plan. ` +
+          `Re-run Analyze to refresh the plan before executing.`
+        );
+      }
+      const destDir  = planDest;
       const destFile = path.join(destDir, path.basename(sf.relativePath));
 
       // Enforce NAS root boundary — destination must be within configured nasPath

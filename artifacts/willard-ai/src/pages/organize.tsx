@@ -299,7 +299,11 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
               <span className="text-xs font-mono text-muted-foreground">AI Confidence</span>
               <span className={`text-sm font-mono font-bold ${confColor}`}>{Math.round(confidence * 100)}%</span>
             </div>
-            {plan.aiNotes && <p className="text-xs text-muted-foreground italic mt-1">{plan.aiNotes}</p>}
+            {(plan.aiReason || plan.aiRecommendation) && (
+              <p className="text-xs text-muted-foreground italic mt-1">
+                {plan.aiReason ?? plan.aiRecommendation}
+              </p>
+            )}
           </div>
         </div>
       )}
