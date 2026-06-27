@@ -711,6 +711,21 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     // Active routes = plan.activeRoutes (if exclusions applied) or plan.routes
     const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
 
+    // 0. Destination configuration warnings — surfaced if settings fields are blank (non-blocking)
+    const destConfigKeys = [
+      { key: "photosDestination",     category: "image",    label: "Photos destination" },
+      { key: "videosDestination",     category: "video",    label: "Videos destination" },
+      { key: "documentsDestination",  category: "document", label: "Documents destination" },
+      { key: "otherFilesDestination", category: "other",    label: "Other files destination" },
+    ] as const;
+    for (const { key, category, label } of destConfigKeys) {
+      const isBlank = !settings[key]?.trim();
+      if (isBlank && activeRoutes.some((r: any) => r.fileType === category)) {
+        const defaultDest = routeDestination(category, settings, nasPath);
+        checks.push({ name: label, ok: true, warning: true, detail: `No custom path set — using default: ${defaultDest}. Configure in Settings to override.` });
+      }
+    }
+
     // 1. Source exists and is readable
     let sourceOk = false;
     let sourceDetail = `Not found: ${job.sourcePath}`;
@@ -842,6 +857,87 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       .returning();
     res.json(updated);
   } catch { res.status(500).json({ error: "Preflight check failed" }); }
+});
+
+/**
+ * Dry-run simulation — reads the plan and returns what WOULD happen without touching the filesystem.
+ * Uses existing planJson routes to compute destinations, detect conflicts, and warn about blank settings.
+ */
+router.get("/organize/jobs/:id/dry-run", async (req, res) => {
+  const id = parseInt(req.params.id);
+  try {
+    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.planJson) { res.status(422).json({ error: "Run analyze first to build the plan" }); return; }
+
+    const plan = job.planJson as any;
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const settings = settingsRows[0] as any ?? {};
+    const nasPath = (settings.nasPath ?? "").trim();
+
+    const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
+
+    // Blank destination warnings
+    const warnings: Array<{ category: string; label: string; using: string }> = [];
+    const destConfigKeys = [
+      { key: "photosDestination",     category: "image",    label: "Photos" },
+      { key: "videosDestination",     category: "video",    label: "Videos" },
+      { key: "documentsDestination",  category: "document", label: "Documents" },
+      { key: "otherFilesDestination", category: "other",    label: "Other Files" },
+    ] as const;
+    for (const { key, category, label } of destConfigKeys) {
+      if (!settings[key]?.trim() && activeRoutes.some((r: any) => r.fileType === category)) {
+        warnings.push({ category, label, using: routeDestination(category, settings, nasPath) });
+      }
+    }
+
+    // Conflict detection
+    const diskConflicts: string[]  = [];
+    const intraConflicts: string[] = [];
+    const destSeen = new Map<string, string>();
+    for (const route of activeRoutes) {
+      const destPath = path.join(route.destination, route.filename);
+      if (destSeen.has(destPath)) {
+        if (intraConflicts.length < 10) intraConflicts.push(route.filename);
+      } else {
+        destSeen.set(destPath, route.relativePath);
+      }
+      if (fs.existsSync(destPath) && diskConflicts.length < 10) {
+        diskConflicts.push(route.filename);
+      }
+    }
+
+    // Unique destination folders that would be created
+    const foldersToCreate = [...new Set(activeRoutes.map((r: any) => r.destination))];
+
+    // Per-type counts
+    const byType = { images: 0, videos: 0, documents: 0, other: 0 };
+    for (const r of activeRoutes) {
+      if (r.fileType === "image")    byType.images++;
+      else if (r.fileType === "video")    byType.videos++;
+      else if (r.fileType === "document") byType.documents++;
+      else                                byType.other++;
+    }
+
+    res.json({
+      ok: diskConflicts.length === 0 && intraConflicts.length === 0,
+      summary: {
+        filesToProcess: activeRoutes.length,
+        foldersToCreate: foldersToCreate.length,
+        totalBytes: plan.totalSizeBytes ?? 0,
+        byType,
+        destinations: plan.destinations ?? {},
+      },
+      diskConflicts,
+      diskConflictCount: diskConflicts.length,
+      intraConflicts,
+      intraConflictCount: intraConflicts.length,
+      warnings,
+      sourceType: job.sourceType,
+    });
+  } catch {
+    res.status(500).json({ error: "Dry-run simulation failed" });
+  }
 });
 
 /**

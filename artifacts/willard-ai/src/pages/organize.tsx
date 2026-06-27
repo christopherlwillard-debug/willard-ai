@@ -17,7 +17,7 @@ import { formatBytes, formatDate } from "@/lib/format";
 import {
   Boxes, Plus, ChevronRight, CheckCircle2, XCircle, AlertTriangle, Loader2,
   Archive, FolderOpen, Trash2, Eye, Play, RotateCcw, Sparkles, HardDrive,
-  FileText, Image, Video, File, ArrowRight, Ban,
+  FileText, Image, Video, File, ArrowRight, Ban, FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -504,14 +504,29 @@ interface SseProgress { stage?: string; message?: string; progress?: number; ind
 function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: any) => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [started, setStarted]   = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [stage, setStage]       = useState("");
-  const [log, setLog]           = useState<string[]>([]);
-  const [done, setDone]         = useState(false);
-  const [error, setError]       = useState<string | null>(null);
+  const [started, setStarted]         = useState(false);
+  const [progress, setProgress]       = useState(0);
+  const [stage, setStage]             = useState("");
+  const [log, setLog]                 = useState<string[]>([]);
+  const [done, setDone]               = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const [dryRunResult, setDryRunResult] = useState<any>(null);
+  const [isDryRunning, setIsDryRunning] = useState(false);
   const esRef    = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  const runDryRun = async () => {
+    setIsDryRunning(true);
+    try {
+      const resp = await fetch(`/api/organize/jobs/${job.id}/dry-run`);
+      if (!resp.ok) throw new Error("Dry-run failed");
+      setDryRunResult(await resp.json());
+    } catch {
+      toast({ title: "Simulation failed", description: "Could not run simulation", variant: "destructive" });
+    } finally {
+      setIsDryRunning(false);
+    }
+  };
 
   const addLog = (msg: string) => setLog(prev => [...prev.slice(-60), msg]);
 
@@ -567,6 +582,98 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
   const plan = job.planJson as any;
 
   if (!started && !done && !error) {
+    // ── Simulation report view ──
+    if (dryRunResult) {
+      const s = dryRunResult.summary ?? {};
+      const hasConflicts = (dryRunResult.diskConflictCount ?? 0) + (dryRunResult.intraConflictCount ?? 0) > 0;
+      const hasWarnings  = (dryRunResult.warnings ?? []).length > 0;
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 font-mono text-sm font-bold text-blue-400">
+            <FlaskConical className="w-4 h-4" /> Simulation Report
+          </div>
+
+          {/* Summary grid */}
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {[
+              { label: "Files",   value: (s.filesToProcess ?? 0).toLocaleString() },
+              { label: "Folders", value: (s.foldersToCreate ?? 0).toLocaleString() },
+              { label: "Size",    value: formatBytes(s.totalBytes ?? 0) },
+            ].map(c => (
+              <div key={c.label} className="p-2 bg-secondary/40 rounded border">
+                <div className="text-sm font-mono font-bold">{c.value}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">{c.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Per-type breakdown */}
+          {s.byType && (
+            <div className="grid grid-cols-4 gap-1.5 text-center">
+              {[
+                { label: "Photos",    value: s.byType.images,    color: "text-blue-400" },
+                { label: "Videos",    value: s.byType.videos,    color: "text-purple-400" },
+                { label: "Documents", value: s.byType.documents, color: "text-amber-400" },
+                { label: "Other",     value: s.byType.other,     color: "text-muted-foreground" },
+              ].map(c => (
+                <div key={c.label} className="p-1.5 bg-secondary/20 rounded border">
+                  <div className={`text-sm font-mono font-bold ${c.color}`}>{c.value}</div>
+                  <div className="text-[9px] text-muted-foreground font-mono">{c.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Blank destination warnings */}
+          {hasWarnings && (
+            <div className="space-y-1.5">
+              {(dryRunResult.warnings as any[]).map((w: any, i: number) => (
+                <div key={i} className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/30 rounded text-xs font-mono text-amber-300">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span><strong>{w.label}</strong> destination not set — using default: <span className="opacity-70">{w.using}</span>. Configure in Settings.</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Conflicts */}
+          {hasConflicts && (
+            <div className="space-y-1.5">
+              {(dryRunResult.diskConflictCount ?? 0) > 0 && (
+                <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
+                  <strong>{dryRunResult.diskConflictCount} file{dryRunResult.diskConflictCount !== 1 ? "s" : ""} already exist</strong> at destination
+                  {dryRunResult.diskConflicts?.length > 0 && <span className="opacity-70"> — e.g. {dryRunResult.diskConflicts.slice(0, 3).join(", ")}</span>}
+                </div>
+              )}
+              {(dryRunResult.intraConflictCount ?? 0) > 0 && (
+                <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
+                  <strong>{dryRunResult.intraConflictCount} intra-job conflict{dryRunResult.intraConflictCount !== 1 ? "s" : ""}</strong> — duplicate filenames routing to same folder
+                  {dryRunResult.intraConflicts?.length > 0 && <span className="opacity-70"> — e.g. {dryRunResult.intraConflicts.slice(0, 3).join(", ")}</span>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!hasConflicts && !hasWarnings && (
+            <div className="flex items-center gap-2 p-2.5 bg-green-500/10 border border-green-500/30 rounded text-xs font-mono text-green-400">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              No conflicts or warnings — safe to execute
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <Button variant="outline" size="sm" className="font-mono text-xs" onClick={() => setDryRunResult(null)}>
+              ← Back
+            </Button>
+            <Button className="flex-1 font-mono font-bold" onClick={startExecute}>
+              <Play className="w-4 h-4 mr-2" /> EXECUTE_FOR_REAL
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Default pre-execute view ──
     return (
       <div className="space-y-5">
         <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
@@ -583,9 +690,21 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
             </p>
           )}
         </div>
-        <Button className="w-full font-mono font-bold bg-primary" onClick={startExecute}>
-          <Play className="w-4 h-4 mr-2" /> EXECUTE_NOW
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="flex-1 font-mono"
+            onClick={runDryRun}
+            disabled={isDryRunning}
+          >
+            {isDryRunning
+              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Simulating…</>
+              : <><FlaskConical className="w-4 h-4 mr-2" /> Simulate First</>}
+          </Button>
+          <Button className="flex-1 font-mono font-bold" onClick={startExecute}>
+            <Play className="w-4 h-4 mr-2" /> Execute Now
+          </Button>
+        </div>
       </div>
     );
   }
@@ -904,7 +1023,7 @@ export default function Organize() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold font-mono tracking-tight">ORGANIZE_CENTER</h1>
+          <h1 className="text-3xl font-bold font-mono tracking-tight">OPERATIONS_CENTER</h1>
           <p className="text-muted-foreground mt-1 font-mono text-sm">Extract archives and route files to the right destination</p>
         </div>
         <Button onClick={() => { setActiveJobId(null); setShowNew(true); }} className="font-mono font-bold">
@@ -932,7 +1051,7 @@ export default function Organize() {
                 <TableCell colSpan={6} className="text-center py-12">
                   <div className="flex flex-col items-center gap-3 text-muted-foreground">
                     <Boxes className="w-10 h-10 opacity-30" />
-                    <p className="font-mono text-sm">No organization jobs yet</p>
+                    <p className="font-mono text-sm">No operations jobs yet</p>
                     <Button size="sm" variant="outline" onClick={() => setShowNew(true)} className="font-mono">
                       <Plus className="w-3.5 h-3.5 mr-1.5" /> Create First Job
                     </Button>
