@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,7 @@ import {
   Zap, Shield, CheckCircle2, SkipForward, ScanLine,
   Sparkles, TrendingDown, AlertTriangle, ChevronDown, ChevronRight,
   Download, RotateCcw, ArrowRight, FileBox, Play, X, CheckCheck,
-  FolderOpen,
+  FolderOpen, RefreshCw, AlertCircle, Clock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -91,6 +91,22 @@ interface ConversionSummary {
   totalSavedBytes: number;
   backupDir:       string;
   results:         ConversionFileResult[];
+}
+
+interface ConversionJob {
+  id:             number;
+  status:         "pending" | "running" | "done" | "failed";
+  approvedExts:   string[];
+  backupDir:      string | null;
+  nasPath:        string;
+  totalFiles:     number;
+  processedFiles: number;
+  succeededFiles: number;
+  failedFiles:    number;
+  skippedFiles:   number;
+  error:          string | null;
+  createdAt:      string;
+  completedAt:    string | null;
 }
 
 // ── Helper: status badges ─────────────────────────────────────────────────────
@@ -194,11 +210,13 @@ function RunConversionsDialog({
   onClose,
   groups,
   approvedExts,
+  existingJobId,
 }: {
   open: boolean;
   onClose: () => void;
   groups: FormatGroup[];
   approvedExts: Set<string>;
+  existingJobId?: number;
 }) {
   const { toast } = useToast();
   const [backupDir, setBackupDir] = useState("");
@@ -211,6 +229,47 @@ function RunConversionsDialog({
 
   const approved = groups.filter(g => approvedExts.has(g.extension));
   const totalSavings = approved.reduce((s, g) => s + g.estimatedSavingsBytes, 0);
+  const isRetry = existingJobId !== undefined;
+
+  // When retrying an existing job, auto-connect to the SSE stream as soon as dialog opens.
+  useEffect(() => {
+    if (!open || !isRetry) return;
+    setPhase("running");
+    setFileResults([]);
+    setRunError(null);
+    setSummary(null);
+    setProgress({ stage: "starting", message: "Reconnecting to conversion job…", progress: 1 });
+
+    const es = new EventSource(`/api/optimize/jobs/${existingJobId}/execute`);
+    esRef.current = es;
+
+    es.addEventListener("status", (e) => {
+      setProgress(JSON.parse(e.data) as ConversionProgress);
+    });
+    es.addEventListener("file_done", (e) => {
+      const data = JSON.parse(e.data) as ConversionFileResult & { processed: number; total: number };
+      setFileResults(prev => [data, ...prev].slice(0, 200));
+      setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
+    });
+    es.addEventListener("summary", (e) => {
+      setSummary(JSON.parse(e.data) as ConversionSummary);
+      setPhase("done");
+      es.close();
+      esRef.current = null;
+    });
+    es.addEventListener("error", (e) => {
+      const data = (e as MessageEvent).data ? JSON.parse((e as MessageEvent).data) : null;
+      const msg = data?.message ?? "Connection error";
+      setRunError(msg);
+      setPhase("done");
+      es.close();
+      esRef.current = null;
+      toast({ title: "Conversion error", description: msg, variant: "destructive" });
+    });
+
+    return () => { es.close(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, existingJobId]);
 
   function handleClose() {
     if (phase === "running") return; // prevent closing while running
@@ -291,9 +350,17 @@ function RunConversionsDialog({
     <Dialog open={open} onOpenChange={o => !o && handleClose()}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="font-mono">RUN_CONVERSIONS</DialogTitle>
+          <DialogTitle className="font-mono">
+            {isRetry ? "RETRY_CONVERSION" : "RUN_CONVERSIONS"}
+          </DialogTitle>
           <DialogDescription className="font-mono text-xs">
-            {phase === "config"
+            {isRetry
+              ? phase === "running"
+                ? "Re-running interrupted conversion job — do not close this window."
+                : phase === "done"
+                ? "Retry complete. Review the results below."
+                : "Connecting…"
+              : phase === "config"
               ? "Originals are backed up before any conversion. Review settings before running."
               : phase === "running"
               ? "Conversion in progress — do not close this window."
@@ -609,6 +676,124 @@ function ConfirmDialog({
   );
 }
 
+// ── Recent conversion jobs panel ──────────────────────────────────────────────
+
+function RecentJobsPanel({
+  jobs,
+  onRetry,
+  retryLoading,
+}: {
+  jobs: ConversionJob[];
+  onRetry: (jobId: number) => void;
+  retryLoading: boolean;
+}) {
+  const isInterrupted = (j: ConversionJob) =>
+    j.status === "failed" && j.error?.includes("Interrupted by server restart");
+
+  const interrupted = jobs.filter(isInterrupted);
+  const otherFailed = jobs.filter(j => j.status === "failed" && !isInterrupted(j));
+  const running     = jobs.filter(j => j.status === "running");
+  const done        = jobs.filter(j => j.status === "done");
+
+  if (jobs.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      {/* Interrupted jobs — server restart banner */}
+      {interrupted.map(job => (
+        <div
+          key={job.id}
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3"
+        >
+          <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-mono font-semibold text-amber-400">
+              Conversion job interrupted by server restart
+            </p>
+            <p className="text-xs font-mono text-muted-foreground mt-0.5">
+              Started {new Date(job.createdAt).toLocaleString()} ·{" "}
+              {job.processedFiles}/{job.totalFiles > 0 ? job.totalFiles : "?"} files processed ·{" "}
+              {job.approvedExts.map(e => `.${e}`).join(", ")}
+            </p>
+            {job.backupDir && (
+              <p className="text-xs font-mono text-muted-foreground mt-1">
+                <span className="text-foreground">Partial backup preserved at:</span>{" "}
+                <span className="font-medium break-all">{job.backupDir}</span>
+              </p>
+            )}
+          </div>
+          <Button
+            size="sm"
+            className="font-mono gap-1.5 bg-amber-600 hover:bg-amber-700 shrink-0"
+            onClick={() => onRetry(job.id)}
+            disabled={retryLoading}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </Button>
+        </div>
+      ))}
+
+      {/* Other failed jobs */}
+      {otherFailed.map(job => (
+        <div
+          key={job.id}
+          className="rounded-md border border-red-500/30 bg-red-500/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3"
+        >
+          <X className="w-5 h-5 text-red-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-mono font-semibold text-red-400">Conversion job failed</p>
+            <p className="text-xs font-mono text-muted-foreground mt-0.5">
+              {new Date(job.createdAt).toLocaleString()}
+              {job.error && ` · ${job.error}`}
+            </p>
+            {job.backupDir && (
+              <p className="text-xs font-mono text-muted-foreground mt-1">
+                <span className="text-foreground">Backup dir:</span>{" "}
+                <span className="break-all">{job.backupDir}</span>
+              </p>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="font-mono gap-1.5 shrink-0"
+            onClick={() => onRetry(job.id)}
+            disabled={retryLoading}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </Button>
+        </div>
+      ))}
+
+      {/* Running jobs (shouldn't appear after startup recovery, but just in case) */}
+      {running.map(job => (
+        <div
+          key={job.id}
+          className="rounded-md border border-blue-500/30 bg-blue-500/5 px-4 py-3 flex items-center gap-3"
+        >
+          <RotateCcw className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+          <p className="text-sm font-mono text-blue-400">
+            Conversion job running… {job.processedFiles}/{job.totalFiles} files
+          </p>
+        </div>
+      ))}
+
+      {/* Summary of done jobs */}
+      {done.length > 0 && interrupted.length === 0 && otherFailed.length === 0 && running.length === 0 && (
+        <div className="rounded-md border border-border bg-secondary/20 px-4 py-2 flex items-center gap-3">
+          <Clock className="w-4 h-4 text-muted-foreground shrink-0" />
+          <p className="text-xs font-mono text-muted-foreground">
+            Last conversion completed {new Date(done[0].completedAt ?? done[0].createdAt).toLocaleString()} ·{" "}
+            {done[0].succeededFiles} converted, {done[0].failedFiles} failed
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Optimize() {
@@ -621,6 +806,8 @@ export default function Optimize() {
   const [expandedExt,  setExpandedExt]  = useState<string | null>(null);
   const [confirmOpen,  setConfirmOpen]  = useState(false);
   const [runOpen,      setRunOpen]      = useState(false);
+  const [retryJobId,   setRetryJobId]   = useState<number | null>(null);
+  const [retryOpen,    setRetryOpen]    = useState(false);
 
   // ── Scan ──────────────────────────────────────────────────────────────────
   const scanMutation = useMutation({
@@ -641,6 +828,39 @@ export default function Optimize() {
     },
     onError: (e: Error) => {
       toast({ title: "Scan failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  // ── Recent conversion jobs ────────────────────────────────────────────────
+  const { data: recentJobs = [], refetch: refetchJobs } = useQuery({
+    queryKey: ["optimize-jobs"],
+    queryFn: async () => {
+      const resp = await fetch("/api/optimize/jobs");
+      if (!resp.ok) return [];
+      return resp.json() as Promise<ConversionJob[]>;
+    },
+    refetchInterval: (query) => {
+      const jobs = query.state.data as ConversionJob[] | undefined;
+      return jobs?.some(j => j.status === "running") ? 3000 : false;
+    },
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (jobId: number) => {
+      const resp = await fetch(`/api/optimize/jobs/${jobId}/retry`, { method: "POST" });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as any).error ?? "Failed to retry job");
+      }
+      return resp.json() as Promise<ConversionJob>;
+    },
+    onSuccess: (job) => {
+      refetchJobs();
+      setRetryJobId(job.id);
+      setRetryOpen(true);
+    },
+    onError: (e: Error) => {
+      toast({ title: "Retry failed", description: e.message, variant: "destructive" });
     },
   });
 
@@ -787,6 +1007,15 @@ export default function Optimize() {
           </Button>
         </div>
       </div>
+
+      {/* Recent conversion jobs — shows interrupted/failed jobs with retry button */}
+      {recentJobs.length > 0 && (
+        <RecentJobsPanel
+          jobs={recentJobs}
+          onRetry={(jobId) => retryMutation.mutate(jobId)}
+          retryLoading={retryMutation.isPending}
+        />
+      )}
 
       {/* Pre-scan prompt */}
       {!scanResult && !scanMutation.isPending && (
@@ -1066,9 +1295,18 @@ export default function Optimize() {
       {/* Run Conversions dialog */}
       <RunConversionsDialog
         open={runOpen}
-        onClose={() => setRunOpen(false)}
+        onClose={() => { setRunOpen(false); refetchJobs(); }}
         groups={scanResult?.groups ?? []}
         approvedExts={approvedExts}
+      />
+
+      {/* Retry interrupted/failed job dialog */}
+      <RunConversionsDialog
+        open={retryOpen}
+        onClose={() => { setRetryOpen(false); setRetryJobId(null); refetchJobs(); }}
+        groups={[]}
+        approvedExts={new Set()}
+        existingJobId={retryJobId ?? undefined}
       />
     </div>
   );

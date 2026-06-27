@@ -519,6 +519,42 @@ router.get("/optimize/jobs", async (_req, res) => {
   }
 });
 
+/**
+ * POST /optimize/jobs/:id/retry — reset a failed conversion job back to pending
+ * so the execute endpoint can re-run it from scratch.
+ * The backup dir from the original (partial) run is preserved and carried over.
+ */
+router.post("/optimize/jobs/:id/retry", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (job.status !== "failed") {
+      res.status(409).json({ error: `Cannot retry a job with status '${job.status}' — only failed jobs can be retried` });
+      return;
+    }
+    const [updated] = await db
+      .update(conversionJobsTable)
+      .set({
+        status:         "pending",
+        error:          null,
+        totalFiles:     0,
+        processedFiles: 0,
+        succeededFiles: 0,
+        failedFiles:    0,
+        skippedFiles:   0,
+        resultJson:     null,
+        completedAt:    null,
+      })
+      .where(eq(conversionJobsTable.id, id))
+      .returning();
+    res.json(updated);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to retry job" });
+  }
+});
+
 /** GET /optimize/jobs/:id — get a single conversion job. */
 router.get("/optimize/jobs/:id", async (req, res) => {
   try {

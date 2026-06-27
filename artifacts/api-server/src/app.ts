@@ -6,7 +6,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { pool, db } from "@workspace/db";
 
-import { appSettingsTable, organizationJobsTable } from "@workspace/db";
+import { appSettingsTable, organizationJobsTable, conversionJobsTable } from "@workspace/db";
 import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
@@ -134,6 +134,21 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
     logger.info({ nasPath }, "NAS storage initialized from persisted settings");
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
+
+// Detect conversion jobs interrupted mid-run (server died while status was "running").
+// Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
+db.update(conversionJobsTable)
+  .set({ status: "failed", error: "Interrupted by server restart — partial backup preserved" })
+  .where(eq(conversionJobsTable.status, "running"))
+  .then(({ rowCount }) => {
+    if (rowCount && rowCount > 0) {
+      logger.warn(
+        { count: rowCount },
+        "RECOVERY: Marked interrupted conversion job(s) as failed — visit Optimize Center to retry",
+      );
+    }
+  })
+  .catch(() => {});
 
 // Detect organize jobs interrupted mid-execution: "executing" status (server died) or
 // "failed" jobs that have a lastStage set (meaning they failed during execute, not during analyze).
