@@ -12,6 +12,7 @@ export const organizationJobsTable = pgTable("organization_jobs", {
   planJson: jsonb("plan_json"),
   preflightJson: jsonb("preflight_json"),
   fileMoves: jsonb("file_moves"),
+  reportJson: jsonb("report_json"),
   reportPath: text("report_path"),
   error: text("error"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

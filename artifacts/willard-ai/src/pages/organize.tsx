@@ -650,13 +650,32 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   });
 
   const plan      = job.planJson as any;
+  const report    = (job as any).reportJson as any ?? null;
   const isRolledBack = job.status === "rolled_back";
   const needsDeleteConfirm = !isRolledBack
     && job.archiveDisposition === "delete"
     && job.sourceType === "archive"
     && !dispositionDone;
 
-  const immichResult = plan?.immichRescan ?? null;
+  // Immich data comes from the execute report, not from planJson
+  const immichVerification = report?.immichVerification ?? null;
+  const immichRescan       = report?.immichRescan ?? null;
+
+  // Per-type counts from report (populated after execute) or derived from plan routes
+  const routes: any[] = plan?.routes ?? [];
+  const excludedCats  = new Set<string>(plan?.excludeCategories ?? []);
+  const excludedPaths = new Set<string>(plan?.excludePaths ?? []);
+  const activeRoutes  = routes.filter((r: any) => !excludedCats.has(r.fileType) && !excludedPaths.has(r.relativePath));
+  const photoCount    = activeRoutes.filter((r: any) => r.fileType === "image").length;
+  const videoCount    = activeRoutes.filter((r: any) => r.fileType === "video").length;
+  const docCount      = activeRoutes.filter((r: any) => r.fileType === "document").length;
+  const otherCount    = activeRoutes.filter((r: any) => r.fileType === "other").length;
+
+  const immichVerifyColor = immichVerification?.status === "verified"
+    ? "border-green-500/30 bg-green-500/5 text-green-400"
+    : immichVerification?.status === "timeout"
+    ? "border-amber-500/30 bg-amber-500/5 text-amber-400"
+    : "border-blue-500/30 bg-blue-500/5 text-blue-400";
 
   return (
     <div className="space-y-5">
@@ -675,35 +694,83 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats — moved + per-type breakdown */}
       {!isRolledBack && (
-        <div className="grid grid-cols-3 gap-3 text-center">
-          {[
-            { label: "Moved",    value: Array.isArray(job.fileMoves) ? job.fileMoves.length : "?" },
-            { label: "Verified", value: Array.isArray(job.fileMoves) ? job.fileMoves.length : "?" },
-            { label: "AI Score", value: plan?.aiConfidence != null ? `${Math.round(plan.aiConfidence * 100)}%` : "N/A" },
-          ].map(s => (
-            <div key={s.label} className="p-3 bg-secondary/40 rounded-lg border">
-              <div className="text-xl font-mono font-bold">{s.value}</div>
-              <div className="text-xs text-muted-foreground font-mono">{s.label}</div>
+        <>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {[
+              { label: "Moved",    value: Array.isArray(job.fileMoves) ? job.fileMoves.length : (report?.filesMoved ?? "?") },
+              { label: "Verified", value: Array.isArray(job.fileMoves) ? job.fileMoves.length : (report?.filesVerified ?? "?") },
+              { label: "AI Score", value: plan?.aiConfidence != null ? `${Math.round(plan.aiConfidence * 100)}%` : "N/A" },
+            ].map(s => (
+              <div key={s.label} className="p-3 bg-secondary/40 rounded-lg border">
+                <div className="text-xl font-mono font-bold">{s.value}</div>
+                <div className="text-xs text-muted-foreground font-mono">{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {/* Per-type breakdown */}
+          {(photoCount + videoCount + docCount + otherCount) > 0 && (
+            <div className="grid grid-cols-4 gap-2 text-center">
+              {[
+                { label: "Photos",    value: photoCount,  color: "text-blue-400" },
+                { label: "Videos",    value: videoCount,  color: "text-purple-400" },
+                { label: "Documents", value: docCount,    color: "text-amber-400" },
+                { label: "Other",     value: otherCount,  color: "text-muted-foreground" },
+              ].map(s => (
+                <div key={s.label} className="p-2 bg-secondary/20 rounded border">
+                  <div className={`text-base font-mono font-bold ${s.color}`}>{s.value}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono">{s.label}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+          {/* AI reason + recommendation */}
+          {(plan?.aiReason || plan?.aiRecommendation) && (
+            <div className="p-3 bg-secondary/20 rounded-lg border text-xs font-mono space-y-1">
+              {plan.aiReason && <p className="text-muted-foreground"><span className="text-primary/60">Reason:</span> {plan.aiReason}</p>}
+              {plan.aiRecommendation && <p className="text-muted-foreground"><span className="text-primary/60">Suggestion:</span> {plan.aiRecommendation}</p>}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Immich rescan result */}
-      {immichResult && (
-        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichResult.triggered ? "border-blue-500/30 bg-blue-500/5 text-blue-400" : "border-muted text-muted-foreground"}`}>
+      {/* Immich verification result (from execute report) */}
+      {immichVerification && (
+        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichVerifyColor}`}>
           <Image className="w-3.5 h-3.5 shrink-0" />
-          <span>{immichResult.detail}</span>
+          <span>
+            Immich: {immichVerification.status === "verified"
+              ? `✓ ${immichVerification.imported}/${immichVerification.expected} assets imported`
+              : immichVerification.status === "timeout"
+              ? `⏱ Still importing — ${immichVerification.imported}/${immichVerification.expected} confirmed so far`
+              : immichVerification.detail}
+          </span>
+        </div>
+      )}
+      {/* Fallback: show raw rescan result if no verification data */}
+      {!immichVerification && immichRescan && (
+        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichRescan.triggered ? "border-blue-500/30 bg-blue-500/5 text-blue-400" : "border-muted text-muted-foreground"}`}>
+          <Image className="w-3.5 h-3.5 shrink-0" />
+          <span>{immichRescan.detail}</span>
         </div>
       )}
 
-      {/* Report path */}
-      {job.reportPath && (
-        <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground p-2 bg-secondary/20 rounded border">
-          <HardDrive className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate" title={job.reportPath}>Report: {job.reportPath.split("/").slice(-2).join("/")}</span>
+      {/* Log + Report path */}
+      {(job.reportPath || report?.logPath) && (
+        <div className="space-y-1">
+          {job.reportPath && (
+            <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground p-2 bg-secondary/20 rounded border">
+              <HardDrive className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate" title={job.reportPath}>Report: {job.reportPath.split("/").slice(-2).join("/")}</span>
+            </div>
+          )}
+          {report?.logPath && (
+            <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground p-2 bg-secondary/20 rounded border">
+              <FileText className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate" title={report.logPath}>Log: {report.logPath.split("/").slice(-2).join("/")}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -888,9 +955,20 @@ export default function Organize() {
                   <TableCell className="text-xs text-muted-foreground">{formatDate(job.createdAt)}</TableCell>
                   <TableCell>
                     <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
-                        <Eye className="w-3.5 h-3.5" />
-                      </Button>
+                      {/* View Report / Open button */}
+                      {job.status === "completed" || job.status === "rolled_back" ? (
+                        <Button
+                          variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono text-primary/80 hover:text-primary"
+                          onClick={() => { setActiveJobId(job.id); setShowNew(false); }}
+                          title="View Report"
+                        >
+                          <FileText className="w-3.5 h-3.5 mr-1" /> Report
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
+                          <Eye className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                         disabled={job.status === "executing" || deleteMutation.isPending}

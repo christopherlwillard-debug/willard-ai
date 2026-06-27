@@ -392,21 +392,26 @@ function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string
   return results;
 }
 
-async function callAiConfidence(planSummary: object): Promise<{ confidence: number; notes: string } | null> {
+async function callAiConfidence(planSummary: object): Promise<{ confidence: number; reason: string; recommendation: string } | null> {
   try {
     const c = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: 'You are a file organization assistant. Assess how well-matched the routing is. Return ONLY valid JSON: {"confidence": <0-1>, "notes": "<one sentence>"}.' },
-        { role: "user",   content: JSON.stringify(planSummary) },
+        {
+          role: "system",
+          content: 'You are a file organization assistant. Review the proposed routing plan and return ONLY valid JSON with exactly these fields: ' +
+            '{"confidence": <number 0-1>, "reason": "<one sentence explaining the confidence score>", "recommendation": "<one actionable suggestion or \'Plan looks good\'>"}'
+        },
+        { role: "user", content: JSON.stringify(planSummary) },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 150,
+      max_tokens: 200,
     });
     const raw = JSON.parse(c.choices[0]?.message?.content ?? "{}");
     return {
-      confidence: typeof raw.confidence === "number" ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
-      notes: typeof raw.notes === "string" ? raw.notes : "Unable to assess",
+      confidence:     typeof raw.confidence     === "number" ? Math.max(0, Math.min(1, raw.confidence)) : 0.5,
+      reason:         typeof raw.reason         === "string" ? raw.reason         : "Unable to assess routing quality.",
+      recommendation: typeof raw.recommendation === "string" ? raw.recommendation : "Review destination assignments manually.",
     };
   } catch { return null; }
 }
@@ -594,13 +599,30 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       other:     routeDestination("other",    settings, nasPath, { archiveName }),
     };
 
-    const aiResult = await callAiConfidence({ totalFiles: fileEntries.length, summary, destinations });
+    // Build intra-plan conflict list for AI review input
+    const filenameGroups = new Map<string, string[]>();
+    for (const r of routes) {
+      const key = path.join(r.destination, r.filename);
+      if (!filenameGroups.has(key)) filenameGroups.set(key, []);
+      filenameGroups.get(key)!.push(r.relativePath);
+    }
+    const planConflicts = [...filenameGroups.values()].filter(g => g.length > 1).map(g => g[0]);
+
+    const aiResult = await callAiConfidence({
+      totalFiles: fileEntries.length,
+      summary,
+      destinations,
+      conflictCount: planConflicts.length,
+      conflictExamples: planConflicts.slice(0, 5),
+    });
     const planJson: any = {
       sourceType: job.sourceType, sourcePath: job.sourcePath,
       totalFiles: fileEntries.length, totalSizeBytes, routes,
       excludeCategories: [], excludePaths: [],
       summary, destinations, archiveDisposition: job.archiveDisposition,
-      aiConfidence: aiResult?.confidence ?? null, aiNotes: aiResult?.notes ?? null,
+      aiConfidence:     aiResult?.confidence     ?? null,
+      aiReason:         aiResult?.reason         ?? null,
+      aiRecommendation: aiResult?.recommendation ?? null,
     };
 
     const [updated] = await db.update(organizationJobsTable)
@@ -1096,6 +1118,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: fileMoves as any,
+      reportJson: report as any,
       reportPath: reportPath || null,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
