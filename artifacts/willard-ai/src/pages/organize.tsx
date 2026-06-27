@@ -1142,6 +1142,11 @@ function DoneStep({ job }: { job: OrganizationJob }) {
 
 // ── Recovery Center ───────────────────────────────────────────────────────────
 
+type InterruptedJob = OrganizationJob & {
+  lastStage?: string | null;
+  stageUpdatedAt?: string | null;
+};
+
 function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
   open: boolean;
   onClose: () => void;
@@ -1158,7 +1163,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
     queryFn: async () => {
       const resp = await fetch("/api/organize/recovery");
       if (!resp.ok) throw new Error("Failed to fetch recovery data");
-      return resp.json() as Promise<{ interrupted: OrganizationJob[] }>;
+      return resp.json() as Promise<{ interrupted: InterruptedJob[] }>;
     },
     enabled: open,
     refetchInterval: open ? 8000 : false,
@@ -1300,15 +1305,22 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                       </span>
                       <span>·</span>
                       <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" /> {formatDate(job.createdAt)}
+                        <Clock className="w-3 h-3" />
+                        {job.stageUpdatedAt ? formatDate(job.stageUpdatedAt) : formatDate(job.createdAt)}
                       </span>
                       {movesCount > 0 && (
                         <>
                           <span>·</span>
-                          <span className="text-amber-400">{movesCount} file{movesCount !== 1 ? "s" : ""} moved before crash</span>
+                          <span className="text-amber-400">{movesCount} file{movesCount !== 1 ? "s" : ""} moved</span>
                         </>
                       )}
                     </div>
+                    {job.lastStage && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-wider">last stage:</span>
+                        <span className="text-[10px] font-mono font-medium text-amber-400/80 uppercase tracking-wider">{job.lastStage}</span>
+                      </div>
+                    )}
                     {job.status === "failed" && job.error && (
                       <p className="text-xs font-mono text-destructive/80 truncate" title={job.error}>
                         {job.error}

@@ -7,7 +7,7 @@ import connectPgSimple from "connect-pg-simple";
 import { pool, db } from "@workspace/db";
 
 import { appSettingsTable, organizationJobsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream } from "./lib/nas-storage";
@@ -25,6 +25,10 @@ export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
     ALTER TABLE organization_jobs
       ADD COLUMN IF NOT EXISTS conflict_policy text NOT NULL DEFAULT 'keep_existing';
+    ALTER TABLE organization_jobs
+      ADD COLUMN IF NOT EXISTS last_stage text;
+    ALTER TABLE organization_jobs
+      ADD COLUMN IF NOT EXISTS stage_updated_at timestamp;
   `);
 }
 
@@ -131,14 +135,14 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
 
-// Detect organize jobs that were interrupted (server died while executing)
-db.select({ id: organizationJobsTable.id, sourcePath: organizationJobsTable.sourcePath })
+// Detect organize jobs that were interrupted (server died while executing or executing failed mid-resume)
+db.select({ id: organizationJobsTable.id, sourcePath: organizationJobsTable.sourcePath, status: organizationJobsTable.status })
   .from(organizationJobsTable)
-  .where(eq(organizationJobsTable.status, "executing"))
+  .where(inArray(organizationJobsTable.status, ["executing", "failed"]))
   .then((rows) => {
     if (rows.length > 0) {
       logger.warn(
-        { count: rows.length, ids: rows.map(r => r.id) },
+        { count: rows.length, ids: rows.map(r => r.id), statuses: rows.map(r => r.status) },
         "RECOVERY: Found interrupted organize job(s) from previous session — visit Recovery Center to resume or roll back",
       );
     }

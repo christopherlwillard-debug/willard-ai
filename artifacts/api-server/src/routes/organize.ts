@@ -1129,6 +1129,15 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     } catch { /* log is best-effort */ }
 
     await db.update(organizationJobsTable).set({ status: "executing" }).where(eq(organizationJobsTable.id, id));
+
+    // Stage checkpoint helper — fire-and-forget; persists lastStage + stageUpdatedAt for Recovery Center
+    const setStage = (stage: string) => {
+      db.update(organizationJobsTable)
+        .set({ lastStage: stage, stageUpdatedAt: new Date() })
+        .where(eq(organizationJobsTable.id, id))
+        .catch(() => {});
+    };
+    setStage("staging");
     send("status", { stage: "staging", message: "Preparing staging area…", progress: 2 });
 
     const tempDir = getTempDir(nasPath, `org-${id}`);
@@ -1200,6 +1209,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       if (r.relativePath && r.destination) planDestMap.set(r.relativePath, r.destination);
     }
 
+    setStage("moving");
     send("status", { stage: "moving", message: `Moving ${total} files…`, progress: 26, total });
     opLog(`MOVE_START: routing ${total} active files from frozen plan destinations (conflict policy: ${conflictPolicy})`);
 
@@ -1281,6 +1291,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
 
     // ── Stage 6: Strict verification — 100% of moved files must exist + per-dest recount ──
+    setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all moved files at destination…", progress: 83 });
 
     // Invariant: moved + conflict-skipped must equal total active routes
@@ -1326,6 +1337,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`VERIFY_DEST_OK: ${destVerification.length} destination group(s) all match`);
 
     // ── Immich rescan + import count verification ────────────────────────────
+    setStage("immich");
     send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
     let immichResult: any = null;
     let immichVerification: any = null;
@@ -1617,9 +1629,9 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
-    if (!job)                       { send("error", { message: "Job not found" });                         res.end(); return; }
-    if (job.status !== "executing") { send("error", { message: `Cannot resume a job with status '${job.status}' — only interrupted (executing) jobs can be resumed` }); res.end(); return; }
-    if (!job.planJson)              { send("error", { message: "Job has no plan — delete and recreate it" }); res.end(); return; }
+    if (!job)                                              { send("error", { message: "Job not found" });                                    res.end(); return; }
+    if (!["executing", "failed"].includes(job.status))    { send("error", { message: `Cannot resume a job with status '${job.status}' — only interrupted (executing or failed) jobs can be resumed` }); res.end(); return; }
+    if (!job.planJson)                                     { send("error", { message: "Job has no plan — delete and recreate it" });           res.end(); return; }
 
     const plan = job.planJson as any;
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
@@ -1629,10 +1641,24 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       send("error", { message: "NAS path is not configured" }); res.end(); return;
     }
 
+    // Mark as executing so a re-interruption is still detectable as a crashed job
+    await db.update(organizationJobsTable)
+      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
+      .where(eq(organizationJobsTable.id, id));
+
+    // Stage checkpoint helper for resume — fire-and-forget
+    const setStage = (stage: string) => {
+      db.update(organizationJobsTable)
+        .set({ lastStage: stage, stageUpdatedAt: new Date() })
+        .where(eq(organizationJobsTable.id, id))
+        .catch(() => {});
+    };
+
     // Existing partial moves from the interrupted run
     const existingMoves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     const alreadyMovedDests = new Set<string>(existingMoves.map(m => m.to));
 
+    setStage("staging");
     send("status", { stage: "staging", message: `Resuming — ${existingMoves.length} file(s) already at destination, re-staging source…`, progress: 2 });
 
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1650,6 +1676,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
 
     if (job.sourceType === "archive") {
+      setStage("extracting");
       send("status", { stage: "extracting", message: "Re-extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) { send("error", { message: `Archive not found: ${job.sourcePath}` }); res.end(); return; }
       const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
@@ -1682,6 +1709,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     let conflictSkipped = 0;
     let excluded = 0;
 
+    setStage("moving");
     send("status", { stage: "moving", message: `Moving remaining files (${existingMoves.length} already done)…`, progress: 26, total });
 
     for (let i = 0; i < sourceFiles.length; i++) {
@@ -1743,6 +1771,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
     }
 
+    setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all files at destination…", progress: 85 });
 
     const allMoves: FileMoveRecord[] = [...existingMoves, ...newMoves];

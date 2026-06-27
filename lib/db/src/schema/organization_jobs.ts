@@ -16,6 +16,8 @@ export const organizationJobsTable = pgTable("organization_jobs", {
   reportJson: jsonb("report_json"),
   reportPath: text("report_path"),
   error: text("error"),
+  lastStage: text("last_stage"),
+  stageUpdatedAt: timestamp("stage_updated_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
 });
