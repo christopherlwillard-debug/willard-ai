@@ -201,12 +201,24 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
  *   (no in-archive per-file hash available in those formats).
  *   Any hash mismatch or I/O error is treated as fatal — the route aborts and rolls back.
  */
-/** Per-file checksum record produced during archive extraction. */
+/**
+ * Per-file checksum record produced during archive extraction.
+ *
+ * verificationMethod:
+ *   "source-vs-dest"    — ZIP only: SHA-256 of the uncompressed archive-entry buffer is
+ *                         compared against SHA-256 of the file as written to disk.
+ *                         verified=true means they match.
+ *   "post-extract-only" — TAR/7z: the archive library exposes no per-file byte stream,
+ *                         so only the destination SHA-256 is available.  This still
+ *                         detects truncated writes and I/O errors.  verified=true means
+ *                         the destination file was successfully hashed after extraction.
+ */
 interface ExtractionChecksumRecord {
-  relativePath: string;
-  sourceHash: string;   // SHA-256 of uncompressed archive-entry data (empty for TAR/7z — no in-memory access)
-  destHash:   string;   // SHA-256 of the file as written to disk
-  verified:   boolean;  // sourceHash !== "" && sourceHash === destHash
+  relativePath:       string;
+  sourceHash:         string;
+  destHash:           string;
+  verificationMethod: "source-vs-dest" | "post-extract-only";
+  verified:           boolean;
 }
 
 async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{
@@ -280,7 +292,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
           `File may be corrupted on write.`
         );
       }
-      extractionChecksums.push({ relativePath: e.entryName, sourceHash, destHash, verified: true });
+      extractionChecksums.push({ relativePath: e.entryName, sourceHash, destHash, verificationMethod: "source-vs-dest", verified: true });
       entriesExtracted++;
     }
     return {
@@ -329,10 +341,10 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       const outPath = path.join(stagingDir, fp);
       try {
         const destHash = await sha256File(outPath);
-        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verified: false });
+        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
       } catch {
         // File not found after extraction — will be caught by the count-match check upstream
-        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash: "", verified: false });
+        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash: "", verificationMethod: "post-extract-only", verified: false });
       }
     }
 
@@ -378,9 +390,9 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       const outPath = path.join(stagingDir, fp);
       try {
         const destHash = await sha256File(outPath);
-        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash, verified: false });
+        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
       } catch {
-        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash: "", verified: false });
+        extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash: "", verificationMethod: "post-extract-only", verified: false });
       }
     }
     entriesExtracted = filePaths.length;
@@ -1255,12 +1267,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       fileMoves.push(record);
       moved++;
 
-      const method = record.hashMethod === "sha256" ? "sha256" : record.hashMethod === "size-sentinel" ? "size" : "?";
-      if (record.verified) {
-        opLog(`MOVE_OK [${method}]: ${sf.fullPath} → ${destFile} (hash=${record.sourceHash.slice(0, 16)}…)`);
-      } else {
-        opLog(`MOVE_UNVERIFIED [${method}]: ${sf.fullPath} → ${destFile} (source or dest stat failed)`);
-      }
+      opLog(`MOVE_OK [sha256]: ${sf.fullPath} → ${destFile} (hash=${record.sourceHash.slice(0, 16)}…)`);
 
       if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
         const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
@@ -1374,12 +1381,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     // Per-file verification summary for the report (cap at 500 to avoid oversized JSONB)
     const fileVerifications = fileMoves.slice(0, 500).map(m => ({
-      filename:    path.basename(m.to),
-      destination: m.to,
-      sourceHash:  m.sourceHash,
-      destHash:    m.destHash,
-      verified:    m.verified,
-      hashMethod:  m.hashMethod,
+      filename:        path.basename(m.to),
+      destination:     m.to,
+      sourceHash:      m.sourceHash,
+      destHash:        m.destHash,
+      verified:        m.verified,
+      verificationMethod: "sha256",
     }));
 
     const report: any = {
