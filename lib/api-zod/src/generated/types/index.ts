@@ -41,6 +41,8 @@ export * from './listArchivesParams';
 export * from './listDocumentsFileType';
 export * from './listDocumentsParams';
 export * from './listFolderParams';
+export * from './nasTestInput';
+export * from './nasTestResult';
 export * from './oldFileResult';
 export * from './openaiConversation';
 export * from './openaiConversationInput';

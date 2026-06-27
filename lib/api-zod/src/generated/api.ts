@@ -63,6 +63,22 @@ export const TestImmichConnectionResponse = zod.object({
 
 
 /**
+ * @summary Test NAS path accessibility
+ */
+export const TestNasPathBody = zod.object({
+  "path": zod.string()
+})
+
+export const TestNasPathResponse = zod.object({
+  "accessible": zod.boolean(),
+  "message": zod.string(),
+  "path": zod.string(),
+  "isDirectory": zod.boolean(),
+  "readable": zod.boolean()
+})
+
+
+/**
  * @summary Start a NAS scan
  */
 export const StartScanResponse = zod.object({

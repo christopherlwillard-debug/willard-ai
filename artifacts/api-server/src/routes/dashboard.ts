@@ -77,8 +77,8 @@ router.get("/dashboard", async (_req, res) => {
     const settings = settingsRows[0];
     const immich = await getImmichStats(settings?.immichBaseUrl ?? "", settings?.immichApiKey ?? "");
 
-    const nasPath = settings?.nasPath || "/";
-    const diskStats = getDiskStats(nasPath);
+    const nasPath = settings?.nasPath ?? "";
+    const diskStats = nasPath ? getDiskStats(nasPath) : null;
 
     res.json({
       totalFiles: totalRow.totalFiles,

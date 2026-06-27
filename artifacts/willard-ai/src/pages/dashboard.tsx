@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import {
   useGetDashboard, getGetDashboardQueryKey,
   useStartScan, useGetScanStatus, getGetScanStatusQueryKey,
@@ -8,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video, HardDrive } from "lucide-react";
+import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video, HardDrive, Settings2, ArrowRight } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -119,6 +120,24 @@ export default function Dashboard() {
           )}
         </Button>
       </div>
+
+      {/* First-run onboarding banner */}
+      {data.totalFiles === 0 && !isScanning && (
+        <div className="flex items-start gap-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
+          <Settings2 className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-mono font-bold text-sm text-primary">NO_FILES_INDEXED</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              To get started: go to <strong>Settings</strong>, enter your NAS mount path, click <strong>Save</strong>, then click <strong>Scan Now</strong> (or use the button above).
+            </p>
+          </div>
+          <Link href="/settings">
+            <Button variant="outline" size="sm" className="font-mono shrink-0">
+              Open Settings <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+            </Button>
+          </Link>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

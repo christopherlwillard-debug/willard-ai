@@ -38,6 +38,18 @@ export interface ImmichTestResult {
   videoCount: number | null;
 }
 
+export interface NasTestInput {
+  path: string;
+}
+
+export interface NasTestResult {
+  accessible: boolean;
+  message: string;
+  path: string;
+  isDirectory: boolean;
+  readable: boolean;
+}
+
 export type ScanJobStatus = typeof ScanJobStatus[keyof typeof ScanJobStatus];
 
 

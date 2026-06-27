@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody, TestImmichConnectionBody } from "@workspace/api-zod";
+import * as fs from "fs";
+import * as path from "path";
 
 const router: IRouter = Router();
 
@@ -34,6 +36,43 @@ router.put("/settings", async (req, res) => {
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: "Invalid request" });
+  }
+});
+
+router.post("/settings/test-nas", async (req, res) => {
+  try {
+    const { path: nasPath } = req.body as { path: string };
+    if (!nasPath || typeof nasPath !== "string") {
+      res.json({ accessible: false, message: "No path provided", path: nasPath ?? "", isDirectory: false, readable: false });
+      return;
+    }
+    const resolved = path.resolve(nasPath);
+    if (!fs.existsSync(resolved)) {
+      res.json({ accessible: false, message: `Path not found: ${resolved}`, path: resolved, isDirectory: false, readable: false });
+      return;
+    }
+    const stat = fs.statSync(resolved);
+    const isDirectory = stat.isDirectory();
+    if (!isDirectory) {
+      res.json({ accessible: false, message: "Path exists but is not a directory", path: resolved, isDirectory: false, readable: false });
+      return;
+    }
+    try {
+      fs.accessSync(resolved, fs.constants.R_OK);
+    } catch {
+      res.json({ accessible: false, message: "Directory exists but is not readable (permission denied)", path: resolved, isDirectory: true, readable: false });
+      return;
+    }
+    const entries = fs.readdirSync(resolved);
+    res.json({
+      accessible: true,
+      message: `Accessible — ${entries.length} item${entries.length !== 1 ? "s" : ""} at root`,
+      path: resolved,
+      isDirectory: true,
+      readable: true,
+    });
+  } catch (err) {
+    res.json({ accessible: false, message: `Error: ${err instanceof Error ? err.message : "Unknown"}`, path: "", isDirectory: false, readable: false });
   }
 });
 

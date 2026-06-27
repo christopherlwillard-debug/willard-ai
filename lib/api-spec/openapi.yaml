@@ -95,6 +95,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/ImmichTestResult"
 
+  /settings/test-nas:
+    post:
+      operationId: testNasPath
+      tags: [settings]
+      summary: Test NAS path accessibility
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NasTestInput"
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NasTestResult"
+
   # ── Scan ──────────────────────────────────────────────────────────────────
   /scan:
     post:
@@ -739,6 +758,34 @@ components:
         - message
         - photoCount
         - videoCount
+
+    NasTestInput:
+      type: object
+      properties:
+        path:
+          type: string
+      required:
+        - path
+
+    NasTestResult:
+      type: object
+      properties:
+        accessible:
+          type: boolean
+        message:
+          type: string
+        path:
+          type: string
+        isDirectory:
+          type: boolean
+        readable:
+          type: boolean
+      required:
+        - accessible
+        - message
+        - path
+        - isDirectory
+        - readable
 
     ScanJob:
       type: object

@@ -49,6 +49,8 @@ import type {
   ListArchivesParams,
   ListDocumentsParams,
   ListFolderParams,
+  NasTestInput,
+  NasTestResult,
   OldFileResult,
   OpenaiConversation,
   OpenaiConversationInput,
@@ -382,6 +384,76 @@ export const useTestImmichConnection = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getTestImmichConnectionMutationOptions(options));
+    }
+
+export const getTestNasPathUrl = () => {
+
+
+
+
+  return `/api/settings/test-nas`
+}
+
+/**
+ * @summary Test NAS path accessibility
+ */
+export const testNasPath = async (nasTestInput: NasTestInput, options?: RequestInit): Promise<NasTestResult> => {
+
+  return customFetch<NasTestResult>(getTestNasPathUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(nasTestInput)
+  }
+);}
+
+
+
+
+export const getTestNasPathMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof testNasPath>>, TError,{data: BodyType<NasTestInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof testNasPath>>, TError,{data: BodyType<NasTestInput>}, TContext> => {
+
+const mutationKey = ['testNasPath'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof testNasPath>>, {data: BodyType<NasTestInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  testNasPath(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TestNasPathMutationResult = NonNullable<Awaited<ReturnType<typeof testNasPath>>>
+    export type TestNasPathMutationBody = BodyType<NasTestInput>
+    export type TestNasPathMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Test NAS path accessibility
+ */
+export const useTestNasPath = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof testNasPath>>, TError,{data: BodyType<NasTestInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof testNasPath>>,
+        TError,
+        {data: BodyType<NasTestInput>},
+        TContext
+      > => {
+      return useMutation(getTestNasPathMutationOptions(options));
     }
 
 export const getStartScanUrl = () => {

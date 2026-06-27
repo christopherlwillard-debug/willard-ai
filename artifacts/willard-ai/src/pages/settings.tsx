@@ -1,12 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { 
   useGetSettings, getGetSettingsQueryKey,
   useUpdateSettings,
   useTestImmichConnection,
+  useTestNasPath,
   useGetScanStatus, getGetScanStatusQueryKey,
   useGetScanHistory, getGetScanHistoryQueryKey,
   useStartScan
 } from "@workspace/api-client-react";
+import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2 } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -67,6 +69,15 @@ export default function Settings() {
     }
   });
 
+  const [nasTestResult, setNasTestResult] = useState<NasTestResult | null>(null);
+
+  const testNasMutation = useTestNasPath({
+    mutation: {
+      onSuccess: (data) => setNasTestResult(data),
+      onError: () => setNasTestResult(null),
+    }
+  });
+
   const [form, setForm] = useState({
     nasPath: "",
     immichBaseUrl: "",
@@ -107,14 +118,42 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="space-y-4">
             {settingsLoading ? <Skeleton className="h-10 w-full" /> : (
-              <div className="space-y-2">
-                <Label>NAS Root Path</Label>
-                <Input 
-                  value={form.nasPath} 
-                  onChange={e => setForm({...form, nasPath: e.target.value})} 
-                  className="font-mono"
-                />
-                <p className="text-xs text-muted-foreground">e.g., /Volumes/Public or Z:\</p>
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>NAS Root Path</Label>
+                  <Input 
+                    value={form.nasPath} 
+                    onChange={e => { setForm({...form, nasPath: e.target.value}); setNasTestResult(null); }} 
+                    placeholder="/mnt/nas  or  /Volumes/Public"
+                    className="font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Mount your NAS share first, then enter the mount path here. e.g. <code className="bg-secondary px-1 rounded">/mnt/nas</code> or <code className="bg-secondary px-1 rounded">/Volumes/Public</code>
+                  </p>
+                </div>
+                {nasTestResult && (
+                  <div className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+                    nasTestResult.accessible
+                      ? "border-green-500/40 bg-green-500/10 text-green-400"
+                      : "border-destructive/40 bg-destructive/10 text-destructive"
+                  }`}>
+                    {nasTestResult.accessible
+                      ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                      : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+                    <span className="font-mono text-xs">{nasTestResult.message}</span>
+                  </div>
+                )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full font-mono"
+                  disabled={testNasMutation.isPending || !form.nasPath}
+                  onClick={() => testNasMutation.mutate({ data: { path: form.nasPath } })}
+                >
+                  {testNasMutation.isPending
+                    ? <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Testing…</>
+                    : <><FolderOpen className="w-3.5 h-3.5 mr-2" /> Test NAS Path</>}
+                </Button>
               </div>
             )}
           </CardContent>
@@ -211,17 +250,25 @@ export default function Settings() {
           {historyLoading ? <Skeleton className="h-32 w-full" /> : (
             <div className="space-y-2">
               {scanHistory?.map(job => (
-                <div key={job.id} className="flex items-center justify-between p-3 text-sm bg-secondary/20 rounded border">
-                  <div className="flex items-center space-x-3">
-                    {job.status === 'completed' ? <CheckCircle2 className="text-green-500 w-4 h-4" /> : 
-                     job.status === 'failed' ? <XCircle className="text-destructive w-4 h-4" /> : 
-                     <Activity className="text-primary w-4 h-4" />}
-                    <span className="font-mono">{formatDate(job.startedAt)}</span>
+                <div key={job.id} className="p-3 text-sm bg-secondary/20 rounded border space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      {job.status === 'completed' ? <CheckCircle2 className="text-green-500 w-4 h-4 shrink-0" /> : 
+                       job.status === 'failed' ? <XCircle className="text-destructive w-4 h-4 shrink-0" /> : 
+                       <Activity className="text-primary w-4 h-4 shrink-0" />}
+                      <span className="font-mono">{formatDate(job.startedAt)}</span>
+                    </div>
+                    <div className="flex items-center space-x-4 font-mono text-muted-foreground">
+                      <span>{job.filesScanned} files</span>
+                      <span className={`uppercase text-xs font-bold ${job.status === 'failed' ? 'text-destructive' : job.status === 'completed' ? 'text-green-500' : ''}`}>{job.status}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-4 font-mono text-muted-foreground">
-                    <span>{job.filesScanned} files</span>
-                    <span className="uppercase text-xs">{job.status}</span>
-                  </div>
+                  {job.status === 'failed' && job.error && (
+                    <div className="flex items-start gap-1.5 ml-7 text-xs text-destructive/80 font-mono">
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>{job.error}</span>
+                    </div>
+                  )}
                 </div>
               ))}
               {scanHistory?.length === 0 && <p className="text-muted-foreground text-center py-4">No scan history available</p>}
