@@ -1007,6 +1007,45 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       )}
 
+      {/* Checksum verification summary */}
+      {!isRolledBack && report && (report.checksumVerifiedCount > 0 || report.checksumUnverifiedCount > 0) && (
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">SHA-256 Integrity Verification</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-2 p-2.5 rounded-lg border border-green-500/30 bg-green-500/5 text-xs font-mono text-green-400">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span><strong>{report.checksumVerifiedCount ?? 0}</strong> verified</span>
+            </div>
+            {(report.checksumUnverifiedCount ?? 0) > 0 && (
+              <div className="flex items-center gap-2 p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 text-xs font-mono text-amber-400">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span><strong>{report.checksumUnverifiedCount}</strong> large (size-check only)</span>
+              </div>
+            )}
+          </div>
+          {Array.isArray(report.fileVerifications) && report.fileVerifications.length > 0 && (
+            <ScrollArea className="h-24 rounded border bg-secondary/10 p-2">
+              <div className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                {(report.fileVerifications as any[]).slice(0, 50).map((v: any, i: number) => (
+                  <div key={i} className="flex items-center gap-1.5 truncate">
+                    <span className={v.verified ? "text-green-400/70" : "text-amber-400/70"}>
+                      {v.verified ? "✓" : "~"}
+                    </span>
+                    <span className="truncate flex-1">{v.filename}</span>
+                    <span className="opacity-40 font-mono text-[9px]" title={v.sourceHash}>
+                      {v.sourceHash?.startsWith("size:") ? v.sourceHash : v.sourceHash?.slice(0, 8) + "…"}
+                    </span>
+                  </div>
+                ))}
+                {report.fileVerifications.length > 50 && (
+                  <p className="text-center opacity-40 pt-1">…and {report.fileVerifications.length - 50} more</p>
+                )}
+              </div>
+            </ScrollArea>
+          )}
+        </div>
+      )}
+
       {/* Immich verification result (from execute report) */}
       {immichVerification && (
         <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichVerifyColor}`}>

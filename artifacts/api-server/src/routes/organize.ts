@@ -12,6 +12,7 @@ import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
+import { moveFile, integrityToken, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 
 const router: IRouter = Router();
 
@@ -110,34 +111,6 @@ function getDiskFreeBytes(dirPath: string): number | null {
   } catch { return null; }
 }
 
-/** SHA-256 via streaming — memory-safe for large files. */
-async function sha256File(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data", chunk => hash.update(chunk));
-    stream.on("end",  () => resolve(hash.digest("hex")));
-    stream.on("error", reject);
-  });
-}
-
-/** Returns SHA-256 for files ≤100 MB, size-sentinel for larger files. */
-const HASH_LIMIT = 100 * 1024 * 1024;
-async function integrityToken(filePath: string): Promise<string> {
-  try {
-    const s = fs.statSync(filePath);
-    return s.size <= HASH_LIMIT ? await sha256File(filePath) : `size:${s.size}`;
-  } catch { return ""; }
-}
-
-function moveFile(from: string, to: string): void {
-  fs.mkdirSync(path.dirname(to), { recursive: true });
-  try { fs.renameSync(from, to); }
-  catch (err: any) {
-    if (err.code === "EXDEV") { fs.copyFileSync(from, to); fs.unlinkSync(from); }
-    else throw err;
-  }
-}
 
 async function peekArchiveEntries(archivePath: string, filename: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
   const ext    = getArchiveExt(filename);
@@ -1035,7 +1008,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   };
 
   const tempDirs: string[] = [];
-  const fileMoves: Array<{from: string; to: string}> = [];
+  const fileMoves: FileMoveRecord[] = [];
   let logStream: fs.WriteStream | null = null;
   let logPath = "";
   const opLog = (line: string) => { try { logStream?.write(line + "\n"); } catch { /* best-effort */ } };
@@ -1221,18 +1194,18 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         }
       }
 
-      const preToken  = await integrityToken(sf.fullPath);
-      moveFile(sf.fullPath, destFile);
-      fileMoves.push({ from: sf.fullPath, to: destFile });
+      // verifiedMove: compute source SHA-256 → move → compute dest SHA-256 → compare.
+      // Throws immediately on mismatch so the catch block triggers rollback.
+      const record = await verifiedMove(sf.fullPath, destFile);
+      fileMoves.push(record);
       moved++;
 
-      // Verify integrity post-move
-      const postToken = await integrityToken(destFile);
-      if (preToken && postToken && preToken !== postToken) {
-        throw new Error(`Integrity mismatch after moving ${path.basename(sf.relativePath)} — checksums differ. All moves reversed.`);
+      const method = record.hashMethod === "sha256" ? "sha256" : record.hashMethod === "size-sentinel" ? "size" : "?";
+      if (record.verified) {
+        opLog(`MOVE_OK [${method}]: ${sf.fullPath} → ${destFile} (hash=${record.sourceHash.slice(0, 16)}…)`);
+      } else {
+        opLog(`MOVE_UNVERIFIED [${method}]: ${sf.fullPath} → ${destFile} (source or dest stat failed)`);
       }
-
-      opLog(`MOVE: ${sf.fullPath} → ${destFile}`);
 
       if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
         const pct = 26 + Math.round(((moved + excluded + conflictSkipped) / total) * 55);
@@ -1248,18 +1221,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       throw new Error(`Move count mismatch: moved ${moved} + skipped ${conflictSkipped} = ${moved + conflictSkipped} but plan expected ${total}. Investigation required.`);
     }
 
-    // Per-file existence check
+    // Per-file existence + checksum summary (checksums were verified inline during move)
+    const checksumVerifiedCount  = fileMoves.filter(m => m.verified).length;
+    const checksumUnverifiedCount = fileMoves.filter(m => !m.verified).length;
     const unverified: string[] = [];
     for (const mv of fileMoves) {
       if (!fs.existsSync(mv.to)) {
         unverified.push(mv.to);
-        opLog(`VERIFY_FAIL: ${mv.to} missing`);
+        opLog(`VERIFY_FAIL: ${mv.to} missing at destination`);
       }
     }
     if (unverified.length > 0) {
       throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files not found at destination.`);
     }
-    opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} files confirmed at destination`);
+    opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} at destination — sha256 verified: ${checksumVerifiedCount}, unverifiable (large/stat-fail): ${checksumUnverifiedCount}`);
 
     // Per-destination directory recount — groups moved files by dest dir and recounts each
     const destCountMap = new Map<string, { expected: number; found: number }>();
@@ -1341,12 +1316,27 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const conflictsReplaced = conflictResolutions.filter(c => c.action === "replace").length;
     const conflictsRenamed  = conflictResolutions.filter(c => c.action === "rename").length;
     if (conflictsTotal > 0) opLog(`CONFLICTS: total=${conflictsTotal} skipped=${conflictsSkipped} replaced=${conflictsReplaced} renamed=${conflictsRenamed} policy=${conflictPolicy}`);
+
+    // Per-file verification summary for the report (cap at 500 to avoid oversized JSONB)
+    const fileVerifications = fileMoves.slice(0, 500).map(m => ({
+      filename:    path.basename(m.to),
+      destination: m.to,
+      sourceHash:  m.sourceHash,
+      destHash:    m.destHash,
+      verified:    m.verified,
+      hashMethod:  m.hashMethod,
+    }));
+
     const report: any = {
       jobId: id, completedAt: completedAt.toISOString(),
       sourceType: job.sourceType, sourcePath: job.sourcePath, archiveDisposition: job.archiveDisposition,
       conflictPolicy,
       filesFound: sourceFiles.length, filesMoved: moved, filesExcluded: excluded,
       filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
+      // Checksum verification summary
+      checksumVerifiedCount,
+      checksumUnverifiedCount,
+      fileVerifications,         // per-file SHA-256 results (capped at 500)
       conflictsTotal, conflictsSkipped, conflictsReplaced, conflictsRenamed,
       conflictResolutions: conflictResolutions.slice(0, 200), // cap log size
       destinations: plan.destinations,
@@ -1367,7 +1357,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       opLog(`REPORT: ${reportPath}`);
     } catch { /* non-fatal */ }
 
-    opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} verified:${fileMoves.length} ===`);
+    opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} verified:${fileMoves.length} sha256-ok:${checksumVerifiedCount} unverifiable:${checksumUnverifiedCount} ===`);
     logStream?.end();
 
     await db.update(organizationJobsTable).set({
@@ -1385,13 +1375,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`ERROR: ${errMsg}`);
     send("status", { stage: "rolling_back", message: "Error — rolling back all moves…", progress: -1 });
 
-    let rolledBack = 0;
-    for (const mv of [...fileMoves].reverse()) {
-      try {
-        if (fs.existsSync(mv.to)) { moveFile(mv.to, mv.from); rolledBack++; opLog(`ROLLBACK: ${mv.to} → ${mv.from}`); }
-      } catch (re: any) { opLog(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`); }
-    }
-
+    // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
+    const rolledBack = await rollbackMoves(fileMoves, line => opLog(line));
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
