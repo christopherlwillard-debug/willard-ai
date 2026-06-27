@@ -23,11 +23,14 @@ function getFileTypeFromName(filename: string): string {
 
 router.get("/archives", async (req, res) => {
   try {
-    const { category, minSize, maxSize, limit = "50", offset = "0" } = req.query as Record<string, string>;
+    const { category, minSize, maxSize, status, dateFrom, dateTo, limit = "50", offset = "0" } = req.query as Record<string, string>;
     const conditions: SQL[] = [];
     if (category) conditions.push(eq(archivesTable.category, category));
     if (minSize) conditions.push(gte(archivesTable.sizeBytes, parseInt(minSize)));
     if (maxSize) conditions.push(lte(archivesTable.sizeBytes, parseInt(maxSize)));
+    if (status) conditions.push(eq(archivesTable.peekStatus, status));
+    if (dateFrom) conditions.push(gte(archivesTable.modifiedAt, new Date(dateFrom)));
+    if (dateTo) conditions.push(lte(archivesTable.modifiedAt, new Date(dateTo)));
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [{ total }] = await db.select({ total: count() }).from(archivesTable).where(where);
     const archives = await db.select().from(archivesTable)

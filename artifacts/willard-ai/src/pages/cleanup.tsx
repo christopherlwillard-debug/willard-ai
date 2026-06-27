@@ -1,4 +1,11 @@
-import { useGetCleanupSummary, getGetCleanupSummaryQueryKey, useGetDuplicateFiles, getGetDuplicateFilesQueryKey, useListArchives, getListArchivesQueryKey } from "@workspace/api-client-react";
+import {
+  useGetCleanupSummary, getGetCleanupSummaryQueryKey,
+  useGetDuplicateFiles, getGetDuplicateFilesQueryKey,
+  useGetLargeFiles, getGetLargeFilesQueryKey,
+  useGetOldFiles, getGetOldFilesQueryKey,
+  useGetEmptyFolders, getGetEmptyFoldersQueryKey,
+  useListArchives, getListArchivesQueryKey,
+} from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +15,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
-function exportReport(summary: any, duplicates: any, archives: any) {
+function exportReport(summary: any, duplicates: any, largeFiles: any, oldFiles: any, emptyFolders: any, archives: any) {
   const lines: string[] = [
     "WILLARD AI — CLEANUP REPORT",
     `Generated: ${new Date().toLocaleString()}`,
@@ -25,10 +32,26 @@ function exportReport(summary: any, duplicates: any, archives: any) {
     lines.push("=== DUPLICATE GROUPS ===");
     for (const g of duplicates.groups) {
       lines.push(`  Hash ${g.hash} (${g.fileCount} copies, wastes ${formatBytes(g.totalWastedBytes)}):`);
-      for (const f of g.files) {
-        lines.push(`    - ${f.path}`);
-      }
+      for (const f of g.files) lines.push(`    - ${f.path}`);
     }
+    lines.push("");
+  }
+
+  if (largeFiles?.files?.length) {
+    lines.push("=== LARGE FILES (>500MB) ===");
+    for (const f of largeFiles.files) lines.push(`  - ${f.path} (${formatBytes(f.sizeBytes)})`);
+    lines.push("");
+  }
+
+  if (oldFiles?.files?.length) {
+    lines.push("=== OLD FILES (>5 years) ===");
+    for (const f of oldFiles.files) lines.push(`  - ${f.path} (modified ${formatDate(f.modifiedAt)})`);
+    lines.push("");
+  }
+
+  if (emptyFolders?.length) {
+    lines.push("=== EMPTY FOLDERS ===");
+    for (const f of emptyFolders) lines.push(`  - ${f.path}`);
     lines.push("");
   }
 
@@ -41,11 +64,9 @@ function exportReport(summary: any, duplicates: any, archives: any) {
       byCategory[cat].push(a);
     }
     for (const [cat, items] of Object.entries(byCategory)) {
-      const totalSize = items.reduce((s, a) => s + (a.sizeBytes ?? 0), 0);
+      const totalSize = items.reduce((s: number, a: any) => s + (a.sizeBytes ?? 0), 0);
       lines.push(`  ${cat.toUpperCase()} (${items.length} archives, ${formatBytes(totalSize)}):`);
-      for (const a of items.slice(0, 5)) {
-        lines.push(`    - ${a.filename} (${formatBytes(a.sizeBytes)})`);
-      }
+      for (const a of items.slice(0, 5)) lines.push(`    - ${a.filename} (${formatBytes(a.sizeBytes)})`);
       if (items.length > 5) lines.push(`    ... and ${items.length - 5} more`);
     }
     lines.push("");
@@ -61,21 +82,13 @@ function exportReport(summary: any, duplicates: any, archives: any) {
 }
 
 export default function Cleanup() {
-  const { data: summary, isLoading: summaryLoading } = useGetCleanupSummary({
-    query: { queryKey: getGetCleanupSummaryQueryKey() },
-  });
+  const { data: summary } = useGetCleanupSummary({ query: { queryKey: getGetCleanupSummaryQueryKey() } });
+  const { data: duplicates, isLoading: dupesLoading } = useGetDuplicateFiles({ limit: 20 }, { query: { queryKey: getGetDuplicateFilesQueryKey({ limit: 20 }) } });
+  const { data: largeFiles, isLoading: largeLoading } = useGetLargeFiles({ limit: 100 }, { query: { queryKey: getGetLargeFilesQueryKey({ limit: 100 }) } });
+  const { data: oldFiles, isLoading: oldLoading } = useGetOldFiles({ limit: 100 }, { query: { queryKey: getGetOldFilesQueryKey({ limit: 100 }) } });
+  const { data: emptyFolders, isLoading: emptyLoading } = useGetEmptyFolders({ query: { queryKey: getGetEmptyFoldersQueryKey() } });
+  const { data: archives, isLoading: archivesLoading } = useListArchives({ limit: 200 }, { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } });
 
-  const { data: duplicates, isLoading: dupesLoading } = useGetDuplicateFiles(
-    { limit: 20 },
-    { query: { queryKey: getGetDuplicateFilesQueryKey({ limit: 20 }) } }
-  );
-
-  const { data: archives, isLoading: archivesLoading } = useListArchives(
-    { limit: 200 },
-    { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } }
-  );
-
-  // Cluster archives by category
   const archiveClusters: Record<string, { items: any[]; totalSize: number }> = {};
   for (const a of archives?.archives ?? []) {
     const cat = a.category ?? "general";
@@ -100,14 +113,13 @@ export default function Cleanup() {
             variant="outline"
             size="sm"
             className="font-mono"
-            onClick={() => exportReport(summary, duplicates, archives)}
+            onClick={() => exportReport(summary, duplicates, largeFiles, oldFiles, emptyFolders, archives)}
           >
             <Download className="w-3.5 h-3.5 mr-1.5" /> Export Report
           </Button>
         </div>
       </div>
 
-      {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card className="border-l-4 border-l-destructive">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -115,7 +127,7 @@ export default function Cleanup() {
             <Copy className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary?.duplicateGroups.toLocaleString() ?? "--"}</div>
+            <div className="text-2xl font-bold">{summary?.duplicateGroups?.toLocaleString() ?? "--"}</div>
             <p className="text-xs text-muted-foreground mt-1">Wasting {formatBytes(summary?.duplicateWastedBytes ?? 0)}</p>
           </CardContent>
         </Card>
@@ -125,7 +137,7 @@ export default function Cleanup() {
             <FileWarning className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary?.largeFileCount.toLocaleString() ?? "--"}</div>
+            <div className="text-2xl font-bold">{summary?.largeFileCount?.toLocaleString() ?? "--"}</div>
             <p className="text-xs text-muted-foreground mt-1">{formatBytes(summary?.largeFilesBytes ?? 0)}</p>
           </CardContent>
         </Card>
@@ -135,7 +147,7 @@ export default function Cleanup() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary?.oldFileCount.toLocaleString() ?? "--"}</div>
+            <div className="text-2xl font-bold">{summary?.oldFileCount?.toLocaleString() ?? "--"}</div>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-green-500">
@@ -144,48 +156,42 @@ export default function Cleanup() {
             <FolderOpen className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary?.emptyFolderCount.toLocaleString() ?? "--"}</div>
+            <div className="text-2xl font-bold">{summary?.emptyFolderCount?.toLocaleString() ?? "--"}</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Detail tabs */}
       <Tabs defaultValue="duplicates">
-        <TabsList>
+        <TabsList className="flex-wrap">
           <TabsTrigger value="duplicates">Duplicate Groups</TabsTrigger>
+          <TabsTrigger value="large">Large Files</TabsTrigger>
+          <TabsTrigger value="old">Old Files</TabsTrigger>
+          <TabsTrigger value="empty">Empty Folders</TabsTrigger>
           <TabsTrigger value="archives">Archive Clusters</TabsTrigger>
         </TabsList>
 
+        {/* DUPLICATE GROUPS */}
         <TabsContent value="duplicates" className="mt-4">
           <Card>
             <CardContent className="pt-4">
-              {dupesLoading || summaryLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
+              {dupesLoading ? (
+                <div className="space-y-2"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
               ) : !duplicates?.groups.length ? (
-                <p className="text-center text-muted-foreground font-mono text-sm py-8">
-                  No duplicate groups found — run a full scan first (hashing enabled)
-                </p>
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">No duplicate groups found — run a full scan first</p>
               ) : (
                 <Accordion type="single" collapsible className="w-full">
                   {duplicates.groups.map((group, i) => (
                     <AccordionItem key={group.hash} value={`item-${i}`}>
                       <AccordionTrigger className="hover:no-underline py-3 px-4 bg-secondary/30 rounded-md mb-2">
                         <div className="flex justify-between items-center w-full pr-4">
-                          <span className="font-mono text-sm">
-                            Hash: {group.hash.substring(0, 8)}… ({group.fileCount} copies)
-                          </span>
-                          <span className="text-destructive font-medium bg-destructive/10 px-2 py-0.5 rounded text-xs">
-                            Wastes {formatBytes(group.totalWastedBytes)}
-                          </span>
+                          <span className="font-mono text-sm">Hash: {group.hash.substring(0, 8)}… ({group.fileCount} copies)</span>
+                          <span className="text-destructive font-medium bg-destructive/10 px-2 py-0.5 rounded text-xs">Wastes {formatBytes(group.totalWastedBytes)}</span>
                         </div>
                       </AccordionTrigger>
                       <AccordionContent className="pt-2 pb-4">
                         <div className="space-y-1.5">
                           {group.files.map((file) => (
-                            <div key={file.id} className="flex justify-between items-center text-sm p-2 bg-secondary/10 border rounded">
+                            <div key={file.id} className="flex justify-between items-center p-2 bg-secondary/10 border rounded">
                               <span className="truncate font-mono text-xs text-muted-foreground">{file.path}</span>
                               <span className="whitespace-nowrap ml-4 font-mono text-xs">{formatBytes(file.sizeBytes)}</span>
                             </div>
@@ -200,6 +206,112 @@ export default function Cleanup() {
           </Card>
         </TabsContent>
 
+        {/* LARGE FILES */}
+        <TabsContent value="large" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-mono">LARGE_FILES &gt; 500MB</CardTitle>
+              <p className="text-xs text-muted-foreground">Files consuming the most space — candidates for compression or archiving</p>
+            </CardHeader>
+            <CardContent>
+              {largeLoading ? (
+                <div className="space-y-2"><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" /></div>
+              ) : !largeFiles?.files.length ? (
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">No large files found — run a scan first</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Filename</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead className="text-right">Size</TableHead>
+                      <TableHead className="text-right">Modified</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {largeFiles.files.map((f) => (
+                      <TableRow key={f.id}>
+                        <TableCell className="font-mono text-sm">{f.filename}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs truncate max-w-[200px]" title={f.folder ?? ""}>{f.folder}</TableCell>
+                        <TableCell className="text-right font-mono text-sm text-amber-500">{formatBytes(f.sizeBytes)}</TableCell>
+                        <TableCell className="text-right text-xs text-muted-foreground">{formatDate(f.modifiedAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* OLD FILES */}
+        <TabsContent value="old" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-mono">OLD_FILES &gt; 5 YEARS</CardTitle>
+              <p className="text-xs text-muted-foreground">Files that have not been modified in over 5 years — review for archiving or deletion</p>
+            </CardHeader>
+            <CardContent>
+              {oldLoading ? (
+                <div className="space-y-2"><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" /></div>
+              ) : !oldFiles?.files.length ? (
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">No old files found — run a scan first</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Filename</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead className="text-right">Size</TableHead>
+                      <TableHead className="text-right">Last Modified</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {oldFiles.files.map((f) => (
+                      <TableRow key={f.id}>
+                        <TableCell className="font-mono text-sm">{f.filename}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs truncate max-w-[200px]" title={f.folder ?? ""}>{f.folder}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">{formatBytes(f.sizeBytes)}</TableCell>
+                        <TableCell className="text-right text-xs text-blue-400">{formatDate(f.modifiedAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* EMPTY FOLDERS */}
+        <TabsContent value="empty" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-mono">EMPTY_FOLDERS</CardTitle>
+              <p className="text-xs text-muted-foreground">Folders with no files — safe to remove to keep directory structure clean</p>
+            </CardHeader>
+            <CardContent>
+              {emptyLoading ? (
+                <div className="space-y-2"><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-full" /></div>
+              ) : !emptyFolders?.length ? (
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">No empty folders found</p>
+              ) : (
+                <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
+                  {emptyFolders.map((folder, i) => (
+                    <div key={i} className="flex items-center justify-between p-2 border rounded bg-secondary/10">
+                      <div className="flex items-center gap-2">
+                        <FolderOpen className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                        <span className="font-mono text-xs text-muted-foreground">{folder.path}</span>
+                      </div>
+                      <span className="text-[10px] text-green-600 bg-green-600/10 px-1.5 py-0.5 rounded font-mono">EMPTY</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ARCHIVE CLUSTERS */}
         <TabsContent value="archives" className="mt-4">
           <Card>
             <CardHeader>
@@ -208,14 +320,9 @@ export default function Cleanup() {
             </CardHeader>
             <CardContent>
               {archivesLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
+                <div className="space-y-2"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
               ) : clusterEntries.length === 0 ? (
-                <p className="text-center text-muted-foreground font-mono text-sm py-8">
-                  No archives indexed — run a scan first
-                </p>
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">No archives indexed — run a scan first</p>
               ) : (
                 <Accordion type="single" collapsible className="w-full">
                   {clusterEntries.map(([cat, cluster]) => (
@@ -226,9 +333,7 @@ export default function Cleanup() {
                             <Package className="w-4 h-4 text-amber-500" />
                             {cat.toUpperCase()} ({cluster.items.length} archives)
                           </span>
-                          <span className="bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded text-xs font-mono">
-                            {formatBytes(cluster.totalSize)}
-                          </span>
+                          <span className="bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded text-xs font-mono">{formatBytes(cluster.totalSize)}</span>
                         </div>
                       </AccordionTrigger>
                       <AccordionContent className="pb-4">
@@ -253,9 +358,7 @@ export default function Cleanup() {
                           </TableBody>
                         </Table>
                         {cluster.items.length > 20 && (
-                          <p className="text-xs text-muted-foreground font-mono mt-2 text-center">
-                            … and {cluster.items.length - 20} more (export report to see all)
-                          </p>
+                          <p className="text-xs text-muted-foreground font-mono mt-2 text-center">… and {cluster.items.length - 20} more (export report to see all)</p>
                         )}
                       </AccordionContent>
                     </AccordionItem>

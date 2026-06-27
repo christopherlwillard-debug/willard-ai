@@ -39,16 +39,19 @@ function getArchiveCategory(filename: string): string {
   return "general";
 }
 
-function computeFileHash(filePath: string, fileSize: number): string | null {
-  if (fileSize > HASH_SIZE_LIMIT) return null;
-  try {
-    const hash = createHash("sha256");
-    const buf = fs.readFileSync(filePath);
-    hash.update(buf);
-    return hash.digest("hex");
-  } catch {
-    return null;
-  }
+function computeFileHash(filePath: string, fileSize: number): Promise<string | null> {
+  if (fileSize > HASH_SIZE_LIMIT) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const hash = createHash("sha256");
+      const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+      stream.on("data", (chunk: Buffer) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+      stream.on("error", () => resolve(null));
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 async function scanDirectory(dirPath: string, jobId: number) {
@@ -110,7 +113,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
         const ext = path.extname(entry.name).replace(".", "").toLowerCase();
         const fileType = getFileType(ext);
         const folder = path.dirname(fullPath);
-        const contentHash = computeFileHash(fullPath, stat.size);
+        const contentHash = await computeFileHash(fullPath, stat.size);
 
         fileBatch.push({
           path: fullPath,

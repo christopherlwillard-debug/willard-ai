@@ -106,21 +106,96 @@ async function getArchivesContext(): Promise<string> {
  * This runs structured queries against local index and Immich before
  * passing results to the language model.
  */
-async function buildQueryContext(userMessage: string, settings: any): Promise<string> {
+interface MatchedFile {
+  filename: string;
+  path: string;
+  fileType: string;
+  sizeBytes: number;
+  folder: string;
+  source: "local" | "immich";
+}
+
+interface QueryContextResult {
+  text: string;
+  matchedFiles: MatchedFile[];
+}
+
+async function buildQueryContext(userMessage: string, settings: any): Promise<QueryContextResult> {
   const msg = userMessage.toLowerCase();
   const parts: string[] = [];
+  const matchedFiles: MatchedFile[] = [];
 
   // File search intent
   const searchMatch = msg.match(/(?:find|search|look for|where is|show me|list)\s+(?:files?\s+(?:named?|called?|with)?\s+)?["']?([a-z0-9\s._-]{2,30})["']?/i);
   if (searchMatch) {
     const keyword = searchMatch[1].trim();
     if (keyword.length >= 2) {
-      const [localResult, immichResult] = await Promise.all([
-        searchLocalFiles(keyword),
-        searchImmich(keyword, settings),
-      ]);
-      if (localResult) parts.push(localResult);
-      if (immichResult) parts.push(immichResult);
+      // Local file search — also collect structured results
+      try {
+        const files = await db.select({
+          filename: indexedFilesTable.filename,
+          path: indexedFilesTable.path,
+          fileType: indexedFilesTable.fileType,
+          sizeBytes: indexedFilesTable.sizeBytes,
+          folder: indexedFilesTable.folder,
+          modifiedAt: indexedFilesTable.modifiedAt,
+        })
+          .from(indexedFilesTable)
+          .where(ilike(indexedFilesTable.filename, `%${keyword}%`))
+          .orderBy(desc(indexedFilesTable.sizeBytes))
+          .limit(10);
+
+        if (files.length > 0) {
+          const lines = files.map(f =>
+            `  • ${f.filename} (${f.fileType}, ${Math.round((f.sizeBytes ?? 0) / 1024)}KB) in ${f.folder ?? "/"}`
+          );
+          parts.push(`Found ${files.length} local files matching "${keyword}":\n${lines.join("\n")}`);
+          for (const f of files) {
+            matchedFiles.push({
+              filename: f.filename ?? "",
+              path: f.path,
+              fileType: f.fileType ?? "other",
+              sizeBytes: f.sizeBytes ?? 0,
+              folder: f.folder ?? "/",
+              source: "local",
+            });
+          }
+        } else {
+          parts.push(`No local files found matching "${keyword}".`);
+        }
+      } catch { /* ignore */ }
+
+      // Immich search
+      const baseUrl = settings?.immichBaseUrl?.replace(/\/$/, "");
+      const apiKey = settings?.immichApiKey;
+      if (baseUrl && apiKey) {
+        try {
+          const r = await fetch(`${baseUrl}/api/search/metadata`, {
+            method: "POST",
+            headers: { "x-api-key": apiKey, "content-type": "application/json" },
+            body: JSON.stringify({ query: keyword, size: 5 }),
+            signal: AbortSignal.timeout(4000),
+          });
+          if (r.ok) {
+            const data = await r.json() as any;
+            const assets: any[] = data?.assets?.items ?? [];
+            if (assets.length > 0) {
+              const lines = assets.map((a: any) => `  • ${a.originalFileName ?? a.id} (${a.type?.toLowerCase() ?? "asset"})`);
+              parts.push(`Found ${assets.length} Immich assets matching "${keyword}":\n${lines.join("\n")}`);
+              for (const a of assets) {
+                matchedFiles.push({
+                  filename: a.originalFileName ?? a.id,
+                  path: a.originalPath ?? a.id,
+                  fileType: a.type?.toLowerCase() === "video" ? "video" : "image",
+                  sizeBytes: a.exifInfo?.fileSizeInByte ?? 0,
+                  folder: "/immich",
+                  source: "immich",
+                });
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
     }
   }
 
@@ -153,7 +228,8 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<st
     }
   }
 
-  return parts.length > 0 ? "\n\n--- Live NAS Data ---\n" + parts.join("\n\n") : "";
+  const text = parts.length > 0 ? "\n\n--- Live NAS Data ---\n" + parts.join("\n\n") : "";
+  return { text, matchedFiles };
 }
 
 async function buildSystemPrompt(settings: any): Promise<string> {
@@ -249,7 +325,7 @@ router.post("/openai/conversations/:id/messages", async (req, res) => {
     // Run structured query against NAS data before calling the LLM
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0];
-    const queryContext = await buildQueryContext(content, settings);
+    const { text: queryContextText, matchedFiles } = await buildQueryContext(content, settings);
 
     // Store user message (original, without the injected context)
     await db.insert(messages).values({ conversationId: id, role: "user", content });
@@ -262,12 +338,17 @@ router.post("/openai/conversations/:id/messages", async (req, res) => {
     const chatMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
       ...history.slice(0, -1).map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
-      { role: "user", content: content + queryContext },
+      { role: "user", content: content + queryContextText },
     ];
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+
+    // Send matched file references as first event so UI can show them immediately
+    if (matchedFiles.length > 0) {
+      res.write(`data: ${JSON.stringify({ matchedFiles })}\n\n`);
+    }
 
     let fullResponse = "";
     const stream = await openai.chat.completions.create({
