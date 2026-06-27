@@ -482,6 +482,15 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
 
   const checks = preflight.checks ?? [];
   const allOk  = preflight.ok;
+  const conflictList: any[] = preflight.conflictList ?? [];
+  const conflictCount: number = preflight.collisionCount ?? 0;
+  const preflightConflictPolicy: string = preflight.conflictPolicy ?? (job as any).conflictPolicy ?? "keep_existing";
+  const conflictPolicyLabels: Record<string, string> = {
+    keep_existing: "Keep existing",
+    replace: "Replace existing",
+    rename: "Rename with suffix",
+    skip: "Skip source",
+  };
 
   return (
     <div className="space-y-4">
@@ -500,6 +509,35 @@ function PreflightStep({ job, onDone }: { job: OrganizationJob; onDone: () => vo
           </div>
         ))}
       </div>
+
+      {/* Structured conflict list */}
+      {conflictCount > 0 && conflictList.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
+              {conflictCount} conflict{conflictCount !== 1 ? "s" : ""} — policy: <span className="text-amber-400">{conflictPolicyLabels[preflightConflictPolicy] ?? preflightConflictPolicy}</span>
+            </p>
+          </div>
+          <ScrollArea className="h-28 rounded border bg-secondary/10 p-2">
+            <div className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
+              {conflictList.map((c: any, i: number) => (
+                <div key={i} className="flex items-center gap-1.5 truncate">
+                  <span className={c.conflictType === "intra_job" ? "text-purple-400/70" : "text-amber-400/70"}>
+                    {c.conflictType === "intra_job" ? "dup" : "exists"}
+                  </span>
+                  <span className="truncate flex-1">{c.filename}</span>
+                  <span className="opacity-40 truncate max-w-[90px]" title={c.destination}>
+                    {c.destination.split("/").slice(-2).join("/")}
+                  </span>
+                </div>
+              ))}
+              {conflictCount > conflictList.length && (
+                <p className="text-center opacity-50 pt-1">…and {conflictCount - conflictList.length} more</p>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+      )}
 
       <div className="flex gap-2">
         <Button variant="outline" size="sm" className="flex-1 font-mono text-xs" onClick={() => preflightMutation.mutate({ id: job.id })} disabled={preflightMutation.isPending}>
@@ -662,22 +700,32 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
           )}
 
           {/* Conflicts */}
-          {hasConflicts && (
-            <div className="space-y-1.5">
-              {(dryRunResult.diskConflictCount ?? 0) > 0 && (
-                <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
-                  <strong>{dryRunResult.diskConflictCount} file{dryRunResult.diskConflictCount !== 1 ? "s" : ""} already exist</strong> at destination — must be excluded before executing
-                  {dryRunResult.diskConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.diskConflictExamples.slice(0, 4).join(", ")}</span>}
-                </div>
-              )}
-              {(dryRunResult.intraConflictCount ?? 0) > 0 && (
-                <div className="p-2.5 bg-destructive/10 border border-destructive/30 rounded text-xs font-mono text-destructive">
-                  <strong>{dryRunResult.intraConflictCount} intra-job conflict{dryRunResult.intraConflictCount !== 1 ? "s" : ""}</strong> — duplicate filenames routing to same folder
-                  {dryRunResult.intraConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.intraConflictExamples.slice(0, 4).join(", ")}</span>}
-                </div>
-              )}
-            </div>
-          )}
+          {hasConflicts && (() => {
+            const dryPolicy = dryRunResult.conflictPolicy ?? "keep_existing";
+            const dryPolicyLabels: Record<string, string> = {
+              keep_existing: "keep existing (source skipped)",
+              replace: "replace existing with source",
+              rename: "rename source with suffix",
+              skip: "skip source file",
+            };
+            const dryPolicyLabel = dryPolicyLabels[dryPolicy] ?? dryPolicy;
+            return (
+              <div className="space-y-1.5">
+                {(dryRunResult.diskConflictCount ?? 0) > 0 && (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded text-xs font-mono text-amber-300">
+                    <strong>{dryRunResult.diskConflictCount} file{dryRunResult.diskConflictCount !== 1 ? "s" : ""} already exist</strong> at destination — will {dryPolicyLabel} (policy)
+                    {dryRunResult.diskConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.diskConflictExamples.slice(0, 4).join(", ")}</span>}
+                  </div>
+                )}
+                {(dryRunResult.intraConflictCount ?? 0) > 0 && (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded text-xs font-mono text-amber-300">
+                    <strong>{dryRunResult.intraConflictCount} intra-job conflict{dryRunResult.intraConflictCount !== 1 ? "s" : ""}</strong> — duplicate filenames routing to same folder — will {dryPolicyLabel} (policy)
+                    {dryRunResult.intraConflictExamples?.length > 0 && <span className="opacity-70 block mt-0.5">e.g. {dryRunResult.intraConflictExamples.slice(0, 4).join(", ")}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Clean state */}
           {!hasConflicts && !hasWarnings && (

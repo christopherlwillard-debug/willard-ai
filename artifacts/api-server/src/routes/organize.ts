@@ -796,18 +796,21 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     }
 
     // 5a. On-disk collision detection: files that already exist at the destination
+    const conflictPolicy: string = (job as any).conflictPolicy ?? "keep_existing";
     let diskCollisionCount = 0;
     const diskCollisionExamples: string[] = [];
+    const conflictList: Array<{filename: string; destination: string; conflictType: "disk" | "intra_job"; sources?: string[]}> = [];
     for (const route of activeRoutes) {
-      if (fs.existsSync(path.join(route.destination, route.filename))) {
+      const destPath = path.join(route.destination, route.filename);
+      if (fs.existsSync(destPath)) {
         diskCollisionCount++;
         if (diskCollisionExamples.length < 4) diskCollisionExamples.push(route.filename);
+        if (conflictList.length < 100) conflictList.push({ filename: route.filename, destination: destPath, conflictType: "disk" });
       }
     }
 
     // 5b. Intra-job collision detection: two or more source files that map to the same
     //     destination path (e.g. A/photo.jpg + B/photo.jpg both routed to Media/Photos).
-    //     Pre-flight must catch these — execute treats unexpected collisions as fatal.
     const destPathSeen = new Map<string, string[]>();  // destPath → source relativePaths
     for (const route of activeRoutes) {
       const destPath = path.join(route.destination, route.filename);
@@ -816,10 +819,11 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     }
     let intraJobCollisionCount = 0;
     const intraJobCollisionExamples: string[] = [];
-    for (const [, sources] of destPathSeen) {
+    for (const [destPath, sources] of destPathSeen) {
       if (sources.length > 1) {
         intraJobCollisionCount++;
         if (intraJobCollisionExamples.length < 4) intraJobCollisionExamples.push(path.basename(sources[0]));
+        if (conflictList.length < 100) conflictList.push({ filename: path.basename(destPath), destination: destPath, conflictType: "intra_job", sources });
       }
     }
 
@@ -830,12 +834,22 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     if (intraJobCollisionCount > 0)
       collisionDetails.push(`${intraJobCollisionCount} intra-job conflict${intraJobCollisionCount !== 1 ? "s" : ""} — duplicate basenames routing to same folder (${intraJobCollisionExamples.join(", ")}${intraJobCollisionCount > 4 ? "…" : ""})`);
 
+    // Collisions are warnings (non-blocking) when a conflict policy is set — all four policies
+    // handle disk collisions at execute time. Only block when no policy would save the file.
+    const conflictPolicyLabel: Record<string, string> = {
+      keep_existing: "keep existing (source skipped)",
+      replace: "replace existing with source",
+      rename: "rename source with suffix",
+      skip: "skip source file",
+    };
+    const policyLabel = conflictPolicyLabel[conflictPolicy] ?? conflictPolicy;
     checks.push({
       name: "File collisions",
       ok: collisionCount === 0,
+      warning: collisionCount > 0,  // non-blocking — policy handles them at execute time
       detail: collisionCount === 0
         ? "No filename conflicts"
-        : `${collisionCount} conflict${collisionCount !== 1 ? "s" : ""} — exclude conflicting files before executing: ${collisionDetails.join("; ")}`,
+        : `${collisionCount} conflict${collisionCount !== 1 ? "s" : ""} — will be resolved at execute time (policy: ${policyLabel}). ${collisionDetails.join("; ")}`,
     });
 
     // 6. Immich reachability — warning-level only (non-blocking)
@@ -849,9 +863,13 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       }
     }
 
-    // allOk: all critical checks pass; Immich (warning:true) is non-blocking
+    // allOk: all critical checks pass; warnings (Immich, collisions with policy) are non-blocking
     const allOk = checks.every(c => c.ok || c.warning === true);
-    const preflightJson = { ok: allOk, checks, diskSpaceRequiredBytes: totalBytes, collisionCount };
+    const preflightJson = {
+      ok: allOk, checks, diskSpaceRequiredBytes: totalBytes,
+      collisionCount, diskCollisionCount, intraJobCollisionCount,
+      conflictPolicy, conflictList,
+    };
     const [updated] = await db.update(organizationJobsTable)
       .set({ status: allOk ? "verified" : "planned", preflightJson })
       .where(eq(organizationJobsTable.id, id))
@@ -961,6 +979,7 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
       else                                byType.other++;
     }
 
+    const dryRunConflictPolicy: string = (job as any).conflictPolicy ?? "keep_existing";
     res.json({
       ok: diskConflictCount === 0 && intraConflictCount === 0 && warnings.length === 0,
       extractionNote,
@@ -983,6 +1002,7 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
       diskConflictExamples,
       intraConflictCount,
       intraConflictExamples,
+      conflictPolicy: dryRunConflictPolicy,
       // Blank destination warnings
       warnings,
       sourceType: job.sourceType,
