@@ -1,12 +1,16 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { archivesTable } from "@workspace/db";
-import { eq, gte, lte, and, desc, count, sql } from "drizzle-orm";
+import { eq, gte, lte, and, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import AdmZip from "adm-zip";
 import * as path from "path";
+import * as fs from "fs";
 
 const router: IRouter = Router();
+
+const ZIP_EXTS = new Set(["zip"]);
+const UNSUPPORTED_EXTS = new Set(["rar", "7z", "tar", "gz", "bz2", "xz", "cab", "iso"]);
 
 function getFileTypeFromName(filename: string): string {
   const ext = path.extname(filename).replace(".", "").toLowerCase();
@@ -55,69 +59,102 @@ router.post("/archives/:id/peek", async (req, res) => {
     const [archive] = await db.select().from(archivesTable).where(eq(archivesTable.id, id)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
 
-    let entries: any[] = [];
-    let isPasswordProtected = false;
-    let hasNestedArchives = false;
-    let estimatedExtractionSize = 0;
-    let photoCount = 0;
-    let videoCount = 0;
-    let documentCount = 0;
+    // Check file still exists on disk
+    if (!fs.existsSync(archive.path)) {
+      res.status(422).json({ error: "Archive file not found on disk — re-run a scan" });
+      return;
+    }
 
     const ext = path.extname(archive.filename).replace(".", "").toLowerCase();
-    if (ext === "zip") {
+
+    // --- Non-ZIP formats: unsupported peek, mark with explicit status ---
+    if (UNSUPPORTED_EXTS.has(ext)) {
+      await db.update(archivesTable).set({
+        peekStatus: "unsupported",
+        containedFileCount: null,
+      }).where(eq(archivesTable.id, id));
+
+      res.json({
+        archiveId: id,
+        filename: archive.filename,
+        entries: [],
+        totalEntries: 0,
+        isPasswordProtected: false,
+        hasNestedArchives: false,
+        estimatedExtractionSizeBytes: 0,
+        category: archive.category,
+        photoCount: 0,
+        videoCount: 0,
+        documentCount: 0,
+        unsupported: true,
+        unsupportedReason: `Peek is supported for ZIP archives only. ${ext.toUpperCase()} support requires additional extraction tools.`,
+      });
+      return;
+    }
+
+    // --- ZIP peek ---
+    if (ZIP_EXTS.has(ext)) {
+      let entries: any[] = [];
+      let isPasswordProtected = false;
+      let hasNestedArchives = false;
+      let estimatedExtractionSize = 0;
+      let photoCount = 0;
+      let videoCount = 0;
+      let documentCount = 0;
+
       try {
-        const zip = new (AdmZip as any)(archive.path);
+        const zip = new AdmZip(archive.path);
         const zipEntries = zip.getEntries();
         for (const entry of zipEntries) {
           const fileType = getFileTypeFromName(entry.entryName);
-          estimatedExtractionSize += entry.header?.size ?? 0;
-          if (["zip", "rar", "7z"].includes(path.extname(entry.entryName).replace(".", "").toLowerCase())) hasNestedArchives = true;
+          const uncompressedSize: number = (entry.header as any)?.size ?? 0;
+          estimatedExtractionSize += uncompressedSize;
+          const nestedExt = path.extname(entry.entryName).replace(".", "").toLowerCase();
+          if (UNSUPPORTED_EXTS.has(nestedExt) || nestedExt === "zip") hasNestedArchives = true;
           if (fileType === "image") photoCount++;
           if (fileType === "video") videoCount++;
           if (fileType === "document") documentCount++;
           entries.push({
             name: path.basename(entry.entryName),
             path: entry.entryName,
-            sizeBytes: entry.header?.size ?? 0,
+            sizeBytes: uncompressedSize,
             isDirectory: entry.isDirectory,
             fileType,
           });
         }
       } catch {
+        // adm-zip throws on encrypted ZIPs
         isPasswordProtected = true;
       }
-    } else {
-      entries = [{
-        name: archive.filename,
-        path: archive.path,
-        sizeBytes: archive.sizeBytes,
-        isDirectory: false,
-        fileType: "archive",
-      }];
+
+      await db.update(archivesTable).set({
+        peekStatus: "peeked",
+        containedFileCount: entries.length,
+        isPasswordProtected,
+        hasNestedArchives,
+        estimatedExtractionSize,
+        peekEntries: entries,
+      }).where(eq(archivesTable.id, id));
+
+      res.json({
+        archiveId: id,
+        filename: archive.filename,
+        entries,
+        totalEntries: entries.length,
+        isPasswordProtected,
+        hasNestedArchives,
+        estimatedExtractionSizeBytes: estimatedExtractionSize,
+        category: archive.category,
+        photoCount,
+        videoCount,
+        documentCount,
+        unsupported: false,
+      });
+      return;
     }
 
-    await db.update(archivesTable).set({
-      peekStatus: "peeked",
-      containedFileCount: entries.length,
-      isPasswordProtected,
-      hasNestedArchives,
-      estimatedExtractionSize,
-      peekEntries: entries,
-    }).where(eq(archivesTable.id, id));
-
-    res.json({
-      archiveId: id,
-      filename: archive.filename,
-      entries,
-      totalEntries: entries.length,
-      isPasswordProtected,
-      hasNestedArchives,
-      estimatedExtractionSizeBytes: estimatedExtractionSize,
-      category: archive.category,
-      photoCount,
-      videoCount,
-      documentCount,
-    });
+    // Unknown extension
+    res.status(422).json({ error: `Unsupported archive format: .${ext}` });
   } catch {
     res.status(500).json({ error: "Failed to peek archive" });
   }

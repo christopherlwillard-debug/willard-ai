@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useGetDashboard, getGetDashboardQueryKey, useStartScan, useGetScanStatus } from "@workspace/api-client-react";
+import { useGetDashboard, getGetDashboardQueryKey, useStartScan, useGetScanStatus, getGetScanStatusQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -23,6 +23,7 @@ export default function Dashboard() {
 
   const { data: scanStatus } = useGetScanStatus({
     query: {
+      queryKey: getGetScanStatusQueryKey(),
       refetchInterval: scanPolling ? 2000 : false,
       enabled: scanPolling,
     },
@@ -36,7 +37,7 @@ export default function Dashboard() {
     },
   });
 
-  const isScanning = data?.isScanning || scanPolling && scanStatus?.isRunning;
+  const isScanning = data?.isScanning || (scanPolling && (scanStatus?.isRunning ?? false));
 
   // Stop polling once scan finishes
   if (scanPolling && scanStatus && !scanStatus.isRunning) {
@@ -73,12 +74,12 @@ export default function Dashboard() {
           </p>
           {isScanning && scanStatus?.current && (
             <p className="text-xs text-muted-foreground font-mono mt-1">
-              {scanStatus.current.stage} — {scanStatus.current.filesScanned?.toLocaleString()} files indexed
+              {(scanStatus.current as any).stage} — {(scanStatus.current as any).filesScanned?.toLocaleString()} files indexed
             </p>
           )}
         </div>
         <Button
-          onClick={() => scanMutation.mutate({})}
+          onClick={() => scanMutation.mutate()}
           disabled={isScanning || scanMutation.isPending}
           className="font-mono shrink-0"
         >
@@ -128,7 +129,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{data.duplicateCount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground mt-1">Requires hash scan</p>
+            <p className="text-xs text-muted-foreground mt-1">by content hash</p>
           </CardContent>
         </Card>
       </div>
