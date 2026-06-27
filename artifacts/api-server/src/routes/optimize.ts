@@ -163,11 +163,8 @@ const FORMAT_RULES: Record<string, FormatRule> = {
     reason: "Transport stream format — H.265 MP4 saves 45–55% with near-identical quality",
   },
   mov: {
-    status: "convert", category: "video",
-    targetFormat: "MP4 (H.265/HEVC)",
-    qualityLoss: "minimal",
-    estimatedSavingsRatio: 0.45,
-    reason: "QuickTime container — H.265 MP4 saves 40–55%. Note: if encoded in Apple ProRes, treat as protected master.",
+    status: "protected", category: "video",
+    reason: "QuickTime (.mov) container — may contain Apple ProRes or other professional codecs. Classified as protected by default. Do not convert without manually verifying the codec (e.g. via ffprobe). Keep original.",
   },
   mkv: {
     status: "convert", category: "video",
