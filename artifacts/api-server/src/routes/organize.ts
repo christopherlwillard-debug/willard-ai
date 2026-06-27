@@ -728,21 +728,47 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       checks.push({ name: `Disk space (${path.basename(dest)})`, ok: diskOk, detail: diskDetail });
     }
 
-    // 5. File collision detection — BLOCKING (must be resolved before execute)
-    let collisionCount = 0;
-    const collisionExamples: string[] = [];
+    // 5a. On-disk collision detection: files that already exist at the destination
+    let diskCollisionCount = 0;
+    const diskCollisionExamples: string[] = [];
     for (const route of activeRoutes) {
       if (fs.existsSync(path.join(route.destination, route.filename))) {
-        collisionCount++;
-        if (collisionExamples.length < 4) collisionExamples.push(route.filename);
+        diskCollisionCount++;
+        if (diskCollisionExamples.length < 4) diskCollisionExamples.push(route.filename);
       }
     }
+
+    // 5b. Intra-job collision detection: two or more source files that map to the same
+    //     destination path (e.g. A/photo.jpg + B/photo.jpg both routed to Media/Photos).
+    //     Pre-flight must catch these — execute treats unexpected collisions as fatal.
+    const destPathSeen = new Map<string, string[]>();  // destPath → source relativePaths
+    for (const route of activeRoutes) {
+      const destPath = path.join(route.destination, route.filename);
+      if (!destPathSeen.has(destPath)) destPathSeen.set(destPath, []);
+      destPathSeen.get(destPath)!.push(route.relativePath ?? route.filename);
+    }
+    let intraJobCollisionCount = 0;
+    const intraJobCollisionExamples: string[] = [];
+    for (const [, sources] of destPathSeen) {
+      if (sources.length > 1) {
+        intraJobCollisionCount++;
+        if (intraJobCollisionExamples.length < 4) intraJobCollisionExamples.push(path.basename(sources[0]));
+      }
+    }
+
+    const collisionCount = diskCollisionCount + intraJobCollisionCount;
+    const collisionDetails: string[] = [];
+    if (diskCollisionCount > 0)
+      collisionDetails.push(`${diskCollisionCount} already on disk (${diskCollisionExamples.join(", ")}${diskCollisionCount > 4 ? "…" : ""})`);
+    if (intraJobCollisionCount > 0)
+      collisionDetails.push(`${intraJobCollisionCount} intra-job conflict${intraJobCollisionCount !== 1 ? "s" : ""} — duplicate basenames routing to same folder (${intraJobCollisionExamples.join(", ")}${intraJobCollisionCount > 4 ? "…" : ""})`);
+
     checks.push({
       name: "File collisions",
       ok: collisionCount === 0,
       detail: collisionCount === 0
         ? "No filename conflicts"
-        : `${collisionCount} file${collisionCount !== 1 ? "s" : ""} already exist at destination — exclude or rename them: ${collisionExamples.join(", ")}${collisionCount > 4 ? "…" : ""}`,
+        : `${collisionCount} conflict${collisionCount !== 1 ? "s" : ""} — exclude conflicting files before executing: ${collisionDetails.join("; ")}`,
     });
 
     // 6. Immich reachability — warning-level only (non-blocking)
