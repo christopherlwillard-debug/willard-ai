@@ -70,7 +70,9 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
   const protocol = forwardedProto || "https";
   const host = req.headers["x-forwarded-host"] || req.headers["host"];
   const baseUrl = `${protocol}://${host}`;
-  const expsUrl = `${host}`;
+  // Include basePath so Expo Go resolves the manifest under the correct path.
+  // e.g. exps://hostname/willard-mobile/ rather than exps://hostname
+  const expsUrl = basePath ? `${host}${basePath}/` : `${host}/`;
 
   const html = landingPageTemplate
     .replace(/BASE_URL_PLACEHOLDER/g, baseUrl)
@@ -113,6 +115,12 @@ const server = http.createServer((req, res) => {
 
   if (basePath && pathname.startsWith(basePath)) {
     pathname = pathname.slice(basePath.length) || "/";
+  }
+
+  if (pathname === "/status") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
   }
 
   if (pathname === "/" || pathname === "/manifest") {
