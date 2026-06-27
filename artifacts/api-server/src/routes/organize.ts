@@ -505,8 +505,13 @@ router.post("/organize/jobs", async (req, res) => {
     if (!sourcePath || typeof sourcePath !== "string") {
       res.status(400).json({ error: "sourcePath is required" }); return;
     }
+    // archiveDisposition only meaningful for archive sources — folder jobs always keep their source
+    const resolvedDisposition = sourceType === "archive" ? (archiveDisposition ?? "keep") : "keep";
+    if (sourceType === "folder" && archiveDisposition && archiveDisposition !== "keep") {
+      res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
+    }
     const [job] = await db.insert(organizationJobsTable)
-      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition })
+      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition })
       .returning();
     res.status(201).json(job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }
@@ -572,6 +577,10 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
         res.status(422).json({ error: "Source folder not found on disk" }); return;
+      }
+      if (!fs.statSync(job.sourcePath).isDirectory()) {
+        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(eq(organizationJobsTable.id, id));
+        res.status(422).json({ error: "sourcePath must be a directory for folder source jobs" }); return;
       }
       entries = walkDir(job.sourcePath).map(w => ({ path: w.relativePath, sizeBytes: w.sizeBytes, isDirectory: false, fileType: w.fileType }));
     }
@@ -701,10 +710,18 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       try {
         fs.accessSync(job.sourcePath, fs.constants.R_OK);
         const stat = fs.statSync(job.sourcePath);
-        sourceOk = true;
-        sourceDetail = job.sourceType === "archive"
-          ? `Found (${(stat.size / 1e6).toFixed(1)} MB)`
-          : `Found (directory)`;
+        // Enforce source type/kind match — archive jobs require a file, folder jobs require a directory
+        const kindOk = job.sourceType === "archive" ? stat.isFile() : stat.isDirectory();
+        if (!kindOk) {
+          sourceDetail = job.sourceType === "archive"
+            ? "sourcePath is not a regular file — expected an archive file"
+            : "sourcePath is not a directory — expected a folder";
+        } else {
+          sourceOk = true;
+          sourceDetail = job.sourceType === "archive"
+            ? `Found (${(stat.size / 1e6).toFixed(1)} MB)`
+            : `Found (directory)`;
+        }
       } catch { sourceDetail = `Exists but not readable`; }
     }
     checks.push({ name: "Source accessible", ok: sourceOk, detail: sourceDetail });
@@ -1164,6 +1181,11 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
     if (job.status !== "completed") { res.status(409).json({ error: "Job must be completed before applying disposition" }); return; }
     if (!req.body?.confirm) { res.status(400).json({ error: "confirm: true is required to execute a destructive disposition" }); return; }
 
+    // Disposition can only operate on archive sources — folders are never touched
+    if (job.sourceType !== "archive") {
+      res.status(400).json({ error: "Disposition is only valid for archive source jobs" }); return;
+    }
+
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const nasPath = (settingsRows[0] as any)?.nasPath ?? "";
 
@@ -1172,9 +1194,26 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
       if (!fs.existsSync(job.sourcePath)) {
         res.json({ ok: true, dispositionResult: "already_gone", sourcePath: job.sourcePath }); return;
       }
+
+      // Safety: sourcePath must be a regular file (not a directory) before deletion
+      const srcStat = fs.statSync(job.sourcePath);
+      if (!srcStat.isFile()) {
+        res.status(400).json({ error: "sourcePath is not a regular file — refusing to delete" }); return;
+      }
+
+      // Safety: sourcePath must be within the configured NAS root
+      if (nasPath) {
+        try { assertWithinRoot(path.resolve(job.sourcePath), path.resolve(nasPath)); }
+        catch { res.status(403).json({ error: "sourcePath is outside the configured NAS root — deletion refused" }); return; }
+      }
+
       fs.unlinkSync(job.sourcePath);
       dispositionResult = "deleted";
     } else if (job.archiveDisposition === "move_to_processed") {
+      if (nasPath) {
+        try { assertWithinRoot(path.resolve(job.sourcePath), path.resolve(nasPath)); }
+        catch { res.status(403).json({ error: "sourcePath is outside the configured NAS root — move refused" }); return; }
+      }
       const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
       fs.mkdirSync(processedDir, { recursive: true });
       const dest = path.join(processedDir, path.basename(job.sourcePath));
