@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive } from "@workspace/api-client-react";
+import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,6 +51,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
   const peekMutation = usePeekArchive({
     mutation: {
       onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetArchiveQueryKey(archiveId) });
         queryClient.invalidateQueries({ queryKey: getListArchivesQueryKey({}) });
       },
     },
@@ -64,7 +65,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
     if (!archiveLoading && !hasPeeked && !isUnsupported && !peekMutation.isPending && !peekMutation.isError && archiveData) {
       peekMutation.mutate({ id: archiveId });
     }
-  }, [archiveLoading, hasPeeked, isUnsupported, archiveData]);
+  }, [archiveId, archiveLoading, hasPeeked, isUnsupported, archiveData, peekMutation.isPending, peekMutation.isError]);
 
   const photoCount = entries.filter((e: any) => !e.isDirectory && e.fileType === "image").length;
   const videoCount = entries.filter((e: any) => !e.isDirectory && e.fileType === "video").length;
