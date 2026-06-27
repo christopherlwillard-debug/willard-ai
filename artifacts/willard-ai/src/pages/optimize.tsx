@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,19 +7,33 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
   Zap, Shield, CheckCircle2, SkipForward, ScanLine,
   Sparkles, TrendingDown, AlertTriangle, ChevronDown, ChevronRight,
-  Download, RotateCcw,
+  Download, RotateCcw, ArrowRight, FileBox,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type FormatStatus = "protected" | "optimal" | "convert" | "skip";
-type QualityLoss  = "none" | "minimal" | "moderate" | "high";
+type FormatStatus  = "protected" | "optimal" | "convert" | "skip";
+type QualityLoss   = "none" | "minimal" | "moderate" | "high";
 type MediaCategory = "image" | "video" | "audio" | "document" | "other";
+
+interface SampleFile {
+  path:                string;
+  sizeBytes:           number;
+  estimatedAfterBytes: number;
+}
 
 interface FormatGroup {
   extension:             string;
@@ -32,6 +46,7 @@ interface FormatGroup {
   estimatedSavingsBytes: number;
   estimatedSavingsRatio: number | null;
   reason:                string;
+  sampleFiles:           SampleFile[];
 }
 
 interface ScanResult {
@@ -43,7 +58,7 @@ interface ScanResult {
   groups:            FormatGroup[];
 }
 
-// ── Helper: status presentation ───────────────────────────────────────────────
+// ── Helper: status badges ─────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: FormatStatus }) {
   const map: Record<FormatStatus, { label: string; variant: "default" | "secondary" | "outline" | "destructive"; icon: React.ReactNode }> = {
@@ -100,16 +115,160 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
   );
 }
 
+// ── Before/After size preview ─────────────────────────────────────────────────
+
+function SizePreview({ group }: { group: FormatGroup }) {
+  if (!group.sampleFiles || group.sampleFiles.length === 0) return null;
+  const ratio = group.estimatedSavingsRatio ?? 0;
+  return (
+    <div className="mt-2 space-y-1">
+      <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1.5">
+        Size preview — largest files in this format:
+      </p>
+      {group.sampleFiles.map((f, i) => {
+        const saved = f.sizeBytes - f.estimatedAfterBytes;
+        const pct   = f.sizeBytes > 0 ? Math.round((saved / f.sizeBytes) * 100) : 0;
+        const name  = f.path.split("/").pop() ?? f.path;
+        return (
+          <div key={i} className="flex items-center gap-2 text-xs font-mono">
+            <FileBox className="w-3 h-3 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground truncate max-w-[220px]" title={f.path}>{name}</span>
+            <span className="text-foreground whitespace-nowrap">{formatBytes(f.sizeBytes)}</span>
+            <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+            <span className="text-emerald-400 whitespace-nowrap">
+              ~{formatBytes(f.estimatedAfterBytes)}
+              <span className="text-muted-foreground ml-1">({pct}% smaller)</span>
+            </span>
+          </div>
+        );
+      })}
+      {ratio > 0 && (
+        <p className="text-[10px] font-mono text-muted-foreground pt-1 border-t border-border/30 mt-1">
+          Estimate based on typical {Math.round(ratio * 100)}% compression ratio for {group.extension.toUpperCase()} → {group.targetFormat ?? "target format"}.
+          Actual results vary by content.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Confirm Selections dialog ─────────────────────────────────────────────────
+
+function ConfirmDialog({
+  open, onClose, groups, approvedExts,
+}: {
+  open: boolean;
+  onClose: () => void;
+  groups: FormatGroup[];
+  approvedExts: Set<string>;
+}) {
+  const approved = groups.filter(g => approvedExts.has(g.extension));
+  const totalSavings = approved.reduce((s, g) => s + g.estimatedSavingsBytes, 0);
+
+  function exportPlan() {
+    const plan = {
+      confirmedAt: new Date().toISOString(),
+      totalSavingsEstimate: formatBytes(totalSavings),
+      conversions: approved.map(g => ({
+        extension:        g.extension,
+        targetFormat:     g.targetFormat,
+        qualityLoss:      g.qualityLoss,
+        fileCount:        g.fileCount,
+        currentSize:      formatBytes(g.totalBytes),
+        estimatedSavings: formatBytes(g.estimatedSavingsBytes),
+        sampleFiles:      g.sampleFiles.map(f => ({
+          path:              f.path,
+          currentSize:       formatBytes(f.sizeBytes),
+          estimatedAfterSize: formatBytes(f.estimatedAfterBytes),
+        })),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `willard-optimize-plan-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-mono">CONFIRM_SELECTIONS</DialogTitle>
+          <DialogDescription className="font-mono text-xs">
+            Review the approved conversions below. No files will be modified until a conversion pipeline is available.
+            Export the plan to preserve your selections.
+          </DialogDescription>
+        </DialogHeader>
+
+        {approved.length === 0 ? (
+          <p className="text-sm text-muted-foreground font-mono py-4 text-center">No formats approved yet.</p>
+        ) : (
+          <div className="space-y-3 my-2">
+            {approved.map(g => (
+              <div key={g.extension} className="border border-border rounded-md p-3 space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <CategoryIcon cat={g.category} />
+                    <span className="font-mono font-bold text-sm">.{g.extension.toUpperCase()}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="font-mono text-sm text-primary">{g.targetFormat}</span>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <QualityBadge loss={g.qualityLoss} />
+                    <span className="text-xs font-mono text-muted-foreground">{g.fileCount.toLocaleString()} files</span>
+                    <span className="text-xs font-mono text-emerald-400">saves ~{formatBytes(g.estimatedSavingsBytes)}</span>
+                  </div>
+                </div>
+                {g.sampleFiles.length > 0 && (
+                  <div className="pt-1">
+                    <SizePreview group={g} />
+                  </div>
+                )}
+              </div>
+            ))}
+            <div className="border-t border-border pt-3 flex justify-between items-center font-mono">
+              <span className="text-sm text-muted-foreground">{approved.length} format{approved.length !== 1 ? "s" : ""} approved</span>
+              <span className="font-bold text-emerald-400">Total estimate: ~{formatBytes(totalSavings)}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+          <p className="text-xs font-mono text-amber-400">
+            ⚠ Conversion execution is not yet available. This plan documents your selections for the upcoming conversion pipeline.
+            Original files will be preserved before any conversion runs.
+          </p>
+        </div>
+
+        <DialogFooter className="gap-2 flex-wrap">
+          <Button variant="outline" size="sm" className="font-mono gap-1.5" onClick={onClose}>
+            Close
+          </Button>
+          {approved.length > 0 && (
+            <Button size="sm" className="font-mono gap-1.5" onClick={exportPlan}>
+              <Download className="w-4 h-4" /> Export Plan (.json)
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Optimize() {
   const { toast } = useToast();
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [approvedExts, setApprovedExts] = useState<Set<string>>(new Set());
-  const [skippedExts, setSkippedExts] = useState<Set<string>>(new Set());
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [expandedReason, setExpandedReason] = useState<string | null>(null);
+  const [skippedExts,  setSkippedExts]  = useState<Set<string>>(new Set());
+  const [aiSummary,    setAiSummary]    = useState<string | null>(null);
+  const [aiLoading,    setAiLoading]    = useState(false);
+  const [expandedExt,  setExpandedExt]  = useState<string | null>(null);
+  const [confirmOpen,  setConfirmOpen]  = useState(false);
 
   // ── Scan ──────────────────────────────────────────────────────────────────
   const scanMutation = useMutation({
@@ -117,7 +276,7 @@ export default function Optimize() {
       const resp = await fetch("/api/optimize/scan");
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
-        throw new Error(body.error ?? "Scan failed");
+        throw new Error((body as any).error ?? "Scan failed");
       }
       return resp.json() as Promise<ScanResult>;
     },
@@ -141,9 +300,9 @@ export default function Optimize() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          groups: data.groups,
-          totalFiles: data.totalFiles,
-          totalBytes: data.totalBytes,
+          groups:            data.groups,
+          totalFiles:        data.totalFiles,
+          totalBytes:        data.totalBytes,
           totalSavingsBytes: data.totalSavingsBytes,
         }),
       });
@@ -159,14 +318,24 @@ export default function Optimize() {
   function toggleApprove(ext: string) {
     setApprovedExts(prev => {
       const next = new Set(prev);
-      if (next.has(ext)) { next.delete(ext); } else { next.add(ext); skippedExts.delete(ext); setSkippedExts(new Set(skippedExts)); }
+      if (next.has(ext)) {
+        next.delete(ext);
+      } else {
+        next.add(ext);
+        setSkippedExts(s => { const ns = new Set(s); ns.delete(ext); return ns; });
+      }
       return next;
     });
   }
   function toggleSkip(ext: string) {
     setSkippedExts(prev => {
       const next = new Set(prev);
-      if (next.has(ext)) { next.delete(ext); } else { next.add(ext); approvedExts.delete(ext); setApprovedExts(new Set(approvedExts)); }
+      if (next.has(ext)) {
+        next.delete(ext);
+      } else {
+        next.add(ext);
+        setApprovedExts(s => { const ns = new Set(s); ns.delete(ext); return ns; });
+      }
       return next;
     });
   }
@@ -180,23 +349,23 @@ export default function Optimize() {
     setSkippedExts(new Set());
   }
 
-  // ── Export recommendations ────────────────────────────────────────────────
+  // ── Export text report ────────────────────────────────────────────────────
   function exportReport() {
     if (!scanResult) return;
     const lines = [
       "WILLARD AI — OPTIMIZATION REPORT",
       `Generated: ${new Date().toLocaleString()}`,
-      `Scanned: ${scanResult.nasPath}`,
+      `Scanned:   ${scanResult.nasPath}`,
       `Total files: ${scanResult.totalFiles.toLocaleString()}`,
-      `Total size: ${formatBytes(scanResult.totalBytes)}`,
-      `Estimated savings: ${formatBytes(scanResult.totalSavingsBytes)}`,
+      `Total size:  ${formatBytes(scanResult.totalBytes)}`,
+      `Est. savings: ${formatBytes(scanResult.totalSavingsBytes)}`,
       "",
       ...(aiSummary ? ["=== AI SUMMARY ===", aiSummary, ""] : []),
       "=== APPROVED CONVERSIONS ===",
       ...(approvedExts.size === 0 ? ["  (none approved)"] : []),
       ...scanResult.groups
         .filter(g => approvedExts.has(g.extension))
-        .map(g => `  .${g.extension} → ${g.targetFormat} | ${g.fileCount} files | ${formatBytes(g.totalBytes)} → saves ~${formatBytes(g.estimatedSavingsBytes)} | Quality: ${g.qualityLoss}`),
+        .map(g => `  .${g.extension} → ${g.targetFormat} | ${g.fileCount} files | ${formatBytes(g.totalBytes)} → saves ~${formatBytes(g.estimatedSavingsBytes)} | Quality: ${g.qualityLoss ?? "—"}`),
       "",
       "=== ALL FORMAT GROUPS ===",
       ...scanResult.groups.map(g =>
@@ -204,10 +373,12 @@ export default function Optimize() {
       ),
     ];
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `willard-optimize-${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click(); URL.revokeObjectURL(url);
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `willard-optimize-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ── Derived stats ─────────────────────────────────────────────────────────
@@ -224,13 +395,24 @@ export default function Optimize() {
         <div>
           <h1 className="text-3xl font-bold font-mono tracking-tight">OPTIMIZE_CENTER</h1>
           <p className="text-sm text-muted-foreground font-mono mt-1">
-            Smart media conversion recommendations — no files are modified without your approval
+            Smart media conversion recommendations — no files are modified without your confirmation
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {scanResult && (
             <Button variant="outline" size="sm" className="font-mono gap-2" onClick={exportReport}>
               <Download className="w-4 h-4" /> Export Report
+            </Button>
+          )}
+          {approvedExts.size > 0 && (
+            <Button
+              variant="default"
+              size="sm"
+              className="font-mono gap-2 bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => setConfirmOpen(true)}
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              Confirm Selections ({approvedExts.size})
             </Button>
           )}
           <Button
@@ -331,13 +513,18 @@ export default function Optimize() {
             />
           </div>
 
-          {/* Approve-all / clear controls */}
+          {/* Batch controls */}
           {convertibleGroups.length > 0 && (
             <div className="flex gap-2 items-center">
-              <span className="text-xs font-mono text-muted-foreground">Batch actions:</span>
+              <span className="text-xs font-mono text-muted-foreground">Batch:</span>
               <Button size="sm" variant="outline" className="font-mono text-xs h-7 gap-1" onClick={approveAll}>
                 <CheckCircle2 className="w-3 h-3" /> Approve All Convertible
               </Button>
+              {approvedExts.size > 0 && (
+                <Button size="sm" variant="default" className="font-mono text-xs h-7 gap-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => setConfirmOpen(true)}>
+                  <CheckCircle2 className="w-3 h-3" /> Confirm Selections ({approvedExts.size})
+                </Button>
+              )}
               <Button size="sm" variant="ghost" className="font-mono text-xs h-7 gap-1" onClick={clearSelections}>
                 <RotateCcw className="w-3 h-3" /> Clear
               </Button>
@@ -373,7 +560,7 @@ export default function Optimize() {
                   {scanResult.groups.map((group) => {
                     const isApproved = approvedExts.has(group.extension);
                     const isSkipped  = skippedExts.has(group.extension);
-                    const expanded   = expandedReason === group.extension;
+                    const expanded   = expandedExt === group.extension;
 
                     return (
                       <>
@@ -390,9 +577,12 @@ export default function Optimize() {
                           <TableCell>
                             <button
                               className="flex items-center gap-1 font-mono font-bold text-sm hover:text-primary transition-colors"
-                              onClick={() => setExpandedReason(expanded ? null : group.extension)}
+                              onClick={() => setExpandedExt(expanded ? null : group.extension)}
                             >
-                              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                              {expanded
+                                ? <ChevronDown className="w-3 h-3" />
+                                : <ChevronRight className="w-3 h-3" />
+                              }
                               .{group.extension.toUpperCase()}
                             </button>
                           </TableCell>
@@ -455,15 +645,23 @@ export default function Optimize() {
                           </TableCell>
                         </TableRow>
 
-                        {/* Expanded reason row */}
+                        {/* Expanded detail row: reason + before/after size preview */}
                         {expanded && (
-                          <TableRow key={`${group.extension}-reason`} className="bg-secondary/20">
-                            <TableCell colSpan={9} className="py-2 pl-10 pr-4">
-                              <div className="flex items-start gap-2">
-                                {group.status === "protected" && <Shield className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />}
-                                {group.status === "convert"   && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />}
-                                {group.status === "optimal"   && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />}
-                                <p className="text-xs font-mono text-muted-foreground">{group.reason}</p>
+                          <TableRow key={`${group.extension}-detail`} className="bg-secondary/20 hover:bg-secondary/20">
+                            <TableCell colSpan={9} className="py-3 pl-10 pr-4">
+                              <div className="space-y-3">
+                                {/* Reason */}
+                                <div className="flex items-start gap-2">
+                                  {group.status === "protected" && <Shield className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />}
+                                  {group.status === "convert"   && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />}
+                                  {group.status === "optimal"   && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />}
+                                  <p className="text-xs font-mono text-muted-foreground">{group.reason}</p>
+                                </div>
+
+                                {/* Before/after size preview (convert groups only) */}
+                                {group.status === "convert" && group.sampleFiles.length > 0 && (
+                                  <SizePreview group={group} />
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -476,45 +674,6 @@ export default function Optimize() {
             </CardContent>
           </Card>
 
-          {/* Approval summary */}
-          {approvedExts.size > 0 && (
-            <Card className="border-blue-500/30 bg-blue-500/5">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base font-mono flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-blue-400" />
-                  Approved Conversions ({approvedExts.size} format{approvedExts.size !== 1 ? "s" : ""})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {scanResult.groups
-                  .filter(g => approvedExts.has(g.extension))
-                  .map(g => (
-                    <div key={g.extension} className="flex items-center justify-between text-sm font-mono py-1 border-b border-border/40 last:border-0">
-                      <span>
-                        <span className="font-bold">.{g.extension.toUpperCase()}</span>
-                        <span className="text-muted-foreground ml-2">→ {g.targetFormat}</span>
-                      </span>
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className="text-muted-foreground">{g.fileCount.toLocaleString()} files · {formatBytes(g.totalBytes)}</span>
-                        <span className="text-emerald-400">saves ~{formatBytes(g.estimatedSavingsBytes)}</span>
-                        <QualityBadge loss={g.qualityLoss} />
-                      </div>
-                    </div>
-                  ))}
-                <div className="pt-2 flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground font-mono">Total estimated savings</span>
-                  <span className="font-mono font-bold text-emerald-400">{formatBytes(approvedSavings)}</span>
-                </div>
-                <div className="pt-1">
-                  <p className="text-xs text-muted-foreground font-mono border border-amber-500/30 bg-amber-500/5 rounded px-3 py-2">
-                    ⚠ Conversion execution is not available yet — this list will be the input for the upcoming conversion pipeline.
-                    Original files will be preserved in a configurable originals folder before any conversion runs.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
           {/* Scan metadata footer */}
           <p className="text-xs text-muted-foreground font-mono text-center">
             Scanned {scanResult.totalFiles.toLocaleString()} files in{" "}
@@ -523,6 +682,14 @@ export default function Optimize() {
           </p>
         </>
       )}
+
+      {/* Confirm Selections dialog */}
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        groups={scanResult?.groups ?? []}
+        approvedExts={approvedExts}
+      />
     </div>
   );
 }

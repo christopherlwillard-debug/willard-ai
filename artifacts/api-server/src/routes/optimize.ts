@@ -213,9 +213,17 @@ const FORMAT_RULES: Record<string, FormatRule> = {
 
 // ── NAS directory walker ───────────────────────────────────────────────────────
 
-interface ExtGroup { count: number; bytes: number; }
+interface SampleFile { path: string; sizeBytes: number; }
+interface ExtGroup   { count: number; bytes: number; samples: SampleFile[]; }
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
+
+/** Keep the top-3 largest sample files per extension. */
+function insertSample(samples: SampleFile[], filePath: string, size: number): void {
+  samples.push({ path: filePath, sizeBytes: size });
+  samples.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  if (samples.length > 3) samples.pop();
+}
 
 function walkForOptimize(
   dir: string,
@@ -235,10 +243,12 @@ function walkForOptimize(
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).slice(1).toLowerCase();
       if (!ext || ext.length > 10) continue;
+      const fullPath = path.join(dir, entry.name);
       let size = 0;
-      try { size = fs.statSync(path.join(dir, entry.name)).size; } catch { /* skip unreadable */ }
-      const curr = groups.get(ext) ?? { count: 0, bytes: 0 };
-      groups.set(ext, { count: curr.count + 1, bytes: curr.bytes + size });
+      try { size = fs.statSync(fullPath).size; } catch { /* skip unreadable */ }
+      const curr = groups.get(ext) ?? { count: 0, bytes: 0, samples: [] };
+      insertSample(curr.samples, fullPath, size);
+      groups.set(ext, { count: curr.count + 1, bytes: curr.bytes + size, samples: curr.samples });
       counter.total++;
     }
   }
@@ -265,12 +275,21 @@ router.get("/optimize/scan", async (_req, res) => {
     const result = [];
     let totalSavingsBytes = 0;
 
-    for (const [ext, { count, bytes }] of groups.entries()) {
+    for (const [ext, { count, bytes, samples }] of groups.entries()) {
       const rule = FORMAT_RULES[ext];
       const status: FormatStatus = rule?.status ?? "skip";
       const category: MediaCategory = rule?.category ?? "other";
       const savings = rule?.estimatedSavingsRatio ? Math.round(bytes * rule.estimatedSavingsRatio) : 0;
       if (status === "convert") totalSavingsBytes += savings;
+
+      // Enrich sample files with estimated post-conversion size
+      const sampleFiles = samples.map(s => ({
+        path:              s.path,
+        sizeBytes:         s.sizeBytes,
+        estimatedAfterBytes: rule?.estimatedSavingsRatio
+          ? Math.round(s.sizeBytes * (1 - rule.estimatedSavingsRatio))
+          : s.sizeBytes,
+      }));
 
       result.push({
         extension:             ext,
@@ -283,6 +302,7 @@ router.get("/optimize/scan", async (_req, res) => {
         estimatedSavingsBytes: savings,
         estimatedSavingsRatio: rule?.estimatedSavingsRatio ?? null,
         reason:                rule?.reason ?? `Unknown format — no conversion recommendation available`,
+        sampleFiles,
       });
     }
 
