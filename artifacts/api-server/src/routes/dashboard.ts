@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { db } from "@workspace/db";
 import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
@@ -7,9 +7,14 @@ import { eq, sql, count } from "drizzle-orm";
 const router: IRouter = Router();
 
 function getDiskStats(dirPath: string): { total: number; used: number; free: number } | null {
+  // Validate path to reject null bytes or obviously invalid values before passing to execFileSync
+  if (!dirPath || dirPath.includes("\0") || dirPath.length > 4096) return null;
   try {
-    const output = execSync(`df -B1 "${dirPath}" 2>/dev/null | tail -1`, { timeout: 2000 }).toString().trim();
-    const parts = output.split(/\s+/);
+    // Use execFileSync (array args) — NOT shell interpolation — to avoid injection risk
+    const output = execFileSync("df", ["-B1", dirPath], { timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }).toString().trim();
+    const lines = output.split("\n");
+    const lastLine = lines[lines.length - 1].trim();
+    const parts = lastLine.split(/\s+/);
     if (parts.length < 4) return null;
     const total = parseInt(parts[1]) || 0;
     const used = parseInt(parts[2]) || 0;
@@ -72,7 +77,7 @@ router.get("/dashboard", async (_req, res) => {
     const settings = settingsRows[0];
     const immich = await getImmichStats(settings?.immichBaseUrl ?? "", settings?.immichApiKey ?? "");
 
-    const nasPath = settings?.nasBasePath || "/";
+    const nasPath = settings?.nasPath || "/";
     const diskStats = getDiskStats(nasPath);
 
     res.json({

@@ -7,6 +7,8 @@ import AdmZip from "adm-zip";
 import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
+import Seven from "node-7z";
+import { path7za } from "7zip-bin";
 
 const router: IRouter = Router();
 
@@ -74,24 +76,43 @@ async function peekTar(filePath: string, ext: string): Promise<{ entries: any[];
   }
 }
 
-function readArchiveHeader(filePath: string): { formatDetected: string; notes: string } {
-  try {
-    const buf = Buffer.alloc(8);
-    const fd = fs.openSync(filePath, "r");
-    fs.readSync(fd, buf, 0, 8, 0);
-    fs.closeSync(fd);
+async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
+  const entries: any[] = [];
+  let isPasswordProtected = false;
+  let format = "7z";
 
-    const sig = buf.slice(0, 7).toString("hex");
+  return new Promise((resolve) => {
+    const stream = Seven.list(filePath, {
+      $bin: path7za,
+      $progress: false,
+    } as any);
 
-    // RAR4: 52 61 72 21 1a 07 00, RAR5: 52 61 72 21 1a 07 01 00
-    if (sig.startsWith("526172211a07")) return { formatDetected: "RAR", notes: buf[6] === 0x01 ? "RAR5 format" : "RAR4 format" };
-    // 7Z: 37 7a bc af 27 1c
-    if (sig.startsWith("377abcaf271c")) return { formatDetected: "7-Zip", notes: "7Z solid archive" };
-    // ISO 9660: identifier at offset 32769 — skip for now, report as ISO
-    return { formatDetected: "Unknown", notes: "No recognized binary signature" };
-  } catch {
-    return { formatDetected: "Unknown", notes: "Could not read file header" };
-  }
+    stream.on("data", (data: any) => {
+      if (data.file !== undefined) {
+        const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
+        const fileType = isDir ? "directory" : getFileTypeFromName(data.file);
+        entries.push({
+          name: path.basename(data.file),
+          path: data.file,
+          sizeBytes: typeof data.size === "number" ? data.size : 0,
+          isDirectory: isDir,
+          fileType,
+        });
+      }
+    });
+
+    stream.on("format", (fmt: string) => { format = fmt ?? format; });
+
+    stream.on("end", () => resolve({ entries, isPasswordProtected, format, error: null }));
+
+    stream.on("error", (err: Error) => {
+      const msg = err?.message ?? "";
+      if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg)) {
+        isPasswordProtected = true;
+      }
+      resolve({ entries, isPasswordProtected, format, error: msg });
+    });
+  });
 }
 
 router.get("/archives", async (req, res) => {
@@ -249,29 +270,32 @@ router.post("/archives/:id/peek", async (req, res) => {
       return;
     }
 
-    // ── RAR / 7Z / ISO / CAB — read header metadata, cannot list without binary ──
+    // ── RAR / 7Z / ISO / CAB — full listing via node-7z + 7zip-bin ──────────
     if (BINARY_ONLY_EXTS.has(ext)) {
-      const { formatDetected, notes } = readArchiveHeader(archive.path);
+      const { entries, isPasswordProtected, format, error } = await peek7z(archive.path);
 
-      // Estimate from filename
-      const filenameCategory = archive.category ?? "General";
+      const hasNestedArchives = entries.some(e => {
+        const nestedExt = path.extname(e.path).replace(".", "").toLowerCase();
+        return TAR_EXTS.has(nestedExt) || ZIP_EXTS.has(nestedExt) || BINARY_ONLY_EXTS.has(nestedExt);
+      });
+      const estimatedExtractionSize = entries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
+      const category = computeCategoryFromContent(entries, isPasswordProtected);
 
       await db.update(archivesTable).set({
         peekStatus: "peeked",
-        containedFileCount: null,
-        isPasswordProtected: false,
-        hasNestedArchives: false,
-        estimatedExtractionSize: null,
-        peekEntries: [],
-        category: filenameCategory,
+        containedFileCount: entries.length,
+        isPasswordProtected,
+        hasNestedArchives,
+        estimatedExtractionSize,
+        peekEntries: entries,
+        category,
       }).where(eq(archivesTable.id, id));
 
       res.json({
-        archiveId: id, filename: archive.filename, entries: [], totalEntries: null,
-        isPasswordProtected: false, hasNestedArchives: false, estimatedExtractionSizeBytes: null,
-        category: filenameCategory, format: formatDetected,
-        notes: `${formatDetected} format detected (${notes}). Full file listing requires a 7z binary (not available in this environment). File size: ${archive.sizeBytes?.toLocaleString() ?? "unknown"} bytes on disk.`,
-        limitedPeek: true,
+        archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
+        isPasswordProtected, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
+        category, format,
+        ...(error && entries.length === 0 ? { notes: `Could not list entries: ${error}` } : {}),
       });
       return;
     }
