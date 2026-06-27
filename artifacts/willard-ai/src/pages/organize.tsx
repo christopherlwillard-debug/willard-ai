@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   useListOrganizeJobs, getListOrganizeJobsQueryKey,
   useCreateOrganizeJob,
@@ -159,6 +159,15 @@ function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
   );
 }
 
+const FILE_ICONS: Record<string, ReactNode> = {
+  image:    <Image    className="w-3 h-3 text-blue-400 shrink-0"   />,
+  video:    <Video    className="w-3 h-3 text-purple-400 shrink-0" />,
+  document: <FileText className="w-3 h-3 text-amber-400 shrink-0"  />,
+  other:    <File     className="w-3 h-3 text-muted-foreground shrink-0" />,
+};
+
+const FILE_LIST_PAGE = 40;
+
 // ── Analyze Step ─────────────────────────────────────────────────────────────
 
 function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void }) {
@@ -187,11 +196,19 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
 
   const plan = job.planJson as any;
   const isAnalyzing = job.status === "analyzing" || analyzeMutation.isPending;
+  const allRoutes: any[] = plan?.routes ?? [];
 
   // Local excluded categories state (mirrors planJson.excludeCategories)
   const [excludedCats, setExcludedCats] = useState<Set<string>>(
     () => new Set(plan?.excludeCategories ?? [])
   );
+  // Local excluded individual paths (mirrors planJson.excludePaths)
+  const [excludedPaths, setExcludedPaths] = useState<Set<string>>(
+    () => new Set(plan?.excludePaths ?? [])
+  );
+  const [fileSearch, setFileSearch] = useState("");
+  const [fileListPage, setFileListPage] = useState(1);
+  const [showFileList, setShowFileList] = useState(false);
 
   useEffect(() => {
     if (job.status === "pending") {
@@ -199,14 +216,30 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
     }
   }, [job.id]);
 
+  const sendUpdate = (cats: Set<string>, paths: Set<string>) => {
+    updatePlanMutation.mutate({
+      id: job.id,
+      data: {
+        excludeCategories: [...cats] as Array<"image" | "video" | "document" | "other">,
+        excludePaths: [...paths],
+      },
+    });
+  };
+
   const toggleCategory = (cat: string) => {
     const next = new Set(excludedCats);
     if (next.has(cat)) next.delete(cat); else next.add(cat);
     setExcludedCats(next);
-    updatePlanMutation.mutate({
-      id: job.id,
-      data: { excludeCategories: [...next], excludePaths: plan?.excludePaths ?? [] },
-    });
+    sendUpdate(next, excludedPaths);
+  };
+
+  const toggleFilePath = (relativePath: string, fileType: string) => {
+    // Category-excluded files cannot be individually re-included from this toggle
+    if (excludedCats.has(fileType)) return;
+    const next = new Set(excludedPaths);
+    if (next.has(relativePath)) next.delete(relativePath); else next.add(relativePath);
+    setExcludedPaths(next);
+    sendUpdate(excludedCats, next);
   };
 
   if (isAnalyzing) {
@@ -232,6 +265,16 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
   const confidence = typeof plan.aiConfidence === "number" ? plan.aiConfidence : null;
   const confColor  = confidence === null ? "text-muted-foreground" : confidence >= 0.8 ? "text-green-400" : confidence >= 0.5 ? "text-amber-400" : "text-destructive";
   const totalActive = plan.totalFiles ?? 0;
+  const totalExcluded = excludedPaths.size + [...excludedCats].reduce((n, cat) =>
+    n + allRoutes.filter(r => r.fileType === cat && !excludedPaths.has(r.relativePath)).length, 0
+  );
+
+  // Filtered file list for per-file section
+  const filteredRoutes = allRoutes.filter(r =>
+    !fileSearch.trim() || r.filename.toLowerCase().includes(fileSearch.trim().toLowerCase()) || r.relativePath.toLowerCase().includes(fileSearch.trim().toLowerCase())
+  );
+  const visibleRoutes  = filteredRoutes.slice(0, fileListPage * FILE_LIST_PAGE);
+  const hasMore        = filteredRoutes.length > visibleRoutes.length;
 
   return (
     <div className="space-y-5">
@@ -261,9 +304,9 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
         </div>
       )}
 
-      {/* Category toggles — check to include, uncheck to exclude */}
+      {/* ── Category toggles ── */}
       <div className="space-y-2">
-        <p className="text-xs font-mono text-muted-foreground uppercase tracking-wider">Routing Plan — uncheck to exclude</p>
+        <p className="text-xs font-mono text-muted-foreground uppercase tracking-wider">Categories — uncheck to exclude entire type</p>
         {FILE_CATEGORIES.map(({ key, label, icon, summaryKey }) => {
           const count = (summary as any)[summaryKey] ?? 0;
           const dest  = (plan.destinations as any)?.[summaryKey === "images" ? "images" : summaryKey === "videos" ? "videos" : summaryKey === "documents" ? "documents" : "other"];
@@ -289,9 +332,82 @@ function AnalyzeStep({ job, onDone }: { job: OrganizationJob; onDone: () => void
         })}
       </div>
 
-      {excludedCats.size > 0 && (
+      {/* ── Per-file list ── */}
+      {allRoutes.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-mono text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors w-full text-left"
+            onClick={() => setShowFileList(v => !v)}
+          >
+            <ChevronRight className={`w-3 h-3 transition-transform ${showFileList ? "rotate-90" : ""}`} />
+            Individual Files ({allRoutes.length.toLocaleString()})
+            {totalExcluded > 0 && <span className="text-amber-400 ml-1">— {totalExcluded} excluded</span>}
+          </button>
+
+          {showFileList && (
+            <div className="space-y-2">
+              <Input
+                className="h-7 text-xs font-mono"
+                placeholder="Filter files…"
+                value={fileSearch}
+                onChange={e => { setFileSearch(e.target.value); setFileListPage(1); }}
+              />
+              <ScrollArea className="h-64 rounded border bg-secondary/10">
+                <div className="p-1 space-y-px">
+                  {visibleRoutes.map((route: any) => {
+                    const catExcluded  = excludedCats.has(route.fileType);
+                    const pathExcluded = excludedPaths.has(route.relativePath);
+                    const isExcluded   = catExcluded || pathExcluded;
+                    return (
+                      <div
+                        key={route.relativePath}
+                        className={`flex items-center gap-2 px-2 py-1 rounded text-xs font-mono transition-opacity ${isExcluded ? "opacity-40" : "hover:bg-secondary/40"}`}
+                      >
+                        <Checkbox
+                          checked={!isExcluded}
+                          onCheckedChange={() => toggleFilePath(route.relativePath, route.fileType)}
+                          disabled={updatePlanMutation.isPending || catExcluded}
+                          className="h-3 w-3 shrink-0"
+                        />
+                        {FILE_ICONS[route.fileType] ?? FILE_ICONS.other}
+                        <span className="flex-1 truncate text-foreground/80" title={route.relativePath}>
+                          {route.filename}
+                        </span>
+                        <ArrowRight className="w-2.5 h-2.5 text-muted-foreground shrink-0" />
+                        <span className="text-muted-foreground truncate max-w-[90px]" title={route.destination}>
+                          {route.destination?.split("/").pop() ?? "—"}
+                        </span>
+                        {catExcluded && <span className="text-muted-foreground/60 text-[9px] shrink-0">cat</span>}
+                      </div>
+                    );
+                  })}
+                  {hasMore && (
+                    <button
+                      type="button"
+                      className="w-full py-2 text-xs font-mono text-primary hover:underline"
+                      onClick={() => setFileListPage(p => p + 1)}
+                    >
+                      Show more ({filteredRoutes.length - visibleRoutes.length} remaining)
+                    </button>
+                  )}
+                  {filteredRoutes.length === 0 && (
+                    <p className="text-center py-4 text-xs text-muted-foreground">No files match filter</p>
+                  )}
+                </div>
+              </ScrollArea>
+              <p className="text-xs text-muted-foreground font-mono">
+                {visibleRoutes.length} of {filteredRoutes.length.toLocaleString()} files shown
+                {excludedPaths.size > 0 && ` · ${excludedPaths.size} individually excluded`}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(excludedCats.size > 0 || excludedPaths.size > 0) && (
         <p className="text-xs text-amber-400/80 font-mono">
-          {excludedCats.size} categor{excludedCats.size === 1 ? "y" : "ies"} excluded — pre-flight must be re-run after changes.
+          {totalExcluded} file{totalExcluded !== 1 ? "s" : ""} excluded — pre-flight must be re-run after changes.
         </p>
       )}
 

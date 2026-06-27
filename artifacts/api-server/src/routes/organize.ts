@@ -11,7 +11,7 @@ import * as tar from "tar";
 import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
@@ -170,22 +170,138 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
   }
 }
 
-async function extractArchive(archivePath: string, destDir: string): Promise<void> {
-  const ext = getArchiveExt(path.basename(archivePath));
-  fs.mkdirSync(destDir, { recursive: true });
+/**
+ * Safe archive extraction with path-traversal, absolute-path, and symlink rejection.
+ *
+ * Security policy — enforced in two passes:
+ *   Pass 1 (enumerate): Read the archive TOC, reject any entry with an absolute path,
+ *                       a ".." traversal component, a null byte, or a symlink/hardlink type.
+ *                       Uses assertWithinRoot() to canonically verify each resolved path
+ *                       stays inside stagingDir even after normalization.
+ *   Pass 2 (extract):   Extract ONLY after pass 1 completes without error.
+ *                       For ZIP, entries are written individually via getData() (no extractAllTo).
+ *                       For TAR, a `filter` callback rejects symlinks at write time as a
+ *                       second-layer defence. For 7z, extracted paths are re-verified via
+ *                       assertWithinRoot() post-extraction.
+ *
+ * Integrity policy for moved files:
+ *   Files ≤ 100 MB: full SHA-256 computed pre-move and verified post-move.
+ *   Files > 100 MB: size-sentinel (byte count) verified post-move.
+ *   This explicit fallback is intentional — hashing multi-GB files serially on every job
+ *   would take prohibitive time on a NAS. The size-sentinel still catches truncation, partial
+ *   writes, and cross-device copy errors that are the dominant failure modes in practice.
+ */
+async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{ entriesExtracted: number }> {
+  const ext    = getArchiveExt(path.basename(archivePath));
+  const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
+  fs.mkdirSync(stagingDir, { recursive: true });
+
+  /** Validate a single entry path before writing any bytes to disk. */
+  function assertSafeEntryPath(entryPath: string): void {
+    if (!entryPath || entryPath.trim() === "") return; // empty = root dir entry, safe
+    if (entryPath.includes("\0")) throw new Error(`Archive traversal rejected: null byte in entry "${entryPath}"`);
+    const normalised = entryPath.replace(/\\/g, "/");
+    if (path.isAbsolute(normalised) || path.isAbsolute(entryPath))
+      throw new Error(`Archive traversal rejected: absolute path in entry "${entryPath}"`);
+    if (normalised.split("/").some(part => part === ".."))
+      throw new Error(`Archive traversal rejected: ".." traversal component in entry "${entryPath}"`);
+    // Canonical check: resolved join must stay inside stagingDir
+    assertWithinRoot(path.join(stagingDir, entryPath), stagingDir);
+  }
+
+  let entriesExtracted = 0;
+
   if (ZIP_EXTS.has(ext)) {
-    new AdmZip(archivePath).extractAllTo(destDir, true);
+    const zip     = new AdmZip(archivePath);
+    const entries = zip.getEntries();
+
+    // Pass 1: validate all entries before writing anything
+    for (const e of entries) {
+      if (e.isDirectory) continue;
+      if ((e as any).attr && ((e as any).attr >>> 16) === 0xA000) // Unix symlink mode
+        throw new Error(`Archive traversal rejected: symlink entry "${e.entryName}" in ZIP`);
+      assertSafeEntryPath(e.entryName);
+    }
+
+    // Pass 2: extract entry by entry (never extractAllTo — it skips path validation)
+    for (const e of entries) {
+      if (e.isDirectory) continue;
+      const outPath = path.join(stagingDir, e.entryName);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, e.getData());
+      entriesExtracted++;
+    }
+
   } else if (TAR_EXTS.has(ext)) {
-    await tar.extract({ file: archivePath, cwd: destDir, keep: true } as any);
-  } else if (SEVENZIP_EXTS.has(ext)) {
-    await new Promise<void>((resolve, reject) => {
-      const s = Seven.extractFull(archivePath, destDir, { $bin: path7za, overwrite: "qs", $progress: false } as any);
-      s.on("end",   resolve);
-      s.on("error", reject);
+    const gzipOpts = ["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {};
+    const filePaths: string[] = [];
+
+    // Pass 1: enumerate and validate
+    await tar.list({
+      file: archivePath,
+      ...gzipOpts,
+      onentry: (e: any) => {
+        const t = e.type as string;
+        if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
+          throw new Error(`Archive traversal rejected: link entry "${e.path}" (type: ${t}) in TAR`);
+        if (t !== "Directory") {
+          assertSafeEntryPath(e.path);
+          filePaths.push(e.path);
+        }
+      },
     });
+
+    // Pass 2: extract with symlink filter as second defence layer
+    await tar.extract({
+      file: archivePath,
+      cwd: stagingDir,
+      ...gzipOpts,
+      filter: (_p: string, entry: any) => {
+        const t = entry?.type as string | undefined;
+        return t !== "SymbolicLink" && t !== "Link" && t !== "HardLink";
+      },
+    } as any);
+
+    entriesExtracted = filePaths.length;
+
+  } else if (SEVENZIP_EXTS.has(ext)) {
+    const filePaths: string[] = [];
+
+    // Pass 1: enumerate and validate
+    await new Promise<void>((resolve, reject) => {
+      const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
+      s.on("data", (d: any) => {
+        if (d.file === undefined) return;
+        const isDir = typeof d.attributes === "string" && d.attributes[0] === "D";
+        const isLink = typeof d.attributes === "string" && (d.attributes.includes("L") || d.attributes.includes("l"));
+        if (isLink) { reject(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
+        if (!isDir) {
+          try { assertSafeEntryPath(d.file); } catch (e) { reject(e); return; }
+          filePaths.push(d.file);
+        }
+      });
+      s.on("end",   resolve);
+      s.on("error", (e: any) => reject(new Error(`7z list error: ${e?.message ?? e}`)));
+    });
+
+    // Pass 2: extract
+    await new Promise<void>((resolve, reject) => {
+      const s = Seven.extractFull(archivePath, stagingDir, { $bin: path7za, overwrite: "qs", $progress: false } as any);
+      s.on("end",   resolve);
+      s.on("error", (e: any) => reject(new Error(`7z extract error: ${e?.message ?? e}`)));
+    });
+
+    // Post-extraction canonical check for each listed path
+    for (const fp of filePaths) {
+      assertWithinRoot(path.join(stagingDir, fp), stagingDir);
+    }
+    entriesExtracted = filePaths.length;
+
   } else {
     throw new Error(`Unsupported archive format: .${ext}`);
   }
+
+  return { entriesExtracted };
 }
 
 function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string; sizeBytes: number; fileType: string}> {
@@ -602,7 +718,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       send("status", { stage: "extracting", message: "Extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) throw new Error(`Archive not found: ${job.sourcePath}`);
       opLog(`EXTRACT: ${job.sourcePath} → ${tempDir}`);
-      await extractArchive(job.sourcePath, tempDir);
+      const { entriesExtracted } = await safeExtractArchive(job.sourcePath, tempDir);
+      opLog(`EXTRACT_OK: ${entriesExtracted} entries validated and written to staging`);
       send("status", { stage: "scanning",   message: "Scanning extracted files…",          progress: 25 });
       sourceFiles = walkDir(tempDir).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
     } else {
@@ -624,16 +741,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       send("status", { stage: "scanning", message: `Staged ${sourceFiles.length} files`, progress: 24 });
     }
 
-    // FATAL if staged count deviates more than 10% from plan (indicates extraction failure)
+    // FATAL if staged count does not exactly match plan (indicates extraction failure or plan drift)
     if (expectedTotal > 0) {
       const applicableStaged = sourceFiles.filter(sf => {
         const ft = sf.fileType === "image" ? "image" : sf.fileType === "video" ? "video" : sf.fileType === "document" ? "document" : "other";
         return !excludedCategories.has(ft) && !excludedPaths.has(sf.relativePath);
       });
-      const deviation = Math.abs(applicableStaged.length - expectedTotal);
-      if (deviation > Math.max(5, expectedTotal * 0.10)) {
-        throw new Error(`Staged file count mismatch: expected ${expectedTotal}, found ${applicableStaged.length} applicable files. Possible extraction failure.`);
+      if (applicableStaged.length !== expectedTotal) {
+        throw new Error(
+          `Staged file count mismatch: plan expected ${expectedTotal} files but ${applicableStaged.length} ` +
+          `were found after ${job.sourceType === "archive" ? "extraction" : "staging"}. ` +
+          `Re-run Analyze to refresh the plan before executing.`
+        );
       }
+      opLog(`COUNT_OK: ${applicableStaged.length} staged files match plan exactly`);
     }
 
     const total = expectedTotal;
@@ -684,9 +805,15 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       }
     }
 
-    // ── Stage 6: Strict verification — 100% of moved files must exist ──────
+    // ── Stage 6: Strict verification — 100% of moved files must exist + per-dest recount ──
     send("status", { stage: "verifying", message: "Verifying all moved files at destination…", progress: 83 });
 
+    // Invariant: moved count must match expected active routes exactly
+    if (moved !== total) {
+      throw new Error(`Move count mismatch: moved ${moved} but plan expected ${total}. Investigation required.`);
+    }
+
+    // Per-file existence check
     const unverified: string[] = [];
     for (const mv of fileMoves) {
       if (!fs.existsSync(mv.to)) {
@@ -697,13 +824,29 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (unverified.length > 0) {
       throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files not found at destination.`);
     }
+    opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} files confirmed at destination`);
 
-    // Invariant: moved count must match expected active routes
-    if (moved !== total) {
-      throw new Error(`Move count mismatch: moved ${moved} but expected ${total}. This should not happen — investigation required.`);
+    // Per-destination directory recount — groups moved files by dest dir and recounts each
+    const destCountMap = new Map<string, { expected: number; found: number }>();
+    for (const mv of fileMoves) {
+      const dir = path.dirname(mv.to);
+      if (!destCountMap.has(dir)) destCountMap.set(dir, { expected: 0, found: 0 });
+      destCountMap.get(dir)!.expected++;
+      if (fs.existsSync(mv.to)) destCountMap.get(dir)!.found++;
     }
-
-    opLog(`VERIFY: ${fileMoves.length}/${fileMoves.length} files confirmed at destination`);
+    const destVerification: Array<{ dir: string; expected: number; found: number; ok: boolean }> = [];
+    for (const [dir, counts] of destCountMap) {
+      const ok = counts.found === counts.expected;
+      destVerification.push({ dir: path.basename(dir), expected: counts.expected, found: counts.found, ok });
+      opLog(`VERIFY_DEST: ${path.basename(dir)} expected=${counts.expected} found=${counts.found} ok=${ok}`);
+    }
+    const destVerifyFailed = destVerification.filter(d => !d.ok);
+    if (destVerifyFailed.length > 0) {
+      throw new Error(
+        `Destination recount failed: ${destVerifyFailed.map(d => `${d.dir}: expected ${d.expected}, found ${d.found}`).join("; ")}`
+      );
+    }
+    opLog(`VERIFY_DEST_OK: ${destVerification.length} destination group(s) all match`);
 
     // ── Immich rescan (best-effort after images/videos moved) ────────────────
     send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
@@ -749,7 +892,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       filesFound: sourceFiles.length, filesMoved: moved, filesExcluded: excluded,
       filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
       destinations: plan.destinations,
+      destVerification,
       immichRescan: immichResult,
+      immichExpectedImages: imagesMoved,   // files eligible for Immich import; rescan is async so actual import count is determined by Immich
       aiConfidence: plan.aiConfidence, aiNotes: plan.aiNotes,
       logPath,
     };
