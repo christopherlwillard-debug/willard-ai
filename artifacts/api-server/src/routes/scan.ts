@@ -325,9 +325,16 @@ async function peekAllArchives(jobId: number) {
     try {
       const { entries, isPasswordProtected, hasNestedArchives, estimatedExtractionSize, category } =
         await peekArchiveFile(archive.path, archive.filename);
+      const files = entries.filter((e: any) => !e.isDirectory);
+      const scanPhotoCount = files.filter((e: any) => e.fileType === "image").length;
+      const scanVideoCount = files.filter((e: any) => e.fileType === "video").length;
+      const scanDocCount = files.filter((e: any) => e.fileType === "document").length;
       await db.update(archivesTable).set({
         peekStatus: "peeked",
         containedFileCount: entries.length,
+        photoCount: scanPhotoCount,
+        videoCount: scanVideoCount,
+        documentCount: scanDocCount,
         isPasswordProtected,
         hasNestedArchives,
         estimatedExtractionSize,

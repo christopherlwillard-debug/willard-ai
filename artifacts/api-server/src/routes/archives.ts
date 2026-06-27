@@ -204,6 +204,9 @@ router.post("/archives/:id/peek", async (req, res) => {
       await db.update(archivesTable).set({
         peekStatus: "peeked",
         containedFileCount: entries.length,
+        photoCount,
+        videoCount,
+        documentCount,
         isPasswordProtected,
         hasNestedArchives,
         estimatedExtractionSize,
@@ -251,10 +254,16 @@ router.post("/archives/:id/peek", async (req, res) => {
       );
       const estimatedExtractionSize = entries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
       const category = computeCategoryFromContent(entries, false);
+      const tarPhotoCount = entries.filter(e => !e.isDirectory && e.fileType === "image").length;
+      const tarVideoCount = entries.filter(e => !e.isDirectory && e.fileType === "video").length;
+      const tarDocCount = entries.filter(e => !e.isDirectory && e.fileType === "document").length;
 
       await db.update(archivesTable).set({
         peekStatus: "peeked",
         containedFileCount: entries.length,
+        photoCount: tarPhotoCount,
+        videoCount: tarVideoCount,
+        documentCount: tarDocCount,
         isPasswordProtected: false,
         hasNestedArchives,
         estimatedExtractionSize,
@@ -265,7 +274,8 @@ router.post("/archives/:id/peek", async (req, res) => {
       res.json({
         archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
         isPasswordProtected: false, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
-        category, format: `tar/${rawExt}`,
+        category, photoCount: tarPhotoCount, videoCount: tarVideoCount, documentCount: tarDocCount,
+        format: `tar/${rawExt}`,
       });
       return;
     }
@@ -280,10 +290,16 @@ router.post("/archives/:id/peek", async (req, res) => {
       });
       const estimatedExtractionSize = entries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
       const category = computeCategoryFromContent(entries, isPasswordProtected);
+      const szPhotoCount = entries.filter(e => !e.isDirectory && e.fileType === "image").length;
+      const szVideoCount = entries.filter(e => !e.isDirectory && e.fileType === "video").length;
+      const szDocCount = entries.filter(e => !e.isDirectory && e.fileType === "document").length;
 
       await db.update(archivesTable).set({
         peekStatus: "peeked",
         containedFileCount: entries.length,
+        photoCount: szPhotoCount,
+        videoCount: szVideoCount,
+        documentCount: szDocCount,
         isPasswordProtected,
         hasNestedArchives,
         estimatedExtractionSize,
@@ -294,7 +310,7 @@ router.post("/archives/:id/peek", async (req, res) => {
       res.json({
         archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
         isPasswordProtected, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
-        category, format,
+        category, photoCount: szPhotoCount, videoCount: szVideoCount, documentCount: szDocCount, format,
         ...(error && entries.length === 0 ? { notes: `Could not list entries: ${error}` } : {}),
       });
       return;

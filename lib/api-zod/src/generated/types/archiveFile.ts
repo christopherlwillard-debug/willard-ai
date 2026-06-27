@@ -16,6 +16,12 @@ export interface ArchiveFile {
   folder: string;
   /** @nullable */
   containedFileCount: number | null;
+  /** @nullable */
+  photoCount: number | null;
+  /** @nullable */
+  videoCount: number | null;
+  /** @nullable */
+  documentCount: number | null;
   category: string;
   peekStatus: string;
   isPasswordProtected: boolean;

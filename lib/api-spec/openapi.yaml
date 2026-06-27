@@ -1002,6 +1002,12 @@ components:
           type: string
         containedFileCount:
           type: ["integer", "null"]
+        photoCount:
+          type: ["integer", "null"]
+        videoCount:
+          type: ["integer", "null"]
+        documentCount:
+          type: ["integer", "null"]
         category:
           type: string
         peekStatus:
@@ -1020,6 +1026,9 @@ components:
         - modifiedAt
         - folder
         - containedFileCount
+        - photoCount
+        - videoCount
+        - documentCount
         - category
         - peekStatus
         - isPasswordProtected
@@ -1122,6 +1131,12 @@ components:
           type: string
         containedFileCount:
           type: ["integer", "null"]
+        photoCount:
+          type: ["integer", "null"]
+        videoCount:
+          type: ["integer", "null"]
+        documentCount:
+          type: ["integer", "null"]
         category:
           type: string
         peekStatus:
@@ -1144,6 +1159,9 @@ components:
         - modifiedAt
         - folder
         - containedFileCount
+        - photoCount
+        - videoCount
+        - documentCount
         - category
         - peekStatus
         - isPasswordProtected

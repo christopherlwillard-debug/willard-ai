@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
-import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter } from "lucide-react";
+import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,30 @@ function fileIcon(fileType: string) {
   }
 }
 
+function TypeCountBadges({ photoCount, videoCount, documentCount }: {
+  photoCount?: number | null;
+  videoCount?: number | null;
+  documentCount?: number | null;
+}) {
+  const badges = [
+    photoCount != null && photoCount > 0 && { icon: <Image className="w-2.5 h-2.5" />, count: photoCount, color: "text-blue-400" },
+    videoCount != null && videoCount > 0 && { icon: <Video className="w-2.5 h-2.5" />, count: videoCount, color: "text-purple-400" },
+    documentCount != null && documentCount > 0 && { icon: <FileText className="w-2.5 h-2.5" />, count: documentCount, color: "text-amber-400" },
+  ].filter(Boolean) as { icon: React.ReactNode; count: number; color: string }[];
+
+  if (badges.length === 0) return null;
+
+  return (
+    <div className="flex gap-1.5 mt-0.5">
+      {badges.map((b, i) => (
+        <span key={i} className={`inline-flex items-center gap-0.5 text-[10px] font-mono ${b.color}`}>
+          {b.icon}{b.count.toLocaleString()}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose: () => void }) {
   const queryClient = useQueryClient();
   const { data: archiveData, isLoading: archiveLoading } = useGetArchive(archiveId);
@@ -35,6 +59,16 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
   const entries = (archiveData?.peekEntries as any[]) ?? [];
   const hasPeeked = archiveData?.peekStatus === "peeked";
   const isUnsupported = archiveData?.peekStatus === "unsupported";
+
+  useEffect(() => {
+    if (!archiveLoading && !hasPeeked && !isUnsupported && !peekMutation.isPending && !peekMutation.isError && archiveData) {
+      peekMutation.mutate({ id: archiveId });
+    }
+  }, [archiveLoading, hasPeeked, isUnsupported, archiveData]);
+
+  const photoCount = entries.filter((e: any) => !e.isDirectory && e.fileType === "image").length;
+  const videoCount = entries.filter((e: any) => !e.isDirectory && e.fileType === "video").length;
+  const documentCount = entries.filter((e: any) => !e.isDirectory && e.fileType === "document").length;
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -51,6 +85,15 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
               {archiveData.estimatedExtractionSize != null && archiveData.estimatedExtractionSize > 0 && (
                 <span>~{formatBytes(archiveData.estimatedExtractionSize)} extracted</span>
               )}
+              {hasPeeked && photoCount > 0 && (
+                <span className="text-blue-400 flex items-center gap-1"><Image className="w-3 h-3" /> {photoCount} photos</span>
+              )}
+              {hasPeeked && videoCount > 0 && (
+                <span className="text-purple-400 flex items-center gap-1"><Video className="w-3 h-3" /> {videoCount} videos</span>
+              )}
+              {hasPeeked && documentCount > 0 && (
+                <span className="text-amber-400 flex items-center gap-1"><FileText className="w-3 h-3" /> {documentCount} docs</span>
+              )}
               {archiveData.isPasswordProtected && (
                 <span className="text-destructive flex items-center gap-1"><Lock className="w-3 h-3" /> Encrypted</span>
               )}
@@ -65,43 +108,59 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
             <div className="flex flex-col items-center justify-center py-8 gap-2 text-muted-foreground">
               <Archive className="w-10 h-10 opacity-30" />
               <p className="text-sm font-mono">Format not supported for peek</p>
-              <p className="text-xs text-center">{(archiveData as any)?.unsupportedReason ?? "Only ZIP archives can be inspected without extraction"}</p>
+              <p className="text-xs text-center opacity-70">Supported formats: ZIP, RAR, 7z, TAR, ISO, CAB, GZ, BZ2, XZ</p>
             </div>
           )}
-          {!hasPeeked && !isUnsupported && !archiveLoading && (
+          {!hasPeeked && !isUnsupported && (peekMutation.isPending || archiveLoading) && (
+            <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+              <RefreshCw className="w-8 h-8 opacity-40 animate-spin" />
+              <p className="text-sm font-mono">Reading archive…</p>
+            </div>
+          )}
+          {!hasPeeked && !isUnsupported && !peekMutation.isPending && !archiveLoading && peekMutation.isError && (
             <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
               <Archive className="w-10 h-10 opacity-30" />
-              <p className="text-sm font-mono">Archive not yet inspected</p>
-              <Button size="sm" onClick={() => peekMutation.mutate({ id: archiveId })} disabled={peekMutation.isPending}>
-                {peekMutation.isPending ? "Reading..." : "Peek Inside"}
+              <p className="text-sm font-mono text-destructive">Failed to read archive</p>
+              <p className="text-xs text-muted-foreground">File may be inaccessible or corrupted</p>
+              <Button size="sm" variant="outline" onClick={() => peekMutation.mutate({ id: archiveId })}>
+                Retry
               </Button>
-              {peekMutation.isError && <p className="text-xs text-destructive">Failed to peek — file may be inaccessible</p>}
             </div>
           )}
-          {archiveLoading && (
-            <div className="space-y-2 p-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
-          )}
           {hasPeeked && entries.length === 0 && (
-            <p className="text-sm text-muted-foreground font-mono text-center py-8">Archive is empty or could not be read</p>
+            <div className="flex flex-col items-center justify-center py-8 gap-2 text-muted-foreground">
+              <Archive className="w-10 h-10 opacity-30" />
+              <p className="text-sm text-muted-foreground font-mono text-center">Archive is empty or entries could not be listed</p>
+              <Button size="sm" variant="outline" className="mt-1" onClick={() => peekMutation.mutate({ id: archiveId })}>
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Re-peek
+              </Button>
+            </div>
           )}
           {hasPeeked && entries.length > 0 && (
-            <ScrollArea className="flex-1 rounded-md border">
-              <div className="font-mono text-xs">
-                <div className="grid grid-cols-[1.5rem_1fr_auto_auto] gap-x-3 px-3 py-2 border-b text-muted-foreground uppercase tracking-wider">
-                  <span></span><span>Path</span><span>Type</span><span className="text-right">Size</span>
-                </div>
-                {entries.map((entry: any, i: number) => (
-                  <div key={i} className="grid grid-cols-[1.5rem_1fr_auto_auto] gap-x-3 px-3 py-1.5 hover:bg-muted/40 items-center border-b border-border/30">
-                    <span className="flex items-center justify-center">
-                      {entry.isDirectory ? <Folder className="w-3.5 h-3.5 text-muted-foreground" /> : fileIcon(entry.fileType)}
-                    </span>
-                    <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>
-                    <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
-                    <span className="text-right text-muted-foreground">{entry.isDirectory ? "—" : formatBytes(entry.sizeBytes ?? 0)}</span>
-                  </div>
-                ))}
+            <>
+              <div className="flex justify-end">
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs font-mono" onClick={() => peekMutation.mutate({ id: archiveId })} disabled={peekMutation.isPending}>
+                  <RefreshCw className="w-3 h-3 mr-1.5" /> Re-peek
+                </Button>
               </div>
-            </ScrollArea>
+              <ScrollArea className="flex-1 rounded-md border">
+                <div className="font-mono text-xs">
+                  <div className="grid grid-cols-[1.5rem_1fr_auto_auto] gap-x-3 px-3 py-2 border-b text-muted-foreground uppercase tracking-wider">
+                    <span></span><span>Path</span><span>Type</span><span className="text-right">Size</span>
+                  </div>
+                  {entries.map((entry: any, i: number) => (
+                    <div key={i} className="grid grid-cols-[1.5rem_1fr_auto_auto] gap-x-3 px-3 py-1.5 hover:bg-muted/40 items-center border-b border-border/30">
+                      <span className="flex items-center justify-center">
+                        {entry.isDirectory ? <Folder className="w-3.5 h-3.5 text-muted-foreground" /> : fileIcon(entry.fileType)}
+                      </span>
+                      <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>
+                      <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
+                      <span className="text-right text-muted-foreground">{entry.isDirectory ? "—" : formatBytes(entry.sizeBytes ?? 0)}</span>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </>
           )}
         </div>
       </DialogContent>
@@ -234,7 +293,7 @@ export default function Archives() {
                 <TableCell className="font-medium">
                   <div className="flex flex-col gap-0.5">
                     <span className="truncate max-w-[180px]">{archive.filename}</span>
-                    <div className="flex gap-1.5">
+                    <div className="flex flex-wrap gap-1.5">
                       {archive.isPasswordProtected && (
                         <span className="inline-flex items-center text-[10px] bg-destructive/10 text-destructive px-1 py-0.5 rounded">
                           <Lock className="w-2.5 h-2.5 mr-0.5" /> Encrypted
@@ -246,6 +305,13 @@ export default function Archives() {
                         </span>
                       )}
                     </div>
+                    {archive.peekStatus === "peeked" && (
+                      <TypeCountBadges
+                        photoCount={archive.photoCount}
+                        videoCount={archive.videoCount}
+                        documentCount={archive.documentCount}
+                      />
+                    )}
                   </div>
                 </TableCell>
                 <TableCell>
