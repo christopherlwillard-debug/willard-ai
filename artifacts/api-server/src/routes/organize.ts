@@ -1296,7 +1296,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (unverified.length > 0) {
       throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files not found at destination.`);
     }
-    opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} at destination — sha256 verified: ${checksumVerifiedCount}, unverifiable (large/stat-fail): ${checksumUnverifiedCount}`);
+    opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} at destination — sha256-verified: ${checksumVerifiedCount}, failed-verification: ${checksumUnverifiedCount}`);
 
     // Per-destination directory recount — groups moved files by dest dir and recounts each
     const destCountMap = new Map<string, { expected: number; found: number }>();
@@ -1420,7 +1420,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       opLog(`REPORT: ${reportPath}`);
     } catch { /* non-fatal */ }
 
-    opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} verified:${fileMoves.length} sha256-ok:${checksumVerifiedCount} unverifiable:${checksumUnverifiedCount} ===`);
+    opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} sha256-ok:${checksumVerifiedCount} failed-verify:${checksumUnverifiedCount} ===`);
     logStream?.end();
 
     await db.update(organizationJobsTable).set({

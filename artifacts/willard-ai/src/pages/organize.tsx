@@ -1019,7 +1019,7 @@ function DoneStep({ job }: { job: OrganizationJob }) {
             {(report.checksumUnverifiedCount ?? 0) > 0 && (
               <div className="flex items-center gap-2 p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 text-xs font-mono text-amber-400">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                <span><strong>{report.checksumUnverifiedCount}</strong> large (size-check only)</span>
+                <span><strong>{report.checksumUnverifiedCount}</strong> moves failed verification</span>
               </div>
             )}
           </div>
@@ -1033,7 +1033,7 @@ function DoneStep({ job }: { job: OrganizationJob }) {
                     </span>
                     <span className="truncate flex-1">{v.filename}</span>
                     <span className="opacity-40 font-mono text-[9px]" title={v.sourceHash}>
-                      {v.sourceHash?.startsWith("size:") ? v.sourceHash : v.sourceHash?.slice(0, 8) + "…"}
+                      {v.sourceHash?.slice(0, 8)}…
                     </span>
                   </div>
                 ))}
