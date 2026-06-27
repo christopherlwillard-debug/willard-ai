@@ -1646,6 +1646,8 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
   const tempDirs: string[] = [];
   const newMoves: FileMoveRecord[] = [];
+  // Declared outside try so catch can restore DB fileMoves to pre-resume baseline on failure
+  let existingMoves: FileMoveRecord[] = [];
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
@@ -1678,7 +1680,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     };
 
     // Existing partial moves from the interrupted run
-    const existingMoves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
+    existingMoves = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     // Primary idempotency: by sourceRelPath (rename-safe — stored since last execute).
     // Fallback: by destination path for legacy records that predate sourceRelPath.
     const alreadyMovedRelPaths = new Set<string>(
