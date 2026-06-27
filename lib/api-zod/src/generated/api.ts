@@ -17,6 +17,110 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
+ * @summary Get authentication status and setup state
+ */
+export const GetAuthStatusResponse = zod.object({
+  "setup": zod.boolean(),
+  "authenticated": zod.boolean()
+})
+
+
+/**
+ * @summary First-run password setup (returns recovery key)
+ */
+export const SetupAuthBody = zod.object({
+  "password": zod.string()
+})
+
+export const SetupAuthResponse = zod.object({
+  "ok": zod.boolean(),
+  "recoveryKey": zod.string()
+})
+
+
+/**
+ * @summary Login with password
+ */
+export const LoginBody = zod.object({
+  "password": zod.string()
+})
+
+export const LoginResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Logout current session
+ */
+export const LogoutResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Reset password using recovery key
+ */
+export const RecoverAuthBody = zod.object({
+  "recoveryKey": zod.string(),
+  "newPassword": zod.string()
+})
+
+export const RecoverAuthResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Change password (requires current session)
+ */
+export const ChangePasswordBody = zod.object({
+  "currentPassword": zod.string(),
+  "newPassword": zod.string()
+})
+
+export const ChangePasswordResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary List all active sessions
+ */
+export const ListSessionsResponse = zod.object({
+  "sessions": zod.array(zod.object({
+  "sid": zod.string(),
+  "deviceName": zod.string(),
+  "ip": zod.string(),
+  "createdAt": zod.coerce.date().nullish(),
+  "lastSeenAt": zod.coerce.date().nullish(),
+  "expiresAt": zod.coerce.date(),
+  "isCurrent": zod.boolean()
+}))
+})
+
+
+/**
+ * @summary Revoke all sessions except the current one
+ */
+export const RevokeOtherSessionsResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Revoke a specific session by ID
+ */
+export const RevokeSessionParams = zod.object({
+  "sid": zod.coerce.string()
+})
+
+export const RevokeSessionResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
  * @summary Get all settings
  */
 export const GetSettingsResponse = zod.object({

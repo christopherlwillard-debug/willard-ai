@@ -6,7 +6,11 @@ import {
   useTestNasPath,
   useGetScanStatus, getGetScanStatusQueryKey,
   useGetScanHistory, getGetScanHistoryQueryKey,
-  useStartScan
+  useStartScan,
+  useChangePassword,
+  useListSessions, getListSessionsQueryKey,
+  useRevokeSession,
+  useRevokeOtherSessions,
 } from "@workspace/api-client-react";
 import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -16,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -276,6 +280,221 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+
+      <SecuritySection />
     </div>
+  );
+}
+
+function SecuritySection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const [pwForm, setPwForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+
+  const changePasswordMutation = useChangePassword({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Password changed successfully" });
+        setPwForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      },
+      onError: (err: any) => toast({
+        title: "Failed to change password",
+        description: err?.response?.data?.error ?? "Something went wrong.",
+        variant: "destructive",
+      }),
+    },
+  });
+
+  const { data: sessionsData, isLoading: sessionsLoading } = useListSessions({
+    query: { queryKey: getListSessionsQueryKey() },
+  });
+
+  const revokeSessionMutation = useRevokeSession({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Session revoked" });
+        queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() });
+      },
+      onError: () => toast({ title: "Failed to revoke session", variant: "destructive" }),
+    },
+  });
+
+  const revokeOthersMutation = useRevokeOtherSessions({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "All other sessions revoked" });
+        queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() });
+      },
+      onError: () => toast({ title: "Failed to revoke sessions", variant: "destructive" }),
+    },
+  });
+
+  const handleChangePassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pwForm.newPassword !== pwForm.confirmPassword) {
+      toast({ title: "Passwords don't match", variant: "destructive" });
+      return;
+    }
+    if (pwForm.newPassword.length < 6) {
+      toast({ title: "Password too short", description: "Must be at least 6 characters.", variant: "destructive" });
+      return;
+    }
+    changePasswordMutation.mutate({
+      data: { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword },
+    });
+  };
+
+  const formatRelativeTime = (dateStr: string | null | undefined) => {
+    if (!dateStr) return "Unknown";
+    const date = new Date(dateStr);
+    const diff = Date.now() - date.getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "Just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  };
+
+  return (
+    <>
+      <div className="pt-4">
+        <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
+          <Shield className="w-5 h-5 text-primary" />
+          SECURITY
+        </h2>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="w-4 h-4" /> Change Password
+            </CardTitle>
+            <CardDescription>Update your login password</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleChangePassword} className="space-y-4" id="change-password-form">
+              <div className="space-y-2">
+                <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Current password</Label>
+                <Input
+                  type="password"
+                  value={pwForm.currentPassword}
+                  onChange={e => setPwForm({ ...pwForm, currentPassword: e.target.value })}
+                  className="font-mono"
+                  autoComplete="current-password"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">New password</Label>
+                <Input
+                  type="password"
+                  value={pwForm.newPassword}
+                  onChange={e => setPwForm({ ...pwForm, newPassword: e.target.value })}
+                  className="font-mono"
+                  placeholder="Min. 6 characters"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Confirm new password</Label>
+                <Input
+                  type="password"
+                  value={pwForm.confirmPassword}
+                  onChange={e => setPwForm({ ...pwForm, confirmPassword: e.target.value })}
+                  className="font-mono"
+                  autoComplete="new-password"
+                />
+              </div>
+            </form>
+          </CardContent>
+          <CardFooter>
+            <Button
+              type="submit"
+              form="change-password-form"
+              className="w-full font-mono font-bold"
+              disabled={changePasswordMutation.isPending || !pwForm.currentPassword || !pwForm.newPassword}
+            >
+              {changePasswordMutation.isPending ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Changing…</>
+              ) : (
+                "CHANGE_PASSWORD"
+              )}
+            </Button>
+          </CardFooter>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Monitor className="w-4 h-4" /> Active Sessions
+            </CardTitle>
+            <CardDescription>Devices currently logged into this app</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {sessionsLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+              </div>
+            ) : (
+              sessionsData?.sessions.map(session => (
+                <div
+                  key={session.sid}
+                  className={`flex items-center justify-between p-3 rounded-md border text-sm ${
+                    session.isCurrent ? "border-primary/40 bg-primary/5" : "border-border bg-secondary/20"
+                  }`}
+                >
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="flex items-center gap-2 font-mono font-medium">
+                      <Monitor className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{session.deviceName}</span>
+                      {session.isCurrent && (
+                        <span className="text-xs text-primary font-bold shrink-0">THIS DEVICE</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground font-mono pl-5">
+                      {session.ip || "Unknown IP"} · Last seen {formatRelativeTime(session.lastSeenAt)}
+                    </div>
+                  </div>
+                  {!session.isCurrent && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-2 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                      disabled={revokeSessionMutation.isPending}
+                      onClick={() => revokeSessionMutation.mutate({ sid: session.sid })}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+              ))
+            )}
+            {!sessionsLoading && (!sessionsData?.sessions || sessionsData.sessions.length === 0) && (
+              <p className="text-center text-sm text-muted-foreground font-mono py-4">No active sessions</p>
+            )}
+          </CardContent>
+          {sessionsData && sessionsData.sessions.length > 1 && (
+            <CardFooter>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="w-full font-mono"
+                disabled={revokeOthersMutation.isPending}
+                onClick={() => revokeOthersMutation.mutate()}
+              >
+                {revokeOthersMutation.isPending ? (
+                  <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Revoking…</>
+                ) : (
+                  "REVOKE_ALL_OTHER_SESSIONS"
+                )}
+              </Button>
+            </CardFooter>
+          )}
+        </Card>
+      </div>
+    </>
   );
 }

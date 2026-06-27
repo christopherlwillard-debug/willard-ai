@@ -9,6 +9,8 @@ export const appSettingsTable = pgTable("app_settings", {
   immichApiKey: text("immich_api_key").notNull().default(""),
   lastScanAt: timestamp("last_scan_at"),
   totalFilesIndexed: integer("total_files_indexed").notNull().default(0),
+  passwordHash: text("password_hash"),
+  recoveryKeyHash: text("recovery_key_hash"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

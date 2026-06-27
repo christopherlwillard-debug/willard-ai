@@ -9,8 +9,13 @@ import {
   Search,
   MessageSquare,
   Settings,
+  LogOut,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLogout } from "@workspace/api-client-react";
+import { useAuth } from "@/context/auth-context";
+import { useQueryClient } from "@tanstack/react-query";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -26,6 +31,17 @@ const navigation = [
 
 export function Sidebar() {
   const [location] = useLocation();
+  const { invalidate } = useAuth();
+  const queryClient = useQueryClient();
+
+  const logoutMutation = useLogout({
+    mutation: {
+      onSuccess: () => {
+        queryClient.clear();
+        invalidate();
+      },
+    },
+  });
 
   return (
     <div className="flex h-full w-64 flex-col bg-sidebar border-r border-sidebar-border">
@@ -59,6 +75,20 @@ export function Sidebar() {
             );
           })}
         </nav>
+      </div>
+      <div className="border-t border-sidebar-border p-2">
+        <button
+          onClick={() => logoutMutation.mutate()}
+          disabled={logoutMutation.isPending}
+          className="group flex w-full items-center px-2 py-2 text-sm font-medium rounded-md font-mono transition-colors text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-50"
+        >
+          {logoutMutation.isPending ? (
+            <Loader2 className="mr-3 h-4 w-4 flex-shrink-0 animate-spin" />
+          ) : (
+            <LogOut className="mr-3 h-4 w-4 flex-shrink-0 group-hover:text-primary" />
+          )}
+          Logout
+        </button>
       </div>
     </div>
   );

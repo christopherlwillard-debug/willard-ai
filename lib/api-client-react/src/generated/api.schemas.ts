@@ -371,6 +371,52 @@ export interface OpenaiError {
   error: string;
 }
 
+export interface OkResult {
+  ok: boolean;
+}
+
+export interface AuthStatus {
+  setup: boolean;
+  authenticated: boolean;
+}
+
+export interface AuthSetupInput {
+  password: string;
+}
+
+export interface AuthSetupResult {
+  ok: boolean;
+  recoveryKey: string;
+}
+
+export interface AuthLoginInput {
+  password: string;
+}
+
+export interface AuthRecoverInput {
+  recoveryKey: string;
+  newPassword: string;
+}
+
+export interface AuthChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface AuthSession {
+  sid: string;
+  deviceName: string;
+  ip: string;
+  createdAt?: string | null;
+  lastSeenAt?: string | null;
+  expiresAt: string;
+  isCurrent: boolean;
+}
+
+export interface SessionsResult {
+  sessions: AuthSession[];
+}
+
 export type SearchFilesParams = {
 q?: string;
 fileType?: string;

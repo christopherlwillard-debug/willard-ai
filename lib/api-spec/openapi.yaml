@@ -30,6 +30,8 @@ tags:
     description: Immich media proxy
   - name: openai
     description: AI assistant operations
+  - name: auth
+    description: Authentication operations
 
 paths:
   /healthz:
@@ -44,6 +46,182 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /auth/status:
+    get:
+      operationId: getAuthStatus
+      tags: [auth]
+      summary: Get authentication status and setup state
+      responses:
+        "200":
+          description: Auth status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthStatus"
+
+  /auth/setup:
+    post:
+      operationId: setupAuth
+      tags: [auth]
+      summary: First-run password setup (returns recovery key)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthSetupInput"
+      responses:
+        "200":
+          description: Setup complete with recovery key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSetupResult"
+        "409":
+          description: Password already set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthLoginInput"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+        "401":
+          description: Incorrect password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout current session
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+
+  /auth/recover:
+    post:
+      operationId: recoverAuth
+      tags: [auth]
+      summary: Reset password using recovery key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRecoverInput"
+      responses:
+        "200":
+          description: Password reset and logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+        "401":
+          description: Invalid recovery key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change password (requires current session)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthChangePasswordInput"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+        "401":
+          description: Not authenticated or wrong current password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /auth/sessions:
+    get:
+      operationId: listSessions
+      tags: [auth]
+      summary: List all active sessions
+      responses:
+        "200":
+          description: Sessions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResult"
+    delete:
+      operationId: revokeOtherSessions
+      tags: [auth]
+      summary: Revoke all sessions except the current one
+      responses:
+        "200":
+          description: Sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+
+  /auth/sessions/{sid}:
+    delete:
+      operationId: revokeSession
+      tags: [auth]
+      summary: Revoke a specific session by ID
+      parameters:
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
 
   # ── Settings ──────────────────────────────────────────────────────────────
   /settings:
@@ -1516,3 +1694,110 @@ components:
           type: string
       required:
         - error
+
+    OkResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+
+    AuthStatus:
+      type: object
+      properties:
+        setup:
+          type: boolean
+        authenticated:
+          type: boolean
+      required:
+        - setup
+        - authenticated
+
+    AuthSetupInput:
+      type: object
+      properties:
+        password:
+          type: string
+      required:
+        - password
+
+    AuthSetupResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        recoveryKey:
+          type: string
+      required:
+        - ok
+        - recoveryKey
+
+    AuthLoginInput:
+      type: object
+      properties:
+        password:
+          type: string
+      required:
+        - password
+
+    AuthRecoverInput:
+      type: object
+      properties:
+        recoveryKey:
+          type: string
+        newPassword:
+          type: string
+      required:
+        - recoveryKey
+        - newPassword
+
+    AuthChangePasswordInput:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+      required:
+        - currentPassword
+        - newPassword
+
+    AuthSession:
+      type: object
+      properties:
+        sid:
+          type: string
+        deviceName:
+          type: string
+        ip:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+        isCurrent:
+          type: boolean
+      required:
+        - sid
+        - deviceName
+        - ip
+        - expiresAt
+        - isCurrent
+
+    SessionsResult:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthSession"
+      required:
+        - sessions
