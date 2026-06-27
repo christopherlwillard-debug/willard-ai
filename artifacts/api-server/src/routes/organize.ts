@@ -555,7 +555,11 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] ?? {};
-    const nasPath = (settings as any).nasPath ?? "";
+    const nasPath = ((settings as any).nasPath ?? "").trim();
+    if (!nasPath || !path.isAbsolute(nasPath)) {
+      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(eq(organizationJobsTable.id, id));
+      res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
+    }
 
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
 
@@ -698,6 +702,10 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     const plan = job.planJson as any;
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] as any ?? {};
+    const nasPath = (settings.nasPath ?? "").trim();
+    if (!nasPath || !path.isAbsolute(nasPath)) {
+      res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running preflight." }); return;
+    }
     const checks: any[] = [];
 
     // Active routes = plan.activeRoutes (if exclusions applied) or plan.routes
@@ -732,17 +740,21 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       checks.push({ name: "Archive integrity", ok: v.ok, detail: v.detail });
     }
 
-    // 3. Destination writability — checked per destination
+    // 3. Destination writability — checked per destination (must be within NAS root)
     const uniqueDests = [...new Set<string>(activeRoutes.map((r: any) => r.destination).filter(Boolean))];
     for (const dest of uniqueDests) {
       let destOk = false;
       let destDetail = "";
       try {
+        // Reject destinations outside the configured NAS root before touching disk
+        assertWithinRoot(path.resolve(dest), path.resolve(nasPath));
         fs.mkdirSync(dest, { recursive: true });
         const tf = path.join(dest, `.willard_test_${Date.now()}`);
         fs.writeFileSync(tf, ""); fs.unlinkSync(tf);
         destOk = true; destDetail = "Writable";
-      } catch (e: any) { destDetail = e.message; }
+      } catch (e: any) {
+        destDetail = e.message?.includes("outside") ? `Outside NAS root: ${e.message}` : e.message;
+      }
       checks.push({ name: `Writable: ${path.basename(dest)}`, ok: destOk, detail: destDetail || dest });
     }
 
@@ -870,7 +882,10 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const plan = job.planJson as any;
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] as any ?? {};
-    const nasPath = settings.nasPath ?? "";
+    const nasPath = (settings.nasPath ?? "").trim();
+    if (!nasPath || !path.isAbsolute(nasPath)) {
+      send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
+    }
 
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -982,6 +997,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       const destDir  = routeDestination(ft, settings, nasPath, { archiveName });
       const destFile = path.join(destDir, path.basename(sf.relativePath));
+
+      // Enforce NAS root boundary — destination must be within configured nasPath
+      assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
 
       // FATAL on unexpected collision — pre-flight should have caught this
       if (fs.existsSync(destFile)) {
