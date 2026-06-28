@@ -60,6 +60,18 @@ interface ScanResult {
   totalBytes:        number;
   totalSavingsBytes: number;
   groups:            FormatGroup[];
+  fromCache?:        boolean;
+}
+
+function timeAgo(isoDate: string): string {
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  const mins  = Math.floor(diffMs / 60_000);
+  if (mins < 1)  return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }
 
 type ConversionFileStatus = "success" | "failed" | "skipped";
@@ -808,11 +820,13 @@ export default function Optimize() {
   const [runOpen,      setRunOpen]      = useState(false);
   const [retryJobId,   setRetryJobId]   = useState<number | null>(null);
   const [retryOpen,    setRetryOpen]    = useState(false);
+  const isMountLoad = useRef(true);
 
   // ── Scan ──────────────────────────────────────────────────────────────────
-  const scanMutation = useMutation({
-    mutationFn: async () => {
-      const resp = await fetch("/api/optimize/scan");
+  const scanMutation = useMutation<ScanResult, Error, boolean>({
+    mutationFn: async (force: boolean) => {
+      const url = force ? "/api/optimize/scan?force=true" : "/api/optimize/scan";
+      const resp = await fetch(url);
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
         throw new Error((body as any).error ?? "Scan failed");
@@ -821,13 +835,19 @@ export default function Optimize() {
     },
     onSuccess: (data) => {
       setScanResult(data);
-      setApprovedExts(new Set());
-      setSkippedExts(new Set());
-      setAiSummary(null);
-      fetchAiSummary(data);
+      if (!data.fromCache) {
+        setApprovedExts(new Set());
+        setSkippedExts(new Set());
+        setAiSummary(null);
+        fetchAiSummary(data);
+      }
+      isMountLoad.current = false;
     },
     onError: (e: Error) => {
-      toast({ title: "Scan failed", description: e.message, variant: "destructive" });
+      if (!isMountLoad.current) {
+        toast({ title: "Scan failed", description: e.message, variant: "destructive" });
+      }
+      isMountLoad.current = false;
     },
   });
 
@@ -863,6 +883,13 @@ export default function Optimize() {
       toast({ title: "Retry failed", description: e.message, variant: "destructive" });
     },
   });
+
+  // ── Load cached scan on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    isMountLoad.current = true;
+    scanMutation.mutate(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── AI summary ────────────────────────────────────────────────────────────
   async function fetchAiSummary(data: ScanResult) {
@@ -997,14 +1024,25 @@ export default function Optimize() {
               </Button>
             </>
           )}
-          <Button
-            onClick={() => scanMutation.mutate()}
-            disabled={scanMutation.isPending}
-            className="font-mono gap-2"
-          >
-            <ScanLine className="w-4 h-4" />
-            {scanMutation.isPending ? "Scanning…" : scanResult ? "Re-scan NAS" : "Scan NAS"}
-          </Button>
+          <div className="flex flex-col items-end gap-0.5">
+            {scanResult?.fromCache && !scanMutation.isPending && (
+              <p className="text-[10px] font-mono text-muted-foreground">
+                Last scanned {timeAgo(scanResult.scannedAt)}
+              </p>
+            )}
+            <Button
+              onClick={() => scanMutation.mutate(scanResult != null)}
+              disabled={scanMutation.isPending}
+              className="font-mono gap-2"
+            >
+              <ScanLine className="w-4 h-4" />
+              {scanMutation.isPending
+                ? (scanResult?.fromCache ? "Checking…" : "Scanning…")
+                : scanResult
+                ? "Re-scan NAS"
+                : "Scan NAS"}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1030,7 +1068,7 @@ export default function Optimize() {
                 Scan your NAS to see which formats can be converted for space savings
               </p>
             </div>
-            <Button onClick={() => scanMutation.mutate()} className="font-mono gap-2 mt-2">
+            <Button onClick={() => scanMutation.mutate(true)} className="font-mono gap-2 mt-2">
               <ScanLine className="w-4 h-4" /> Start Scan
             </Button>
           </CardContent>

@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { desc, eq } from "drizzle-orm";
-import { assertWithinRoot } from "../lib/nas-storage";
+import { assertWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router: IRouter = Router();
@@ -228,6 +228,40 @@ const FORMAT_RULES: Record<string, FormatRule> = {
   xcf:  { status: "protected", category: "image",  reason: "GIMP project file — layered master, never convert" },
 };
 
+// ── Optimize scan cache ────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_FILENAME = "optimize-scan.json";
+
+function getCachePath(nasPath: string): string {
+  return path.join(getWillardAIDir(nasPath), "cache", CACHE_FILENAME);
+}
+
+function readScanCache(nasPath: string): (Record<string, unknown> & { scannedAt: string }) | null {
+  try {
+    const cachePath = getCachePath(nasPath);
+    if (!fs.existsSync(cachePath)) return null;
+    const raw = fs.readFileSync(cachePath, "utf-8");
+    const data = JSON.parse(raw) as Record<string, unknown> & { scannedAt: string };
+    if (!data.scannedAt) return null;
+    const age = Date.now() - new Date(data.scannedAt).getTime();
+    if (age > CACHE_TTL_MS) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
+  try {
+    const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(getCachePath(nasPath), JSON.stringify(data), "utf-8");
+  } catch {
+    // Non-fatal — cache write is best-effort
+  }
+}
+
 // ── NAS directory walker ───────────────────────────────────────────────────────
 
 interface SampleFile { path: string; sizeBytes: number; }
@@ -334,7 +368,7 @@ function convertVideo(srcPath: string, destPath: string): string | null {
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
 
-router.get("/optimize/scan", async (_req, res) => {
+router.get("/optimize/scan", async (req, res) => {
   try {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] as any ?? {};
@@ -345,6 +379,16 @@ router.get("/optimize/scan", async (_req, res) => {
     }
 
     assertWithinRoot(path.resolve(nasPath), path.resolve(nasPath));
+
+    // ── Return cached result if fresh enough and not forcing a re-scan ──────
+    const force = req.query.force === "true";
+    if (!force) {
+      const cached = readScanCache(nasPath);
+      if (cached) {
+        res.json({ ...cached, fromCache: true });
+        return;
+      }
+    }
 
     const groups = new Map<string, ExtGroup>();
     const counter = { total: 0 };
@@ -392,14 +436,18 @@ router.get("/optimize/scan", async (_req, res) => {
       return b.estimatedSavingsBytes - a.estimatedSavingsBytes;
     });
 
-    res.json({
+    const payload = {
       scannedAt: new Date().toISOString(),
       nasPath,
       totalFiles: counter.total,
       totalBytes: result.reduce((s, g) => s + g.totalBytes, 0),
       totalSavingsBytes,
       groups: result,
-    });
+      fromCache: false,
+    };
+
+    writeScanCache(nasPath, payload);
+    res.json(payload);
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Scan failed" });
   }
