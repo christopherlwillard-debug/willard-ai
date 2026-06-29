@@ -17,6 +17,17 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
+ * @summary Get library health status
+ */
+export const GetHealthStatusResponse = zod.object({
+  "database": zod.boolean(),
+  "thumbnailsOk": zod.boolean(),
+  "missingFiles": zod.number(),
+  "corruptFiles": zod.number()
+})
+
+
+/**
  * @summary Get authentication status and setup state
  */
 export const GetAuthStatusResponse = zod.object({
@@ -265,6 +276,8 @@ export const GetDashboardResponse = zod.object({
   "archiveCount": zod.number(),
   "documentCount": zod.number(),
   "duplicateCount": zod.number(),
+  "duplicateSizeBytes": zod.number(),
+  "incomingCount": zod.number(),
   "isScanning": zod.boolean(),
   "lastScanAt": zod.string().nullable(),
   "typeBreakdown": zod.array(zod.object({
@@ -272,7 +285,10 @@ export const GetDashboardResponse = zod.object({
   "count": zod.number(),
   "sizeBytes": zod.number(),
   "percentage": zod.number()
-}))
+})),
+  "diskTotal": zod.number().nullish(),
+  "diskUsed": zod.number().nullish(),
+  "diskFree": zod.number().nullish()
 })
 
 

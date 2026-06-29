@@ -1,16 +1,14 @@
 import { Router, type IRouter } from "express";
 import { execFileSync } from "child_process";
 import { db } from "@workspace/db";
-import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable } from "@workspace/db";
+import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable, organizationJobsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
 
 const router: IRouter = Router();
 
 function getDiskStats(dirPath: string): { total: number; used: number; free: number } | null {
-  // Validate path to reject null bytes or obviously invalid values before passing to execFileSync
   if (!dirPath || dirPath.includes("\0") || dirPath.length > 4096) return null;
   try {
-    // Use execFileSync (array args) — NOT shell interpolation — to avoid injection risk
     const output = execFileSync("df", ["-B1", dirPath], { timeout: 2000, stdio: ["pipe", "pipe", "pipe"] }).toString().trim();
     const lines = output.split("\n");
     const lastLine = lines[lines.length - 1].trim();
@@ -57,6 +55,15 @@ router.get("/dashboard", async (_req, res) => {
     );
     const duplicateCount = Number((dupQuery.rows[0] as any)?.cnt ?? 0);
 
+    const dupSizeQuery = await db.execute(
+      sql`SELECT COALESCE(SUM(size_bytes), 0) as total_size FROM ${indexedFilesTable} WHERE content_hash IN (SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1)`
+    );
+    const duplicateSizeBytes = Number((dupSizeQuery.rows[0] as any)?.total_size ?? 0);
+
+    const [incomingRow] = await db.select({ count: count() }).from(organizationJobsTable)
+      .where(eq(organizationJobsTable.status, "pending"));
+    const incomingCount = incomingRow?.count ?? 0;
+
     const runningJob = await db.select().from(scanJobsTable)
       .where(eq(scanJobsTable.status, "running")).limit(1);
 
@@ -71,6 +78,8 @@ router.get("/dashboard", async (_req, res) => {
       archiveCount: archiveCountRow.count,
       documentCount: docCountRow.count,
       duplicateCount,
+      duplicateSizeBytes,
+      incomingCount,
       isScanning: runningJob.length > 0,
       lastScanAt: settings?.lastScanAt ?? null,
       typeBreakdown: breakdown,

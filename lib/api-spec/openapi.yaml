@@ -47,6 +47,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
 
+  /health/status:
+    get:
+      operationId: getHealthStatus
+      tags: [health]
+      summary: Get library health status
+      responses:
+        "200":
+          description: Library health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryHealthStatus"
+
   # ── Auth ──────────────────────────────────────────────────────────────────
   /auth/status:
     get:
@@ -1228,6 +1241,23 @@ components:
       required:
         - isRunning
 
+    LibraryHealthStatus:
+      type: object
+      properties:
+        database:
+          type: boolean
+        thumbnailsOk:
+          type: boolean
+        missingFiles:
+          type: integer
+        corruptFiles:
+          type: integer
+      required:
+        - database
+        - thumbnailsOk
+        - missingFiles
+        - corruptFiles
+
     DashboardSummary:
       type: object
       properties:
@@ -1241,6 +1271,10 @@ components:
           type: integer
         duplicateCount:
           type: integer
+        duplicateSizeBytes:
+          type: integer
+        incomingCount:
+          type: integer
         isScanning:
           type: boolean
         lastScanAt:
@@ -1249,12 +1283,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TypeBreakdown"
+        diskTotal:
+          type: ["integer", "null"]
+        diskUsed:
+          type: ["integer", "null"]
+        diskFree:
+          type: ["integer", "null"]
       required:
         - totalFiles
         - totalSizeBytes
         - archiveCount
         - documentCount
         - duplicateCount
+        - duplicateSizeBytes
+        - incomingCount
         - isScanning
         - lastScanAt
         - typeBreakdown

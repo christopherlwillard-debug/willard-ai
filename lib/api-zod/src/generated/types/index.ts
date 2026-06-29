@@ -37,6 +37,7 @@ export * from './getOldFilesParams';
 export * from './healthStatus';
 export * from './indexedFile';
 export * from './largeFileResult';
+export * from './libraryHealthStatus';
 export * from './listArchivesParams';
 export * from './listDocumentsFileType';
 export * from './listDocumentsParams';

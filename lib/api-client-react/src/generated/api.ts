@@ -45,6 +45,7 @@ import type {
   HealthStatus,
   IndexedFile,
   LargeFileResult,
+  LibraryHealthStatus,
   ListArchivesParams,
   ListDocumentsParams,
   ListFolderParams,
@@ -164,6 +165,83 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getHealthCheckQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetHealthStatusUrl = () => {
+
+
+
+
+  return `/api/health/status`
+}
+
+/**
+ * @summary Get library health status
+ */
+export const getHealthStatus = async ( options?: RequestInit): Promise<LibraryHealthStatus> => {
+
+  return customFetch<LibraryHealthStatus>(getGetHealthStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetHealthStatusQueryKey = () => {
+    return [
+    `/api/health/status`
+    ] as const;
+    }
+
+
+export const getGetHealthStatusQueryOptions = <TData = Awaited<ReturnType<typeof getHealthStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getHealthStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetHealthStatusQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getHealthStatus>>> = ({ signal }) => getHealthStatus({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getHealthStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetHealthStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getHealthStatus>>>
+export type GetHealthStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get library health status
+ */
+
+export function useGetHealthStatus<TData = Awaited<ReturnType<typeof getHealthStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getHealthStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetHealthStatusQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

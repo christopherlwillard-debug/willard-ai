@@ -91,6 +91,13 @@ export interface ScanStatus {
   lastCompleted?: ScanStatusLastCompleted;
 }
 
+export interface LibraryHealthStatus {
+  database: boolean;
+  thumbnailsOk: boolean;
+  missingFiles: number;
+  corruptFiles: number;
+}
+
 export interface TypeBreakdown {
   fileType: string;
   count: number;
@@ -104,10 +111,18 @@ export interface DashboardSummary {
   archiveCount: number;
   documentCount: number;
   duplicateCount: number;
+  duplicateSizeBytes: number;
+  incomingCount: number;
   isScanning: boolean;
   /** @nullable */
   lastScanAt: string | null;
   typeBreakdown: TypeBreakdown[];
+  /** @nullable */
+  diskTotal?: number | null;
+  /** @nullable */
+  diskUsed?: number | null;
+  /** @nullable */
+  diskFree?: number | null;
 }
 
 export interface IndexedFile {
@@ -564,5 +579,4 @@ export type GetOldFilesParams = {
 limit?: number;
 offset?: number;
 };
-
 

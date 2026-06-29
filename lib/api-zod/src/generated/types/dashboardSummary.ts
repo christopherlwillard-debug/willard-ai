@@ -13,8 +13,16 @@ export interface DashboardSummary {
   archiveCount: number;
   documentCount: number;
   duplicateCount: number;
+  duplicateSizeBytes: number;
+  incomingCount: number;
   isScanning: boolean;
   /** @nullable */
   lastScanAt: string | null;
   typeBreakdown: TypeBreakdown[];
+  /** @nullable */
+  diskTotal?: number | null;
+  /** @nullable */
+  diskUsed?: number | null;
+  /** @nullable */
+  diskFree?: number | null;
 }
