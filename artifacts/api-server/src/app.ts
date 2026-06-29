@@ -30,6 +30,8 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS last_stage text;
     ALTER TABLE organization_jobs
       ADD COLUMN IF NOT EXISTS stage_updated_at timestamp;
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS logo_path text;
   `);
   await pool.query(`
     ALTER TABLE app_settings
