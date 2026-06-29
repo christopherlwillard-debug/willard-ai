@@ -131,12 +131,40 @@ router.get("/media/files", async (req: Request, res: Response) => {
   res.json({ files, total, page, limit });
 });
 
-// ── GET /api/media/folders — unique top-level folder list ────────────────────
+// ── GET /api/media/folders — hierarchical folder tree ────────────────────────
+
+interface FolderNode {
+  name: string;
+  path: string;
+  children: FolderNode[];
+}
+
+function buildFolderTree(folderPaths: string[]): FolderNode[] {
+  const nodeMap = new Map<string, FolderNode>();
+  const roots: FolderNode[] = [];
+
+  for (const fp of [...folderPaths].sort()) {
+    const parts = fp.split("/");
+    let parentList = roots;
+
+    for (let depth = 1; depth <= parts.length; depth++) {
+      const currentPath = parts.slice(0, depth).join("/");
+      if (!nodeMap.has(currentPath)) {
+        const node: FolderNode = { name: parts[depth - 1], path: currentPath, children: [] };
+        nodeMap.set(currentPath, node);
+        parentList.push(node);
+      }
+      parentList = nodeMap.get(currentPath)!.children;
+    }
+  }
+
+  return roots;
+}
 
 router.get("/media/folders", async (_req: Request, res: Response) => {
   const nasPath = await getNasPath();
   if (!nasPath) {
-    res.json({ folders: [] });
+    res.json({ tree: [] });
     return;
   }
 
@@ -145,16 +173,18 @@ router.get("/media/folders", async (_req: Request, res: Response) => {
     .from(mediaFilesTable)
     .where(eq(mediaFilesTable.nasPath, nasPath));
 
-  // Extract unique top-level folders from relative paths
+  // Collect all unique ancestor folder paths (strip filename from each relative path)
   const folderSet = new Set<string>();
   for (const row of rows) {
     const parts = row.relativePath.split("/");
-    if (parts.length > 1) {
-      folderSet.add(parts[0]);
+    // Each path like "a/b/c/file.jpg" → folders "a", "a/b", "a/b/c"
+    for (let i = 1; i < parts.length; i++) {
+      folderSet.add(parts.slice(0, i).join("/"));
     }
   }
 
-  res.json({ folders: Array.from(folderSet).sort() });
+  const tree = buildFolderTree(Array.from(folderSet));
+  res.json({ tree });
 });
 
 // ── GET /api/media/thumbnail/:id — serve or generate thumbnail ───────────────

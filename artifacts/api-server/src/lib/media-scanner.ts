@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getWillardAIDir } from "./nas-storage";
+import { getThumbnailDir, thumbnailFilename } from "./thumbnail-engine";
 
 // ── Media type classification ─────────────────────────────────────────────────
 
@@ -157,6 +158,13 @@ export async function runMediaScan(nasPath: string): Promise<number> {
           ) {
             skipped++;
           } else {
+            // File is new or changed — delete stale thumbnail so it regenerates
+            if (existing) {
+              const thumbDir = getThumbnailDir(nasPath);
+              const oldThumb = path.join(thumbDir, thumbnailFilename(existing.id));
+              try { fs.unlinkSync(oldThumb); } catch { /* already gone */ }
+            }
+
             await db.insert(mediaFilesTable).values({
               nasPath,
               relativePath,

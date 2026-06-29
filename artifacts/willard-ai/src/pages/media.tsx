@@ -11,6 +11,8 @@ import {
   RefreshCw,
   X,
   FolderOpen,
+  Folder,
+  ChevronRight,
   Search,
   Download,
   ExternalLink,
@@ -49,6 +51,12 @@ interface MediaFilesResponse {
   total: number;
   page: number;
   limit: number;
+}
+
+interface FolderNode {
+  name: string;
+  path: string;
+  children: FolderNode[];
 }
 
 interface ScanJob {
@@ -316,6 +324,83 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
 
+// ── Collapsible folder tree node ──────────────────────────────────────────────
+
+function FolderTreeNode({
+  node,
+  depth,
+  selectedFolder,
+  onSelect,
+}: {
+  node: FolderNode;
+  depth: number;
+  selectedFolder: string | null;
+  onSelect: (path: string | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(
+    () => selectedFolder !== null && selectedFolder.startsWith(node.path),
+  );
+  const hasChildren = node.children.length > 0;
+  const isSelected  = selectedFolder === node.path;
+  const indent      = depth * 12;
+
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex items-center gap-1 px-2 py-1.5 text-xs font-mono transition-colors cursor-pointer select-none",
+          isSelected
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        )}
+        style={{ paddingLeft: `${8 + indent}px` }}
+      >
+        {/* Expand/collapse chevron */}
+        <button
+          onClick={(e) => { e.stopPropagation(); if (hasChildren) setExpanded((v) => !v); }}
+          className="shrink-0 w-4 h-4 flex items-center justify-center"
+        >
+          {hasChildren ? (
+            <ChevronRight className={cn("w-3 h-3 transition-transform", expanded && "rotate-90")} />
+          ) : (
+            <span className="w-3" />
+          )}
+        </button>
+
+        {/* Folder icon + name — clicking selects */}
+        <button
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+          onClick={() => onSelect(isSelected ? null : node.path)}
+        >
+          {isSelected ? (
+            <FolderOpen className="w-3.5 h-3.5 shrink-0 text-primary" />
+          ) : (
+            <Folder className="w-3.5 h-3.5 shrink-0" />
+          )}
+          <span className="truncate">{node.name}</span>
+        </button>
+      </div>
+
+      {/* Children */}
+      {expanded && hasChildren && (
+        <div>
+          {node.children.map((child) => (
+            <FolderTreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              selectedFolder={selectedFolder}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
 function EmptyState({ onScan, isScanning }: { onScan: () => void; isScanning: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-6 py-20 text-center">
@@ -373,7 +458,7 @@ export default function Media() {
     queryFn: async () => {
       const r = await fetch("/api/media/folders");
       if (!r.ok) throw new Error("Failed to load folders");
-      return r.json() as Promise<{ folders: string[] }>;
+      return r.json() as Promise<{ tree: FolderNode[] }>;
     },
   });
 
@@ -434,7 +519,8 @@ export default function Media() {
   const files      = filesQuery.data?.files ?? [];
   const total      = filesQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const folders    = foldersQuery.data?.folders ?? [];
+  const folderTree = foldersQuery.data?.tree ?? [];
+  const hasFolders = folderTree.length > 0;
 
   const handleScan = useCallback(() => {
     scanMutation.mutate();
@@ -547,13 +633,14 @@ export default function Media() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* ── Folder sidebar ── */}
-        {folders.length > 0 && (
-          <div className="w-48 shrink-0 border-r border-border overflow-y-auto py-2">
+        {hasFolders && (
+          <div className="w-52 shrink-0 border-r border-border overflow-y-auto py-2">
             <div className="px-3 py-1">
               <span className="text-[10px] font-mono font-semibold text-muted-foreground uppercase tracking-widest">
                 Folders
               </span>
             </div>
+            {/* All files entry */}
             <button
               onClick={() => setSelectedFolder(null)}
               className={cn(
@@ -564,22 +651,17 @@ export default function Media() {
               )}
             >
               <Layers className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">All</span>
+              <span className="truncate">All files</span>
             </button>
-            {folders.map((folder) => (
-              <button
-                key={folder}
-                onClick={() => setSelectedFolder(selectedFolder === folder ? null : folder)}
-                className={cn(
-                  "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
-                  selectedFolder === folder
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )}
-              >
-                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{folder}</span>
-              </button>
+            {/* Recursive tree */}
+            {folderTree.map((node) => (
+              <FolderTreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                selectedFolder={selectedFolder}
+                onSelect={setSelectedFolder}
+              />
             ))}
           </div>
         )}

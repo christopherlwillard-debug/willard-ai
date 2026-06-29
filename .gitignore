@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# NAS mount paths that may exist in development (Windows drive letters)
+artifacts/api-server/[a-zA-Z]:/

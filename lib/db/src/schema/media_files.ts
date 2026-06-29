@@ -1,4 +1,4 @@
-import { pgTable, serial, text, bigint, integer, real, timestamp, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, bigint, integer, real, timestamp, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -21,8 +21,8 @@ export const mediaFilesTable = pgTable("media_files", {
   contentHash:          text("content_hash"),
   indexedAt:            timestamp("indexed_at").notNull().defaultNow(),
 }, (t) => [
+  uniqueIndex("media_files_nas_rel_unique").on(t.nasPath, t.relativePath),
   index("media_files_nas_path_idx").on(t.nasPath),
-  index("media_files_rel_path_idx").on(t.relativePath),
   index("media_files_media_type_idx").on(t.mediaType),
   index("media_files_content_hash_idx").on(t.contentHash),
 ]);

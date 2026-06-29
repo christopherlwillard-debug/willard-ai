@@ -3,7 +3,7 @@ set -e
 pnpm install --frozen-lockfile
 pnpm --filter db push
 
-# Ensure media tables exist (drizzle-kit push may skip non-interactive envs)
+# Ensure media tables exist (drizzle-kit push may skip in non-interactive envs)
 psql "$DATABASE_URL" << 'SQL'
 CREATE TABLE IF NOT EXISTS media_files (
   id                    serial PRIMARY KEY,
@@ -22,11 +22,14 @@ CREATE TABLE IF NOT EXISTS media_files (
   thumbnail_generated_at timestamp,
   exif_json             jsonb,
   content_hash          text,
-  indexed_at            timestamp NOT NULL DEFAULT now(),
-  UNIQUE (nas_path, relative_path)
+  indexed_at            timestamp NOT NULL DEFAULT now()
 );
+
+-- Idempotent: add the unique constraint if it does not already exist
+CREATE UNIQUE INDEX IF NOT EXISTS media_files_nas_rel_unique
+  ON media_files (nas_path, relative_path);
+
 CREATE INDEX IF NOT EXISTS media_files_nas_path_idx ON media_files (nas_path);
-CREATE INDEX IF NOT EXISTS media_files_rel_path_idx ON media_files (relative_path);
 CREATE INDEX IF NOT EXISTS media_files_media_type_idx ON media_files (media_type);
 CREATE INDEX IF NOT EXISTS media_files_content_hash_idx ON media_files (content_hash);
 
