@@ -20,6 +20,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Layers,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -438,6 +440,7 @@ export default function Media() {
   const [selectedFile, setSelectedFile]       = useState<MediaFile | null>(null);
   const [page, setPage]               = useState(1);
   const [sort, setSort]               = useState("indexed_desc");
+  const [viewMode, setViewMode]       = useState<"grid" | "list">("grid");
   const [dismissedJobId, setDismissedJobId]   = useState<number | null>(null);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -586,6 +589,30 @@ export default function Media() {
           )}
         </Button>
 
+        {/* View mode toggle */}
+        <div className="flex items-center border border-border rounded-md overflow-hidden">
+          <button
+            onClick={() => setViewMode("grid")}
+            className={cn(
+              "h-8 w-8 flex items-center justify-center transition-colors",
+              viewMode === "grid" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+            title="Grid view"
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setViewMode("list")}
+            className={cn(
+              "h-8 w-8 flex items-center justify-center transition-colors",
+              viewMode === "list" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+            title="List view"
+          >
+            <List className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
         <Button
           size="sm"
           variant="ghost"
@@ -702,16 +729,62 @@ export default function Media() {
                 )}
               </div>
 
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-3">
-                {files.map((file) => (
-                  <ThumbnailCard
-                    key={file.id}
-                    file={file}
-                    selected={selectedFile?.id === file.id}
-                    onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
-                  />
-                ))}
-              </div>
+              {viewMode === "grid" ? (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-3">
+                  {files.map((file) => (
+                    <ThumbnailCard
+                      key={file.id}
+                      file={file}
+                      selected={selectedFile?.id === file.id}
+                      onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="border border-border rounded-md overflow-hidden">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="bg-muted/50 border-b border-border">
+                      <tr>
+                        <th className="text-left px-3 py-2 text-muted-foreground font-semibold uppercase tracking-wider">Name</th>
+                        <th className="text-left px-3 py-2 text-muted-foreground font-semibold uppercase tracking-wider w-24">Type</th>
+                        <th className="text-left px-3 py-2 text-muted-foreground font-semibold uppercase tracking-wider w-20 hidden sm:table-cell">Size</th>
+                        <th className="text-left px-3 py-2 text-muted-foreground font-semibold uppercase tracking-wider w-24 hidden md:table-cell">Dimensions</th>
+                        <th className="text-left px-3 py-2 text-muted-foreground font-semibold uppercase tracking-wider w-28 hidden lg:table-cell">Modified</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {files.map((file, i) => (
+                        <tr
+                          key={file.id}
+                          onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
+                          className={cn(
+                            "cursor-pointer border-b border-border last:border-0 transition-colors",
+                            i % 2 === 0 ? "bg-card" : "bg-muted/20",
+                            selectedFile?.id === file.id ? "bg-accent" : "hover:bg-accent/50",
+                          )}
+                        >
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <MediaTypeIcon type={file.mediaType} className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate max-w-[200px] sm:max-w-[280px] md:max-w-xs lg:max-w-sm">{file.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 capitalize text-muted-foreground">{file.mediaType}</td>
+                          <td className="px-3 py-2 text-muted-foreground hidden sm:table-cell">{formatBytes(file.sizeBytes)}</td>
+                          <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">
+                            {file.width && file.height
+                              ? `${file.width}×${file.height}`
+                              : file.durationSeconds != null
+                              ? formatDuration(file.durationSeconds)
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground hidden lg:table-cell">{formatDate(file.modifiedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {totalPages > 1 && (
                 <div className="flex items-center justify-center gap-2 pt-2">

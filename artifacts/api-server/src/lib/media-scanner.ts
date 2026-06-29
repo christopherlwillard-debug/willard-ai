@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
 import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -57,6 +58,76 @@ export function guessMimeType(ext: string): string {
   return map[lower] ?? "application/octet-stream";
 }
 
+// ── Metadata extraction ────────────────────────────────────────────────────────
+
+const SHARP_EXTS = new Set([
+  "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "tiff", "tif", "gif", "bmp",
+]);
+
+async function extractImageMeta(
+  fullPath: string,
+): Promise<{ width: number | null; height: number | null }> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const meta = await sharp(fullPath, { failOn: "none" }).metadata();
+    return { width: meta.width ?? null, height: meta.height ?? null };
+  } catch {
+    return { width: null, height: null };
+  }
+}
+
+const VIDEO_META_EXTS = new Set([
+  "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "3gp",
+  "ts", "mts", "m2ts", "mpeg", "mpg",
+]);
+
+function extractVideoMeta(
+  fullPath: string,
+): { width: number | null; height: number | null; durationSeconds: number | null } {
+  const result = spawnSync("ffprobe", [
+    "-v", "quiet",
+    "-print_format", "json",
+    "-show_streams",
+    "-show_format",
+    fullPath,
+  ], { encoding: "utf8", timeout: 15000 });
+
+  if (result.status !== 0 || !result.stdout) {
+    return { width: null, height: null, durationSeconds: null };
+  }
+  try {
+    const json = JSON.parse(result.stdout);
+    const videoStream = (json.streams ?? []).find((s: any) => s.codec_type === "video");
+    const duration = parseFloat(json.format?.duration ?? "0") || null;
+    return {
+      width:           videoStream?.width  ?? null,
+      height:          videoStream?.height ?? null,
+      durationSeconds: duration,
+    };
+  } catch {
+    return { width: null, height: null, durationSeconds: null };
+  }
+}
+
+// ── System/NAS directories to skip ────────────────────────────────────────────
+
+const SYSTEM_DIR_NAMES = new Set([
+  // Windows
+  "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
+  // Synology
+  "@eaDir", "@Recycle", "@SynoEAStream", "@SynoThumbs",
+  // QNAP
+  "#recycle", "#snapshot",
+  // macOS
+  ".Spotlight-V100", ".Trashes", ".fseventsd",
+  // Other common system dirs
+  "lost+found", "__pycache__",
+]);
+
+function isSystemDir(name: string): boolean {
+  return name.startsWith(".") || name.startsWith("@") || name.startsWith("#") || SYSTEM_DIR_NAMES.has(name);
+}
+
 // ── Directory walker ───────────────────────────────────────────────────────────
 
 function walkNas(
@@ -71,7 +142,7 @@ function walkNas(
     return;
   }
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
+    if (isSystemDir(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(path.resolve(fullPath))) continue;
@@ -165,6 +236,22 @@ export async function runMediaScan(nasPath: string): Promise<number> {
               try { fs.unlinkSync(oldThumb); } catch { /* already gone */ }
             }
 
+            // Extract metadata (dimensions for images, duration for videos)
+            let width:           number | null = null;
+            let height:          number | null = null;
+            let durationSeconds: number | null = null;
+
+            if (SHARP_EXTS.has(f.ext)) {
+              const imgMeta = await extractImageMeta(f.fullPath);
+              width  = imgMeta.width;
+              height = imgMeta.height;
+            } else if (VIDEO_META_EXTS.has(f.ext)) {
+              const vidMeta = extractVideoMeta(f.fullPath);
+              width           = vidMeta.width;
+              height          = vidMeta.height;
+              durationSeconds = vidMeta.durationSeconds;
+            }
+
             await db.insert(mediaFilesTable).values({
               nasPath,
               relativePath,
@@ -174,6 +261,9 @@ export async function runMediaScan(nasPath: string): Promise<number> {
               mediaType,
               sizeBytes:  f.sizeBytes,
               modifiedAt: f.modifiedAt,
+              width,
+              height,
+              durationSeconds,
             }).onConflictDoUpdate({
               target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
               set: {
@@ -183,6 +273,9 @@ export async function runMediaScan(nasPath: string): Promise<number> {
                 mediaType,
                 sizeBytes:  f.sizeBytes,
                 modifiedAt: f.modifiedAt,
+                width,
+                height,
+                durationSeconds,
                 thumbnailPath:        null,
                 thumbnailGeneratedAt: null,
                 indexedAt:  new Date(),
