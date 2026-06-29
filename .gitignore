@@ -50,3 +50,10 @@ Thumbs.db
 
 # NAS mount paths that may exist in development (Windows drive letters)
 artifacts/api-server/[a-zA-Z]:/
+
+# WillardAI runtime data written into the test-media directory during scans
+test-media/WillardAI/
+
+# Playwright test results and reports
+playwright-report/
+test-results/
