@@ -1,19 +1,52 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import {
-  useGetDashboard, getGetDashboardQueryKey,
-  useStartScan, useGetScanStatus, getGetScanStatusQueryKey,
+  useGetDashboard,
+  getGetDashboardQueryKey,
+  useStartScan,
+  useGetScanStatus,
+  getGetScanStatusQueryKey,
+  useGetSettings,
+  useSearchFiles,
 } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { formatBytes, formatDate } from "@/lib/format";
+import { Card, CardContent } from "@/components/ui/card";
+import { formatBytes } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, FileArchive, FileText, Copy, ScanLine, Loader2, HardDrive, Settings2, ArrowRight } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import {
+  Image as ImageIcon,
+  Film,
+  FileText,
+  Archive,
+  HardDrive,
+  ChevronRight,
+  CheckCircle2,
+  Loader2,
+  MapPin,
+  Settings2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 
-const COLORS = ["hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))", "hsl(var(--chart-4))", "hsl(var(--chart-5))"];
-const DISK_COLORS = ["hsl(var(--destructive))", "hsl(var(--muted))"];
+function formatRelativeDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "Never";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) {
+    return `Today • ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  } else if (diffDays === 1) {
+    return "Yesterday";
+  } else if (diffDays < 7) {
+    return `${diffDays} days ago`;
+  } else {
+    return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  }
+}
+
+function getTypeCount(breakdown: Array<{ fileType: string; count: number }>, type: string): number {
+  return breakdown.find((b) => b.fileType === type)?.count ?? 0;
+}
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -22,7 +55,7 @@ export default function Dashboard() {
   const { data, isLoading, error } = useGetDashboard({
     query: {
       queryKey: getGetDashboardQueryKey(),
-      refetchInterval: scanPolling ? 3000 : false,
+      refetchInterval: scanPolling ? 3000 : 30000,
     },
   });
 
@@ -36,12 +69,14 @@ export default function Dashboard() {
 
   const scanMutation = useStartScan({
     mutation: {
-      onSuccess: () => { setScanPolling(true); },
+      onSuccess: () => setScanPolling(true),
     },
   });
 
+  const { data: settings } = useGetSettings();
+  const { data: recentFiles } = useSearchFiles({ limit: 5 });
+
   const isScanning = data?.isScanning || (scanPolling && (scanStatus?.isRunning ?? false));
-  const scanProgress = scanStatus?.current;
 
   if (scanPolling && scanStatus && !scanStatus.isRunning) {
     setScanPolling(false);
@@ -50,255 +85,241 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4">
-        <Skeleton className="h-8 w-64" />
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-32" />)}
+      <div className="space-y-5">
+        <Skeleton className="h-36 rounded-xl" />
+        <div className="grid grid-cols-5 gap-3">
+          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
         </div>
-        <Skeleton className="h-64" />
+        <Skeleton className="h-36 rounded-lg" />
+        <Skeleton className="h-52 rounded-lg" />
+        <Skeleton className="h-52 rounded-lg" />
       </div>
     );
   }
 
   if (error || !data) {
-    return <div className="text-red-500 font-mono">Failed to load dashboard data</div>;
+    return <div className="text-red-500 font-mono text-sm">Failed to load dashboard data</div>;
   }
 
+  const photoCount = getTypeCount(data.typeBreakdown, "image");
+  const videoCount = getTypeCount(data.typeBreakdown, "video");
   const hasDiskStats = (data as any).diskTotal != null && (data as any).diskTotal > 0;
   const diskTotal: number = (data as any).diskTotal ?? 0;
   const diskUsed: number = (data as any).diskUsed ?? 0;
-  const diskFree: number = (data as any).diskFree ?? 0;
-  const diskUsedPct = diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0;
+  const nasPath = settings?.nasPath ?? "";
 
-  const diskChartData = hasDiskStats
-    ? [{ name: "Used", value: diskUsed }, { name: "Free", value: diskFree }]
-    : [];
+  const statCards = [
+    {
+      label: "Photos",
+      value: photoCount.toLocaleString(),
+      icon: ImageIcon,
+      color: "text-purple-400",
+      bg: "bg-purple-400/10",
+    },
+    {
+      label: "Videos",
+      value: videoCount.toLocaleString(),
+      icon: Film,
+      color: "text-blue-400",
+      bg: "bg-blue-400/10",
+    },
+    {
+      label: "Documents",
+      value: data.documentCount.toLocaleString(),
+      icon: FileText,
+      color: "text-green-400",
+      bg: "bg-green-400/10",
+    },
+    {
+      label: "Archives",
+      value: data.archiveCount.toLocaleString(),
+      icon: Archive,
+      color: "text-orange-400",
+      bg: "bg-orange-400/10",
+    },
+    {
+      label: "Storage",
+      value: hasDiskStats ? formatBytes(diskUsed) : formatBytes(data.totalSizeBytes),
+      sub: hasDiskStats ? `of ${formatBytes(diskTotal)}` : `${data.totalFiles.toLocaleString()} files`,
+      icon: HardDrive,
+      color: "text-sky-400",
+      bg: "bg-sky-400/10",
+    },
+  ];
+
+  const actions: { label: string; href?: string; action?: () => void }[] = [
+    { label: "Scan Library", action: () => scanMutation.mutate() },
+    { label: "Open Library", href: "/library" },
+    { label: "Organize Incoming", href: "/organize" },
+    { label: "Optimize Library", href: "/optimize" },
+    { label: "Library Health", href: "/cleanup" },
+  ];
+
+  const files = recentFiles?.files ?? [];
 
   return (
-    <div className="space-y-8">
-      {/* Header + Scan Now */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-3xl font-bold font-mono tracking-tight">SYSTEM_OVERVIEW</h1>
-          <p className="text-muted-foreground mt-2 font-mono text-sm">
-            Last scanned: {formatDate(data.lastScanAt)} | Status:{" "}
-            <span className={isScanning ? "text-amber-400" : "text-green-500"}>
-              {isScanning ? "SCANNING" : "IDLE"}
-            </span>
-          </p>
-          {isScanning && scanProgress && (
-            <div className="mt-2 space-y-1">
-              <p className="text-xs text-muted-foreground font-mono">
-                {scanProgress.stage} — {scanProgress.filesScanned?.toLocaleString() ?? 0} files indexed
-              </p>
-              <div className="h-1 w-64 bg-secondary rounded-full overflow-hidden">
-                <div className="h-full w-1/3 bg-primary rounded-full animate-[slide_1.5s_linear_infinite]" />
-              </div>
-            </div>
-          )}
+    <div className="space-y-5">
+      {/* Hero banner */}
+      <div className="relative flex items-center justify-between rounded-xl border border-border bg-card px-8 overflow-hidden" style={{ minHeight: 130 }}>
+        <div className="py-6 z-10">
+          <h1 className="text-2xl font-bold tracking-tight">Welcome back, Willard!</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Your media library is ready.</p>
         </div>
-        <Button
-          onClick={() => scanMutation.mutate()}
-          disabled={isScanning || scanMutation.isPending}
-          className="font-mono shrink-0"
-        >
-          {isScanning ? (
-            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Scanning...</>
-          ) : (
-            <><ScanLine className="w-4 h-4 mr-2" /> Scan Now</>
-          )}
-        </Button>
+        <img
+          src={`${import.meta.env.BASE_URL}opengraph.jpg`}
+          alt="Willard's Media Center"
+          className="h-24 w-auto object-contain opacity-90 shrink-0"
+        />
       </div>
 
-      {/* First-run onboarding banner */}
-      {data.totalFiles === 0 && !isScanning && (
-        <div className="flex items-start gap-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
-          <Settings2 className="w-5 h-5 text-primary mt-0.5 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="font-mono font-bold text-sm text-primary">NO_FILES_INDEXED</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              To get started: go to <strong>Settings</strong>, enter your NAS mount path, click <strong>Save</strong>, then click <strong>Scan Now</strong> (or use the button above).
-            </p>
-          </div>
-          <Link href="/settings">
-            <Button variant="outline" size="sm" className="font-mono shrink-0">
-              Open Settings <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-            </Button>
-          </Link>
+      {/* First-run onboarding */}
+      {data.totalFiles === 0 && !isScanning && nasPath === "" && (
+        <div className="flex items-start gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4">
+          <Settings2 className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            <strong className="text-foreground">Getting started:</strong> Go to{" "}
+            <Link href="/settings" className="text-primary hover:underline">Settings</Link>,
+            enter your NAS mount path, save, then click <strong>Scan Library</strong> above.
+          </p>
         </div>
       )}
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Indexed</CardTitle>
-            <Database className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatBytes(data.totalSizeBytes)}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {data.totalFiles.toLocaleString()} files indexed
+      {/* Stats row */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {statCards.map(({ label, value, sub, icon: Icon, color, bg }) => (
+          <Card key={label} className="border-border">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className={cn("rounded-md p-2 shrink-0", bg)}>
+                <Icon className={cn("w-4 h-4", color)} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] text-muted-foreground leading-none mb-1">{label}</p>
+                <p className="text-base font-semibold tabular-nums truncate leading-none">{value}</p>
+                {sub && <p className="text-[10px] text-muted-foreground mt-1 truncate">{sub}</p>}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Library Status card — full width, most prominent */}
+      <Link href="/organize">
+        <Card className="border-border hover:border-primary/40 transition-colors cursor-pointer group">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-5">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Library Status</p>
+              <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-4">
+              <div>
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Status</p>
+                <div className="flex items-center gap-1.5">
+                  {isScanning ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400 shrink-0" />
+                      <span className="text-sm font-medium text-amber-400">Scanning…</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                      <span className="text-sm font-medium">Healthy</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Last Scan</p>
+                <p className="text-sm font-medium">{formatRelativeDate(data.lastScanAt)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Storage</p>
+                <p className="text-sm font-medium">
+                  {hasDiskStats
+                    ? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+                    : formatBytes(data.totalSizeBytes)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Background Tasks</p>
+                <p className="text-sm font-medium">{isScanning ? "Scanning" : "Idle"}</p>
+              </div>
+            </div>
+            {nasPath && (
+              <div className="flex items-center gap-2 mt-5 pt-4 border-t border-border">
+                <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <p className="text-xs text-muted-foreground font-mono truncate">{nasPath}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </Link>
+
+      {/* Actions */}
+      <Card className="border-border">
+        <CardContent className="p-0">
+          <div className="px-6 pt-5 pb-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</p>
+          </div>
+          <div className="divide-y divide-border">
+            {actions.map(({ label, href, action }) =>
+              action ? (
+                <button
+                  key={label}
+                  onClick={action}
+                  disabled={isScanning || scanMutation.isPending}
+                  className="w-full flex items-center justify-between px-6 py-3.5 hover:bg-muted/40 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="text-sm">{label}</span>
+                  {isScanning && label === "Scan Library" ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+                  )}
+                </button>
+              ) : (
+                <Link key={label} href={href!}>
+                  <div className="flex items-center justify-between px-6 py-3.5 hover:bg-muted/40 transition-colors cursor-pointer group">
+                    <span className="text-sm">{label}</span>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+                  </div>
+                </Link>
+              )
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Recent Imports */}
+      <Card className="border-border">
+        <CardContent className="p-0">
+          <div className="flex items-center justify-between px-6 pt-5 pb-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Recent Imports{files.length > 0 ? ` (${files.length})` : ""}
             </p>
-            {hasDiskStats && (
-              <p className="text-xs text-muted-foreground mt-0.5 font-mono">
-                of {formatBytes(diskTotal)} disk
-              </p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Archives</CardTitle>
-            <FileArchive className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{data.archiveCount.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Documents</CardTitle>
-            <FileText className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{data.documentCount.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Duplicates</CardTitle>
-            <Copy className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{data.duplicateCount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground mt-1">by content hash</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Charts row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Disk Usage Ring */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-muted-foreground" />
-              Disk Usage
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {!hasDiskStats ? (
-              <div className="h-[220px] flex flex-col items-center justify-center gap-2 text-muted-foreground">
-                <HardDrive className="w-8 h-8 opacity-30" />
-                <p className="font-mono text-xs text-center">Set NAS path in Settings<br />to show disk stats</p>
+          </div>
+          <div className="divide-y divide-border">
+            {files.length === 0 ? (
+              <div className="px-6 py-8 text-center text-sm text-muted-foreground">
+                No files indexed yet — run a scan to populate.
               </div>
             ) : (
-              <>
-                <div className="h-[180px] relative">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={diskChartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        paddingAngle={2}
-                        dataKey="value"
-                        startAngle={90}
-                        endAngle={-270}
-                      >
-                        {diskChartData.map((_e, i) => (
-                          <Cell key={i} fill={DISK_COLORS[i]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(v: number) => formatBytes(v)}
-                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  {/* Center label */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <span className="text-2xl font-bold font-mono">{diskUsedPct}%</span>
-                    <span className="text-[10px] text-muted-foreground font-mono">USED</span>
-                  </div>
+              files.slice(0, 5).map((file) => (
+                <div key={file.filename} className="flex items-center justify-between px-6 py-3">
+                  <p className="text-sm truncate pr-6 min-w-0">{file.filename}</p>
+                  <p className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+                    {formatRelativeDate(file.modifiedAt)}
+                  </p>
                 </div>
-                <div className="space-y-2 mt-1">
-                  <div className="flex justify-between items-center text-xs font-mono">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-destructive inline-block" /> Used
-                    </span>
-                    <span>{formatBytes(diskUsed)}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs font-mono">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-muted inline-block" /> Free
-                    </span>
-                    <span className="text-green-500">{formatBytes(diskFree)}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs font-mono border-t pt-2 mt-1">
-                    <span className="text-muted-foreground">Total</span>
-                    <span>{formatBytes(diskTotal)}</span>
-                  </div>
-                </div>
-              </>
+              ))
             )}
-          </CardContent>
-        </Card>
-
-        {/* Storage Breakdown by type */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Storage Breakdown</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data.typeBreakdown.length === 0 ? (
-              <div className="h-[220px] flex items-center justify-center text-muted-foreground font-mono text-sm">
-                No data — run a scan to populate
-              </div>
-            ) : (
-              <>
-                <div className="h-[180px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={data.typeBreakdown}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={72}
-                        paddingAngle={4}
-                        dataKey="sizeBytes"
-                        nameKey="fileType"
-                      >
-                        {data.typeBreakdown.map((_e, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(v: number) => formatBytes(v)}
-                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="flex flex-wrap gap-2 mt-1 justify-center">
-                  {data.typeBreakdown.map((entry, i) => (
-                    <div key={entry.fileType} className="flex items-center gap-1.5 text-xs font-mono">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                      <span className="text-muted-foreground">{entry.fileType}</span>
-                      <span>{formatBytes(entry.sizeBytes)}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-      </div>
+          </div>
+          <div className="px-6 py-3.5 border-t border-border">
+            <Link href="/library" className="text-sm text-primary hover:underline">
+              View Library →
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
