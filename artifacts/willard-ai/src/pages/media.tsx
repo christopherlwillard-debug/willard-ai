@@ -17,6 +17,7 @@ import {
   Download,
   ExternalLink,
   Play,
+  Pause,
   CheckCircle2,
   AlertCircle,
   Layers,
@@ -91,17 +92,57 @@ interface FolderNode {
   children: FolderNode[];
 }
 
-interface ScanJob {
-  id: number;
-  status: "running" | "done" | "failed";
-  nasPath: string;
-  totalFiles: number;
-  indexedFiles: number;
-  skippedFiles: number;
+interface JobCounters {
+  new: number;
+  modified: number;
+  moved: number;
+  unchanged: number;
+  deleted: number;
+  hashed: number;
+  thumbnails: number;
+}
+
+interface JobSummary {
+  newFiles: number;
+  modifiedFiles: number;
+  movedFiles: number;
+  deletedFiles: number;
+  unchangedFiles: number;
+  hashedFiles: number;
   thumbnailsGenerated: number;
-  startedAt: string;
+  elapsedMs: number;
+  previousElapsedMs: number | null;
+}
+
+interface ProgressEvent {
+  jobId: number;
+  status: "RUNNING" | "PAUSED" | "DONE" | "FAILED" | "CANCELLED";
+  phase: string;
+  profile: string | null;
+  progress: number;
+  filesProcessed: number;
+  filesTotal: number;
+  currentPath: string;
+  etaSeconds: number | null;
+  speed: number;
+  counters: JobCounters;
+  summary: JobSummary | null;
+}
+
+interface LibraryJob {
+  id: number;
+  jobType: string;
+  profile: string | null;
+  status: string;
+  cancellationReason: string | null;
+  nasPath: string;
+  startedAt: string | null;
   finishedAt: string | null;
+  totalFiles: number | null;
+  processedFiles: number;
+  summary: JobSummary | null;
   error: string | null;
+  createdAt: string;
 }
 
 type MediaType = "all" | "photo" | "video" | "audio" | "document" | "other";
@@ -212,18 +253,71 @@ function ThumbnailCard({
 
 // ── Scan status banner ────────────────────────────────────────────────────────
 
-function ScanBanner({ job, onDismiss }: { job: ScanJob | null; onDismiss: () => void }) {
-  if (!job) return null;
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
 
-  if (job.status === "done") {
+function formatSpeed(filesPerSec: number): string {
+  if (filesPerSec < 1) return `${(filesPerSec * 60).toFixed(1)}/min`;
+  return `${filesPerSec.toFixed(1)}/s`;
+}
+
+function ScanSummaryCard({ summary, onDismiss }: { summary: JobSummary; onDismiss: () => void }) {
+  const elapsed = summary.elapsedMs / 1000;
+  const prev    = summary.previousElapsedMs !== null ? summary.previousElapsedMs / 1000 : null;
+  const saved   = prev !== null ? prev - elapsed : null;
+
+  return (
+    <div className="rounded-lg border border-green-700/40 bg-green-900/20 px-4 py-3 text-sm font-mono text-green-300">
+      <div className="flex items-center gap-2 mb-2">
+        <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <span className="font-semibold">Scan complete</span>
+        <span className="text-green-500 ml-1">({(elapsed).toFixed(1)}s)</span>
+        {saved !== null && saved > 0.5 && (
+          <span className="text-green-400 text-xs ml-1">— saved {saved.toFixed(1)}s vs full scan</span>
+        )}
+        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-green-400">
+        {summary.newFiles       > 0 && <span>+{summary.newFiles.toLocaleString()} new</span>}
+        {summary.modifiedFiles  > 0 && <span>~{summary.modifiedFiles.toLocaleString()} modified</span>}
+        {summary.movedFiles     > 0 && <span>→{summary.movedFiles.toLocaleString()} moved</span>}
+        {summary.deletedFiles   > 0 && <span className="text-red-400">✕{summary.deletedFiles.toLocaleString()} deleted</span>}
+        {summary.unchangedFiles > 0 && <span className="text-green-600">{summary.unchangedFiles.toLocaleString()} unchanged</span>}
+        {summary.thumbnailsGenerated > 0 && <span>{summary.thumbnailsGenerated.toLocaleString()} thumbnails</span>}
+      </div>
+    </div>
+  );
+}
+
+function ScanBanner({
+  progress,
+  onDismiss,
+  onPause,
+  onResume,
+  onCancel,
+}: {
+  progress: ProgressEvent | null;
+  onDismiss: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+}) {
+  if (!progress) return null;
+
+  if (progress.status === "DONE" && progress.summary) {
+    return <ScanSummaryCard summary={progress.summary} onDismiss={onDismiss} />;
+  }
+
+  if (progress.status === "DONE") {
     return (
       <div className="flex items-center gap-2 px-4 py-2 bg-green-900/30 border border-green-700/40 rounded-lg text-sm text-green-300 font-mono">
         <CheckCircle2 className="w-4 h-4 shrink-0" />
-        <span>
-          Scan complete — {job.indexedFiles.toLocaleString()} new,{" "}
-          {job.skippedFiles.toLocaleString()} unchanged of{" "}
-          {job.totalFiles.toLocaleString()} files.
-        </span>
+        <span>Scan complete — {progress.filesProcessed.toLocaleString()} files processed.</span>
         <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200">
           <X className="w-3.5 h-3.5" />
         </button>
@@ -231,30 +325,77 @@ function ScanBanner({ job, onDismiss }: { job: ScanJob | null; onDismiss: () => 
     );
   }
 
-  if (job.status === "failed") {
+  if (progress.status === "FAILED" || progress.status === "CANCELLED") {
+    const color = progress.status === "CANCELLED" ? "amber" : "red";
     return (
-      <div className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-700/40 rounded-lg text-sm text-red-300 font-mono">
+      <div className={`flex items-center gap-2 px-4 py-2 bg-${color}-900/30 border border-${color}-700/40 rounded-lg text-sm text-${color}-300 font-mono`}>
         <AlertCircle className="w-4 h-4 shrink-0" />
-        <span>Scan failed: {job.error}</span>
-        <button onClick={onDismiss} className="ml-auto text-red-400 hover:text-red-200">
+        <span>{progress.status === "CANCELLED" ? "Scan cancelled." : `Scan failed.`}</span>
+        <button onClick={onDismiss} className="ml-auto">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
     );
   }
 
-  const pct = job.totalFiles > 0
-    ? Math.round(((job.indexedFiles + job.skippedFiles) / job.totalFiles) * 100)
-    : null;
+  const pct  = Math.round(progress.progress * 100);
+  const isPaused = progress.status === "PAUSED";
 
   return (
-    <div className="flex items-center gap-2 px-4 py-2 bg-blue-900/30 border border-blue-700/40 rounded-lg text-sm text-blue-300 font-mono">
-      <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-      <span>
-        Scanning… {(job.indexedFiles + job.skippedFiles).toLocaleString()}
-        {job.totalFiles > 0 ? ` / ${job.totalFiles.toLocaleString()} files` : " files"}
-        {pct !== null ? ` (${pct}%)` : ""}
-      </span>
+    <div className="rounded-lg border border-blue-700/40 bg-blue-900/20 px-4 py-3 space-y-2 font-mono text-sm">
+      {/* Top row */}
+      <div className="flex items-center gap-2 text-blue-300">
+        {isPaused
+          ? <span className="text-amber-400 font-semibold text-xs uppercase tracking-wide">Paused</span>
+          : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+        }
+        <span className="truncate flex-1 text-xs text-blue-400" title={progress.currentPath}>
+          {progress.phase}{progress.currentPath ? ` — ${progress.currentPath.split("/").pop()}` : ""}
+        </span>
+        <span className="text-xs text-blue-500 shrink-0">
+          {progress.filesProcessed.toLocaleString()}
+          {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} files
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="w-full bg-blue-900/50 rounded-full h-1.5">
+        <div
+          className="bg-blue-400 h-1.5 rounded-full transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Stats row */}
+      <div className="flex items-center gap-3 text-xs text-blue-400">
+        <span>{pct}%</span>
+        {progress.etaSeconds !== null && progress.etaSeconds > 0 && (
+          <span>ETA {formatEta(progress.etaSeconds)}</span>
+        )}
+        {progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
+        <div className="flex gap-2 ml-auto">
+          {progress.counters.new       > 0 && <span className="text-green-400">+{progress.counters.new}</span>}
+          {progress.counters.modified  > 0 && <span className="text-yellow-400">~{progress.counters.modified}</span>}
+          {progress.counters.moved     > 0 && <span className="text-cyan-400">→{progress.counters.moved}</span>}
+          {progress.counters.deleted   > 0 && <span className="text-red-400">✕{progress.counters.deleted}</span>}
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="flex items-center gap-2 pt-0.5">
+        {isPaused ? (
+          <button onClick={onResume} className="text-xs text-blue-300 hover:text-blue-100 flex items-center gap-1">
+            <Play className="w-3 h-3" /> Resume
+          </button>
+        ) : (
+          <button onClick={onPause} className="text-xs text-blue-400 hover:text-blue-200 flex items-center gap-1">
+            <Pause className="w-3 h-3" /> Pause
+          </button>
+        )}
+        <button onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 flex items-center gap-1 ml-2">
+          <X className="w-3 h-3" /> Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -628,7 +769,6 @@ export default function Media() {
   const [page, setPage]               = useState(1);
   const [sort, setSort]               = useState("indexed_desc");
   const [viewMode, setViewMode]       = useState<"grid" | "list">("grid");
-  const [dismissedJobId, setDismissedJobId]   = useState<number | null>(null);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const LIMIT = 60;
@@ -665,29 +805,40 @@ export default function Media() {
     },
   });
 
-  const scanStatusQuery = useQuery({
-    queryKey: ["media-scan-status"],
+  // ── Library job progress (active job) ──────────────────────────────────────
+
+  const [dismissedProgress, setDismissedProgress] = useState<boolean>(false);
+
+  const activeJobQuery = useQuery({
+    queryKey: ["library-active-job"],
     queryFn: async () => {
-      const r = await fetch("/api/media/scan/status");
-      if (!r.ok) throw new Error("Failed to load scan status");
-      const json = await r.json();
-      return json as ScanJob | null;
+      const r = await fetch("/api/library/jobs/active");
+      if (!r.ok) throw new Error("Failed to load active job");
+      return r.json() as Promise<ProgressEvent | null>;
     },
-    refetchInterval: (query) => (query.state.data?.status === "running" ? 1500 : false),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "RUNNING" || status === "PAUSED" ? 1000 : false;
+    },
   });
 
+  const prevActiveStatus = useRef<string | null>(null);
   useEffect(() => {
-    if (scanStatusQuery.data?.status === "done") {
+    const status = activeJobQuery.data?.status;
+    if (prevActiveStatus.current !== "DONE" && status === "DONE") {
       queryClient.invalidateQueries({ queryKey: ["media-files"] });
       queryClient.invalidateQueries({ queryKey: ["media-folders"] });
+      queryClient.invalidateQueries({ queryKey: ["library-jobs"] });
+      setDismissedProgress(false);
     }
-  }, [scanStatusQuery.data?.status, queryClient]);
+    if (status) prevActiveStatus.current = status;
+  }, [activeJobQuery.data?.status, queryClient]);
 
   // ── Scan mutation ───────────────────────────────────────────────────────────
 
   const scanMutation = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/media/scan", { method: "POST" });
+      const r = await fetch("/api/library/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: "QUICK" }) });
       if (!r.ok) {
         const body = await r.json().catch(() => ({ error: "Unknown error" }));
         throw new Error((body as any).error ?? "Scan failed");
@@ -695,16 +846,42 @@ export default function Media() {
       return r.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["media-scan-status"] });
+      setDismissedProgress(false);
+      queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
     },
     onError: (err: Error) => {
       toast({ title: "Scan failed", description: err.message, variant: "destructive" });
     },
   });
 
-  const isScanning = scanStatusQuery.data?.status === "running" || scanMutation.isPending;
-  const scanJob    = scanStatusQuery.data ?? null;
-  const showBanner = scanJob !== null && scanJob.id !== dismissedJobId;
+  const pauseMutation = useMutation({
+    mutationFn: async (jobId: number) => {
+      await fetch(`/api/library/jobs/${jobId}/pause`, { method: "POST" });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: async (jobId: number) => {
+      await fetch(`/api/library/jobs/${jobId}/resume`, { method: "POST" });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async (jobId: number) => {
+      await fetch(`/api/library/jobs/${jobId}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "USER_CANCELLED" }) });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
+      queryClient.invalidateQueries({ queryKey: ["library-jobs"] });
+    },
+  });
+
+  const activeProgress = activeJobQuery.data ?? null;
+  const activeStatus   = activeProgress?.status;
+  const isScanning     = activeStatus === "RUNNING" || activeStatus === "PAUSED" || scanMutation.isPending;
+  const showBanner     = activeProgress !== null && !dismissedProgress;
 
   const files      = filesQuery.data?.files ?? [];
   const total      = filesQuery.data?.total ?? 0;
@@ -805,7 +982,7 @@ export default function Media() {
           variant="ghost"
           onClick={() => {
             queryClient.invalidateQueries({ queryKey: ["media-files"] });
-            queryClient.invalidateQueries({ queryKey: ["media-scan-status"] });
+            queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
           }}
           className="h-8 w-8 p-0"
           title="Refresh"
@@ -818,8 +995,11 @@ export default function Media() {
       {showBanner && (
         <div className="px-4 pt-2 shrink-0">
           <ScanBanner
-            job={scanJob}
-            onDismiss={() => setDismissedJobId(scanJob?.id ?? null)}
+            progress={activeProgress}
+            onDismiss={() => setDismissedProgress(true)}
+            onPause={() => activeProgress && pauseMutation.mutate(activeProgress.jobId)}
+            onResume={() => activeProgress && resumeMutation.mutate(activeProgress.jobId)}
+            onCancel={() => activeProgress && cancelMutation.mutate(activeProgress.jobId)}
           />
         </div>
       )}

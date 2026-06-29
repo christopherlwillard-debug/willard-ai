@@ -2,9 +2,8 @@ import { Router, type Request, type Response } from "express";
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { mediaFilesTable, mediaScanJobsTable, appSettingsTable } from "@workspace/db";
+import { mediaFilesTable, appSettingsTable } from "@workspace/db";
 import { eq, and, like, desc, asc, sql, count } from "drizzle-orm";
-import { runMediaScan, getActiveScanJobId } from "../lib/media-scanner";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
 
 const router = Router();
@@ -15,60 +14,6 @@ async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
   return row?.nasPath ?? null;
 }
-
-// ── POST /api/media/scan — start a new scan ───────────────────────────────────
-
-router.post("/media/scan", async (req: Request, res: Response) => {
-  const nasPath = await getNasPath();
-  if (!nasPath) {
-    res.status(400).json({ error: "NAS path not configured. Visit Settings to configure it." });
-    return;
-  }
-  if (!fs.existsSync(nasPath)) {
-    res.status(400).json({ error: "NAS path is not accessible." });
-    return;
-  }
-
-  const existingId = getActiveScanJobId();
-  if (existingId !== null) {
-    res.json({ jobId: existingId, alreadyRunning: true });
-    return;
-  }
-
-  const jobId = await runMediaScan(nasPath);
-  res.json({ jobId, alreadyRunning: false });
-});
-
-// ── GET /api/media/scan/status — latest scan job status ──────────────────────
-
-router.get("/media/scan/status", async (_req: Request, res: Response) => {
-  const activeId = getActiveScanJobId();
-
-  if (activeId !== null) {
-    const [job] = await db
-      .select()
-      .from(mediaScanJobsTable)
-      .where(eq(mediaScanJobsTable.id, activeId))
-      .limit(1);
-    if (job) {
-      res.json(job);
-      return;
-    }
-  }
-
-  // Return most recent completed job
-  const [job] = await db
-    .select()
-    .from(mediaScanJobsTable)
-    .orderBy(desc(mediaScanJobsTable.startedAt))
-    .limit(1);
-
-  if (!job) {
-    res.json(null);
-    return;
-  }
-  res.json(job);
-});
 
 // ── GET /api/media/files — paginated, filtered file listing ──────────────────
 

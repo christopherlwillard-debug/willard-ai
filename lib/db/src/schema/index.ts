@@ -9,3 +9,4 @@ export * from "./organization_jobs";
 export * from "./conversion_jobs";
 export * from "./media_files";
 export * from "./media_scan_jobs";
+export * from "./library_jobs";

@@ -55,6 +55,9 @@ export const mediaFilesTable = pgTable("media_files", {
   exifJson:             jsonb("exif_json"),
   contentHash:          text("content_hash"),
 
+  lastScanAction:       text("last_scan_action"),
+  lastScannedAt:        timestamp("last_scanned_at"),
+
   indexedAt:            timestamp("indexed_at").notNull().defaultNow(),
 }, (t) => [
   uniqueIndex("media_files_nas_rel_unique").on(t.nasPath, t.relativePath),

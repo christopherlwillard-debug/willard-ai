@@ -11,6 +11,7 @@ import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream } from "./lib/nas-storage";
+import { recoverInterruptedJobs } from "./lib/library-engine";
 
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
@@ -134,6 +135,9 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
     logger.info({ nasPath }, "NAS storage initialized from persisted settings");
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
+
+// Recover library jobs interrupted mid-run
+recoverInterruptedJobs().catch(() => {});
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.

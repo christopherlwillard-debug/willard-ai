@@ -15,6 +15,7 @@ import openaiRouter from "./openai/index";
 import organizeRouter from "./organize";
 import optimizeRouter from "./optimize";
 import mediaRouter from "./media";
+import libraryRouter from "./library";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(openaiRouter);
 router.use(organizeRouter);
 router.use(optimizeRouter);
 router.use(mediaRouter);
+router.use(libraryRouter);
 
 export default router;

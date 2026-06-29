@@ -1,0 +1,252 @@
+This is excellent. I only have a few changes that I think will make it even more future-proof.
+
+1. Don't store scan status on every file
+
+This is the one thing I would change.
+
+Instead of storing:
+
+🟢 Unchanged
+🟡 Modified
+🔵 New
+🟣 Moved
+🔴 Deleted
+
+forever...
+
+I'd make those Last Scan Results, not permanent states.
+
+Why?
+
+Because after the next scan, a "New" file isn't new anymore.
+
+Instead I'd store something like:
+
+lastScanAction
+
+NEW
+MODIFIED
+MOVED
+UNCHANGED
+DELETED
+VERIFIED
+
+Then also keep:
+
+lastScannedAt
+
+2026-06-28 14:18
+
+That gives you historical context without misleading users months later.
+
+2. Add Scan Profiles
+
+I LOVE that you're adding
+
+Quick
+
+Full
+
+I'd expand it to this:
+
+Quick Scan
+
+Incremental
+
+(default)
+
+✔
+
+Full Verification
+
+Rehash everything
+
+Rebuild metadata
+
+Rebuild thumbnails (optional)
+
+Repair Library
+
+Verify database
+
+Repair thumbnails
+
+Repair metadata
+
+Remove orphaned cache
+
+Eventually your Settings page can simply say:
+
+Library Maintenance
+
+Quick Scan
+
+Full Verify
+
+Repair Library
+
+Rebuild Thumbnail Cache
+
+Rebuild Metadata
+
+Very clean.
+
+3. Progress percentages
+
+Instead of only showing
+
+248,113 of 592,844
+
+I'd also show
+
+42%
+
+12 minutes remaining
+
+People understand percentages much faster.
+
+4. Biggest improvement I'd make
+
+I'd add Performance Statistics.
+
+Imagine after every scan:
+
+Library Scan Complete
+
+592,844 Files
+
+126 New
+
+18 Modified
+
+3 Deleted
+
+247,901 Skipped
+
+167 Files Hashed
+
+126 Thumbnails Generated
+
+Elapsed
+
+1m 43s
+
+Previous Scan
+
+18m 12s
+
+Saved
+
+16m 29s
+
+That last line is huge.
+
+It immediately shows the benefit of the incremental scanner.
+
+5. One thing I'd absolutely add
+
+Since this app is designed for NAS users...
+
+Keep a scan log.
+
+Example:
+
+June 28
+
+Quick Scan
+
+1m 43s
+
+126 New
+
+June 27
+
+Quick Scan
+
+1m 51s
+
+18 New
+
+June 25
+
+Full Verification
+
+2h 18m
+
+Then if someone asks
+
+"When did I last scan?"
+
+it's right there.
+
+6. Detect NAS offline
+
+This is something almost nobody thinks about.
+
+Instead of
+
+Scan Failed
+
+Say
+
+NAS Not Available
+
+Reconnect your library location and try again.
+
+Retry
+
+Much friendlier.
+
+7. Add "Paused"
+
+Especially if someone closes their laptop.
+
+Scanning...
+
+Paused
+
+Laptop Sleeping
+
+Resume when available
+8. I would add one more scan mode
+
+Not today, but design for it.
+
+Quick
+
+Folder Scan
+
+Full Verify
+
+Imagine you just copied
+
+Vacation 2026
+
+No need to scan 400,000 files.
+
+Just right-click
+
+Scan This Folder
+
+It finishes in seconds.
+
+I think this is becoming one of the strongest pieces of the application.
+
+At this point your scanner isn't just walking folders anymore.
+
+It's becoming a true Library Engine.
+
+Everything else depends on it:
+
+Library
+Dashboard
+Map
+Search
+Collections
+Health Center
+Optimize
+Duplicate Detection
+Metadata
+Thumbnails
+
+If I were making one architectural recommendation, I'd go one step further and rename this internally from Media Scanner to Library Engine. The scanner becomes just one responsibility of a larger engine that also handles indexing, synchronization, health checks, and background maintenance. That name will fit much better as the Media Center continues to grow.

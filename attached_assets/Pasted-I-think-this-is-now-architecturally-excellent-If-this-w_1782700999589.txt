@@ -1,0 +1,278 @@
+I think this is now architecturally excellent. If this were my project, I'd approve it with only a handful of refinements that will save you from future migrations.
+
+1. Rename scan_history to library_jobs
+
+This is the biggest change I'd make.
+
+Right now you're thinking:
+
+Scan History
+
+But in six months you'll have:
+
+Library Scan
+Thumbnail Generation
+Metadata Rebuild
+Health Repair
+Duplicate Analysis
+Optimize Library
+AI Indexing (optional)
+Face Recognition (future)
+
+Instead of
+
+scan_history
+
+I'd use
+
+library_jobs
+
+Example:
+
+Job Type
+
+SCAN
+THUMBNAILS
+REPAIR
+VERIFY
+OPTIMIZE
+METADATA
+
+Now one table powers your entire Background Tasks page.
+
+2. Separate Library Engine from Job Engine
+
+Instead of:
+
+Library Engine
+
+↓
+
+Scan
+
+↓
+
+Progress
+
+I'd architect it like this:
+
+Library Engine
+       │
+       ├─────────────┐
+       │             │
+ Indexer        Job Engine
+       │             │
+ Metadata      Queue
+ Scanner       History
+ Thumbnails    Progress
+ Integrity     Resume
+
+The Library Engine decides what needs to happen.
+
+The Job Engine decides when and how it runs.
+
+That separation will make future features much easier.
+
+3. Root Path is brilliant
+
+This may be my favorite addition.
+
+rootPath
+
+opens the door for:
+
+Scan Folder
+
+Verify Folder
+
+Optimize Folder
+
+Generate Thumbnails
+
+Analyze Folder
+
+All using the same API.
+
+That's exactly how I'd design it.
+
+4. Repair Profile
+
+I'd rename
+
+Repair Library
+
+to
+
+Library Health Scan
+
+Then inside it
+
+Verify Index
+
+Repair Metadata
+
+Repair Cache
+
+Repair Thumbnails
+
+Cleanup
+
+Health Scan feels more descriptive to users than "Repair Library."
+
+5. Add Job Priority
+
+You don't need it today.
+
+But I'd put it into the database now.
+
+HIGH
+
+NORMAL
+
+LOW
+
+Example:
+
+Quick Scan
+
+HIGH
+
+Thumbnail Generation
+
+LOW
+
+Optimize
+
+LOW
+
+Now if someone starts a scan while thumbnails are generating...
+
+The scan wins.
+
+6. Add Cancellation Reason
+
+Instead of
+
+FAILED
+
+Store
+
+FAILED
+
+USER_CANCELLED
+
+NAS_OFFLINE
+
+SYSTEM_SLEEP
+
+POWER_LOSS
+
+ERROR
+
+This will make troubleshooting much easier.
+
+7. Biggest suggestion
+
+This one is important.
+
+Don't expose:
+
+Quick
+
+Full
+
+Repair
+
+to users everywhere.
+
+Instead make one button:
+
+Scan Library
+
+Default = Quick.
+
+Settings contains:
+
+Default Scan
+
+Quick
+
+Full Verify
+
+99% of users will never change it.
+
+The interface stays clean.
+
+8. Scan ETA
+
+Don't use a simple average.
+
+Use a rolling average over the last few thousand files.
+
+Reason:
+
+If the scanner suddenly enters a folder of RAW images...
+
+ETA won't jump wildly.
+
+It'll stay smooth.
+
+9. Progress Event Structure
+
+I'd define this now so you never break clients later.
+
+Example:
+
+{
+  "phase":"metadata",
+  "progress":42,
+  "filesProcessed":248113,
+  "filesTotal":592844,
+  "currentPath":"Photos/2024/Arizona",
+  "etaSeconds":734,
+  "speed":2187
+}
+
+Future-proof and easy to extend.
+
+10. Future Job Queue
+
+Eventually this page becomes:
+
+Background Tasks
+
+✔ Library Scan
+
+Running
+
+42%
+
+✔ Thumbnail Generation
+
+Running
+
+67%
+
+✔ Optimize Library
+
+Waiting
+
+✔ Health Scan
+
+Completed
+
+✔ Duplicate Analysis
+
+Paused
+
+Which is why I suggested library_jobs instead of scan_history.
+
+Overall
+
+I think you're no longer building "a scanner."
+
+You're building the core infrastructure of the Media Center.
+
+Everything else—Library, Dashboard, Map, Search, Collections, Health, Optimize—will sit on top of this.
+
+The only architectural change I'd strongly recommend is moving from a scan-specific mindset (scan_history) to a generalized background-job system (library_jobs). It requires almost no extra work now, but it will prevent you from having to redesign your persistence layer when you add the next generation of background features. I think that's the one investment that will pay off the most as the application grows.
