@@ -1,0 +1,155 @@
+I like the idea, but I'd make one important change because you're building for very large NAS libraries, not just a few thousand photos.
+
+The goal shouldn't be to generate every thumbnail immediately. If you have 300,000 photos, users shouldn't have to wait hours after every scan before the scan is considered "done."
+
+I'd rewrite the feature like this:
+
+#48 - Intelligent Background Thumbnail Generation
+
+What & Why
+
+After a media scan completes, the Media Center should automatically generate thumbnails for newly indexed media in the background.
+
+Thumbnail generation should never block the completion of a scan. Users can begin browsing their library immediately while thumbnails continue to generate in the background.
+
+The thumbnail engine should prioritize media the user is most likely to view first and avoid regenerating thumbnails that already exist.
+
+Done Looks Like
+After Scan
+
+Media scan completes.
+
+↓
+
+Library immediately becomes available.
+
+↓
+
+Background thumbnail worker starts automatically.
+
+↓
+
+Progress updates live.
+
+Thumbnail Queue
+
+Generate thumbnails only for:
+
+Newly discovered media
+Modified media
+Missing thumbnails
+
+Skip:
+
+Existing thumbnails
+Unchanged files
+Unsupported formats
+Priority Order
+
+Generate thumbnails in this order:
+
+Current folder being viewed
+Favorites
+Recently added media
+Photos
+Videos
+Documents
+Remaining library
+
+This ensures users rarely see placeholders while browsing.
+
+Dashboard Status
+
+Library Status
+
+Media Scan
+✔ Complete
+
+Thumbnail Cache
+Generating...
+
+18,432 / 96,201
+
+or
+
+Thumbnail Cache
+
+96,201 / 96,201
+
+✔ Complete
+Performance
+Runs in the background
+Multiple worker threads
+Doesn't interfere with browsing
+Can be paused if a new scan begins
+Resume Support
+
+If the application closes:
+
+Resume thumbnail generation where it left off.
+
+Never restart from the beginning.
+
+Cache Management
+
+Generate thumbnails only once.
+
+If the original file changes:
+
+Replace thumbnail
+Update cache
+
+If file deleted:
+
+Remove thumbnail automatically.
+Future Features Enabled
+Instant browsing
+Timeline view
+Map view
+Collections
+Search previews
+Duplicate previews
+Relevant Files
+artifacts/api-server/src/lib/media-scanner.ts
+Queue new thumbnail jobs after scan
+artifacts/api-server/src/lib/thumbnail-engine.ts
+Background worker
+Resume support
+Queue priorities
+artifacts/api-server/src/routes/media.ts
+Live thumbnail progress
+Dependencies
+Media Scanner
+Thumbnail Engine
+Library Browser
+One thing I'd add
+
+Since this is your Media Center, I'd introduce a new setting:
+
+Thumbnail Quality
+⚡ Fast (256 px)
+⭐ Balanced (512 px) Default
+🖥 High Quality (1024 px)
+
+This lets someone with a slower computer or NAS generate thumbnails much faster, while someone with a more powerful setup can choose higher-quality previews.
+
+I also think there's one feature missing...
+
+A Thumbnail Manager.
+
+Thumbnail Cache
+
+Built:
+98,421
+
+Missing:
+183
+
+Cache Size:
+14.6 GB
+
+Rebuild Cache
+
+Clear Cache
+
+That gives users visibility into what's happening and provides a way to recover from problems without rescanning the entire library. It's a small addition that will make maintaining large libraries much easier.

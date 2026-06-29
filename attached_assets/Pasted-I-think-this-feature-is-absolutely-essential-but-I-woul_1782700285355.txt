@@ -1,0 +1,258 @@
+I think this feature is absolutely essential, but I would make it much bigger. This is one of those features that separates a basic file browser from a polished media application.
+
+Here's how I'd spec it.
+
+#47 - Immersive Media Viewer (Photos, Videos & Documents)
+
+What & Why
+
+The Media Center should provide a modern, distraction-free viewing experience for all supported media without requiring downloads or external applications.
+
+Users should be able to browse their entire library using keyboard shortcuts, mouse gestures, or touch controls while keeping their place in the Library.
+
+The viewer should feel similar to Apple Photos, Google Photos, or Lightroom.
+
+Done Looks Like
+Photos
+
+Clicking any photo opens a full-screen viewer.
+
+Display:
+
+Original-resolution image (scaled to fit)
+Smooth fade animation
+Black background
+Hidden interface until mouse movement
+Zoom
+Pan
+Rotate
+Full-screen mode
+Videos
+
+Clicking a video opens an integrated player.
+
+Features:
+
+Play/Pause
+Seek
+Volume
+Full Screen
+Playback Speed
+Picture-in-Picture (browser supported)
+Keyboard controls
+
+Uses the existing streaming endpoint.
+
+No download required.
+
+Documents
+
+Supported:
+
+PDF
+
+Open inside the viewer.
+
+Features:
+
+Page navigation
+Zoom
+Search (future)
+Print
+Download
+Navigation
+
+Mouse:
+
+Click Left
+
+Previous
+
+Click Right
+
+Next
+
+Mouse Wheel
+
+Zoom
+
+Double Click
+
+100% / Fit Screen
+
+Keyboard
+
+← Previous
+
+→ Next
+
+Esc Close
+
+Space Play/Pause
+
+F Full Screen
+
+Zoom In
+
+− Zoom Out
+
+Home First Item
+
+End Last Item
+
+Touch Devices
+
+Swipe Left
+
+Next
+
+Swipe Right
+
+Previous
+
+Pinch
+
+Zoom
+
+Double Tap
+
+Fit Screen
+
+Filmstrip
+
+Optional bottom filmstrip.
+
+Example:
+
+◀ [📷][📷][📷][📷][🎥][📷][📷] ▶
+
+Clicking another item changes the viewer instantly.
+
+Information Panel
+
+Toggle with:
+
+ℹ Info
+
+Shows:
+
+Filename
+
+Path
+
+Date Taken
+
+Camera
+
+Lens
+
+Resolution
+
+File Size
+
+GPS
+
+Rating
+
+Tags
+
+Collections
+
+Actions
+
+Available directly inside viewer:
+
+⭐ Favorite
+
+🏷 Tag
+
+📂 Reveal Folder
+
+🗺 Show on Map
+
+⬇ Download
+
+🗑 Delete
+
+✏ Rename
+
+Performance
+
+Load only:
+
+Current
+
+Previous
+
+Next
+
+media item.
+
+Never preload the entire library.
+
+Future Enhancements
+RAW preview
+HDR support
+Side-by-side compare
+Slideshow
+Dual monitor presentation mode
+AI object highlighting
+Face highlighting
+Relevant Files
+artifacts/willard-ai/src/pages/library.tsx
+Viewer
+Toolbar
+Filmstrip
+Detail panel
+artifacts/api-server/src/routes/media.ts
+Existing stream endpoint
+Image delivery
+Dependencies
+Media Index
+Thumbnail Engine
+Metadata Extraction
+Library Browser
+One feature I'd add immediately
+
+Since you're already building the map feature, add a Map button right inside the viewer.
+
+Imagine you're looking at a vacation photo.
+
+Instead of digging through menus, you click:
+
+📍 Show on Map
+
+The map opens, centered exactly where that photo was taken.
+
+That ties the viewer directly into your location feature and makes the whole Media Center feel much more integrated.
+
+One last design recommendation
+
+I would avoid traditional pop-up modals.
+
+Instead, make the viewer take over the entire application, similar to Apple Photos or Plex:
+
+────────────────────────────────────────────
+
+                    Photo
+
+        (fills almost the entire screen)
+
+────────────────────────────────────────────
+
+← Previous                 Next →
+
+────────────────────────────────────────────
+Filename                    ★ Favorite
+
+Date Taken
+
+Camera
+
+Location
+
+[ Map ]
+
+────────────────────────────────────────────
+
+It feels much more premium, and it keeps users immersed in their library rather than feeling like they're opening and closing dialogs.

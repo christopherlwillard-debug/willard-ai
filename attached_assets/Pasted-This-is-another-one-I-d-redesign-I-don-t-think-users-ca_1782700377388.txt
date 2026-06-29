@@ -1,0 +1,192 @@
+This is another one I'd redesign. I don't think users care about "234,532 files scanned..." scrolling by. They care about one question:
+
+"How much longer is this going to take?"
+
+I'd make the scan experience feel more like installing a game on Steam or copying files in Windows.
+
+#12 - Live Library Scan & Progress Center
+
+What & Why
+
+The Media Center should provide a modern, real-time scan experience that keeps users informed without overwhelming them with technical details.
+
+Using Server-Sent Events (SSE), the scanner pushes live updates to the UI as work progresses. Users should always know what the scanner is doing, how far along it is, and what remains.
+
+The scan should continue in the background while users browse other parts of the Media Center.
+
+Done Looks Like
+Scan Card (Dashboard)
+Library Scan
+
+███████████░░░░░░░░░░░░░░
+
+42%
+
+Scanning...
+
+Photos/
+Family/
+2025/
+Vacation/
+
+248,113 of 592,844 files
+
+Time Remaining
+
+12 minutes
+
+[ Pause ]
+
+[ Cancel ]
+Scan Details
+
+Live updates include:
+
+Current folder
+Files scanned
+New files
+Modified files
+Deleted files
+Hashes computed
+Metadata extracted
+Thumbnails queued
+Progress Phases
+
+Instead of one long progress bar, show the current phase.
+
+✔ Discovering folders
+
+✔ Comparing existing index
+
+▶ Reading metadata
+
+Waiting
+
+Thumbnail generation
+
+Users immediately know what the scanner is doing.
+
+Background Operation
+
+The scan continues while users:
+
+Browse Library
+View photos
+Search
+Read documents
+
+The app remains fully usable.
+
+Scan Complete
+✔ Library Updated
+
+592,844 files checked
+
+127 new
+
+18 modified
+
+3 removed
+
+126 thumbnails queued
+
+Elapsed Time
+
+3 minutes 48 seconds
+Resume Support
+
+If the app closes:
+
+Scan interrupted
+
+Resume previous scan?
+
+Continue from the last completed folder.
+
+Performance
+
+Use Server-Sent Events (SSE).
+
+No polling.
+
+Progress updates stream in real time.
+
+Dashboard Integration
+
+The dashboard shows only a compact card.
+
+Library
+
+Scanning...
+
+42%
+
+12 minutes remaining
+
+Clicking the card opens the full progress window.
+
+No need to dedicate half the dashboard to scan progress.
+
+History
+
+Maintain a scan history.
+
+Today
+
+Completed
+
+3m 42s
+
+Yesterday
+
+Completed
+
+2m 58s
+
+June 27
+
+Completed
+
+4m 18s
+
+Users can review previous scans and troubleshoot if needed.
+
+Relevant Files
+artifacts/api-server/src/routes/scan.ts
+SSE progress events
+Scan phases
+Resume support
+artifacts/willard-ai/src/pages/dashboard.tsx
+Compact scan card
+Progress window
+Live updates
+Dependencies
+Incremental Scanner (#7)
+Media Index
+Thumbnail Queue
+Library Browser
+One feature I'd add
+
+I would introduce a Background Tasks panel for everything the Media Center does, not just scanning.
+
+Think of it like a download manager.
+
+Background Tasks
+
+✓ Library Scan
+
+42%
+
+✓ Thumbnail Generation
+
+67%
+
+✓ Video Optimization
+
+Waiting
+
+✓ Duplicate Analysis
+
+Paused
+
+This becomes a central place for long-running jobs. Users can continue browsing their library while tasks run in the background, and they always have one place to check progress or pause/resume work. I think that scales much better than trying to squeeze scan details into the dashboard as you add more features over time.

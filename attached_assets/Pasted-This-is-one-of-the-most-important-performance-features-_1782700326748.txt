@@ -1,0 +1,153 @@
+This is one of the most important performance features you'll build. I would expand it from "skip hashing" into a full Incremental Scan Engine because that's what users expect from a modern media manager.
+
+#7 - Incremental Media Scanner (Skip Unchanged Files)
+
+What & Why
+
+The Media Center should never perform unnecessary work.
+
+During a scan, files that have not changed since the previous scan should not be rehashed, have their metadata re-extracted, or have their thumbnails regenerated.
+
+Instead, the scanner should intelligently detect which files actually changed and process only those.
+
+This allows repeat scans of very large NAS libraries to complete in seconds rather than hours.
+
+The NAS remains the source of truth while the Media Index stays synchronized efficiently.
+
+Done Looks Like
+Existing File (Unchanged)
+
+If:
+
+Relative path matches
+File size matches
+Modified date matches
+
+Then skip:
+
+SHA-256 hash
+EXIF extraction
+Thumbnail generation
+Video analysis
+PDF metadata extraction
+
+Reuse all existing metadata.
+
+Existing File (Modified)
+
+If:
+
+Size changed
+OR modified date changed
+
+Then:
+
+Recompute SHA-256
+Refresh metadata
+Regenerate thumbnail
+Update database
+New File
+
+If no database record exists:
+
+Hash file
+Extract metadata
+Generate thumbnail
+Add to Media Index
+Deleted File
+
+If an indexed file no longer exists:
+
+Mark as Missing
+Perform cleanup during Library Integrity pass (#55)
+Renamed / Moved File
+
+If the content hash matches an existing record:
+
+Update file path
+Preserve metadata
+Preserve favorites
+Preserve collections
+Preserve tags
+Preserve thumbnail
+
+Do not create a duplicate.
+
+Scan Summary
+
+At the end of every scan show:
+
+Library Scan Complete
+
+Files Scanned ............ 248,315
+
+Unchanged ............... 247,892
+
+New ..................... 126
+
+Modified ................ 41
+
+Moved ................... 12
+
+Deleted ................. 3
+
+Hashes Calculated ....... 167
+
+Thumbnails Generated .... 148
+
+Elapsed Time ............ 00:01:42
+
+This gives users confidence that the scanner is working efficiently.
+
+Performance Goals
+Never hash an unchanged file.
+Never regenerate an existing thumbnail.
+Never reread EXIF for unchanged media.
+Only access files that actually changed.
+Scans should scale to hundreds of thousands of files.
+Future Enhancements
+
+Support a Quick Scan and a Full Verification Scan.
+
+Quick Scan (Default)
+
+Checks:
+
+File exists
+Size
+Modified date
+
+Very fast.
+
+Full Verification
+
+Rehashes every file.
+
+Useful after:
+
+Drive migration
+Backup restore
+Integrity verification
+Relevant Files
+artifacts/api-server/src/routes/scan.ts
+Incremental scan logic
+Change detection
+Summary generation
+Dependencies
+Media Index
+Thumbnail Engine
+Metadata Extraction
+Library Integrity
+One suggestion I'd make
+
+Instead of just comparing path + size + modified time, assign every file a scan status internally:
+
+🟢 Unchanged
+🟡 Modified
+🔵 New
+🟣 Moved
+🔴 Deleted
+🟠 Missing
+⚠️ Needs Verification
+
+That status becomes useful everywhere—not just during scanning. It can power the dashboard, health center, and troubleshooting tools, making it much easier to understand what changed since the last scan. I think it's worth building into the scanner from the beginning.

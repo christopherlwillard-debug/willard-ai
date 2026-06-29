@@ -1,0 +1,198 @@
+I like the idea, but I think this should become a much broader feature. Instead of just cleaning thumbnails, make it the Library Health Center.
+
+That way, the cleanup button becomes one tool in a complete maintenance system.
+
+#49 - Library Health & Cleanup
+
+What & Why
+
+Over time, media libraries naturally accumulate stale records, orphaned thumbnails, empty folders, and missing files as users organize their NAS outside of the Media Center.
+
+The Library Health system keeps the Media Center synchronized with the NAS and provides one-click maintenance tools to repair common issues.
+
+The NAS remains the source of truth.
+
+No original media files are modified or deleted without explicit user approval.
+
+Done Looks Like
+Health Scan
+
+Analyze the library for:
+
+Missing files
+Orphaned media index records
+Missing thumbnails
+Orphaned thumbnails
+Empty folders
+Broken metadata references
+Duplicate thumbnails
+Corrupt media files (future)
+Cleanup Summary
+
+Display results before making changes.
+
+Example:
+
+Missing Files .............. 12
+
+Orphaned Index Records ..... 12
+
+Orphaned Thumbnails ........ 87
+
+Missing Thumbnails ......... 43
+
+Empty Folders .............. 5
+
+Unused Cache ............... 2.4 GB
+
+Cleanup Actions
+
+Users can choose individual actions.
+
+☑ Remove orphaned database records
+
+☑ Delete orphaned thumbnails
+
+☑ Regenerate missing thumbnails
+
+☑ Remove empty folders
+
+☐ Rebuild metadata
+
+☐ Full thumbnail rebuild
+
+Then:
+
+Run Cleanup
+
+Automatic Cleanup
+
+During every normal scan:
+
+Automatically:
+
+Remove orphaned index entries
+Remove orphaned thumbnails
+Detect moved files (#55)
+Detect deleted files
+
+Most users should never need manual cleanup.
+
+Manual Maintenance
+
+The toolbar includes:
+
+Library Health
+
+Opening it displays:
+
+Overall Library Health
+
+🟢 Healthy
+
+or
+
+🟡 Attention Needed
+
+Repair Options
+
+Users can:
+
+Verify Media Index
+Verify Thumbnail Cache
+Verify Metadata
+Verify Folder Structure
+Progress
+
+Cleanup displays live progress.
+
+Example:
+
+Checking Media Index
+
+█████████████████░░░░░
+
+247,832 / 248,014
+
+Removing orphaned thumbnails...
+
+Cleaning cache...
+
+Finished
+
+Safety
+
+Never delete original media.
+
+Cleanup only removes:
+
+Cache files
+Thumbnail files
+Temporary files
+Stale Media Index entries
+
+The NAS media library is never modified.
+
+Dashboard Integration
+
+Dashboard includes:
+
+Library Health
+
+🟢 Healthy
+
+or
+
+🟡 12 Issues Found
+
+Clicking the card opens the Health Center.
+
+Future Features Enabled
+Cache Management
+Storage Analytics
+Repair Wizard
+Backup Verification
+Database Integrity Checks
+Relevant Files
+
+artifacts/api-server/src/routes/media.ts
+
+POST /api/media/cleanup
+Library Health API
+
+artifacts/api-server/src/lib/media-scanner.ts
+
+Orphan detection
+Cleanup helpers
+Verification routines
+
+artifacts/willard-ai/src/pages/library.tsx
+
+Library Health button
+Cleanup dialog
+Repair tools
+Dependencies
+Media Index
+Thumbnail Engine
+Incremental Scanner (#7)
+Library Integrity (#55)
+One change I'd make
+
+I actually wouldn't put this button directly on the Library toolbar.
+
+The Library toolbar should stay focused on browsing:
+
+Grid
+Timeline
+Map
+Filters
+Search
+
+Maintenance belongs in a dedicated Library Health page (or under Settings → Library Health). The dashboard can simply show a small health indicator:
+
+🟢 Library Healthy
+🟡 12 Issues Found
+
+Clicking that takes you to the full Health Center where users can review issues and choose which maintenance tasks to run.
+
+That keeps the browsing experience clean while still making maintenance easy to find when it's needed.
