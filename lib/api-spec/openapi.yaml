@@ -26,8 +26,6 @@ tags:
     description: Storage statistics
   - name: cleanup
     description: Cleanup suggestions
-  - name: immich
-    description: Immich media proxy
   - name: openai
     description: AI assistant operations
   - name: auth
@@ -256,24 +254,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/AppSettings"
 
-  /settings/test-immich:
-    post:
-      operationId: testImmichConnection
-      tags: [settings]
-      summary: Test Immich connection
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ImmichTestInput"
-      responses:
-        "200":
-          description: Test result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImmichTestResult"
 
   /settings/test-nas:
     post:
@@ -417,7 +397,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [local, immich, all]
+            enum: [local, all]
         - name: limit
           in: query
           schema:
@@ -720,69 +700,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/CleanupSummary"
 
-  # ── Immich proxy ──────────────────────────────────────────────────────────
-  /immich/status:
-    get:
-      operationId: getImmichStatus
-      tags: [immich]
-      summary: Get Immich connection status and stats
-      responses:
-        "200":
-          description: Immich status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImmichStatus"
-
-  /immich/recent-photos:
-    get:
-      operationId: getImmichRecentPhotos
-      tags: [immich]
-      summary: Get recent photos from Immich
-      parameters:
-        - name: limit
-          in: query
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Recent photos
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ImmichAsset"
-
-  /immich/albums:
-    get:
-      operationId: getImmichAlbums
-      tags: [immich]
-      summary: Get albums from Immich
-      responses:
-        "200":
-          description: Albums
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ImmichAlbum"
-
-  /immich/people:
-    get:
-      operationId: getImmichPeople
-      tags: [immich]
-      summary: Get people (faces) from Immich
-      responses:
-        "200":
-          description: People
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ImmichPerson"
 
   # ── AI Chat ───────────────────────────────────────────────────────────────
   /openai/conversations:
@@ -1170,10 +1087,6 @@ components:
       properties:
         nasPath:
           type: string
-        immichBaseUrl:
-          type: string
-        immichApiKey:
-          type: string
         lastScanAt:
           type: ["string", "null"]
         totalFilesIndexed:
@@ -1188,8 +1101,6 @@ components:
           type: string
       required:
         - nasPath
-        - immichBaseUrl
-        - immichApiKey
         - lastScanAt
         - totalFilesIndexed
         - photosDestination
@@ -1202,10 +1113,6 @@ components:
       properties:
         nasPath:
           type: string
-        immichBaseUrl:
-          type: string
-        immichApiKey:
-          type: string
         photosDestination:
           type: string
         videosDestination:
@@ -1214,34 +1121,6 @@ components:
           type: string
         otherFilesDestination:
           type: string
-
-    ImmichTestInput:
-      type: object
-      properties:
-        baseUrl:
-          type: string
-        apiKey:
-          type: string
-      required:
-        - baseUrl
-        - apiKey
-
-    ImmichTestResult:
-      type: object
-      properties:
-        connected:
-          type: boolean
-        message:
-          type: string
-        photoCount:
-          type: ["integer", "null"]
-        videoCount:
-          type: ["integer", "null"]
-      required:
-        - connected
-        - message
-        - photoCount
-        - videoCount
 
     NasTestInput:
       type: object
@@ -1370,12 +1249,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TypeBreakdown"
-        immichPhotoCount:
-          type: integer
-        immichVideoCount:
-          type: integer
-        immichConnected:
-          type: boolean
       required:
         - totalFiles
         - totalSizeBytes
@@ -1385,9 +1258,6 @@ components:
         - isScanning
         - lastScanAt
         - typeBreakdown
-        - immichPhotoCount
-        - immichVideoCount
-        - immichConnected
 
     TypeBreakdown:
       type: object
@@ -1868,85 +1738,6 @@ components:
         - oldFileCount
         - emptyFolderCount
 
-    ImmichStatus:
-      type: object
-      properties:
-        connected:
-          type: boolean
-        baseUrl:
-          type: string
-        photoCount:
-          type: integer
-        videoCount:
-          type: integer
-        albumCount:
-          type: integer
-        personCount:
-          type: integer
-        error:
-          type: ["string", "null"]
-      required:
-        - connected
-        - baseUrl
-        - photoCount
-        - videoCount
-        - albumCount
-        - personCount
-        - error
-
-    ImmichAsset:
-      type: object
-      properties:
-        id:
-          type: string
-        filename:
-          type: string
-        type:
-          type: string
-        thumbUrl:
-          type: string
-        createdAt:
-          type: string
-      required:
-        - id
-        - filename
-        - type
-        - thumbUrl
-        - createdAt
-
-    ImmichAlbum:
-      type: object
-      properties:
-        id:
-          type: string
-        albumName:
-          type: string
-        assetCount:
-          type: integer
-        thumbUrl:
-          type: ["string", "null"]
-      required:
-        - id
-        - albumName
-        - assetCount
-        - thumbUrl
-
-    ImmichPerson:
-      type: object
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        assetCount:
-          type: integer
-        thumbUrl:
-          type: ["string", "null"]
-      required:
-        - id
-        - name
-        - assetCount
-        - thumbUrl
 
     ApiError:
       type: object
