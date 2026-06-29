@@ -29,6 +29,8 @@ import {
   Aperture,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MediaViewer } from "@/components/media/MediaViewer";
+import type { MediaFile, MediaFilesResponse } from "@/types/media";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -36,55 +38,6 @@ import { useToast } from "@/hooks/use-toast";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface MediaFile {
-  id: number;
-  nasPath: string;
-  relativePath: string;
-  name: string;
-  extension: string;
-  mimeType: string;
-  mediaType: "photo" | "video" | "audio" | "document" | "other";
-  sizeBytes: number;
-  modifiedAt: string | null;
-  width: number | null;
-  height: number | null;
-  orientation: number | null;
-  durationSeconds: number | null;
-  thumbnailPath: string | null;
-  indexedAt: string;
-  // EXIF / photo
-  dateTaken: string | null;
-  cameraMake: string | null;
-  cameraModel: string | null;
-  lens: string | null;
-  iso: number | null;
-  aperture: number | null;
-  exposure: string | null;
-  focalLength: number | null;
-  flash: string | null;
-  colorProfile: string | null;
-  gpsLatitude: number | null;
-  gpsLongitude: number | null;
-  // Video
-  videoCodec: string | null;
-  videoBitrate: number | null;
-  fps: number | null;
-  audioCodec: string | null;
-  dateCreated: string | null;
-  // PDF
-  pageCount: number | null;
-  pdfAuthor: string | null;
-  pdfTitle: string | null;
-  pdfSubject: string | null;
-  pdfKeywords: string | null;
-}
-
-interface MediaFilesResponse {
-  files: MediaFile[];
-  total: number;
-  page: number;
-  limit: number;
-}
 
 interface FolderNode {
   name: string;
@@ -766,6 +719,7 @@ export default function Media() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
   const [selectedFile, setSelectedFile]       = useState<MediaFile | null>(null);
+  const [viewerIndex,  setViewerIndex]        = useState<number | null>(null);
   const [page, setPage]               = useState(1);
   const [sort, setSort]               = useState("indexed_desc");
   const [viewMode, setViewMode]       = useState<"grid" | "list">("grid");
@@ -1098,12 +1052,12 @@ export default function Media() {
 
               {viewMode === "grid" ? (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-3">
-                  {files.map((file) => (
+                  {files.map((file, i) => (
                     <ThumbnailCard
                       key={file.id}
                       file={file}
                       selected={selectedFile?.id === file.id}
-                      onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
+                      onClick={() => { setViewerIndex(i); setSelectedFile(file); }}
                     />
                   ))}
                 </div>
@@ -1123,7 +1077,7 @@ export default function Media() {
                       {files.map((file, i) => (
                         <tr
                           key={file.id}
-                          onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
+                          onClick={() => { setViewerIndex(i); setSelectedFile(file); }}
                           className={cn(
                             "cursor-pointer border-b border-border last:border-0 transition-colors",
                             i % 2 === 0 ? "bg-card" : "bg-muted/20",
@@ -1183,10 +1137,19 @@ export default function Media() {
         </div>
 
         {/* ── Detail panel ── */}
-        {selectedFile && (
+        {selectedFile && viewerIndex === null && (
           <DetailPanel file={selectedFile} onClose={() => setSelectedFile(null)} />
         )}
       </div>
+
+      {/* ── Immersive viewer ── */}
+      {viewerIndex !== null && files.length > 0 && (
+        <MediaViewer
+          files={files}
+          initialIndex={viewerIndex}
+          onClose={() => setViewerIndex(null)}
+        />
+      )}
     </div>
   );
 }
