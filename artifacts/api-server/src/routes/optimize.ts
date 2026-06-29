@@ -6,6 +6,7 @@ import * as path from "path";
 import { spawnSync } from "child_process";
 import { desc, eq } from "drizzle-orm";
 import { assertWithinRoot, getWillardAIDir } from "../lib/nas-storage";
+import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router: IRouter = Router();
@@ -340,8 +341,7 @@ function convertImage(srcPath: string, destPath: string): string | null {
     destPath,
   ], { encoding: "utf8", stdio: "pipe", timeout: 120_000 });
   if (result.status !== 0) {
-    const stderr = (result.stderr ?? "").slice(-500);
-    return `ffmpeg exited ${result.status}: ${stderr}`;
+    return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
   }
   return null;
 }
@@ -360,8 +360,7 @@ function convertVideo(srcPath: string, destPath: string): string | null {
     destPath,
   ], { encoding: "utf8", stdio: "pipe", timeout: 3_600_000 }); // 1h max per video
   if (result.status !== 0) {
-    const stderr = (result.stderr ?? "").slice(-500);
-    return `ffmpeg exited ${result.status}: ${stderr}`;
+    return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
   }
   return null;
 }

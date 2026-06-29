@@ -11,6 +11,7 @@ import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
+import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 
 export async function bootstrapSessionTable(): Promise<void> {
@@ -54,8 +55,12 @@ const sessionSecret = envSecret ?? randomBytes(32).toString("hex");
 
 const app: Express = express();
 
-// Trust Replit's reverse proxy so express-rate-limit can read X-Forwarded-For
-app.set("trust proxy", 1);
+// Trust the reverse proxy (Replit / production) so express-rate-limit can read
+// X-Forwarded-For. Skip it for a bare local run where there is no proxy in front
+// of the server — otherwise express-rate-limit warns about a permissive setting.
+if (process.env["REPL_ID"] || process.env["NODE_ENV"] === "production") {
+  app.set("trust proxy", 1);
+}
 
 app.use(
   pinoHttp({
@@ -152,6 +157,9 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
     }
   }
 }).catch(() => { /* DB not ready yet — logger will use stdout only */ });
+
+// Warn (don't crash) if ffmpeg/ffprobe are missing — important for local installs
+checkMediaToolsOnStartup();
 
 // Recover library jobs interrupted mid-run
 recoverInterruptedJobs().catch(() => {});

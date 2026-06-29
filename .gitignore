@@ -57,3 +57,8 @@ test-media/WillardAI/
 # Playwright test results and reports
 playwright-report/
 test-results/
+
+# Local environment configuration (never commit secrets — see .env.example)
+.env
+.env.local
+.env.*.local

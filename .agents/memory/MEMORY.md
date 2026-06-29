@@ -9,3 +9,4 @@
 - [NixOS Playwright Chromium libs](nixos-playwright-chromium.md) — npx playwright test fails with libgbm/libudev not found; use runTest() subagent instead
 - [app_settings schema drift fix](app-settings-schema-drift.md) — add new columns to bootstrapSessionTable ALTER TABLE block so server restart auto-migrates
 - [NAS reachability vs path.resolve](nas-reachability-path-resolve.md) — on Linux, reject Windows drive/UNC/relative paths before path.resolve or they resolve to local folders and falsely report online
+- [REPL_ID gates local vs cloud](repl-id-local-vs-cloud.md) — use process.env.REPL_ID (not NODE_ENV) to gate Replit-only vite plugins, strict PORT/BASE_PATH, trust-proxy, and root .env loading for off-Replit/Windows runs

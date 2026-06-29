@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { getWillardAIDir } from "./nas-storage";
+import { formatMediaToolError } from "./media-tools";
 
 // ── Thumbnail directory ────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ function generateVideoThumbnail(
   ], { encoding: "buffer", timeout: 30000 });
 
   if (result.status !== 0 || !fs.existsSync(tmpPng)) {
-    return `ffmpeg exited ${result.status}`;
+    return formatMediaToolError("ffmpeg", result);
   }
 
   // Convert PNG → WebP via sharp
@@ -87,7 +88,7 @@ function generateImageThumbnailSync(
   ], { encoding: "buffer", timeout: 15000 });
   try { fs.rmSync(sourcePath); } catch { /* ignore */ }
   if (result.status !== 0) {
-    return `ffmpeg conversion failed: ${result.status}`;
+    return formatMediaToolError("ffmpeg", result);
   }
   return null;
 }
@@ -106,7 +107,7 @@ function generatePdfThumbnail(
     destPath,
   ], { encoding: "buffer", timeout: 30000 });
   if (result.status !== 0) {
-    return `ffmpeg pdf thumbnail failed: ${result.status}`;
+    return formatMediaToolError("ffmpeg", result);
   }
   return null;
 }

@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { Writable } from "stream";
 
@@ -173,10 +174,13 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
       fs.mkdirSync(tempDir, { recursive: true });
       return tempDir;
     } catch {
-      // Fall through to local /tmp
+      // Fall through to the OS temp dir
     }
   }
-  const localDir = path.join("/tmp", "willard-ai", suffix);
+  // Cross-platform local fallback. os.tmpdir() is the OS temp directory on every
+  // platform (e.g. /tmp on Linux/macOS, %TEMP% on Windows) so this works when the
+  // server runs locally on a user's machine, not just on Replit's Linux host.
+  const localDir = path.join(os.tmpdir(), "willard-ai", suffix);
   try { fs.mkdirSync(localDir, { recursive: true }); } catch { /* ignore */ }
   return localDir;
 }

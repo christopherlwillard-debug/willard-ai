@@ -4,12 +4,30 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the API server (uses the platform-assigned `PORT`)
+- `pnpm --filter @workspace/willard-ai run dev` — run the web app
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Required env: `DATABASE_URL` — Postgres connection string; `PORT` — server port; `SESSION_SECRET` — required in production
+
+## Running locally (off Replit)
+
+The server reads files directly from disk, so it can only see a user's local
+drive (e.g. a Windows `Z:`) when it runs on that machine — on Replit's cloud
+those paths are unreachable and the library reports "Library Offline".
+
+- Full Windows/local setup guide: **`LOCAL_SETUP.md`**
+- Copy `.env.example` → `.env` for local configuration. The API server loads the
+  root `.env` automatically (via `--env-file-if-exists`); on Replit it is absent
+  and the platform supplies env vars instead.
+- Off Replit, the web dev server defaults to port `5000` and base path `/`, and
+  all Replit-only Vite plugins are skipped. On Replit (`REPL_ID` set) the strict
+  `PORT`/`BASE_PATH` requirement and Replit plugins remain in force.
+- FFmpeg (`ffmpeg`/`ffprobe`) must be on PATH for thumbnails, video metadata, and
+  media conversion; if missing the server logs a clear warning at startup instead
+  of crashing. 7-Zip support is bundled (`7zip-bin`).
 
 ## Stack
 

@@ -4,7 +4,13 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-const rawPort = process.env.PORT;
+const isReplit = process.env.REPL_ID !== undefined;
+
+// On Replit the platform always provides PORT and BASE_PATH (one per artifact).
+// For a local run off Replit we fall back to sensible defaults so the web app
+// starts with no extra configuration. The API server runs on 8080 (see the
+// proxy below), so the web dev server defaults to 5000.
+const rawPort = process.env.PORT ?? (isReplit ? undefined : "5000");
 
 if (!rawPort) {
   throw new Error(
@@ -18,7 +24,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
+const basePath = process.env.BASE_PATH ?? (isReplit ? undefined : "/");
 
 if (!basePath) {
   throw new Error(
@@ -31,18 +37,23 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
+    // Replit-only dev tooling — skipped entirely when running off Replit so a
+    // clean local install starts without any Replit-specific plugins.
+    ...(isReplit
       ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer({
-              root: path.resolve(import.meta.dirname, ".."),
-            }),
-          ),
-          await import("@replit/vite-plugin-dev-banner").then((m) =>
-            m.devBanner(),
-          ),
+          runtimeErrorOverlay(),
+          ...(process.env.NODE_ENV !== "production"
+            ? [
+                await import("@replit/vite-plugin-cartographer").then((m) =>
+                  m.cartographer({
+                    root: path.resolve(import.meta.dirname, ".."),
+                  }),
+                ),
+                await import("@replit/vite-plugin-dev-banner").then((m) =>
+                  m.devBanner(),
+                ),
+              ]
+            : []),
         ]
       : []),
   ],
