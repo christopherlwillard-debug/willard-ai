@@ -1,0 +1,295 @@
+The biggest thing holding it back isn't functionality—it's that some of the wording and layout still feels like a developer interface instead of a polished product.
+
+What I'd change
+1. Rename the page
+
+Instead of:
+
+SYSTEM_CONFIGURATION
+
+Make it:
+
+Settings
+
+or
+
+Library Settings
+
+Simple and clean.
+
+2. Library card
+
+Instead of:
+
+NAS Configuration
+
+I'd use:
+
+Library
+
+Your media library location.
+
+Library Name
+Main Library
+
+Library Location
+Z:\
+
+[ Browse ] [ Test Connection ]
+
+🟢 Connected
+
+592,844 Files
+18,421 Folders
+4.28 TB Free
+
+It feels much more like Windows.
+
+3. Remove the technical wording
+
+These jump out immediately:
+
+❌ SYSTEM_IDLE
+
+❌ START_INDEX_SCAN
+
+❌ SAVE_CONFIG
+
+❌ SAVE_DESTINATIONS
+
+❌ REINITIALIZE_DIRS
+
+Instead:
+
+✅ Ready
+
+✅ Scan Library
+
+✅ Save Changes
+
+✅ Save Organization
+
+✅ Repair Application Folders
+
+Tiny change...
+
+Huge difference.
+
+4. Branding
+
+I LOVE that you added branding.
+
+I honestly think that's one of the coolest parts of the app.
+
+I'd move it near the top.
+
+Library
+
+Branding
+
+Organization
+
+Scanning
+
+Storage
+
+Security
+
+That feels natural.
+
+5. Scanner Status
+
+Right now it's too empty.
+
+Instead of
+
+SYSTEM_IDLE
+
+0 files
+
+I'd make it
+
+Library Status
+
+🟢 Ready
+
+Last Scan
+
+Today
+8:44 PM
+
+Indexed Files
+
+592,844
+
+Default
+
+Quick Scan
+
+[ Scan Library ]
+
+Much more useful.
+
+6. Scan History
+
+Looks good.
+
+I'd only add:
+
+Duration
+
+1m 43s
+
+and
+
+Quick
+
+or
+
+Full Verify
+
+Those become valuable later.
+
+7. NAS Storage
+
+I actually LOVE this section.
+
+I would only change the title.
+
+Instead of
+
+NAS STORAGE
+
+I'd call it
+
+Application Storage
+
+because those folders belong to your app, not the NAS itself.
+
+8. These green boxes
+
+They're good.
+
+I'd simply tighten them.
+
+✓ Database
+
+✓ Cache
+
+✓ Reports
+
+✓ Logs
+
+✓ Backups
+
+✓ Temp
+
+✓ Archive Index
+
+✓ Scan History
+
+Smaller.
+
+Cleaner.
+
+Less padding.
+
+9. Security
+
+Personally...
+
+I'd move Security to its own page.
+
+Your Media Center is about media.
+
+Changing passwords feels unrelated.
+
+I'd have
+
+Settings
+
+Library
+
+Organization
+
+Scanning
+
+Storage
+
+Appearance
+
+Then
+
+Account
+
+Password
+
+Sessions
+
+Login
+
+Recovery
+
+Keeps things organized.
+
+My favorite part
+
+This:
+
+WillardAI
+
+config/
+
+database/
+
+cache/
+
+reports/
+
+logs/
+
+I think that's incredibly useful.
+
+It immediately tells users:
+
+"The app is self-contained."
+
+That's a huge selling point.
+
+One thing I'd absolutely add
+
+I'd add this near the top.
+
+Library Connection
+
+🟢 Connected
+
+Main Library
+
+Z:\
+
+Last Checked
+
+Just now
+
+Response Time
+
+12 ms
+
+If the NAS ever disconnects...
+
+It immediately changes to
+
+🔴 Library Offline
+
+Reconnect your NAS
+
+Retry
+
+That will save you countless support headaches.
+
+Overall
+
+I genuinely think you're building something that doesn't really exist for Windows users: a personal media management application that owns the organization, indexing, metadata, thumbnails, optimization, and browsing without relying on Docker or a third-party media server.
+
+At this stage, I'd spend more effort on polishing the wording and user experience than adding lots of new controls. The functionality is coming together well; making it feel approachable is what will really elevate it.
