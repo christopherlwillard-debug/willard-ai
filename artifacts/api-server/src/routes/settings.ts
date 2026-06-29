@@ -214,7 +214,7 @@ router.post(
       fs.mkdirSync(dir, { recursive: true });
 
       // Remove any previously stored logo (it may have a different extension)
-      if (settings.logoPath && fs.existsSync(settings.logoPath)) {
+      if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
         try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
       }
 

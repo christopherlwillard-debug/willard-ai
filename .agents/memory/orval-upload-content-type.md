@@ -1,18 +1,26 @@
 ---
-name: Orval upload content-type
-description: Generated binary-upload clients hardcode a single content-type; how to send the real one
+name: Orval binary upload in the zod target
+description: How to model binary/file uploads in openapi so orval's zod client doesn't break the libs typecheck
 ---
 
-When an OpenAPI path's requestBody lists multiple binary content types (e.g.
-image/png, image/jpeg, image/svg+xml), orval generates an upload function whose
-fetch sets `headers: { 'Content-Type': '<first listed>' , ...options?.headers }`.
-So it always sends the first type unless overridden.
+This repo generates two orval targets from one openapi.yaml: `api-client-react`
+(has DOM lib) and `zod` (`lib/api-zod`, node-only, `lib: es2022`, `types: []`).
 
-**Why:** orval picks one content-type at generation time; it does not infer it from
-the Blob/File passed at runtime.
+For a file upload, model the request body as `multipart/form-data` referencing a
+**named component schema** (e.g. `LogoUpload` with `file: {type: string, format:
+binary}`), NOT an inline body.
 
-**How to apply:** Call the generated function directly (not the bare hook) and pass
-the real type: `uploadFn(file, { headers: { 'Content-Type': file.type } })`. Wrap in
-`useMutation({ mutationFn: (file) => uploadFn(file, { headers: { 'Content-Type': file.type } }) })`.
-Keep the server's accepted content-type allowlist in sync with the File MIME types
-the browser produces (svg → image/svg+xml, jpg → image/jpeg).
+**Why:**
+- An inline multipart body makes orval emit a zod const AND a generated type with
+  the same operation-derived name (`<Op>Body`) into the zod package; `index.ts`
+  re-exports both via `export *` → TS2308 duplicate-export error. A named component
+  gives the type a distinct name (the schema name), avoiding the clash.
+- The generated zod/type code references DOM globals `File`/`Blob`, which don't
+  resolve under the base `lib: ["es2022"]`. `lib/api-zod/tsconfig.json` adds
+  `"dom"` to `lib` so they typecheck.
+
+**How to apply:** When adding any binary upload endpoint, define a component schema
+for the body, ref it from `multipart/form-data`, regenerate, and confirm
+`pnpm -w run typecheck:libs` has no NEW errors (pre-existing
+integrations-openai-ai-react react-type errors are unrelated). The react client
+then builds `FormData` itself; call it as `uploadFn({ file })`.
