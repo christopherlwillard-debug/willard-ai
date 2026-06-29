@@ -74,12 +74,34 @@ function FileTypeIcon({ fileType, className }: { fileType: string; className?: s
   }
 }
 
-function FileTypeBadge({ filename }: { filename: string }) {
-  const ext = filename.split(".").pop()?.toUpperCase() ?? "FILE";
+function ThumbnailCard({ file, ext, badgeColor }: {
+  file: { id: number; filename: string; fileType: string; modifiedAt: string | null };
+  ext: string;
+  badgeColor: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const canThumbnail = file.fileType === "image" || file.fileType === "video";
+
   return (
-    <span className="absolute bottom-2 left-2 text-[10px] font-bold bg-black/60 text-white px-1.5 py-0.5 rounded">
-      {ext}
-    </span>
+    <div className="shrink-0 w-36">
+      <div className="relative h-24 w-36 rounded-lg bg-muted flex items-center justify-center overflow-hidden border border-border">
+        {canThumbnail && !imgFailed ? (
+          <img
+            src={`/api/media/thumbnail/${file.id}`}
+            alt={file.filename}
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <FileTypeIcon fileType={file.fileType} className="text-muted-foreground/40 w-10 h-10" />
+        )}
+        <span className={cn("absolute bottom-2 left-2 text-[10px] font-bold text-white px-1.5 py-0.5 rounded z-10", badgeColor)}>
+          {ext}
+        </span>
+      </div>
+      <p className="text-xs truncate mt-1.5 text-foreground/90">{file.filename}</p>
+      <p className="text-[10px] text-muted-foreground mt-0.5">{formatRelativeDate(file.modifiedAt)}</p>
+    </div>
   );
 }
 
@@ -281,11 +303,11 @@ export default function Dashboard() {
       </div>
 
       {/* ── Stat Cards Row ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="flex gap-3 overflow-x-auto pb-1 -mb-1">
         {statCards.map(({ label, value, sub, icon: Icon, iconBg, iconColor, barColor, barPct }) => (
           <div
             key={label}
-            className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden"
+            className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden shrink-0 w-44"
           >
             <div className={cn("inline-flex items-center justify-center w-9 h-9 rounded-lg mb-3", iconBg)}>
               <Icon className={cn("w-4.5 h-4.5", iconColor)} style={{ width: 18, height: 18 }} />
@@ -326,15 +348,9 @@ export default function Dashboard() {
           <div className="border-l border-border pl-8 min-w-fit">
             <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Scan</p>
             <p className="text-sm font-medium">{formatRelativeDate(data.lastScanAt)}</p>
-            {nasPath && (
-              <button
-                className="text-xs text-primary hover:underline mt-0.5"
-                onClick={() => scanMutation.mutate()}
-                disabled={isScanning}
-              >
-                View History
-              </button>
-            )}
+            <Link href="/settings" className="text-xs text-primary hover:underline mt-0.5 block">
+              View Settings
+            </Link>
           </div>
 
           <div className="border-l border-border pl-8 flex-1">
@@ -388,16 +404,12 @@ export default function Dashboard() {
                   "bg-gray-600";
 
                 return (
-                  <div key={file.filename} className="shrink-0 w-36">
-                    <div className="relative h-24 w-36 rounded-lg bg-muted flex items-center justify-center overflow-hidden border border-border">
-                      <FileTypeIcon fileType={file.fileType} className="text-muted-foreground/40 w-10 h-10" />
-                      <span className={cn("absolute bottom-2 left-2 text-[10px] font-bold text-white px-1.5 py-0.5 rounded", badgeColor)}>
-                        {ext}
-                      </span>
-                    </div>
-                    <p className="text-xs truncate mt-1.5 text-foreground/90">{file.filename}</p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{formatRelativeDate(file.modifiedAt)}</p>
-                  </div>
+                  <ThumbnailCard
+                    key={file.filename}
+                    file={file}
+                    ext={ext}
+                    badgeColor={badgeColor}
+                  />
                 );
               })}
             </div>
