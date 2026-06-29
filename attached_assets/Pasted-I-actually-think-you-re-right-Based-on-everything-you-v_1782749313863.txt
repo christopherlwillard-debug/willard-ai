@@ -1,0 +1,138 @@
+I actually think you're right.
+
+Based on everything you've shown me, I don't think the app is really testing the NAS connection yet.
+
+Here's why.
+
+You disconnected Z:.
+
+Yet the app still says:
+
+✅ Connected
+✅ All Present
+✅ Ready
+
+That should never happen if it's actually checking the filesystem.
+
+What I think is happening
+
+I suspect the backend is doing something like this:
+
+connectionStatus = true;
+
+or
+
+return {
+  connected: true
+}
+
+or it's simply reading the last saved setting from the database instead of testing the drive.
+
+That would explain why disconnecting Z: had no effect.
+
+A real connection test should do this
+
+When you click Test Connection, the API should literally perform these checks in order:
+
+1. Does the path exist?
+await fs.access("Z:\\");
+
+If that fails:
+
+❌ Library not found
+2. Can I read it?
+await fs.readdir("Z:\\");
+
+If that fails:
+
+❌ Cannot access library
+3. Is it actually a directory?
+const stat = await fs.stat("Z:\\");
+
+If it's not:
+
+❌ Invalid library location
+4. Count a few folders
+
+Example:
+
+Photos
+
+Videos
+
+Documents
+
+Incoming
+5. Determine free space
+
+Return something like
+
+4.28 TB Free
+6. Test the WillardAI folder
+Z:\WillardAI
+
+If missing
+
+Offer
+
+Create Application Folder?
+Scanner should also fail
+
+Right now your scanner says
+
+Completed
+
+0 Files
+
+That's another clue.
+
+If Z: is disconnected it should NEVER say
+
+Completed
+
+It should say
+
+Library Offline
+
+Cannot reach
+
+Z:\
+
+Reconnect drive
+
+Retry
+I also noticed this
+
+Your page says
+
+Accessible — 1 item at root
+
+Earlier.
+
+That sounds suspicious.
+
+If it really scanned Z:\ I'd expect something like
+
+18,421 folders
+
+592,844 files
+
+One item sounds like it's checking a placeholder directory rather than your actual NAS.
+
+I would have Replit verify these exact things
+
+I'd tell it:
+
+The NAS connection is not being genuinely validated. Disconnecting the mapped Z: drive still reports Connected and All Present. Replace the current placeholder connection logic with a real filesystem validation. Test Connection must verify that the configured Library Location exists, is reachable, is a directory, and can be enumerated using Node's filesystem APIs. If the drive is unavailable, immediately return Library Offline instead of Connected. Scanner, Application Storage, and Library Status must all use the same real filesystem check rather than cached or hardcoded values. The application should never report Connected when the configured library path cannot be accessed.
+
+I think this is actually a good thing to catch now.
+
+Because once this is fixed, every part of your Media Center becomes trustworthy:
+
+✅ Dashboard knows if the library is online.
+✅ Scanner knows if it can scan.
+✅ Library knows if it can browse.
+✅ Health Center knows if the NAS is available.
+✅ Optimize knows if it can process files.
+
+Right now, I don't think the app is lying intentionally—I think those pieces just haven't been wired up to the real filesystem yet. Catching that now is much easier than discovering it after you've built the rest of the Media Center.
