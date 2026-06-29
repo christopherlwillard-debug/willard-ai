@@ -1,0 +1,129 @@
+I actually think those mobile tasks are based on the old vision of the app, before we simplified the architecture.
+
+Given everything we've discussed, I would remove or completely rewrite them.
+
+#8 — Browse NAS folders and search files from mobile
+
+I would delete this.
+
+Why?
+
+Your phone already has ways to access the NAS:
+
+My Cloud Home app/website
+SMB apps (if supported)
+Future web interface for your Media Center
+
+The Media Center shouldn't try to become a mobile file explorer.
+
+Instead, if you eventually want mobile support, it should be:
+
+View your indexed media library, not browse the raw NAS filesystem.
+
+That means:
+
+Browse photos
+View videos
+Search
+Collections
+Map
+Dashboard
+
+Not:
+
+Z:
+└── Photos
+    └── Family
+        └── Vacation
+#9 — Storage breakdown charts on mobile
+
+I would remove this too.
+
+Storage charts belong on the Dashboard and will automatically work on a responsive web page.
+
+You don't need a separate mobile task for that.
+
+#10 — Keep chat context across mobile app restarts
+
+This one really doesn't belong in the Media Center unless you're planning an AI assistant inside the app.
+
+If you are planning one someday, I'd make it:
+
+Persist Media Assistant conversations across sessions.
+
+Otherwise, I'd remove it entirely.
+
+What I'd replace them with
+
+Eventually I'd build a responsive web app, not a separate mobile app.
+
+Your phone would simply open:
+
+https://media.willardhome.com
+
+(or whatever URL you use later)
+
+The interface would adapt to the screen size.
+
+On desktop:
+
+Sidebar
+
+Dashboard
+
+Library
+
+Collections
+
+Search
+
+Settings
+
+On phone:
+
+☰
+
+Dashboard
+
+Library
+
+Search
+
+Same backend.
+
+Same database.
+
+Same code.
+
+What I think the mobile priorities should actually be
+
+When the time comes, I'd replace those tasks with something like:
+
+Mobile Phase 1
+Responsive Library
+Responsive Photo Viewer
+Responsive Video Player
+Responsive Map
+Responsive Search
+Responsive Collections
+Mobile Phase 2
+Upload photos from phone to the Incoming folder (optional, if you want it later)
+Share media links
+Favorite photos
+Download originals
+
+That's it.
+
+Remember your goal
+
+From everything we've discussed, your Media Center is becoming:
+
+A Digital Asset Manager
+A NAS Management Tool
+A Media Organizer
+
+Not a replacement for the My Cloud Home interface.
+
+Your app's job is to organize, index, search, optimize, and present your media. If you just need to browse the NAS remotely or copy files around, the My Cloud Home tools (or another file manager) already handle that well.
+
+I think that separation of responsibilities will keep the Media Center focused and much easier to maintain.
