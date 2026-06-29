@@ -9,3 +9,4 @@
 - [Orval upload content-type](orval-upload-content-type.md) — generated binary-upload client hardcodes the first openapi content-type; override per-call via request headers
 - [NixOS Playwright Chromium libs](nixos-playwright-chromium.md) — npx playwright test fails with libgbm/libudev not found; use runTest() subagent instead
 - [app_settings schema drift fix](app-settings-schema-drift.md) — add new columns to bootstrapSessionTable ALTER TABLE block so server restart auto-migrates
+- [NAS reachability vs path.resolve](nas-reachability-path-resolve.md) — on Linux, reject Windows drive/UNC/relative paths before path.resolve or they resolve to local folders and falsely report online

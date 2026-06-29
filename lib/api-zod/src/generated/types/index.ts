@@ -72,6 +72,7 @@ export * from './scanJob';
 export * from './scanJobStatus';
 export * from './scanStatus';
 export * from './scanStatusLastCompleted';
+export * from './scanStatusLastFailed';
 export * from './searchFilesParams';
 export * from './searchFilesSource';
 export * from './sessionsResult';

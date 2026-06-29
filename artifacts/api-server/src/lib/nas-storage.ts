@@ -66,6 +66,72 @@ export interface NasDirStatusResult {
   subdirs: NasSubdirStatus[];
 }
 
+export interface NasReachability {
+  online: boolean;
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  readable: boolean;
+  message: string;
+}
+
+/**
+ * Single source of truth for "is the configured library path usable right now".
+ * Performs live filesystem checks in order: exists → is-directory → readable →
+ * enumerable. Returns a structured result so every surface (dashboard, health,
+ * scanner, Settings test) can report a consistent online/offline state.
+ */
+export function checkNasReachable(nasPath: string | null | undefined): NasReachability {
+  if (!nasPath || typeof nasPath !== "string" || nasPath.trim() === "") {
+    return { online: false, path: nasPath ?? "", exists: false, isDirectory: false, readable: false, message: "No library location configured" };
+  }
+  if (nasPath.includes("\0") || nasPath.length > 4096) {
+    return { online: false, path: nasPath, exists: false, isDirectory: false, readable: false, message: "Invalid library location" };
+  }
+  const trimmed = nasPath.trim();
+  // On a non-Windows host (this server runs on Linux), Windows-style locations
+  // can never be reached. Reject them explicitly instead of letting
+  // path.resolve() turn e.g. "Z:" into a local relative folder that may exist
+  // and falsely report online.
+  if (process.platform !== "win32") {
+    if (/^[A-Za-z]:/.test(trimmed)) {
+      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows drive letters (e.g. Z:) are not reachable from this server" };
+    }
+    if (trimmed.startsWith("\\\\")) {
+      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows network shares (\\\\server\\share) are not reachable from this server" };
+    }
+    if (!trimmed.startsWith("/")) {
+      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Library location must be an absolute path" };
+    }
+  }
+  const resolved = path.resolve(trimmed);
+  try {
+    if (!fs.existsSync(resolved)) {
+      return { online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: `Library not found: ${resolved}` };
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) {
+      return { online: false, path: resolved, exists: true, isDirectory: false, readable: false, message: "Library location is not a directory" };
+    }
+    try {
+      fs.accessSync(resolved, fs.constants.R_OK);
+    } catch {
+      return { online: false, path: resolved, exists: true, isDirectory: true, readable: false, message: "Library exists but is not readable (permission denied)" };
+    }
+    const entries = fs.readdirSync(resolved);
+    return {
+      online: true,
+      path: resolved,
+      exists: true,
+      isDirectory: true,
+      readable: true,
+      message: `Online — ${entries.length} item${entries.length !== 1 ? "s" : ""} at root`,
+    };
+  } catch (err) {
+    return { online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: `Library unreachable: ${err instanceof Error ? err.message : "unknown error"}` };
+  }
+}
+
 export function getNasDirStatus(nasPath: string): NasDirStatusResult {
   const willardAiPath = getWillardAIDir(nasPath);
   let exists = false;

@@ -3,6 +3,7 @@ import { execFileSync } from "child_process";
 import { db } from "@workspace/db";
 import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable, organizationJobsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
+import { checkNasReachable } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
@@ -70,7 +71,8 @@ router.get("/dashboard", async (_req, res) => {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0];
     const nasPath = settings?.nasPath ?? "";
-    const diskStats = nasPath ? getDiskStats(nasPath) : null;
+    const reach = checkNasReachable(nasPath);
+    const diskStats = reach.online ? getDiskStats(reach.path) : null;
 
     res.json({
       totalFiles: totalRow.totalFiles,
@@ -86,6 +88,9 @@ router.get("/dashboard", async (_req, res) => {
       diskTotal: diskStats?.total ?? null,
       diskUsed: diskStats?.used ?? null,
       diskFree: diskStats?.free ?? null,
+      libraryOnline: reach.online,
+      libraryPath: reach.path,
+      libraryMessage: reach.message,
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to get dashboard data" });

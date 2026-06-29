@@ -25,4 +25,7 @@ export interface DashboardSummary {
   diskUsed?: number | null;
   /** @nullable */
   diskFree?: number | null;
+  libraryOnline: boolean;
+  libraryPath: string;
+  libraryMessage: string;
 }

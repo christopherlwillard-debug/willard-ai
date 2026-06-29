@@ -5,7 +5,7 @@ import { desc, eq, sql, and } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
-import { getWillardAIDir, writeScanHistory, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
+import { getWillardAIDir, writeScanHistory, getTempDir, cleanTempDir, assertWithinRoot, checkNasReachable } from "../lib/nas-storage";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -363,8 +363,9 @@ async function runScan(jobId: number, nasPath: string) {
   try {
     await db.update(scanJobsTable).set({ status: "running", stage: "Initializing", startedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
 
-    if (!nasPath || !fs.existsSync(nasPath)) {
-      await db.update(scanJobsTable).set({ status: "failed", error: `NAS path not accessible: ${nasPath}`, finishedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
+    const reach = checkNasReachable(nasPath);
+    if (!reach.online) {
+      await db.update(scanJobsTable).set({ status: "failed", error: `Library Offline — ${reach.message}`, stage: "Library Offline", finishedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
       return;
     }
 
@@ -452,10 +453,16 @@ router.get("/scan/status", async (_req, res) => {
       .orderBy(desc(scanJobsTable.finishedAt))
       .limit(1);
 
+    const failed = await db.select().from(scanJobsTable)
+      .where(eq(scanJobsTable.status, "failed"))
+      .orderBy(desc(scanJobsTable.finishedAt))
+      .limit(1);
+
     res.json({
       isRunning: running.length > 0 && running[0].status === "running",
       current: running.length > 0 ? running[0] : null,
       lastCompleted: completed.length > 0 ? completed[0] : null,
+      lastFailed: failed.length > 0 ? failed[0] : null,
     });
   } catch {
     res.status(500).json({ error: "Failed to get scan status" });

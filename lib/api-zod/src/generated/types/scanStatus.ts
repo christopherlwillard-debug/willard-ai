@@ -7,10 +7,13 @@
  */
 import type { ScanJob } from './scanJob';
 import type { ScanStatusLastCompleted } from './scanStatusLastCompleted';
+import type { ScanStatusLastFailed } from './scanStatusLastFailed';
 
 export interface ScanStatus {
   isRunning: boolean;
   current?: ScanJob;
   /** @nullable */
   lastCompleted?: ScanStatusLastCompleted;
+  /** @nullable */
+  lastFailed?: ScanStatusLastFailed;
 }

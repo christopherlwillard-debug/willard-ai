@@ -1309,6 +1309,8 @@ components:
           $ref: "#/components/schemas/ScanJob"
         lastCompleted:
           type: ["object", "null"]
+        lastFailed:
+          type: ["object", "null"]
       required:
         - isRunning
 
@@ -1317,14 +1319,23 @@ components:
       properties:
         database:
           type: boolean
+        libraryOnline:
+          type: boolean
+        libraryPath:
+          type: string
+        libraryMessage:
+          type: string
         thumbnailsOk:
           type: boolean
         missingFiles:
-          type: integer
+          type: ["integer", "null"]
         corruptFiles:
-          type: integer
+          type: ["integer", "null"]
       required:
         - database
+        - libraryOnline
+        - libraryPath
+        - libraryMessage
         - thumbnailsOk
         - missingFiles
         - corruptFiles
@@ -1360,6 +1371,12 @@ components:
           type: ["integer", "null"]
         diskFree:
           type: ["integer", "null"]
+        libraryOnline:
+          type: boolean
+        libraryPath:
+          type: string
+        libraryMessage:
+          type: string
       required:
         - totalFiles
         - totalSizeBytes
@@ -1371,6 +1388,9 @@ components:
         - isScanning
         - lastScanAt
         - typeBreakdown
+        - libraryOnline
+        - libraryPath
+        - libraryMessage
 
     TypeBreakdown:
       type: object

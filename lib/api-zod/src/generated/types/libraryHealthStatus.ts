@@ -8,7 +8,12 @@
 
 export interface LibraryHealthStatus {
   database: boolean;
+  libraryOnline: boolean;
+  libraryPath: string;
+  libraryMessage: string;
   thumbnailsOk: boolean;
-  missingFiles: number;
-  corruptFiles: number;
+  /** @nullable */
+  missingFiles: number | null;
+  /** @nullable */
+  corruptFiles: number | null;
 }

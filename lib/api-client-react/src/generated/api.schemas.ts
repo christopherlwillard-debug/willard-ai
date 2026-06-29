@@ -90,18 +90,30 @@ export interface ScanJob {
  */
 export type ScanStatusLastCompleted = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
+export type ScanStatusLastFailed = { [key: string]: unknown } | null;
+
 export interface ScanStatus {
   isRunning: boolean;
   current?: ScanJob;
   /** @nullable */
   lastCompleted?: ScanStatusLastCompleted;
+  /** @nullable */
+  lastFailed?: ScanStatusLastFailed;
 }
 
 export interface LibraryHealthStatus {
   database: boolean;
+  libraryOnline: boolean;
+  libraryPath: string;
+  libraryMessage: string;
   thumbnailsOk: boolean;
-  missingFiles: number;
-  corruptFiles: number;
+  /** @nullable */
+  missingFiles: number | null;
+  /** @nullable */
+  corruptFiles: number | null;
 }
 
 export interface TypeBreakdown {
@@ -129,6 +141,9 @@ export interface DashboardSummary {
   diskUsed?: number | null;
   /** @nullable */
   diskFree?: number | null;
+  libraryOnline: boolean;
+  libraryPath: string;
+  libraryMessage: string;
 }
 
 export interface IndexedFile {

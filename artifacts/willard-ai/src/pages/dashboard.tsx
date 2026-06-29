@@ -29,6 +29,7 @@ import {
   HeartPulse,
   FolderOpen,
   ScanLine,
+  CloudOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -280,15 +281,19 @@ export default function Dashboard() {
     },
   ];
 
-  const allHealthy = !isScanning && (healthData?.database ?? true) && (healthData?.thumbnailsOk ?? true) && (healthData?.missingFiles ?? 0) === 0;
+  const libraryOnline = data.libraryOnline ?? true;
+  const libraryMessage = data.libraryMessage ?? "";
+  const libraryPath = data.libraryPath || nasPath;
+
+  const allHealthy = !isScanning && libraryOnline && (healthData?.database ?? true) && (healthData?.thumbnailsOk ?? true) && (healthData?.missingFiles ?? 0) === 0;
 
   const healthItems = [
+    { label: "Library", ok: libraryOnline, value: libraryOnline ? null : "Offline" },
     { label: "Database", ok: healthData?.database ?? true, value: null },
-    { label: "Thumbnails", ok: healthData?.thumbnailsOk ?? true, value: null },
+    { label: "Thumbnails", ok: libraryOnline && (healthData?.thumbnailsOk ?? true), value: null },
     { label: "Duplicates", ok: data.duplicateCount === 0, value: data.duplicateCount > 0 ? `${data.duplicateCount} items` : null },
-    { label: "Missing Files", ok: (healthData?.missingFiles ?? 0) === 0, value: healthData?.missingFiles ?? 0 },
     { label: "Metadata", ok: true, value: null },
-    { label: "Corrupt Files", ok: (healthData?.corruptFiles ?? 0) === 0, value: healthData?.corruptFiles ?? 0 },
+    { label: "Corrupt Files", ok: (healthData?.corruptFiles ?? 0) === 0, value: healthData?.corruptFiles ?? null },
   ];
 
   const quickActions = [
@@ -353,7 +358,11 @@ export default function Dashboard() {
       <div className="rounded-lg border border-border bg-card px-6 py-4">
         <div className="flex items-start gap-8">
           <div className="flex items-center gap-3 min-w-fit">
-            {isScanning ? (
+            {!libraryOnline ? (
+              <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
+                <CloudOff className="w-5 h-5 text-red-500" />
+              </div>
+            ) : isScanning ? (
               <Loader2 className="w-8 h-8 text-amber-400 animate-spin shrink-0" />
             ) : allHealthy ? (
               <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center shrink-0">
@@ -365,11 +374,13 @@ export default function Dashboard() {
               </div>
             )}
             <div>
-              <p className={cn("text-sm font-semibold", isScanning ? "text-amber-400" : allHealthy ? "text-green-400" : "text-amber-400")}>
-                {isScanning ? "Scanning Library…" : allHealthy ? "All Systems Healthy" : "Issues Detected"}
+              <p className={cn("text-sm font-semibold", !libraryOnline ? "text-red-400" : isScanning ? "text-amber-400" : allHealthy ? "text-green-400" : "text-amber-400")}>
+                {!libraryOnline ? "Library Offline" : isScanning ? "Scanning Library…" : allHealthy ? "All Systems Healthy" : "Issues Detected"}
               </p>
-              <p className="text-xs text-muted-foreground">
-                {isScanning ? "Scan in progress" : "Last scan completed successfully."}
+              <p className="text-xs text-muted-foreground max-w-xs truncate" title={!libraryOnline ? `${libraryMessage}${libraryPath ? ` (${libraryPath})` : ""}` : undefined}>
+                {!libraryOnline
+                  ? (libraryMessage || `Cannot reach ${libraryPath || "the library location"}`)
+                  : isScanning ? "Scan in progress" : "Last scan completed successfully."}
               </p>
             </div>
           </div>

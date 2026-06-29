@@ -21,9 +21,12 @@ export const HealthCheckResponse = zod.object({
  */
 export const GetHealthStatusResponse = zod.object({
   "database": zod.boolean(),
+  "libraryOnline": zod.boolean(),
+  "libraryPath": zod.string(),
+  "libraryMessage": zod.string(),
   "thumbnailsOk": zod.boolean(),
-  "missingFiles": zod.number(),
-  "corruptFiles": zod.number()
+  "missingFiles": zod.number().nullable(),
+  "corruptFiles": zod.number().nullable()
 })
 
 
@@ -249,6 +252,9 @@ export const GetScanStatusResponse = zod.object({
 }).optional(),
   "lastCompleted": zod.object({
 
+}).passthrough().nullish(),
+  "lastFailed": zod.object({
+
 }).passthrough().nullish()
 })
 
@@ -290,7 +296,10 @@ export const GetDashboardResponse = zod.object({
 })),
   "diskTotal": zod.number().nullish(),
   "diskUsed": zod.number().nullish(),
-  "diskFree": zod.number().nullish()
+  "diskFree": zod.number().nullish(),
+  "libraryOnline": zod.boolean(),
+  "libraryPath": zod.string(),
+  "libraryMessage": zod.string()
 })
 
 
