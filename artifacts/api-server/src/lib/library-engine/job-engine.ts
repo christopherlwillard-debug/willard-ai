@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, libraryJobsTable } from "@workspace/db";
-import { eq, and, lt, sql } from "drizzle-orm";
+import { eq, and, lt, sql, isNull, or, gt } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
   type CancellationReason, type ScanPhase, type ScanAction,
@@ -15,7 +15,7 @@ import {
   PHOTO_EXTS, VIDEO_META_EXTS,
 } from "./indexer";
 import { getWillardAIDir } from "../nas-storage";
-import { getThumbnailDir, thumbnailFilename } from "../thumbnail-engine";
+import { getThumbnailDir, thumbnailFilename, generateThumbnail } from "../thumbnail-engine";
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -154,7 +154,11 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
   activeJobs.set(job.id, state);
 
   // Run async without blocking the response
-  void runScanJob(state, opts.rootPath);
+  if (opts.jobType === "THUMBNAILS") {
+    void runThumbnailJob(state);
+  } else {
+    void runScanJob(state, opts.rootPath);
+  }
 
   return { jobId: job.id, alreadyRunning: false };
 }
@@ -194,7 +198,11 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   };
   activeJobs.set(job.id, state);
 
-  void runScanJob(state, job.rootPath ?? undefined);
+  if (job.jobType === "THUMBNAILS") {
+    void runThumbnailJob(state);
+  } else {
+    void runScanJob(state, job.rootPath ?? undefined);
+  }
   return true;
 }
 
@@ -466,6 +474,156 @@ async function runScanJob(state: ActiveJobState, rootPath?: string): Promise<voi
       thumbnailsGenerated: state.counters.thumbnails,
       elapsedMs,
       previousElapsedMs,
+    };
+
+    await db.update(libraryJobsTable).set({
+      status:         "DONE",
+      finishedAt:     new Date(),
+      processedFiles: state.filesProcessed,
+      totalFiles:     state.filesTotal,
+      summary,
+    }).where(eq(libraryJobsTable.id, jobId));
+
+    activeJobs.delete(jobId);
+
+  } catch (err: any) {
+    await failJob(jobId, "ERROR", err?.message ?? "Unknown error");
+  }
+}
+
+// ── Thumbnail backfill job ────────────────────────────────────────────────────
+
+const THUMB_BATCH = 50;
+
+async function runThumbnailJob(state: ActiveJobState): Promise<void> {
+  const jobId   = state.id;
+  const nasPath = state.nasPath;
+
+  state.phase = "thumbnailing";
+
+  try {
+    // Check NAS
+    if (!isNasAvailable(nasPath)) {
+      await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
+      return;
+    }
+
+    // Count total files that need thumbnails
+    const [{ count: totalCount }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(mediaFilesTable)
+      .where(and(
+        eq(mediaFilesTable.nasPath, nasPath),
+        isNull(mediaFilesTable.thumbnailPath),
+        or(
+          eq(mediaFilesTable.mediaType, "photo"),
+          eq(mediaFilesTable.mediaType, "video"),
+          eq(mediaFilesTable.extension, "pdf"),
+        ),
+      ));
+
+    state.filesTotal = totalCount ?? 0;
+    state.filesProcessed = 0;
+
+    await db.update(libraryJobsTable)
+      .set({ totalFiles: state.filesTotal, startedAt: state.startedAt })
+      .where(eq(libraryJobsTable.id, jobId));
+
+    // Cursor-based batch processing
+    let cursor = 0;
+
+    while (true) {
+      // Pause handling
+      if (state.pauseRequested) {
+        await db.update(libraryJobsTable).set({
+          status: "PAUSED",
+          pausedAt: new Date(),
+          cursor: String(cursor),
+          processedFiles: state.filesProcessed,
+        }).where(eq(libraryJobsTable.id, jobId));
+        // Wait until resume or cancel
+        while (state.pauseRequested && !state.cancelRequested) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!state.cancelRequested) {
+          await db.update(libraryJobsTable)
+            .set({ status: "RUNNING", pausedAt: null })
+            .where(eq(libraryJobsTable.id, jobId));
+        }
+      }
+
+      if (state.cancelRequested) {
+        await db.update(libraryJobsTable).set({
+          status:             "CANCELLED",
+          cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
+          finishedAt:         new Date(),
+          processedFiles:     state.filesProcessed,
+        }).where(eq(libraryJobsTable.id, jobId));
+        activeJobs.delete(jobId);
+        return;
+      }
+
+      // Fetch next batch
+      const batch = await db.select({
+        id:           mediaFilesTable.id,
+        relativePath: mediaFilesTable.relativePath,
+        extension:    mediaFilesTable.extension,
+      })
+        .from(mediaFilesTable)
+        .where(and(
+          eq(mediaFilesTable.nasPath, nasPath),
+          isNull(mediaFilesTable.thumbnailPath),
+          gt(mediaFilesTable.id, cursor),
+          or(
+            eq(mediaFilesTable.mediaType, "photo"),
+            eq(mediaFilesTable.mediaType, "video"),
+            eq(mediaFilesTable.extension, "pdf"),
+          ),
+        ))
+        .orderBy(mediaFilesTable.id)
+        .limit(THUMB_BATCH);
+
+      if (batch.length === 0) break;
+
+      for (const file of batch) {
+        cursor = file.id;
+
+        if (state.cancelRequested) break;
+
+        const sourcePath = path.join(nasPath, file.relativePath);
+        state.currentPath = file.relativePath;
+        tickSpeed(state);
+
+        try {
+          const result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath);
+          if (!result.error && result.destPath) {
+            await db.update(mediaFilesTable).set({
+              thumbnailPath:        result.destPath,
+              thumbnailGeneratedAt: new Date(),
+            }).where(eq(mediaFilesTable.id, file.id));
+            state.counters.thumbnails++;
+          }
+        } catch {
+          // Skip failed thumbnails — don't abort the job
+        }
+
+        state.filesProcessed++;
+      }
+
+      // Update progress in DB periodically
+      await db.update(libraryJobsTable)
+        .set({ processedFiles: state.filesProcessed, cursor: String(cursor) })
+        .where(eq(libraryJobsTable.id, jobId));
+    }
+
+    // Done
+    const elapsedMs = Date.now() - state.startedAt.getTime();
+    const summary: JobSummary = {
+      newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0, unchangedFiles: 0,
+      hashedFiles: 0,
+      thumbnailsGenerated: state.counters.thumbnails,
+      elapsedMs,
+      previousElapsedMs: null,
     };
 
     await db.update(libraryJobsTable).set({

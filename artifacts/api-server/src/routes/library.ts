@@ -111,4 +111,22 @@ router.post("/library/jobs/:id/cancel", async (req: Request, res: Response) => {
   res.json({ ok, jobId: id });
 });
 
+// ── POST /api/library/thumbnails — start a thumbnail backfill job ─────────────
+
+router.post("/library/thumbnails", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "FULL",
+    nasPath,
+  });
+
+  res.json(result);
+});
+
 export default router;

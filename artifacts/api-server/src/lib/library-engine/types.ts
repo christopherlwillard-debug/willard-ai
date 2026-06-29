@@ -6,7 +6,7 @@ export type JobPriority = "HIGH" | "NORMAL" | "LOW";
 export type JobStatus   = "PENDING" | "RUNNING" | "PAUSED" | "DONE" | "FAILED" | "CANCELLED";
 export type CancellationReason = "USER_CANCELLED" | "NAS_OFFLINE" | "SYSTEM_SLEEP" | "POWER_LOSS" | "ERROR";
 export type ScanAction  = "NEW" | "MODIFIED" | "MOVED" | "UNCHANGED" | "DELETED" | "VERIFIED";
-export type ScanPhase   = "walking" | "indexing" | "hashing" | "metadata" | "detecting_moves" | "detecting_deletions" | "finalizing";
+export type ScanPhase   = "walking" | "indexing" | "hashing" | "metadata" | "detecting_moves" | "detecting_deletions" | "finalizing" | "thumbnailing";
 
 // ── Summary stored in library_jobs.summary (jsonb) ────────────────────────────
 

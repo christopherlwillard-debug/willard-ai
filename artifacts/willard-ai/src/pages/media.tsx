@@ -20,6 +20,7 @@ import {
   Pause,
   CheckCircle2,
   AlertCircle,
+  Wand2,
   Layers,
   LayoutGrid,
   List,
@@ -832,9 +833,27 @@ export default function Media() {
     },
   });
 
+  const thumbnailsMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/library/thumbnails", { method: "POST" });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error((body as any).error ?? "Thumbnail job failed");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      setDismissedProgress(false);
+      queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Thumbnail job failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const activeProgress = activeJobQuery.data ?? null;
   const activeStatus   = activeProgress?.status;
-  const isScanning     = activeStatus === "RUNNING" || activeStatus === "PAUSED" || scanMutation.isPending;
+  const isScanning     = activeStatus === "RUNNING" || activeStatus === "PAUSED" || scanMutation.isPending || thumbnailsMutation.isPending;
   const showBanner     = activeProgress !== null && !dismissedProgress;
 
   const files      = filesQuery.data?.files ?? [];
@@ -900,10 +919,26 @@ export default function Media() {
           disabled={isScanning}
           className="gap-2 font-mono text-xs h-8"
         >
-          {isScanning ? (
+          {isScanning && scanMutation.isPending ? (
             <><Loader2 className="w-3.5 h-3.5 animate-spin" />Scanning…</>
           ) : (
             <><ScanLine className="w-3.5 h-3.5" />Scan Library</>
+          )}
+        </Button>
+
+        {/* Thumbnails button */}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => thumbnailsMutation.mutate()}
+          disabled={isScanning}
+          className="gap-2 font-mono text-xs h-8"
+          title="Generate thumbnails for all photos, videos and PDFs missing one"
+        >
+          {thumbnailsMutation.isPending ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" />Starting…</>
+          ) : (
+            <><Wand2 className="w-3.5 h-3.5" />Gen Thumbnails</>
           )}
         </Button>
 
