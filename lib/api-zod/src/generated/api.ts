@@ -125,8 +125,6 @@ export const RevokeSessionResponse = zod.object({
  */
 export const GetSettingsResponse = zod.object({
   "nasPath": zod.string(),
-  "immichBaseUrl": zod.string(),
-  "immichApiKey": zod.string(),
   "lastScanAt": zod.string().nullable(),
   "totalFilesIndexed": zod.number(),
   "photosDestination": zod.string(),
@@ -141,8 +139,6 @@ export const GetSettingsResponse = zod.object({
  */
 export const UpdateSettingsBody = zod.object({
   "nasPath": zod.string().optional(),
-  "immichBaseUrl": zod.string().optional(),
-  "immichApiKey": zod.string().optional(),
   "photosDestination": zod.string().optional(),
   "videosDestination": zod.string().optional(),
   "documentsDestination": zod.string().optional(),
@@ -151,30 +147,12 @@ export const UpdateSettingsBody = zod.object({
 
 export const UpdateSettingsResponse = zod.object({
   "nasPath": zod.string(),
-  "immichBaseUrl": zod.string(),
-  "immichApiKey": zod.string(),
   "lastScanAt": zod.string().nullable(),
   "totalFilesIndexed": zod.number(),
   "photosDestination": zod.string(),
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string()
-})
-
-
-/**
- * @summary Test Immich connection
- */
-export const TestImmichConnectionBody = zod.object({
-  "baseUrl": zod.string(),
-  "apiKey": zod.string()
-})
-
-export const TestImmichConnectionResponse = zod.object({
-  "connected": zod.boolean(),
-  "message": zod.string(),
-  "photoCount": zod.number().nullable(),
-  "videoCount": zod.number().nullable()
 })
 
 
@@ -294,10 +272,7 @@ export const GetDashboardResponse = zod.object({
   "count": zod.number(),
   "sizeBytes": zod.number(),
   "percentage": zod.number()
-})),
-  "immichPhotoCount": zod.number(),
-  "immichVideoCount": zod.number(),
-  "immichConnected": zod.boolean()
+}))
 })
 
 
@@ -311,7 +286,7 @@ export const SearchFilesQueryParams = zod.object({
   "maxSize": zod.coerce.number().optional(),
   "after": zod.coerce.string().optional(),
   "before": zod.coerce.string().optional(),
-  "source": zod.enum(['local', 'immich', 'all']).optional(),
+  "source": zod.enum(['local', 'all']).optional(),
   "limit": zod.coerce.number().optional(),
   "offset": zod.coerce.number().optional()
 })
@@ -630,61 +605,6 @@ export const GetCleanupSummaryResponse = zod.object({
   "oldFileCount": zod.number(),
   "emptyFolderCount": zod.number()
 })
-
-
-/**
- * @summary Get Immich connection status and stats
- */
-export const GetImmichStatusResponse = zod.object({
-  "connected": zod.boolean(),
-  "baseUrl": zod.string(),
-  "photoCount": zod.number(),
-  "videoCount": zod.number(),
-  "albumCount": zod.number(),
-  "personCount": zod.number(),
-  "error": zod.string().nullable()
-})
-
-
-/**
- * @summary Get recent photos from Immich
- */
-export const GetImmichRecentPhotosQueryParams = zod.object({
-  "limit": zod.coerce.number().optional()
-})
-
-export const GetImmichRecentPhotosResponseItem = zod.object({
-  "id": zod.string(),
-  "filename": zod.string(),
-  "type": zod.string(),
-  "thumbUrl": zod.string(),
-  "createdAt": zod.string()
-})
-export const GetImmichRecentPhotosResponse = zod.array(GetImmichRecentPhotosResponseItem)
-
-
-/**
- * @summary Get albums from Immich
- */
-export const GetImmichAlbumsResponseItem = zod.object({
-  "id": zod.string(),
-  "albumName": zod.string(),
-  "assetCount": zod.number(),
-  "thumbUrl": zod.string().nullable()
-})
-export const GetImmichAlbumsResponse = zod.array(GetImmichAlbumsResponseItem)
-
-
-/**
- * @summary Get people (faces) from Immich
- */
-export const GetImmichPeopleResponseItem = zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "assetCount": zod.number(),
-  "thumbUrl": zod.string().nullable()
-})
-export const GetImmichPeopleResponse = zod.array(GetImmichPeopleResponseItem)
 
 
 /**

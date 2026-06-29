@@ -18,11 +18,10 @@ interface MatchedFile {
   fileType: string;
   sizeBytes: number;
   folder: string;
-  source: "local" | "immich";
+  source: string;
 }
 
-function fileIcon(fileType: string, source: string) {
-  if (source === "immich") return <ImageIcon className="w-3 h-3 text-purple-400 flex-shrink-0" />;
+function fileIcon(fileType: string, _source: string) {
   switch (fileType) {
     case "image": return <ImageIcon className="w-3 h-3 text-blue-400 flex-shrink-0" />;
     case "video": return <Video className="w-3 h-3 text-purple-400 flex-shrink-0" />;
@@ -50,7 +49,7 @@ function MatchedFilesCard({ files }: { files: MatchedFile[] }) {
               <span className="text-muted-foreground truncate block text-[10px] font-mono">{f.path}</span>
             </div>
             <div className="text-right flex-shrink-0 space-y-0.5">
-              <span className={`block text-[10px] font-mono ${f.source === "immich" ? "text-purple-400" : "text-blue-400"}`}>
+              <span className="block text-[10px] font-mono text-blue-400">
                 {f.source}
               </span>
               {f.sizeBytes > 0 && (

@@ -26,19 +26,6 @@ function getDiskStats(dirPath: string): { total: number; used: number; free: num
   }
 }
 
-async function getImmichStats(baseUrl: string, apiKey: string) {
-  if (!baseUrl || !apiKey) return { photoCount: 0, videoCount: 0, connected: false };
-  try {
-    const url = `${baseUrl.replace(/\/$/, "")}/api/server/statistics`;
-    const r = await fetch(url, { headers: { "x-api-key": apiKey }, signal: AbortSignal.timeout(3000) });
-    if (!r.ok) return { photoCount: 0, videoCount: 0, connected: false };
-    const data = await r.json() as any;
-    return { photoCount: data.photos ?? 0, videoCount: data.videos ?? 0, connected: true };
-  } catch {
-    return { photoCount: 0, videoCount: 0, connected: false };
-  }
-}
-
 router.get("/dashboard", async (_req, res) => {
   try {
     const [totalRow] = await db.select({
@@ -75,8 +62,6 @@ router.get("/dashboard", async (_req, res) => {
 
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0];
-    const immich = await getImmichStats(settings?.immichBaseUrl ?? "", settings?.immichApiKey ?? "");
-
     const nasPath = settings?.nasPath ?? "";
     const diskStats = nasPath ? getDiskStats(nasPath) : null;
 
@@ -89,9 +74,6 @@ router.get("/dashboard", async (_req, res) => {
       isScanning: runningJob.length > 0,
       lastScanAt: settings?.lastScanAt ?? null,
       typeBreakdown: breakdown,
-      immichPhotoCount: immich.photoCount,
-      immichVideoCount: immich.videoCount,
-      immichConnected: immich.connected,
       diskTotal: diskStats?.total ?? null,
       diskUsed: diskStats?.used ?? null,
       diskFree: diskStats?.free ?? null,

@@ -1,7 +1,6 @@
 import {
   useGetSettings,
   useUpdateSettings,
-  useTestImmichConnection,
 } from "@workspace/api-client-react";
 import type { SettingsInput } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -71,22 +70,12 @@ export default function SettingsScreen() {
 
   const settingsQuery = useGetSettings();
   const updateMutation = useUpdateSettings();
-  const testImmichMutation = useTestImmichConnection();
-
   const [nasPath, setNasPath] = useState("");
-  const [immichUrl, setImmichUrl] = useState("");
-  const [immichApiKey, setImmichApiKey] = useState("");
   const [saved, setSaved] = useState(false);
-  const [immichTestResult, setImmichTestResult] = useState<{
-    connected: boolean;
-    message: string;
-  } | null>(null);
 
   useEffect(() => {
     if (settingsQuery.data) {
       setNasPath(settingsQuery.data.nasPath ?? "");
-      setImmichUrl(settingsQuery.data.immichBaseUrl ?? "");
-      setImmichApiKey(settingsQuery.data.immichApiKey ?? "");
     }
   }, [settingsQuery.data]);
 
@@ -94,8 +83,6 @@ export default function SettingsScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const input: SettingsInput = {
       nasPath,
-      immichBaseUrl: immichUrl,
-      immichApiKey,
     };
     updateMutation.mutate(input, {
       onSuccess: () => {
@@ -104,23 +91,8 @@ export default function SettingsScreen() {
         setTimeout(() => setSaved(false), 2500);
       },
     });
-  }, [nasPath, immichUrl, immichApiKey, updateMutation, queryClient]);
+  }, [nasPath, updateMutation, queryClient]);
 
-  const onTestImmich = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setImmichTestResult(null);
-    testImmichMutation.mutate(
-      { baseUrl: immichUrl, apiKey: immichApiKey },
-      {
-        onSuccess: (result) => {
-          setImmichTestResult({ connected: result.connected, message: result.message });
-        },
-        onError: () => {
-          setImmichTestResult({ connected: false, message: "Connection failed" });
-        },
-      }
-    );
-  }, [immichUrl, immichApiKey, testImmichMutation]);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 + 84 : insets.bottom + 60;
@@ -169,85 +141,6 @@ export default function SettingsScreen() {
               placeholder="/mnt/nas"
               icon="folder"
             />
-          </View>
-
-          {/* Immich Section */}
-          <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.sectionHeader}>
-              <View style={[styles.sectionIcon, { backgroundColor: "#0dd9a0" + "22" }]}>
-                <Feather name="image" size={14} color="#0dd9a0" />
-              </View>
-              <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
-                Immich
-              </Text>
-            </View>
-            <Field
-              label="BASE URL"
-              value={immichUrl}
-              onChange={(v) => { setImmichUrl(v); setImmichTestResult(null); }}
-              placeholder="http://192.168.1.x:2283"
-              icon="link"
-            />
-            <Field
-              label="API KEY"
-              value={immichApiKey}
-              onChange={(v) => { setImmichApiKey(v); setImmichTestResult(null); }}
-              placeholder="your-immich-api-key"
-              secureTextEntry
-              icon="key"
-            />
-
-            {immichTestResult && (
-              <View
-                style={[
-                  styles.testResult,
-                  {
-                    backgroundColor: immichTestResult.connected
-                      ? "#0dd9a0" + "18"
-                      : "#ef4343" + "18",
-                    borderColor: immichTestResult.connected ? "#0dd9a0" + "55" : "#ef4343" + "55",
-                  },
-                ]}
-              >
-                <Feather
-                  name={immichTestResult.connected ? "check-circle" : "x-circle"}
-                  size={14}
-                  color={immichTestResult.connected ? "#0dd9a0" : "#ef4343"}
-                />
-                <Text
-                  style={[
-                    styles.testResultText,
-                    {
-                      color: immichTestResult.connected ? "#0dd9a0" : "#ef4343",
-                      fontFamily: "Inter_400Regular",
-                    },
-                  ]}
-                >
-                  {immichTestResult.message}
-                </Text>
-              </View>
-            )}
-
-            <Pressable
-              onPress={onTestImmich}
-              disabled={!immichUrl || !immichApiKey || testImmichMutation.isPending}
-              style={({ pressed }) => [
-                styles.testButton,
-                {
-                  borderColor: colors.border,
-                  opacity: pressed || !immichUrl || !immichApiKey ? 0.5 : 1,
-                },
-              ]}
-            >
-              {testImmichMutation.isPending ? (
-                <ActivityIndicator size="small" color={colors.mutedForeground} />
-              ) : (
-                <Feather name="zap" size={14} color={colors.mutedForeground} />
-              )}
-              <Text style={[styles.testButtonText, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
-                Test Connection
-              </Text>
-            </Pressable>
           </View>
 
           {/* About Section */}

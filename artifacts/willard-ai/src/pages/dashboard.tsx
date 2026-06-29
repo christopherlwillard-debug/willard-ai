@@ -3,13 +3,12 @@ import { Link } from "wouter";
 import {
   useGetDashboard, getGetDashboardQueryKey,
   useStartScan, useGetScanStatus, getGetScanStatusQueryKey,
-  useGetImmichRecentPhotos, getGetImmichRecentPhotosQueryKey,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Database, FileArchive, FileText, Copy, Activity, ScanLine, Loader2, Image as ImageIcon, Video, HardDrive, Settings2, ArrowRight } from "lucide-react";
+import { Database, FileArchive, FileText, Copy, ScanLine, Loader2, HardDrive, Settings2, ArrowRight } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -34,16 +33,6 @@ export default function Dashboard() {
       enabled: scanPolling,
     },
   });
-
-  const { data: recentPhotos } = useGetImmichRecentPhotos(
-    { limit: 12 },
-    {
-      query: {
-        queryKey: getGetImmichRecentPhotosQueryKey({ limit: 12 }),
-        enabled: data?.immichConnected === true,
-      },
-    }
-  );
 
   const scanMutation = useStartScan({
     mutation: {
@@ -309,76 +298,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Immich Integration */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Immich Integration</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center space-x-2">
-                <Activity className={`h-4 w-4 ${data.immichConnected ? "text-green-500" : "text-red-500"}`} />
-                <span className="font-mono text-sm">
-                  {data.immichConnected ? "CONNECTED" : "DISCONNECTED"}
-                </span>
-              </div>
-              {data.immichConnected ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-secondary p-3 rounded-md">
-                    <p className="text-xs text-muted-foreground">Photos</p>
-                    <p className="text-xl font-bold">{data.immichPhotoCount.toLocaleString()}</p>
-                  </div>
-                  <div className="bg-secondary p-3 rounded-md">
-                    <p className="text-xs text-muted-foreground">Videos</p>
-                    <p className="text-xl font-bold">{data.immichVideoCount.toLocaleString()}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground font-mono">
-                  Configure Immich URL + API key in Settings to connect your photo library
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
       </div>
-
-      {/* Recent photos strip — only when Immich connected */}
-      {data.immichConnected && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="font-mono text-sm">RECENT_MEDIA</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-6 md:grid-cols-12 gap-2">
-              {recentPhotos
-                ? recentPhotos.slice(0, 12).map((asset) => (
-                    <div
-                      key={asset.id}
-                      className="aspect-square bg-secondary rounded overflow-hidden relative group"
-                    >
-                      {asset.thumbUrl ? (
-                        <img
-                          src={asset.thumbUrl}
-                          alt={asset.filename}
-                          className="object-cover w-full h-full group-hover:scale-105 transition-transform"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          {(asset as { type?: string }).type === "VIDEO"
-                            ? <Video className="w-4 h-4 text-muted-foreground" />
-                            : <ImageIcon className="w-4 h-4 text-muted-foreground" />}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                : [...Array(12)].map((_, i) => (
-                    <Skeleton key={i} className="aspect-square w-full rounded" />
-                  ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

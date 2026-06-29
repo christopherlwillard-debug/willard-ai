@@ -11,6 +11,5 @@ export type SearchFilesSource = typeof SearchFilesSource[keyof typeof SearchFile
 
 export const SearchFilesSource = {
   local: 'local',
-  immich: 'immich',
   all: 'all',
 } as const;

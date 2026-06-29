@@ -1,0 +1,11 @@
+{
+  "jobId": 6,
+  "nasPath": "Z:\\",
+  "startedAt": "2026-06-29T03:48:20.090Z",
+  "finishedAt": "2026-06-29T03:48:20.117Z",
+  "durationSeconds": 0,
+  "filesScanned": 0,
+  "archivesFound": 0,
+  "status": "completed",
+  "error": null
+}

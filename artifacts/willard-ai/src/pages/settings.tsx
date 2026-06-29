@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { 
   useGetSettings, getGetSettingsQueryKey,
   useUpdateSettings,
-  useTestImmichConnection,
   useTestNasPath,
   useGetScanStatus, getGetScanStatusQueryKey,
   useGetScanHistory, getGetScanHistoryQueryKey,
@@ -54,18 +53,6 @@ export default function Settings() {
     }
   });
 
-  const testImmichMutation = useTestImmichConnection({
-    mutation: {
-      onSuccess: (data) => {
-        if (data.connected) {
-          toast({ title: "Connected to Immich", description: `Found ${data.photoCount} photos` });
-        } else {
-          toast({ title: "Connection failed", description: data.message, variant: "destructive" });
-        }
-      }
-    }
-  });
-
   const startScanMutation = useStartScan({
     mutation: {
       onSuccess: () => {
@@ -86,8 +73,6 @@ export default function Settings() {
 
   const [form, setForm] = useState({
     nasPath: "",
-    immichBaseUrl: "",
-    immichApiKey: "",
     photosDestination: "",
     videosDestination: "",
     documentsDestination: "",
@@ -98,8 +83,6 @@ export default function Settings() {
     if (settings) {
       setForm({
         nasPath: settings.nasPath,
-        immichBaseUrl: settings.immichBaseUrl,
-        immichApiKey: settings.immichApiKey,
         photosDestination: settings.photosDestination ?? "",
         videosDestination: settings.videosDestination ?? "",
         documentsDestination: settings.documentsDestination ?? "",
@@ -110,12 +93,6 @@ export default function Settings() {
 
   const handleSave = () => {
     updateMutation.mutate({ data: form });
-  };
-
-  const handleTestImmich = () => {
-    testImmichMutation.mutate({ 
-      data: { baseUrl: form.immichBaseUrl, apiKey: form.immichApiKey } 
-    });
   };
 
   return (
@@ -178,44 +155,6 @@ export default function Settings() {
           </CardFooter>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Immich Integration</CardTitle>
-            <CardDescription>Connect to your Immich server instance</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-             {settingsLoading ? <div className="space-y-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div> : (
-              <>
-                <div className="space-y-2">
-                  <Label>Server URL</Label>
-                  <Input 
-                    value={form.immichBaseUrl} 
-                    onChange={e => setForm({...form, immichBaseUrl: e.target.value})} 
-                    placeholder="http://192.168.1.100:2283"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>API Key</Label>
-                  <Input 
-                    type="password"
-                    value={form.immichApiKey} 
-                    onChange={e => setForm({...form, immichApiKey: e.target.value})} 
-                    className="font-mono"
-                  />
-                </div>
-              </>
-            )}
-          </CardContent>
-          <CardFooter className="flex gap-2">
-            <Button variant="secondary" onClick={handleTestImmich} disabled={testImmichMutation.isPending} className="flex-1">
-              Test Connection
-            </Button>
-            <Button onClick={handleSave} disabled={updateMutation.isPending} className="flex-1">
-              Save
-            </Button>
-          </CardFooter>
-        </Card>
       </div>
 
       <Card>

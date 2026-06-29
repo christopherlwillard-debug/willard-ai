@@ -8,8 +8,6 @@
 
 export interface AppSettings {
   nasPath: string;
-  immichBaseUrl: string;
-  immichApiKey: string;
   /** @nullable */
   lastScanAt: string | null;
   totalFilesIndexed: number;

@@ -98,4 +98,8 @@ CREATE TABLE IF NOT EXISTS library_jobs (
 CREATE INDEX IF NOT EXISTS library_jobs_nas_path_idx  ON library_jobs (nas_path);
 CREATE INDEX IF NOT EXISTS library_jobs_status_idx    ON library_jobs (status);
 CREATE INDEX IF NOT EXISTS library_jobs_job_type_idx  ON library_jobs (job_type);
+
+-- Remove Immich columns (idempotent)
+ALTER TABLE app_settings DROP COLUMN IF EXISTS immich_base_url;
+ALTER TABLE app_settings DROP COLUMN IF EXISTS immich_api_key;
 SQL

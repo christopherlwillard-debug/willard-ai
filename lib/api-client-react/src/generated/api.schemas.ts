@@ -11,8 +11,6 @@ export interface HealthStatus {
 
 export interface AppSettings {
   nasPath: string;
-  immichBaseUrl: string;
-  immichApiKey: string;
   /** @nullable */
   lastScanAt: string | null;
   totalFilesIndexed: number;
@@ -24,26 +22,10 @@ export interface AppSettings {
 
 export interface SettingsInput {
   nasPath?: string;
-  immichBaseUrl?: string;
-  immichApiKey?: string;
   photosDestination?: string;
   videosDestination?: string;
   documentsDestination?: string;
   otherFilesDestination?: string;
-}
-
-export interface ImmichTestInput {
-  baseUrl: string;
-  apiKey: string;
-}
-
-export interface ImmichTestResult {
-  connected: boolean;
-  message: string;
-  /** @nullable */
-  photoCount: number | null;
-  /** @nullable */
-  videoCount: number | null;
 }
 
 export interface NasTestInput {
@@ -126,9 +108,6 @@ export interface DashboardSummary {
   /** @nullable */
   lastScanAt: string | null;
   typeBreakdown: TypeBreakdown[];
-  immichPhotoCount: number;
-  immichVideoCount: number;
-  immichConnected: boolean;
 }
 
 export interface IndexedFile {
@@ -319,41 +298,6 @@ export interface CleanupSummary {
   largeFilesBytes: number;
   oldFileCount: number;
   emptyFolderCount: number;
-}
-
-export interface ImmichStatus {
-  connected: boolean;
-  baseUrl: string;
-  photoCount: number;
-  videoCount: number;
-  albumCount: number;
-  personCount: number;
-  /** @nullable */
-  error: string | null;
-}
-
-export interface ImmichAsset {
-  id: string;
-  filename: string;
-  type: string;
-  thumbUrl: string;
-  createdAt: string;
-}
-
-export interface ImmichAlbum {
-  id: string;
-  albumName: string;
-  assetCount: number;
-  /** @nullable */
-  thumbUrl: string | null;
-}
-
-export interface ImmichPerson {
-  id: string;
-  name: string;
-  assetCount: number;
-  /** @nullable */
-  thumbUrl: string | null;
 }
 
 export interface ApiError {
@@ -568,7 +512,6 @@ export type SearchFilesSource = typeof SearchFilesSource[keyof typeof SearchFile
 
 export const SearchFilesSource = {
   local: 'local',
-  immich: 'immich',
   all: 'all',
 } as const;
 
@@ -622,7 +565,4 @@ limit?: number;
 offset?: number;
 };
 
-export type GetImmichRecentPhotosParams = {
-limit?: number;
-};
 

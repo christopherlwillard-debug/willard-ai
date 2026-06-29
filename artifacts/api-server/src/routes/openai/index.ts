@@ -36,29 +36,6 @@ async function searchLocalFiles(keyword: string): Promise<string> {
   }
 }
 
-/** Query Immich for assets matching a keyword. */
-async function searchImmich(keyword: string, settings: any): Promise<string> {
-  const baseUrl = settings?.immichBaseUrl?.replace(/\/$/, "");
-  const apiKey = settings?.immichApiKey;
-  if (!baseUrl || !apiKey) return "";
-  try {
-    const r = await fetch(`${baseUrl}/api/search/metadata`, {
-      method: "POST",
-      headers: { "x-api-key": apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ query: keyword, size: 5 }),
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!r.ok) return "";
-    const data = await r.json() as any;
-    const assets: any[] = data?.assets?.items ?? [];
-    if (assets.length === 0) return `No Immich media found matching "${keyword}".`;
-    const lines = assets.map((a: any) => `  • ${a.originalFileName ?? a.id} (${a.type?.toLowerCase() ?? "asset"})`);
-    return `Found ${assets.length} Immich assets matching "${keyword}":\n${lines.join("\n")}`;
-  } catch {
-    return "";
-  }
-}
-
 /** Query storage breakdown for context. */
 async function getStorageContext(): Promise<string> {
   const breakdown = await db.select({
@@ -103,7 +80,7 @@ async function getArchivesContext(): Promise<string> {
 
 /**
  * Detect query intent from the user message and return relevant NAS context.
- * This runs structured queries against local index and Immich before
+ * This runs structured queries against the local index before
  * passing results to the language model.
  */
 interface MatchedFile {
@@ -112,7 +89,7 @@ interface MatchedFile {
   fileType: string;
   sizeBytes: number;
   folder: string;
-  source: "local" | "immich";
+  source: string;
 }
 
 interface QueryContextResult {
@@ -165,37 +142,6 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
         }
       } catch { /* ignore */ }
 
-      // Immich search
-      const baseUrl = settings?.immichBaseUrl?.replace(/\/$/, "");
-      const apiKey = settings?.immichApiKey;
-      if (baseUrl && apiKey) {
-        try {
-          const r = await fetch(`${baseUrl}/api/search/metadata`, {
-            method: "POST",
-            headers: { "x-api-key": apiKey, "content-type": "application/json" },
-            body: JSON.stringify({ query: keyword, size: 5 }),
-            signal: AbortSignal.timeout(4000),
-          });
-          if (r.ok) {
-            const data = await r.json() as any;
-            const assets: any[] = data?.assets?.items ?? [];
-            if (assets.length > 0) {
-              const lines = assets.map((a: any) => `  • ${a.originalFileName ?? a.id} (${a.type?.toLowerCase() ?? "asset"})`);
-              parts.push(`Found ${assets.length} Immich assets matching "${keyword}":\n${lines.join("\n")}`);
-              for (const a of assets) {
-                matchedFiles.push({
-                  filename: a.originalFileName ?? a.id,
-                  path: a.originalPath ?? a.id,
-                  fileType: a.type?.toLowerCase() === "video" ? "video" : "image",
-                  sizeBytes: a.exifInfo?.fileSizeInByte ?? 0,
-                  folder: "/immich",
-                  source: "immich",
-                });
-              }
-            }
-          }
-        } catch { /* ignore */ }
-      }
     }
   }
 
@@ -243,8 +189,6 @@ async function buildSystemPrompt(settings: any): Promise<string> {
 
   const sizeGB = (Number(totalSizeBytes) / (1024 ** 3)).toFixed(2);
   const breakdown = typeBreakdown.map(r => `${r.fileType}: ${r.fileCount}`).join(", ");
-  const immichConfigured = !!(settings?.immichBaseUrl && settings?.immichApiKey);
-
   return `You are Willard AI, an intelligent assistant for a WD My Cloud NAS home media server.
 
 Current NAS statistics:
@@ -253,7 +197,6 @@ Current NAS statistics:
 - Archive files: ${archiveCount}
 - File type breakdown: ${breakdown || "No files indexed yet"}
 - NAS path: ${settings?.nasPath || "Not configured"}
-- Immich integration: ${immichConfigured ? "Connected" : "Not configured"}
 
 You help users understand their NAS contents, find files, analyze storage, identify cleanup opportunities, and manage their media collection. You are concise, precise, and helpful. When discussing files or storage, use human-readable sizes (KB, MB, GB).
 

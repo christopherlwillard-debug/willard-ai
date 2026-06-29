@@ -20,8 +20,7 @@ const FILE_TYPES = [
   { value: "other", label: "Other" },
 ];
 
-function fileTypeIcon(fileType: string | undefined, source: string | undefined) {
-  if (source === "immich") return <ImageIcon className="h-4 w-4 text-purple-400" />;
+function fileTypeIcon(fileType: string | undefined, _source: string | undefined) {
   switch (fileType) {
     case "image": return <ImageIcon className="h-4 w-4 text-blue-400" />;
     case "video": return <Video className="h-4 w-4 text-purple-400" />;
@@ -60,9 +59,7 @@ function FileDetailSheet({ file, onClose }: { file: any; onClose: () => void }) 
             {file.source && (
               <div className="space-y-0.5">
                 <p className="text-xs text-muted-foreground font-mono uppercase">Source Badge</p>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-mono uppercase ${
-                  file.source === "immich" ? "bg-purple-500/20 text-purple-400" : "bg-blue-500/20 text-blue-400"
-                }`}>{file.source}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded font-mono uppercase bg-blue-500/20 text-blue-400">{file.source}</span>
               </div>
             )}
           </div>
@@ -103,7 +100,7 @@ export default function Search() {
       <div>
         <h1 className="text-3xl font-bold font-mono tracking-tight">UNIVERSAL_SEARCH</h1>
         <p className="text-muted-foreground font-mono text-sm mt-1">
-          Search across local NAS files and Immich media library
+          Search across all locally indexed NAS files
         </p>
       </div>
 
@@ -135,7 +132,6 @@ export default function Search() {
           <SelectContent>
             <SelectItem value="all">All Sources</SelectItem>
             <SelectItem value="local">Local Files</SelectItem>
-            <SelectItem value="immich">Immich Media</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -143,12 +139,7 @@ export default function Search() {
       {q.length >= 2 && data && (
         <div className="flex items-center gap-4 text-xs font-mono text-muted-foreground px-1">
           <span>{total.toLocaleString()} results</span>
-          {sources && (
-            <>
-              <span className="text-blue-400">local: {sources.local}</span>
-              <span className="text-purple-400">immich: {sources.immich}</span>
-            </>
-          )}
+          {sources && <span className="text-blue-400">local: {sources.local}</span>}
           <span className="ml-auto text-[10px] opacity-60">Click any row for details</span>
         </div>
       )}
@@ -206,11 +197,7 @@ export default function Search() {
                     </span>
                   </TableCell>
                   <TableCell className="text-center">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono uppercase ${
-                      file.source === "immich"
-                        ? "bg-purple-500/20 text-purple-400"
-                        : "bg-blue-500/20 text-blue-400"
-                    }`}>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-mono uppercase bg-blue-500/20 text-blue-400">
                       {file.source}
                     </span>
                   </TableCell>

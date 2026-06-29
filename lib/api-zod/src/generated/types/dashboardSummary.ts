@@ -17,7 +17,4 @@ export interface DashboardSummary {
   /** @nullable */
   lastScanAt: string | null;
   typeBreakdown: TypeBreakdown[];
-  immichPhotoCount: number;
-  immichVideoCount: number;
-  immichConnected: boolean;
 }

@@ -17,9 +17,6 @@ let currentScanJobId: number | null = null;
 
 const HASH_SIZE_LIMIT = 500 * 1024 * 1024;
 
-// File types managed by Immich — excluded from local indexing to avoid duplication
-const IMMICH_TYPES = new Set(["image", "video"]);
-
 const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "txz", "cab", "iso"]);
 const ZIP_EXTS = new Set(["zip"]);
 const TAR_EXTS = new Set(["tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "tar.gz", "tar.bz2", "tar.xz"]);
@@ -265,11 +262,6 @@ async function scanDirectory(dirPath: string, jobId: number) {
         const fileType = getFileType(ext);
         const folder = path.dirname(fullPath);
         filesScanned++;
-
-        // Images and videos are managed by Immich — skip local indexing to avoid duplication
-        if (IMMICH_TYPES.has(fileType)) {
-          continue;
-        }
 
         // Compute SHA-256 content hash for duplicate detection.
         // Files over HASH_SIZE_LIMIT (500 MB) are skipped (hash stays null).

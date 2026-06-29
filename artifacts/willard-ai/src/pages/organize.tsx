@@ -896,10 +896,6 @@ function DoneStep({ job }: { job: OrganizationJob }) {
     && job.sourceType === "archive"
     && !dispositionDone;
 
-  // Immich data comes from the execute report, not from planJson
-  const immichVerification = report?.immichVerification ?? null;
-  const immichRescan       = report?.immichRescan ?? null;
-
   // Per-type counts from report (populated after execute) or derived from plan routes
   const routes: any[] = plan?.routes ?? [];
   const excludedCats  = new Set<string>(plan?.excludeCategories ?? []);
@@ -909,12 +905,6 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   const videoCount    = activeRoutes.filter((r: any) => r.fileType === "video").length;
   const docCount      = activeRoutes.filter((r: any) => r.fileType === "document").length;
   const otherCount    = activeRoutes.filter((r: any) => r.fileType === "other").length;
-
-  const immichVerifyColor = immichVerification?.status === "verified"
-    ? "border-green-500/30 bg-green-500/5 text-green-400"
-    : immichVerification?.status === "timeout"
-    ? "border-amber-500/30 bg-amber-500/5 text-amber-400"
-    : "border-blue-500/30 bg-blue-500/5 text-blue-400";
 
   return (
     <div className="space-y-5">
@@ -1044,27 +1034,6 @@ function DoneStep({ job }: { job: OrganizationJob }) {
               </div>
             </ScrollArea>
           )}
-        </div>
-      )}
-
-      {/* Immich verification result (from execute report) */}
-      {immichVerification && (
-        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichVerifyColor}`}>
-          <Image className="w-3.5 h-3.5 shrink-0" />
-          <span>
-            Immich: {immichVerification.status === "verified"
-              ? `✓ ${immichVerification.imported}/${immichVerification.expected} assets imported`
-              : immichVerification.status === "timeout"
-              ? `⏱ Still importing — ${immichVerification.imported}/${immichVerification.expected} confirmed so far`
-              : immichVerification.detail}
-          </span>
-        </div>
-      )}
-      {/* Fallback: show raw rescan result if no verification data */}
-      {!immichVerification && immichRescan && (
-        <div className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs font-mono ${immichRescan.triggered ? "border-blue-500/30 bg-blue-500/5 text-blue-400" : "border-muted text-muted-foreground"}`}>
-          <Image className="w-3.5 h-3.5 shrink-0" />
-          <span>{immichRescan.detail}</span>
         </div>
       )}
 

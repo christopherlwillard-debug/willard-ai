@@ -454,80 +454,6 @@ async function callAiConfidence(planSummary: object): Promise<{ confidence: numb
   } catch { return null; }
 }
 
-/** Query Immich asset statistics — used for pre/post-move count comparison. */
-async function getImmichAssetStats(immichUrl: string, apiKey: string): Promise<{ images: number; videos: number; total: number } | null> {
-  try {
-    const headers = { "x-api-key": apiKey, "Accept": "application/json" };
-    const resp = await fetch(`${immichUrl}/api/assets/statistics`, { headers, signal: AbortSignal.timeout(8000) });
-    if (!resp.ok) return null;
-    const data = await resp.json() as any;
-    const images = data.images ?? 0;
-    const videos = data.videos ?? 0;
-    return { images, videos, total: images + videos };
-  } catch { return null; }
-}
-
-/**
- * Poll Immich after rescan to verify the expected number of new assets were imported.
- * Compares total asset count against a pre-move baseline; polls every 3 s for up to 45 s.
- * Non-fatal: a "timeout" status means Immich is still processing, not that files were lost.
- */
-async function verifyImmichImport(
-  immichUrl: string,
-  apiKey: string,
-  baseline: { images: number; videos: number; total: number },
-  expectedNew: number,
-  progressCb: (msg: string) => void,
-): Promise<{ expected: number; imported: number; status: "verified" | "timeout" | "error"; detail: string }> {
-  const maxWaitMs = 45_000;
-  const pollMs    = 3_000;
-  const deadline  = Date.now() + maxWaitMs;
-
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, pollMs));
-    const stats = await getImmichAssetStats(immichUrl, apiKey);
-    if (!stats) return { expected: expectedNew, imported: 0, status: "error", detail: "Cannot query Immich asset statistics" };
-    const delta = stats.total - baseline.total;
-    progressCb(`Immich: ${delta}/${expectedNew} new assets confirmed…`);
-    if (delta >= expectedNew) {
-      return { expected: expectedNew, imported: delta, status: "verified", detail: `Immich confirmed ${delta} new asset${delta !== 1 ? "s" : ""} (expected ${expectedNew})` };
-    }
-  }
-
-  const finalStats = await getImmichAssetStats(immichUrl, apiKey);
-  const delta = finalStats ? finalStats.total - baseline.total : 0;
-  return {
-    expected: expectedNew, imported: delta, status: "timeout",
-    detail: `Immich import not confirmed within 45 s: ${delta}/${expectedNew} assets detected. Rescan may still be in progress — check Immich directly.`,
-  };
-}
-
-/** Trigger Immich library rescan via the external API. Best-effort — always resolves. */
-async function triggerImmichRescan(immichUrl: string, apiKey: string): Promise<{ triggered: boolean; libraries: number; detail: string }> {
-  try {
-    const headers = { "x-api-key": apiKey, "Content-Type": "application/json", "Accept": "application/json" };
-    const libResp = await fetch(`${immichUrl}/api/libraries`, { headers, signal: AbortSignal.timeout(8000) });
-    if (!libResp.ok) return { triggered: false, libraries: 0, detail: `Immich returned HTTP ${libResp.status}` };
-
-    const libraries = (await libResp.json()) as any[];
-    let triggered = 0;
-    for (const lib of libraries) {
-      try {
-        const scanResp = await fetch(`${immichUrl}/api/libraries/${lib.id}/scan`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ refreshModifiedFiles: false, refreshAllFiles: false }),
-          signal: AbortSignal.timeout(8000),
-        });
-        if (scanResp.ok || scanResp.status === 204) triggered++;
-      } catch { /* per-library failure is non-fatal */ }
-    }
-    return { triggered: triggered > 0, libraries: triggered, detail: `Triggered scan on ${triggered}/${libraries.length} Immich libraries` };
-  } catch (e: any) {
-    return { triggered: false, libraries: 0, detail: `Immich rescan unavailable: ${e.message}` };
-  }
-}
-
 function isoTimestamp(): string {
   return new Date().toISOString().replace(/:/g, "-").replace(/\./g, "-").slice(0, 19);
 }
@@ -890,18 +816,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
         : `${collisionCount} conflict${collisionCount !== 1 ? "s" : ""} — will be resolved at execute time (policy: ${policyLabel}). ${collisionDetails.join("; ")}`,
     });
 
-    // 6. Immich reachability — warning-level only (non-blocking)
-    const immichUrl = settings.immichBaseUrl?.trim();
-    if (immichUrl) {
-      try {
-        const resp = await fetch(`${immichUrl}/api/server/ping`, { signal: AbortSignal.timeout(5000) });
-        checks.push({ name: "Immich reachable", ok: resp.ok, warning: !resp.ok, detail: resp.ok ? "Immich API responding" : `HTTP ${resp.status} — photos may not auto-import` });
-      } catch (e: any) {
-        checks.push({ name: "Immich reachable", ok: false, warning: true, detail: `Cannot reach Immich: ${e.message}` });
-      }
-    }
-
-    // allOk: all critical checks pass; warnings (Immich, collisions with policy) are non-blocking
+    // allOk: all critical checks pass; warnings (collisions with policy) are non-blocking
     const allOk = checks.every(c => c.ok || c.warning === true);
     const preflightJson = {
       ok: allOk, checks, diskSpaceRequiredBytes: totalBytes,
@@ -1105,16 +1020,6 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const archiveName = job.sourceType === "archive"
       ? path.parse(path.parse(job.sourcePath).name).name
       : undefined;
-
-    // imagesMoved computed here (needed for Immich baseline before moves)
-    const imagesMoved = activeRoutes.filter(r => r.fileType === "image" || r.fileType === "video").length;
-
-    // Pre-move Immich asset baseline (for import count verification after rescan)
-    let immichBaseline: { images: number; videos: number; total: number } | null = null;
-    if (imagesMoved > 0 && settings.immichBaseUrl?.trim() && settings.immichApiKey?.trim()) {
-      immichBaseline = await getImmichAssetStats(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
-      if (immichBaseline) opLog(`IMMICH_BASELINE: images=${immichBaseline.images} videos=${immichBaseline.videos} total=${immichBaseline.total}`);
-    }
 
     // Open per-file operation log
     const ts = isoTimestamp();
@@ -1343,31 +1248,6 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
     opLog(`VERIFY_DEST_OK: ${destVerification.length} destination group(s) all match`);
 
-    // ── Immich rescan + import count verification ────────────────────────────
-    await setStage("immich");
-    send("status", { stage: "immich", message: "Triggering Immich library rescan…", progress: 88 });
-    let immichResult: any = null;
-    let immichVerification: any = null;
-    if (imagesMoved > 0 && settings.immichBaseUrl?.trim() && settings.immichApiKey?.trim()) {
-      const rescanResult = await triggerImmichRescan(settings.immichBaseUrl.trim(), settings.immichApiKey.trim());
-      immichResult = rescanResult;
-      opLog(`IMMICH_RESCAN: ${rescanResult.detail}`);
-
-      if (rescanResult.triggered && immichBaseline) {
-        send("status", { stage: "immich_verify", message: `Verifying Immich import — expecting ${imagesMoved} new asset${imagesMoved !== 1 ? "s" : ""}…`, progress: 90 });
-        immichVerification = await verifyImmichImport(
-          settings.immichBaseUrl.trim(),
-          settings.immichApiKey.trim(),
-          immichBaseline,
-          imagesMoved,
-          (msg) => send("status", { stage: "immich_verify", message: msg, progress: 91 }),
-        );
-        opLog(`IMMICH_VERIFY: status=${immichVerification.status} imported=${immichVerification.imported}/${immichVerification.expected} — ${immichVerification.detail}`);
-      } else {
-        immichVerification = { expected: imagesMoved, imported: 0, status: "skipped", detail: rescanResult.detail };
-      }
-    }
-
     // ── Archive disposition (post 100% verification) ─────────────────────────
     let dispositionApplied = "kept";
     let dispositionPending = false;
@@ -1429,8 +1309,6 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       destVerification,
       archiveCrcValidation: crcValidation,
       archiveExtractionChecksums: archiveExtractionChecksums.length > 0 ? archiveExtractionChecksums : undefined,
-      immichRescan: immichResult,
-      immichVerification,
       aiConfidence: plan.aiConfidence, aiNotes: plan.aiNotes,
       logPath,
     };

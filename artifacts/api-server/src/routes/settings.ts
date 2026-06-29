@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { GetSettingsResponse, UpdateSettingsBody, TestImmichConnectionBody } from "@workspace/api-zod";
+import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
 import { bootstrapWillardAIDir, getNasDirStatus, nasLogStream } from "../lib/nas-storage";
@@ -121,29 +121,6 @@ router.post("/settings/test-nas", async (req, res) => {
     });
   } catch (err) {
     res.json({ accessible: false, message: `Error: ${err instanceof Error ? err.message : "Unknown"}`, path: "", isDirectory: false, readable: false });
-  }
-});
-
-router.post("/settings/test-immich", async (req, res) => {
-  try {
-    const { baseUrl, apiKey } = TestImmichConnectionBody.parse(req.body);
-    const url = `${baseUrl.replace(/\/$/, "")}/api/server/statistics`;
-    const response = await fetch(url, {
-      headers: { "x-api-key": apiKey },
-    });
-    if (!response.ok) {
-      res.json({ connected: false, message: `Immich returned ${response.status}`, photoCount: null, videoCount: null });
-      return;
-    }
-    const data = await response.json() as any;
-    res.json({
-      connected: true,
-      message: "Connected successfully",
-      photoCount: data.photos ?? 0,
-      videoCount: data.videos ?? 0,
-    });
-  } catch (err) {
-    res.json({ connected: false, message: `Connection failed: ${err instanceof Error ? err.message : "Unknown error"}`, photoCount: null, videoCount: null });
   }
 });
 

@@ -8,8 +8,6 @@
 
 export interface SettingsInput {
   nasPath?: string;
-  immichBaseUrl?: string;
-  immichApiKey?: string;
   photosDestination?: string;
   videosDestination?: string;
   documentsDestination?: string;
