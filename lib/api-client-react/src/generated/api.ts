@@ -3778,3 +3778,220 @@ export const useApplyOrganizeJobDisposition = <TError = ErrorType<ApiError>,
       return useMutation(getApplyOrganizeJobDispositionMutationOptions(options));
     }
 
+export const getGetSettingsLogoUrl = () => {
+
+
+
+
+  return `/api/settings/logo`
+}
+
+/**
+ * @summary Stream the current branding logo
+ */
+export const getSettingsLogo = async ( options?: RequestInit): Promise<Blob> => {
+
+  return customFetch<Blob>(getGetSettingsLogoUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSettingsLogoQueryKey = () => {
+    return [
+    `/api/settings/logo`
+    ] as const;
+    }
+
+
+export const getGetSettingsLogoQueryOptions = <TData = Awaited<ReturnType<typeof getSettingsLogo>>, TError = ErrorType<ApiError>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettingsLogo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSettingsLogoQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSettingsLogo>>> = ({ signal }) => getSettingsLogo({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSettingsLogo>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSettingsLogoQueryResult = NonNullable<Awaited<ReturnType<typeof getSettingsLogo>>>
+export type GetSettingsLogoQueryError = ErrorType<ApiError>
+
+
+/**
+ * @summary Stream the current branding logo
+ */
+
+export function useGetSettingsLogo<TData = Awaited<ReturnType<typeof getSettingsLogo>>, TError = ErrorType<ApiError>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettingsLogo>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSettingsLogoQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUploadSettingsLogoUrl = () => {
+
+
+
+
+  return `/api/settings/logo`
+}
+
+/**
+ * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+ */
+export const uploadSettingsLogo = async (uploadSettingsLogoBody: Blob, options?: RequestInit): Promise<AppSettings> => {
+
+  return customFetch<AppSettings>(getUploadSettingsLogoUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'image/png', ...options?.headers },
+    body: uploadSettingsLogoBody
+  }
+);}
+
+
+
+
+export const getUploadSettingsLogoMutationOptions = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext> => {
+
+const mutationKey = ['uploadSettingsLogo'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadSettingsLogo>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  uploadSettingsLogo(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UploadSettingsLogoMutationResult = NonNullable<Awaited<ReturnType<typeof uploadSettingsLogo>>>
+    export type UploadSettingsLogoMutationBody = BodyType<Blob>
+    export type UploadSettingsLogoMutationError = ErrorType<ApiError>
+
+    /**
+ * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+ */
+export const useUploadSettingsLogo = <TError = ErrorType<ApiError>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof uploadSettingsLogo>>,
+        TError,
+        {data: BodyType<Blob>},
+        TContext
+      > => {
+      return useMutation(getUploadSettingsLogoMutationOptions(options));
+    }
+
+export const getDeleteSettingsLogoUrl = () => {
+
+
+
+
+  return `/api/settings/logo`
+}
+
+/**
+ * @summary Remove the current branding logo
+ */
+export const deleteSettingsLogo = async ( options?: RequestInit): Promise<AppSettings> => {
+
+  return customFetch<AppSettings>(getDeleteSettingsLogoUrl(),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteSettingsLogoMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSettingsLogo>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteSettingsLogo>>, TError,void, TContext> => {
+
+const mutationKey = ['deleteSettingsLogo'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSettingsLogo>>, void> = () => {
+
+
+          return  deleteSettingsLogo(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteSettingsLogoMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSettingsLogo>>>
+
+    export type DeleteSettingsLogoMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Remove the current branding logo
+ */
+export const useDeleteSettingsLogo = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSettingsLogo>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteSettingsLogo>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getDeleteSettingsLogoMutationOptions(options));
+    }
+

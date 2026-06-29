@@ -1085,6 +1085,77 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /settings/logo:
+    get:
+      operationId: getSettingsLogo
+      tags: [settings]
+      summary: Stream the current branding logo
+      responses:
+        "200":
+          description: Logo image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/svg+xml:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No logo set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: uploadSettingsLogo
+      tags: [settings]
+      summary: Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/svg+xml:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Logo uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+        "400":
+          description: Invalid file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteSettingsLogo
+      tags: [settings]
+      summary: Remove the current branding logo
+      responses:
+        "200":
+          description: Logo removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+
 components:
   schemas:
     HealthStatus:
@@ -1112,6 +1183,8 @@ components:
           type: string
         otherFilesDestination:
           type: string
+        logoPath:
+          type: ["string", "null"]
       required:
         - nasPath
         - lastScanAt

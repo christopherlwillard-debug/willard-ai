@@ -18,6 +18,8 @@ export interface AppSettings {
   videosDestination: string;
   documentsDestination: string;
   otherFilesDestination: string;
+  /** @nullable */
+  logoPath?: string | null;
 }
 
 export interface SettingsInput {

@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, raw } from "express";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -9,6 +9,26 @@ import { bootstrapWillardAIDir, getNasDirStatus, nasLogStream } from "../lib/nas
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2MB
+
+const LOGO_CONTENT_TYPES: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/svg+xml": "svg",
+};
+
+function getBrandingDir(): string {
+  return path.join(process.cwd(), "data", "branding");
+}
+
+// Defense-in-depth: only ever read/delete files inside the branding dir, even if
+// the stored DB path were somehow tampered with.
+function isWithinBrandingDir(targetPath: string): boolean {
+  const root = path.resolve(getBrandingDir());
+  const resolved = path.resolve(targetPath);
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
 
 async function getOrCreateSettings() {
   const rows = await db.select().from(appSettingsTable).limit(1);
@@ -121,6 +141,92 @@ router.post("/settings/test-nas", async (req, res) => {
     });
   } catch (err) {
     res.json({ accessible: false, message: `Error: ${err instanceof Error ? err.message : "Unknown"}`, path: "", isDirectory: false, readable: false });
+  }
+});
+
+router.get("/settings/logo", async (_req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    if (!settings.logoPath || !isWithinBrandingDir(settings.logoPath) || !fs.existsSync(settings.logoPath)) {
+      res.status(404).json({ error: "No logo set" });
+      return;
+    }
+    const ext = path.extname(settings.logoPath).toLowerCase();
+    const contentType =
+      ext === ".png" ? "image/png" :
+      ext === ".svg" ? "image/svg+xml" :
+      ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
+      "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-cache");
+    fs.createReadStream(settings.logoPath).pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load logo" });
+  }
+});
+
+router.post(
+  "/settings/logo",
+  raw({ type: () => true, limit: LOGO_MAX_BYTES }),
+  async (req, res) => {
+    try {
+      const contentType = (req.headers["content-type"] ?? "").split(";")[0].trim();
+      const ext = LOGO_CONTENT_TYPES[contentType];
+      if (!ext) {
+        res.status(400).json({ error: "Unsupported file type. Use PNG, JPG, or SVG." });
+        return;
+      }
+      const body = req.body as Buffer;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: "No file data received" });
+        return;
+      }
+      if (body.length > LOGO_MAX_BYTES) {
+        res.status(400).json({ error: "File too large. Maximum size is 2MB." });
+        return;
+      }
+
+      const settings = await getOrCreateSettings();
+      const dir = getBrandingDir();
+      fs.mkdirSync(dir, { recursive: true });
+
+      // Remove any previously stored logo (it may have a different extension)
+      if (settings.logoPath && fs.existsSync(settings.logoPath)) {
+        try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
+      }
+
+      const destPath = path.join(dir, `logo.${ext}`);
+      fs.writeFileSync(destPath, body);
+
+      const [updated] = await db
+        .update(appSettingsTable)
+        .set({ logoPath: destPath })
+        .where(eq(appSettingsTable.id, settings.id))
+        .returning();
+
+      logger.info({ destPath }, "Branding logo uploaded");
+      res.json(updated);
+    } catch (err) {
+      logger.error({ err }, "Failed to upload logo");
+      res.status(500).json({ error: "Failed to upload logo" });
+    }
+  },
+);
+
+router.delete("/settings/logo", async (_req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
+      try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
+    }
+    const [updated] = await db
+      .update(appSettingsTable)
+      .set({ logoPath: null })
+      .where(eq(appSettingsTable.id, settings.id))
+      .returning();
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to remove logo" });
   }
 });
 

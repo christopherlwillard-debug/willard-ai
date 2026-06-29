@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Image as ImageIcon,
@@ -16,9 +17,37 @@ import {
   FolderHeart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useLogout } from "@workspace/api-client-react";
+import { useLogout, getGetSettingsLogoUrl } from "@workspace/api-client-react";
 import { useAuth } from "@/context/auth-context";
 import { useQueryClient } from "@tanstack/react-query";
+
+function SidebarBrand() {
+  const [logoVersion, setLogoVersion] = useState(0);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    const onUpdate = () => {
+      setLogoFailed(false);
+      setLogoVersion((v) => v + 1);
+    };
+    window.addEventListener("willard-logo-updated", onUpdate);
+    return () => window.removeEventListener("willard-logo-updated", onUpdate);
+  }, []);
+
+  if (logoFailed) {
+    return <h1 className="text-xl font-bold font-mono tracking-tight text-primary">WILLARD_AI</h1>;
+  }
+
+  return (
+    <img
+      key={logoVersion}
+      src={`${getGetSettingsLogoUrl()}?v=${logoVersion}`}
+      alt="Willard AI"
+      className="h-9 w-auto max-w-full object-contain"
+      onError={() => setLogoFailed(true)}
+    />
+  );
+}
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -52,7 +81,7 @@ export function Sidebar() {
   return (
     <div className="flex h-full w-64 flex-col bg-sidebar border-r border-sidebar-border">
       <div className="flex h-14 items-center px-4 border-b border-sidebar-border">
-        <h1 className="text-xl font-bold font-mono tracking-tight text-primary">WILLARD_AI</h1>
+        <SidebarBrand />
       </div>
       <div className="flex-1 overflow-y-auto py-4">
         <nav className="space-y-1 px-2">

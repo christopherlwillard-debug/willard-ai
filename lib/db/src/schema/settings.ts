@@ -13,6 +13,7 @@ export const appSettingsTable = pgTable("app_settings", {
   videosDestination: text("videos_destination").notNull().default(""),
   documentsDestination: text("documents_destination").notNull().default(""),
   otherFilesDestination: text("other_files_destination").notNull().default(""),
+  logoPath: text("logo_path"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

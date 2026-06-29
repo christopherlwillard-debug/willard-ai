@@ -141,7 +141,8 @@ export const GetSettingsResponse = zod.object({
   "photosDestination": zod.string(),
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
-  "otherFilesDestination": zod.string()
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish()
 })
 
 
@@ -163,7 +164,8 @@ export const UpdateSettingsResponse = zod.object({
   "photosDestination": zod.string(),
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
-  "otherFilesDestination": zod.string()
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish()
 })
 
 
@@ -939,6 +941,42 @@ export const ApplyOrganizeJobDispositionResponse = zod.object({
   "ok": zod.boolean(),
   "dispositionResult": zod.string(),
   "sourcePath": zod.string()
+})
+
+
+/**
+ * @summary Stream the current branding logo
+ */
+export const GetSettingsLogoResponse = zod.unknown()
+
+
+/**
+ * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+ */
+export const UploadSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish()
+})
+
+
+/**
+ * @summary Remove the current branding logo
+ */
+export const DeleteSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish()
 })
 
 

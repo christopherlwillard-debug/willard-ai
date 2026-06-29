@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   useGetSettings, getGetSettingsQueryKey,
   useUpdateSettings,
@@ -12,7 +12,11 @@ import {
   useRevokeOtherSessions,
   useGetNasDirStatus, getGetNasDirStatusQueryKey,
   useReinitNasDirs,
+  uploadSettingsLogo,
+  useDeleteSettingsLogo,
+  getGetSettingsLogoUrl,
 } from "@workspace/api-client-react";
+import { useMutation } from "@tanstack/react-query";
 import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
@@ -21,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -191,6 +195,8 @@ export default function Settings() {
         </CardFooter>
       </Card>
 
+      <BrandingSection />
+
       <Card className="border-primary/50">
         <CardHeader>
           <CardTitle className="flex items-center text-primary">
@@ -267,6 +273,134 @@ export default function Settings() {
       <SecuritySection />
       <StorageSection />
     </div>
+  );
+}
+
+function BrandingSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
+  const hasLogo = !!settings?.logoPath;
+
+  // Cache-busting key so the preview/sidebar/hero refresh after upload or delete
+  const [logoVersion, setLogoVersion] = useState(0);
+  const logoSrc = `${getGetSettingsLogoUrl()}?v=${logoVersion}`;
+
+  const refreshLogoEverywhere = () => {
+    setLogoVersion((v) => v + 1);
+    queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+    window.dispatchEvent(new Event("willard-logo-updated"));
+  };
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadSettingsLogo(file, { headers: { "Content-Type": file.type } }),
+    onSuccess: () => {
+      toast({ title: "Logo updated" });
+      refreshLogoEverywhere();
+    },
+    onError: (err: any) => toast({
+      title: "Failed to upload logo",
+      description: err?.message ?? "Something went wrong.",
+      variant: "destructive",
+    }),
+  });
+
+  const deleteMutation = useDeleteSettingsLogo({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Logo removed" });
+        refreshLogoEverywhere();
+      },
+      onError: () => toast({ title: "Failed to remove logo", variant: "destructive" }),
+    },
+  });
+
+  const ACCEPTED = ["image/png", "image/jpeg", "image/svg+xml"];
+  const MAX_BYTES = 2 * 1024 * 1024;
+
+  const handleFile = (file: File) => {
+    if (!ACCEPTED.includes(file.type)) {
+      toast({ title: "Unsupported file type", description: "Please use a PNG, JPG, or SVG image.", variant: "destructive" });
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      toast({ title: "File too large", description: "Maximum size is 2MB.", variant: "destructive" });
+      return;
+    }
+    uploadMutation.mutate(file);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><ImageIcon className="w-5 h-5" /> Branding</CardTitle>
+        <CardDescription>Upload a logo to display in the sidebar and on the dashboard banner. PNG, JPG, or SVG, up to 2MB.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-6">
+          <div className="flex h-20 w-40 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/30 overflow-hidden">
+            {hasLogo ? (
+              <img
+                key={logoVersion}
+                src={logoSrc}
+                alt="Current logo"
+                className="max-h-full max-w-full object-contain"
+              />
+            ) : (
+              <span className="text-xs text-muted-foreground font-mono">No logo set</span>
+            )}
+          </div>
+          <div className="flex-1 space-y-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/svg+xml"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="font-mono"
+                disabled={uploadMutation.isPending}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploadMutation.isPending ? (
+                  <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Uploading…</>
+                ) : (
+                  <><UploadCloud className="w-3.5 h-3.5 mr-2" /> {hasLogo ? "Replace Logo" : "Upload Logo"}</>
+                )}
+              </Button>
+              {hasLogo && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="font-mono text-destructive hover:text-destructive hover:bg-destructive/10"
+                  disabled={deleteMutation.isPending}
+                  onClick={() => deleteMutation.mutate()}
+                >
+                  {deleteMutation.isPending ? (
+                    <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> Removing…</>
+                  ) : (
+                    <><Trash2 className="w-3.5 h-3.5 mr-2" /> Remove</>
+                  )}
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Your logo replaces the WILLARD_AI text in the sidebar and appears on the dashboard banner.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -4,3 +4,5 @@
 - [Vite proxy required for /api in dev](vite-proxy-api.md) — frontend dev server must proxy /api → localhost:8080 or all API calls 404 in Vite
 - [Auth architecture](auth-architecture.md) — session cookie auth pattern; bcryptjs, connect-pg-simple, rate limiting on login route
 - [SHA-256 verification testability](sha256-testability.md) — verifiedMove takes afterMoveHook to inject corruption between move and re-hash; the only way to test the mismatch throw path without mocking
+- [Drizzle push needs a TTY](drizzle-push-tty.md) — drizzle-kit push errors without a TTY; apply additive nullable columns via ALTER TABLE ADD COLUMN IF NOT EXISTS instead
+- [Orval upload content-type](orval-upload-content-type.md) — generated binary-upload client hardcodes the first openapi content-type; override per-call via request headers

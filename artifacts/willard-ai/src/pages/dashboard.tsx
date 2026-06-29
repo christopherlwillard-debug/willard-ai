@@ -7,6 +7,7 @@ import {
   useGetSettings,
   useSearchFiles,
   useGetHealthStatus,
+  getGetSettingsLogoUrl,
 } from "@workspace/api-client-react";
 import { formatBytes } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -102,6 +103,38 @@ function ThumbnailCard({ file, ext, badgeColor }: {
       <p className="text-xs truncate mt-1.5 text-foreground/90">{file.filename}</p>
       <p className="text-[10px] text-muted-foreground mt-0.5">{formatRelativeDate(file.modifiedAt)}</p>
     </div>
+  );
+}
+
+function HeroLogo() {
+  const [logoVersion, setLogoVersion] = useState(0);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    const onUpdate = () => {
+      setLogoFailed(false);
+      setLogoVersion((v) => v + 1);
+    };
+    window.addEventListener("willard-logo-updated", onUpdate);
+    return () => window.removeEventListener("willard-logo-updated", onUpdate);
+  }, []);
+
+  if (logoFailed) {
+    return (
+      <div className="flex h-28 w-28 items-center justify-center rounded-xl bg-white/5 border border-white/10">
+        <Database className="w-10 h-10 text-blue-300/60" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      key={logoVersion}
+      src={`${getGetSettingsLogoUrl()}?v=${logoVersion}`}
+      alt="Willard's Media Center"
+      className="h-28 w-auto object-contain"
+      onError={() => setLogoFailed(true)}
+    />
   );
 }
 
@@ -294,20 +327,16 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="relative shrink-0 pr-8">
-          <img
-            src={`${import.meta.env.BASE_URL}opengraph.jpg`}
-            alt="Willard's Media Center"
-            className="h-28 w-auto object-contain"
-          />
+          <HeroLogo />
         </div>
       </div>
 
       {/* ── Stat Cards Row ──────────────────────────────────────────────── */}
-      <div className="flex gap-3 overflow-x-auto pb-1 -mb-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {statCards.map(({ label, value, sub, icon: Icon, iconBg, iconColor, barColor, barPct }) => (
           <div
             key={label}
-            className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden shrink-0 w-44"
+            className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden min-w-0"
           >
             <div className={cn("inline-flex items-center justify-center w-9 h-9 rounded-lg mb-3", iconBg)}>
               <Icon className={cn("w-4.5 h-4.5", iconColor)} style={{ width: 18, height: 18 }} />
