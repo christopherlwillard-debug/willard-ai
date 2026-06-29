@@ -1119,18 +1119,9 @@ paths:
       requestBody:
         required: true
         content:
-          image/png:
+          multipart/form-data:
             schema:
-              type: string
-              format: binary
-          image/jpeg:
-            schema:
-              type: string
-              format: binary
-          image/svg+xml:
-            schema:
-              type: string
-              format: binary
+              $ref: "#/components/schemas/LogoUpload"
       responses:
         "200":
           description: Logo uploaded
@@ -1158,6 +1149,13 @@ paths:
 
 components:
   schemas:
+    LogoUpload:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
     HealthStatus:
       type: object
       properties:

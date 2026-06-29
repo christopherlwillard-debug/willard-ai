@@ -953,6 +953,10 @@ export const GetSettingsLogoResponse = zod.unknown()
 /**
  * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
  */
+export const UploadSettingsLogoBody = zod.object({
+  "file": zod.instanceof(File)
+})
+
 export const UploadSettingsLogoResponse = zod.object({
   "nasPath": zod.string(),
   "lastScanAt": zod.string().nullable(),

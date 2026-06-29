@@ -5,6 +5,10 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+export interface LogoUpload {
+  file: Blob;
+}
+
 export interface HealthStatus {
   status: string;
 }

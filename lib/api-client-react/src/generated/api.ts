@@ -49,6 +49,7 @@ import type {
   ListArchivesParams,
   ListDocumentsParams,
   ListFolderParams,
+  LogoUpload,
   NasDirStatus,
   NasTestInput,
   NasTestResult,
@@ -3866,14 +3867,16 @@ export const getUploadSettingsLogoUrl = () => {
 /**
  * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
  */
-export const uploadSettingsLogo = async (uploadSettingsLogoBody: Blob, options?: RequestInit): Promise<AppSettings> => {
+export const uploadSettingsLogo = async (logoUpload: LogoUpload, options?: RequestInit): Promise<AppSettings> => {
+    const formData = new FormData();
+formData.append(`file`, logoUpload.file);
 
   return customFetch<AppSettings>(getUploadSettingsLogoUrl(),
   {
     ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'image/png', ...options?.headers },
-    body: uploadSettingsLogoBody
+    method: 'POST'
+    ,
+    body: formData
   }
 );}
 
@@ -3881,8 +3884,8 @@ export const uploadSettingsLogo = async (uploadSettingsLogoBody: Blob, options?:
 
 
 export const getUploadSettingsLogoMutationOptions = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<LogoUpload>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<LogoUpload>}, TContext> => {
 
 const mutationKey = ['uploadSettingsLogo'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -3894,7 +3897,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadSettingsLogo>>, {data: BodyType<Blob>}> = (props) => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadSettingsLogo>>, {data: BodyType<LogoUpload>}> = (props) => {
           const {data} = props ?? {};
 
           return  uploadSettingsLogo(data,requestOptions)
@@ -3908,18 +3911,18 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
   return  { mutationFn, ...mutationOptions }}
 
     export type UploadSettingsLogoMutationResult = NonNullable<Awaited<ReturnType<typeof uploadSettingsLogo>>>
-    export type UploadSettingsLogoMutationBody = BodyType<Blob>
+    export type UploadSettingsLogoMutationBody = BodyType<LogoUpload>
     export type UploadSettingsLogoMutationError = ErrorType<ApiError>
 
     /**
  * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
  */
 export const useUploadSettingsLogo = <TError = ErrorType<ApiError>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadSettingsLogo>>, TError,{data: BodyType<LogoUpload>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof uploadSettingsLogo>>,
         TError,
-        {data: BodyType<Blob>},
+        {data: BodyType<LogoUpload>},
         TContext
       > => {
       return useMutation(getUploadSettingsLogoMutationOptions(options));

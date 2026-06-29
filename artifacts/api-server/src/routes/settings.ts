@@ -1,4 +1,5 @@
-import { Router, type IRouter, raw } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import multer from "multer";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -17,6 +18,31 @@ const LOGO_CONTENT_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/svg+xml": "svg",
 };
+
+const uploadLogo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: LOGO_MAX_BYTES, files: 1 },
+});
+
+// Wrap multer so its errors (e.g. file too large) become a friendly 400 instead
+// of falling through to the generic 500 error handler.
+function handleLogoUpload(req: Request, res: Response, next: NextFunction): void {
+  uploadLogo.single("file")(req, res, (err: unknown) => {
+    if (err instanceof multer.MulterError) {
+      const message =
+        err.code === "LIMIT_FILE_SIZE"
+          ? "File too large. Maximum size is 2MB."
+          : "Invalid upload.";
+      res.status(400).json({ error: message });
+      return;
+    }
+    if (err) {
+      next(err);
+      return;
+    }
+    next();
+  });
+}
 
 function getBrandingDir(): string {
   return path.join(process.cwd(), "data", "branding");
@@ -167,24 +193,21 @@ router.get("/settings/logo", async (_req, res) => {
 
 router.post(
   "/settings/logo",
-  raw({ type: () => true, limit: LOGO_MAX_BYTES }),
+  handleLogoUpload,
   async (req, res) => {
     try {
-      const contentType = (req.headers["content-type"] ?? "").split(";")[0].trim();
+      const file = req.file;
+      if (!file || file.size === 0) {
+        res.status(400).json({ error: "No file data received" });
+        return;
+      }
+      const contentType = (file.mimetype ?? "").split(";")[0].trim();
       const ext = LOGO_CONTENT_TYPES[contentType];
       if (!ext) {
         res.status(400).json({ error: "Unsupported file type. Use PNG, JPG, or SVG." });
         return;
       }
-      const body = req.body as Buffer;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
-        res.status(400).json({ error: "No file data received" });
-        return;
-      }
-      if (body.length > LOGO_MAX_BYTES) {
-        res.status(400).json({ error: "File too large. Maximum size is 2MB." });
-        return;
-      }
+      const body = file.buffer;
 
       const settings = await getOrCreateSettings();
       const dir = getBrandingDir();

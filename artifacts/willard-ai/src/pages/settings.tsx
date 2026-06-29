@@ -295,7 +295,7 @@ function BrandingSection() {
   };
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadSettingsLogo(file, { headers: { "Content-Type": file.type } }),
+    mutationFn: (file: File) => uploadSettingsLogo({ file }),
     onSuccess: () => {
       toast({ title: "Logo updated" });
       refreshLogoEverywhere();
