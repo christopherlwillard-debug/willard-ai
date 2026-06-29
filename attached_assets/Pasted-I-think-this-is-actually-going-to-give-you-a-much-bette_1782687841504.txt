@@ -1,0 +1,141 @@
+I think this is actually going to give you a much better system than trying to force Immich to be the primary storage.
+
+Based on everything we've built together, here's what I'd recommend.
+
+Final Architecture
+                  Replit Media Center
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+     Jobs              Documents          Media
+        │                  │                  │
+        └──────────────┬───┴──────────────────┘
+                       │
+                  NAS (Master Storage)
+                       │
+      ┌────────────────┴─────────────────┐
+      │                                  │
+    Photos                           Documents
+      │
+      ▼
+    Immich
+ (Indexes & AI Only)
+
+The important part is:
+
+Your NAS is the master copy.
+Your Replit app controls everything.
+Immich only indexes and searches.
+
+That means if you ever replace Immich in five years, you don't have to move a single file.
+
+Here's what I would build next in Replit
+Phase 1 – Storage Manager
+
+Your app creates the folders.
+
+Photos
+│
+├── Personal
+├── Manufactured Homes
+├── Asphalt
+├── Rentals
+├── Family
+└── Archive
+
+No manual organization.
+
+Phase 2 – Import Engine
+
+Your app imports:
+
+Google Photos ZIPs
+iCloud exports
+SD cards
+Camera folders
+Phone backups
+
+Automatically.
+
+Phase 3 – AI Organization
+
+Your app can:
+
+detect duplicates
+rename files
+organize by date
+organize by GPS
+organize by job
+read EXIF
+generate previews
+Phase 4 – Immich Sync
+
+Whenever your app changes the NAS:
+
+Copy photo
+      ↓
+Move photo
+      ↓
+Rename photo
+      ↓
+Delete photo
+      ↓
+Tell Immich:
+"Rescan this folder."
+
+No uploads to Immich.
+
+This is the part I'm excited about
+
+Because you're writing the app yourself, you aren't limited by what Immich can do.
+
+For example:
+
+Job #4287
+
+Dealer:
+Champion
+
+Customer:
+John Smith
+
+Photos:
+  Kitchen
+  Living Room
+  Marriage Line
+  Exterior
+  Plumbing
+  Warranty
+
+Clicking Kitchen could instantly show the Immich album, while the job itself lives in your contractor app.
+
+I also think we should add a Media Center module
+
+Instead of just "Photos," build a true media manager:
+
+Media Center
+│
+├── Photos
+├── Videos
+├── PDFs
+├── Warranty Documents
+├── Manuals
+├── Floor Plans
+├── Dealer Files
+└── Marketing
+
+That would become one of the strongest parts of your entire business system.
+
+My recommendation
+
+I wouldn't spend any more time trying to make Immich own the NAS storage.
+
+The installation is working. We know the API, AI features, and interface are all functioning.
+
+The next step is to start building the Media Center in Replit and design it so that:
+
+The app owns the files and folder structure.
+The NAS stores the originals.
+Immich indexes those folders and provides AI search.
+
+I think that's the architecture that will scale best for everything you've described—from manufactured home jobs to asphalt projects and your personal photo archive.

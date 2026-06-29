@@ -1,0 +1,159 @@
+do we need immich because i feel like thats our biggest problem
+
+I think you've identified the real issue.
+
+No, I don't think you need Immich to build your Media Center.
+
+In fact, I think trying to build around Immich first has been slowing the project down because you're working around its requirements instead of building exactly what you want.
+
+Think about your actual goals
+
+From everything we've discussed over the past few months, your goals are:
+
+Store everything on your NAS.
+Organize photos, videos, and documents.
+Browse them from your phone or laptop.
+Search and filter your media.
+Find duplicates.
+Rename and organize files.
+Convert formats (HEIC, MOV, etc.).
+Import from Google Photos, iCloud, SD cards, and phones.
+Never duplicate your original files.
+Keep your laptop's storage free.
+
+None of those require Immich.
+
+What does Immich actually add?
+
+Mainly these AI features:
+
+Face recognition
+Object recognition
+Natural language search ("show me dogs at the beach")
+OCR
+Memories
+Map view
+
+Those are nice, but they're not the foundation of your Media Center.
+
+What I'd build first
+
+I'd make your Media Center capable of doing this:
+
+Incoming Folder
+       │
+       ▼
+Preview Import
+       │
+       ▼
+Duplicate Check
+       │
+       ▼
+Choose Destination
+       │
+       ▼
+Move Files
+       │
+       ▼
+Generate Thumbnails
+       │
+       ▼
+Done
+
+No Immich involved.
+
+You can generate thumbnails yourself
+
+You don't need Immich for that.
+
+Your app can generate thumbnails for:
+
+JPG
+PNG
+HEIC
+MP4
+MOV
+PDF
+
+and cache them.
+
+Search
+
+You can search by:
+
+Filename
+Folder
+Date
+Camera
+GPS
+File type
+Tags
+Rating
+Favorites
+
+Again, no Immich required.
+
+Import Queue
+
+This is the feature I think will make your app feel polished.
+
+📥 Import Queue
+
+Google Photos.zip
+
+1,842 Photos
+17 Videos
+
+Duplicates: 42
+
+Destination:
+Photos/Family/2026
+
+[Preview]
+
+[Import]
+Folder Browser
+
+Your app becomes the control panel.
+
+Photos
+
+Family
+
+Manufactured Homes
+
+Vacation
+
+Videos
+
+Documents
+
+Archive
+Where I'd leave room for Immich
+
+Instead of making it mandatory:
+
+Media Center
+
+↓
+
+AI Providers
+
+Immich
+Google Vision
+OpenAI
+Future AI
+
+The Media Center doesn't care which one you use.
+
+My recommendation
+
+If this were my project, I'd tell Replit:
+
+"Remove Immich as a required dependency. Build the Media Center as a complete application that manages files directly on the NAS. Design an AI Provider interface so Immich or another AI engine can be added later without changing the core application."
+
+That gives you a much cleaner architecture.
+
+You get a fully functional Media Center first, and if six months from now you buy a mini PC, you can install Immich and simply enable the AI integration.
+
+I actually think that's a stronger product because your application remains in control. Immich becomes an enhancement, not the thing your entire system depends on. Given your storage constraints and your goal of keeping the NAS as the source of truth, I'd stop making Immich the centerpiece and make it an optional feature instead.

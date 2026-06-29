@@ -1,0 +1,86 @@
+or i just drag and drop the folders to the my cloud home and then a scan will pick them up 
+
+Honestly, I like that approach even more.
+
+You don't necessarily need a complicated Import Engine if your workflow is always going to be:
+
+Download photos (Google Photos, iCloud, SD card, etc.).
+Drag and drop them into a folder on your NAS.
+Your app notices the new folder.
+Your app processes it.
+Immich indexes it.
+
+That simplifies the entire system.
+
+Your workflow could look like this
+Google Photos ZIP
+        │
+Extract
+        │
+Drag folder to:
+Z:\Photos\Incoming
+        │
+        ▼
+Replit detects new folder
+        │
+        ├── Read EXIF
+        ├── Detect duplicates
+        ├── Rename (optional)
+        ├── Organize into final folders
+        ├── Generate metadata
+        └── Trigger Immich rescan
+
+No upload interface. No browser file picker. No waiting for uploads.
+
+Even better: an "Incoming" folder
+
+Instead of dropping files anywhere, dedicate one folder, for example:
+
+Photos/
+├── Incoming/
+├── Personal/
+├── Manufactured Homes/
+├── Asphalt/
+└── Archive/
+
+Your app continuously watches Incoming.
+
+When a new folder appears:
+
+It validates the files.
+Detects duplicates.
+Organizes them.
+Moves them to their final location.
+Triggers an Immich rescan.
+Marks the import as complete.
+
+That gives you a very clean workflow.
+
+One feature I'd definitely add
+
+An Import Queue in your app.
+
+Instead of processing everything silently, show something like:
+
+Import Queue
+
+📁 Google Photos 2026
+Status: Processing...
+
+✔ 1,842 photos imported
+✔ 27 videos imported
+⚠ 3 duplicates skipped
+✔ Immich scan triggered
+
+Completed
+
+Now you always know what happened without digging through logs.
+
+I think this is the simplest architecture
+NAS = permanent storage.
+Replit app = watches and organizes.
+Immich = AI indexing and search.
+
+That's fewer moving parts, easier to troubleshoot, and it still gives you all the AI features you're after.
+
+For your use case, I'd actually prefer this over building a full upload/import interface. It keeps the workflow fast and lets your app focus on organizing and managing media rather than transferring files.

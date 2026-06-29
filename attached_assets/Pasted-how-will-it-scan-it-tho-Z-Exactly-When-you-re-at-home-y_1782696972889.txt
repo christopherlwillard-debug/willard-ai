@@ -1,0 +1,506 @@
+how will it scan it tho? Z:?
+
+Exactly. When you're at home, yes—it would scan Z:.
+
+But I would not hardcode Z: because drive letters can change.
+
+I'd design it like this:
+
+First-time setup
+
+The app asks:
+
+Where is your Media Library?
+
+[ Browse... ]
+
+You select:
+
+Z:\MediaCenter
+
+or
+
+Z:\Photos
+
+or whatever folder you want.
+
+The app saves that path in its settings.
+
+Example:
+
+{
+  "libraryPath": "Z:\\MediaCenter"
+}
+
+From then on, every scan starts there.
+
+How scanning actually works
+
+It doesn't read every file every 30 seconds.
+
+Instead:
+
+First scan
+Z:\MediaCenter
+
+↓
+
+Walk every folder
+
+↓
+
+Read every file
+
+↓
+
+Save metadata to database
+
+Like Windows Search indexing.
+
+Future scans
+
+Instead of rescanning 4 TB every time:
+
+Z:\MediaCenter
+
+↓
+
+What's new?
+
+↓
+
+What's changed?
+
+↓
+
+What's deleted?
+
+↓
+
+Update database
+
+That makes scans very fast.
+
+How does it know?
+
+Every file has things like:
+
+Path
+Size
+Modified date
+
+For example:
+
+Z:\Photos\Vacation\IMG0001.JPG
+
+Size:
+4,283,112
+
+Modified:
+2026-06-18 10:42
+
+The database stores that.
+
+Next scan:
+
+If nothing changed...
+
+Skip it.
+
+If the modified date changed...
+
+Re-index it.
+
+If it's gone...
+
+Remove it.
+
+Incoming folder
+
+Same idea.
+
+Suppose:
+
+Z:\Incoming
+
+Every minute:
+
+Scan Incoming
+
+↓
+
+Found new folder
+
+Google Photos June
+
+↓
+
+Create Import Job
+
+No uploads.
+
+No browser.
+
+No cloud.
+
+The database becomes
+
+Instead of asking the NAS every time:
+
+Show me all PNG files
+
+The app asks its own database.
+
+Much faster.
+
+This is why I think your app won't need Immich
+
+Your app becomes the index.
+
+Immich was acting as the index.
+
+Now your Media Center becomes:
+
+NAS
+
+↓
+
+Scanner
+
+↓
+
+SQLite Database
+
+↓
+
+Media Browser
+
+↓
+
+Thumbnails
+One thing I'd change from the original plan
+
+Instead of just storing:
+
+Path
+
+I'd also store a file hash (SHA-256 or similar).
+
+Why?
+
+Because then your duplicate finder becomes incredibly accurate.
+
+For example:
+
+Photo A
+
+Path:
+Photos\Vacation
+
+Hash:
+ABC123...
+
+Photo B
+
+Path:
+Downloads
+
+Hash:
+ABC123...
+
+Same hash = same file, even if the filename changed.
+
+I actually think this is the architecture I'd use
+NAS (Z:)
+│
+├── Photos
+├── Videos
+├── Documents
+├── Music
+└── Incoming
+        │
+        ▼
+Scanner Service
+        │
+        ▼
+SQLite Database
+        │
+        ▼
+Thumbnail Cache
+        │
+        ▼
+Media Center UI
+
+The only caveat is where that SQLite database and thumbnail cache live. If the app only runs while you're using your laptop at home, they can live on the laptop because they'll usually be much smaller than the original media library. If you truly can't spare any laptop storage, you could instead store the database and thumbnail cache in dedicated folders on the NAS (for example Z:\MediaCenter\AppData\Database and Z:\MediaCenter\AppData\Thumbnails). That would be slower than a local SSD, but for a personal media center it's a perfectly reasonable tradeoff and still avoids the Docker/PostgreSQL issues you ran into with Immich because SQLite and your own thumbnail cache are much simpler to manage than a full database server.
+
+but isnt adding and reading folders from nas the issue with immich and docker
+
+This is the exact question we needed to get to, because the answer is no—but the reason is subtle.
+
+The issue wasn't that Immich was reading files from your NAS.
+
+The issue was where Immich stores its working data.
+
+Those are two completely different things.
+
+Reading files from the NAS ✅
+
+This is fine.
+
+Example:
+
+Z:\Photos
+
+↓
+
+Read IMG_1234.JPG
+
+↓
+
+Extract EXIF
+
+↓
+
+Generate thumbnail
+
+↓
+
+Done
+
+Your app is just opening the file like Windows Explorer would.
+
+Writing thumbnails/database to the NAS ⚠️
+
+This is where things get tricky.
+
+Immich does this:
+
+NAS Photos
+
+↓
+
+Generate thumbnail
+
+↓
+
+Write thumbnail
+
+↓
+
+Update PostgreSQL
+
+↓
+
+Update Redis
+
+↓
+
+Update AI indexes
+
+The database is constantly writing:
+
+thousands of tiny records
+transactions
+WAL logs
+cache updates
+
+That's why PostgreSQL wants fast, local storage.
+
+Your Media Center is much simpler
+
+Imagine your scanner.
+
+It walks the folders:
+
+Z:\Photos
+
+↓
+
+Read file
+
+↓
+
+Get metadata
+
+↓
+
+Save one record
+
+Done.
+
+That's a very different workload than a live database server.
+
+Example
+
+Suppose you have
+
+Vacation
+
+IMG001.jpg
+IMG002.jpg
+IMG003.jpg
+
+Your scanner does
+
+Open file
+
+Read EXIF
+
+Close file
+
+Next file.
+
+No server.
+
+No transactions.
+
+No AI.
+
+Immich does MUCH more
+
+For ONE image it might
+
+Read image
+
+Generate preview
+
+Generate thumbnail
+
+Generate webp
+
+Run OCR
+
+Run face recognition
+
+Run object detection
+
+Store vectors
+
+Store embeddings
+
+Update search index
+
+Update PostgreSQL
+
+Update Redis
+
+That's why it needs lots of local disk activity.
+
+Your scanner doesn't
+
+It might only do
+
+Read metadata
+
+↓
+
+Database entry
+
+↓
+
+Done
+The thumbnail cache
+
+Even if your app creates thumbnails
+
+thumbs/
+
+IMG001.webp
+IMG002.webp
+IMG003.webp
+
+Those are just files.
+
+Not a constantly changing database.
+
+This is the key difference
+
+Think of it like this.
+
+Windows Explorer
+
+Can browse
+
+Z:\Photos
+
+all day long.
+
+No problem.
+
+Lightroom
+
+Can browse
+
+Z:\Photos
+
+No problem.
+
+Adobe Bridge
+
+Can browse
+
+Z:\Photos
+
+No problem.
+
+Immich
+
+Not just browsing.
+
+It's running
+
+PostgreSQL
+Redis
+AI
+Docker
+Machine Learning
+Face Recognition
+
+at the same time.
+
+I actually think your Media Center is closer to Adobe Bridge
+
+Than it is to Immich.
+
+It indexes files.
+
+Shows previews.
+
+Reads metadata.
+
+Moves files.
+
+Renames.
+
+Searches.
+
+That's all very reasonable to do against a NAS.
+
+One thing I'd do
+
+I'd avoid rescanning the entire NAS every minute.
+
+Instead:
+
+Every 60 seconds
+
+↓
+
+Check folders
+
+↓
+
+Only inspect files whose
+date/size changed
+
+↓
+
+Update index
+
+Or even better:
+
+Add a "Scan Now" button and let users choose when to refresh if they prefer. For a personal media library, a scheduled scan every few minutes or on demand is often more than enough.
+
+So yes—you can build a Media Center that reads and organizes files directly from your My Cloud Home. The problem you hit with Immich wasn't "reading a NAS"; it was that Immich is a full application stack (Docker + PostgreSQL + Redis + AI services) that expects fast local storage for its own internal data.
+
+Your Media Center can be much lighter because it's primarily acting as a file manager and indexer rather than running an always-on AI platform.

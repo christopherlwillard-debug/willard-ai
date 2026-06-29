@@ -1,0 +1,219 @@
+I think you're 95% there, but there's one important correction I'd make before you invest a lot more time.
+
+What I agree with
+✅ NAS is the master storage
+
+Absolutely.
+
+Your app should never depend on a database of files being the source of truth.
+
+NAS
+│
+├── Photos
+├── Videos
+├── Documents
+└── Music
+
+Everything lives there.
+
+✅ Organize Center
+
+Perfect.
+
+It should handle:
+
+Duplicate detection
+EXIF reading
+GPS
+Batch rename
+Folder organization
+File moves
+✅ Optimize Center
+
+Perfect.
+
+HEIC → JPG
+MOV → MP4
+Large images
+Video compression
+
+All operating directly on the NAS.
+
+✅ Preview before processing
+
+I actually like this better than automatic processing.
+
+Incoming
+
+↓
+
+Found 582 photos
+
+Duplicates: 12
+
+Videos: 18
+
+Destination:
+Family > Vacation 2026
+
+[Process]
+
+That's exactly how I'd design it.
+
+Here's what I'd change
+I would remove the assumption that the Replit app is watching the NAS.
+
+Instead, I'd split the architecture into two pieces.
+
+Cloud App (Replit)
+
+↓
+
+Home Agent
+
+↓
+
+NAS
+
+The reason is simple:
+
+Your Replit app cannot directly see your home NAS when it's deployed in the cloud.
+
+Even if today you're only using it at home, separating the "brain" (the app) from the "hands" (the machine that manipulates files) makes the project much easier to evolve later.
+
+The Home Agent can be very small. Today it runs on your laptop when you're home. In the future it could run on a mini PC without changing the Media Center.
+
+I would also change the Import Engine slightly
+
+Instead of:
+
+Incoming
+
+↓
+
+Organize
+
+I'd do:
+
+Incoming
+
+↓
+
+Scan
+
+↓
+
+Preview
+
+↓
+
+Approve
+
+↓
+
+Organize
+
+↓
+
+Optimize
+
+↓
+
+Backup
+
+↓
+
+Immich Rescan
+
+That gives you a checkpoint before anything changes on disk.
+
+One more feature I'd add
+
+Since you're building your own Media Center, take advantage of it.
+
+Imagine this dashboard:
+
+📷 Photos      182,443
+
+🎥 Videos      5,812
+
+📄 Documents   14,992
+
+💾 Storage     6.2 TB
+
+⚠ Duplicates      312
+
+📥 Incoming       487
+
+🔄 Processing       1
+
+✔ Last Backup
+Yesterday 11:42 PM
+
+That becomes your "home screen."
+
+What I'd postpone
+
+I would not spend time integrating Immich deeply yet.
+
+Instead, make it an optional service.
+
+Your app should still work if Immich is turned off.
+
+That way:
+
+Browse photos ✔
+Browse videos ✔
+Organize ✔
+Search filenames ✔
+View PDFs ✔
+Duplicate detection ✔
+
+...all continue to work.
+
+If Immich is available:
+
+Face recognition ✔
+Object recognition ✔
+AI search ✔
+OCR ✔
+
+appear automatically.
+
+One thing I disagree with
+
+This statement:
+
+"Your laptop only runs the app code (~200 MB total)."
+
+That's only true if the app itself is doing file management.
+
+If you also run services like Immich, PostgreSQL, OCR, AI models, or video conversion on the laptop, those services can consume many gigabytes. So it's important to distinguish between the Media Center app and optional background services.
+
+If this were my project, I'd define three layers:
+Layer 1 (Storage)
+-----------------
+NAS
+Photos
+Videos
+Documents
+Music
+
+Layer 2 (Media Center)
+----------------------
+Browse
+Search
+Organize
+Import
+Optimize
+Backup
+
+Layer 3 (Optional Services)
+---------------------------
+Immich
+OCR
+AI
+Face Recognition
+Video Transcoding
+
+I actually think that's the strongest long-term architecture. It means your Media Center is valuable on its own, and every future service you add—Immich today, something else tomorrow—simply plugs into it rather than becoming something the whole system depends on.
