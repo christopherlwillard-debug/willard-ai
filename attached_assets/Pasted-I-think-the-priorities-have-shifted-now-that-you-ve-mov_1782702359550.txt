@@ -1,0 +1,148 @@
+I think the priorities have shifted now that you've moved away from Immich and built the Library Engine. If this were my roadmap, I'd reorder it.
+
+Phase 1 — Make the Library Amazing ⭐⭐⭐⭐⭐
+
+These are the features users will notice immediately.
+
+1. #47 — Immersive Media Viewer
+
+This is the biggest missing piece.
+
+Without it, users can't really enjoy browsing the library.
+
+2. #48 — Background Thumbnail Generation
+
+The library won't feel complete until every folder has thumbnails.
+
+3. #12 — Background Tasks Panel
+
+Now that everything runs as jobs, users need one place to monitor them.
+
+This becomes the command center for:
+
+Library Scan
+Thumbnail Generation
+Health Scan
+Optimize
+Duplicate Analysis
+Metadata Rebuild
+4. #11 — Fast File Browsing
+
+Huge quality-of-life improvement.
+
+Large folders should feel instant.
+
+Phase 2 — Polish the Library ⭐⭐⭐⭐
+5. #6 — Duplicate Groups Before Scan
+
+This is nice, but not essential.
+
+6. #35 — Optimize Center
+
+I'd actually move this after the Library.
+
+People browse photos every day.
+
+People optimize files once every few months.
+
+7. #44 — Job History
+
+Makes sense once Background Tasks exist.
+
+8. #37 — Pause/Cancel Conversion
+
+Useful, but only after Optimize is mature.
+
+Phase 3 — Security ⭐⭐⭐
+
+These should happen before any public release.
+
+#19 Rate limiting
+#20 Authentication
+#21 End-to-end tests
+
+No need to rush them if you're still the only user.
+
+I think one thing is missing...
+
+After #48...
+
+I'd immediately build Collections.
+
+Because once you have:
+
+Fast browsing
+Thumbnails
+Viewer
+
+The next thing users naturally want is:
+
+"Put these 80 vacation photos together."
+
+Not folders.
+
+Collections.
+
+Then:
+
+Family
+Arizona Trip
+Manufactured Homes
+Warranty Photos
+Asphalt Jobs
+
+Collections are one of the biggest usability improvements you can add.
+
+My roadmap would be
+Foundation ✅
+Library Engine
+Metadata
+Scanner
+Health
+Dashboard
+Browse
+#47 Viewer
+#48 Thumbnails
+#11 Fast browsing
+Operations
+#12 Background Tasks
+#44 Job History
+Organize
+Collections
+Favorites
+Tags
+Map View
+Optimize
+Smart Optimize
+Duplicate Manager
+Health Center
+Security
+Login
+Rate limiting
+Testing
+One thing I'd actually move way down
+#35 Optimize Center
+
+I know we spent time redesigning it, but think about how people actually use a media library.
+
+They will:
+
+Browse every day.
+Search every day.
+View photos every day.
+Make collections regularly.
+
+They'll probably run Optimize:
+
+Once after importing a big library.
+Occasionally after adding new media.
+
+That makes it a maintenance feature rather than a core experience. I'd make the Library feel exceptional first, then add optimization.
+
+So my top three priorities would be:
+
+#47 – Immersive Media Viewer
+#48 – Background Thumbnail Generation
+#12 – Background Tasks Panel
+
+Once those are done, the Media Center will feel like a polished, professional application instead of just a capable backend. Everything after that builds on a strong user experience.
