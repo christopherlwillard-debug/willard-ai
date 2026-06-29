@@ -1,1 +1,1 @@
-export { default } from "@/pages/media";
+export { default } from "@/pages/explorer";
