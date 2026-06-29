@@ -2,7 +2,6 @@ import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard,
   Image as ImageIcon,
-  FolderTree,
   Archive,
   FileText,
   Trash2,
@@ -13,6 +12,8 @@ import {
   Loader2,
   Boxes,
   Zap,
+  BookImage,
+  FolderHeart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout } from "@workspace/api-client-react";
@@ -22,7 +23,8 @@ import { useQueryClient } from "@tanstack/react-query";
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Media", href: "/media", icon: ImageIcon },
-  { name: "Explorer", href: "/explorer", icon: FolderTree },
+  { name: "Library", href: "/library", icon: BookImage },
+  { name: "Collections", href: "/collections", icon: FolderHeart },
   { name: "Archives", href: "/archives", icon: Archive },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "Operations", href: "/organize", icon: Boxes },
