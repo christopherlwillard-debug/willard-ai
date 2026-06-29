@@ -22,6 +22,10 @@ import {
   Layers,
   LayoutGrid,
   List,
+  MapPin,
+  Camera,
+  Calendar,
+  Aperture,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,9 +47,35 @@ interface MediaFile {
   modifiedAt: string | null;
   width: number | null;
   height: number | null;
+  orientation: number | null;
   durationSeconds: number | null;
   thumbnailPath: string | null;
   indexedAt: string;
+  // EXIF / photo
+  dateTaken: string | null;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  lens: string | null;
+  iso: number | null;
+  aperture: number | null;
+  exposure: string | null;
+  focalLength: number | null;
+  flash: string | null;
+  colorProfile: string | null;
+  gpsLatitude: number | null;
+  gpsLongitude: number | null;
+  // Video
+  videoCodec: string | null;
+  videoBitrate: number | null;
+  fps: number | null;
+  audioCodec: string | null;
+  dateCreated: string | null;
+  // PDF
+  pageCount: number | null;
+  pdfAuthor: string | null;
+  pdfTitle: string | null;
+  pdfSubject: string | null;
+  pdfKeywords: string | null;
 }
 
 interface MediaFilesResponse {
@@ -229,19 +259,55 @@ function ScanBanner({ job, onDismiss }: { job: ScanJob | null; onDismiss: () => 
   );
 }
 
+// ── Detail panel helpers ───────────────────────────────────────────────────────
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-0.5">{label}</p>
+      <div className="text-sm">{value}</div>
+    </div>
+  );
+}
+
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2.5">
+      <p className="text-[10px] font-mono font-semibold text-muted-foreground/60 uppercase tracking-widest border-b border-border pb-1">{title}</p>
+      {children}
+    </div>
+  );
+}
+
+function cameraLabel(make: string | null, model: string | null): string | null {
+  if (!make && !model) return null;
+  if (!make) return model;
+  if (!model) return make;
+  // Avoid duplicating make in model (e.g. "Apple iPhone 15 Pro" vs "Apple" + "iPhone 15 Pro")
+  return model.startsWith(make) ? model : `${make} ${model}`;
+}
+
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
 function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
+  const camera = cameraLabel(file.cameraMake, file.cameraModel);
+  const hasGps = file.gpsLatitude != null && file.gpsLongitude != null;
+  const mapsUrl = hasGps
+    ? `https://www.google.com/maps?q=${file.gpsLatitude},${file.gpsLongitude}`
+    : null;
+
   return (
     <div className="flex flex-col h-full border-l border-border bg-card w-72 shrink-0">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <span className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest">Details</span>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <div className="w-full aspect-square bg-muted flex items-center justify-center overflow-hidden border-b border-border">
+      {/* Thumbnail */}
+      <div className="w-full aspect-square bg-muted flex items-center justify-center overflow-hidden border-b border-border shrink-0">
         {(file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") ? (
           <img
             src={`/api/media/thumbnail/${file.id}`}
@@ -256,57 +322,178 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        <div>
-          <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Name</p>
-          <p className="text-sm break-all">{file.name}</p>
-        </div>
-        <div>
-          <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Path</p>
-          <p className="text-xs text-muted-foreground font-mono break-all">{file.relativePath}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Size</p>
-            <p className="text-sm">{formatBytes(file.sizeBytes)}</p>
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+        {/* ── File info ── */}
+        <DetailSection title="File">
+          <DetailRow label="Name" value={<span className="break-all">{file.name}</span>} />
+          <DetailRow label="Path" value={<span className="text-xs text-muted-foreground font-mono break-all">{file.relativePath}</span>} />
+          <div className="grid grid-cols-2 gap-2.5">
+            <DetailRow label="Size" value={formatBytes(file.sizeBytes)} />
+            <DetailRow
+              label="Type"
+              value={
+                <div className="flex items-center gap-1">
+                  <MediaTypeIcon type={file.mediaType} className="w-3.5 h-3.5" />
+                  <span className="capitalize">{file.mediaType}</span>
+                </div>
+              }
+            />
+            {file.extension && (
+              <DetailRow label="Format" value={
+                <Badge variant="outline" className="font-mono text-xs uppercase">.{file.extension}</Badge>
+              } />
+            )}
           </div>
-          <div>
-            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Type</p>
-            <div className="flex items-center gap-1 mt-0.5">
-              <MediaTypeIcon type={file.mediaType} className="w-4 h-4" />
-              <span className="text-sm capitalize">{file.mediaType}</span>
+        </DetailSection>
+
+        {/* ── Photo EXIF ── */}
+        {file.mediaType === "photo" && (
+          <DetailSection title="Photo">
+            <div className="grid grid-cols-2 gap-2.5">
+              {file.width != null && file.height != null && (
+                <DetailRow label="Resolution" value={`${file.width} × ${file.height}`} />
+              )}
+              {file.dateTaken && (
+                <DetailRow
+                  label="Date Taken"
+                  value={
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-muted-foreground shrink-0" />
+                      {formatDate(file.dateTaken)}
+                    </span>
+                  }
+                />
+              )}
+              {file.modifiedAt && (
+                <DetailRow label="Modified" value={formatDate(file.modifiedAt)} />
+              )}
             </div>
-          </div>
-          {file.width != null && file.height != null && (
-            <div>
-              <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Dimensions</p>
-              <p className="text-sm">{file.width} × {file.height}</p>
-            </div>
-          )}
-          {file.durationSeconds != null && (
-            <div>
-              <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Duration</p>
-              <p className="text-sm">{formatDuration(file.durationSeconds)}</p>
-            </div>
-          )}
-          <div>
-            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Modified</p>
-            <p className="text-sm">{formatDate(file.modifiedAt)}</p>
-          </div>
-          <div>
-            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Indexed</p>
-            <p className="text-sm">{formatDate(file.indexedAt)}</p>
-          </div>
-        </div>
-        {file.extension && (
-          <div>
-            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Extension</p>
-            <Badge variant="outline" className="font-mono text-xs uppercase">.{file.extension}</Badge>
-          </div>
+
+            {camera && (
+              <DetailRow
+                label="Camera"
+                value={
+                  <span className="flex items-center gap-1">
+                    <Camera className="w-3 h-3 text-muted-foreground shrink-0" />
+                    {camera}
+                  </span>
+                }
+              />
+            )}
+            {file.lens && <DetailRow label="Lens" value={file.lens} />}
+
+            {(file.iso != null || file.aperture != null || file.exposure || file.focalLength != null) && (
+              <div className="grid grid-cols-2 gap-2.5">
+                {file.iso != null && <DetailRow label="ISO" value={`ISO ${file.iso}`} />}
+                {file.aperture != null && (
+                  <DetailRow
+                    label="Aperture"
+                    value={
+                      <span className="flex items-center gap-1">
+                        <Aperture className="w-3 h-3 text-muted-foreground shrink-0" />
+                        {`ƒ/${file.aperture % 1 === 0 ? file.aperture : file.aperture.toFixed(1)}`}
+                      </span>
+                    }
+                  />
+                )}
+                {file.exposure && <DetailRow label="Exposure" value={file.exposure} />}
+                {file.focalLength != null && <DetailRow label="Focal Length" value={`${file.focalLength}mm`} />}
+              </div>
+            )}
+
+            {file.flash && <DetailRow label="Flash" value={file.flash} />}
+            {file.colorProfile && <DetailRow label="Color Profile" value={file.colorProfile} />}
+
+            {hasGps && (
+              <DetailRow
+                label="GPS Location"
+                value={
+                  <a
+                    href={mapsUrl!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-primary hover:underline"
+                  >
+                    <MapPin className="w-3 h-3 shrink-0" />
+                    {file.gpsLatitude!.toFixed(5)}, {file.gpsLongitude!.toFixed(5)}
+                  </a>
+                }
+              />
+            )}
+          </DetailSection>
         )}
+
+        {/* ── Video ── */}
+        {file.mediaType === "video" && (
+          <DetailSection title="Video">
+            <div className="grid grid-cols-2 gap-2.5">
+              {file.width != null && file.height != null && (
+                <DetailRow label="Resolution" value={`${file.width} × ${file.height}`} />
+              )}
+              {file.durationSeconds != null && (
+                <DetailRow label="Duration" value={formatDuration(file.durationSeconds)} />
+              )}
+              {file.fps != null && (
+                <DetailRow label="FPS" value={`${file.fps} fps`} />
+              )}
+              {file.videoCodec && (
+                <DetailRow label="Video Codec" value={<span className="font-mono uppercase">{file.videoCodec}</span>} />
+              )}
+              {file.audioCodec && (
+                <DetailRow label="Audio Codec" value={<span className="font-mono uppercase">{file.audioCodec}</span>} />
+              )}
+              {file.videoBitrate != null && (
+                <DetailRow label="Bitrate" value={`${file.videoBitrate} kbps`} />
+              )}
+              {(file.dateCreated || file.modifiedAt) && (
+                <DetailRow label="Date Created" value={formatDate(file.dateCreated ?? file.modifiedAt)} />
+              )}
+            </div>
+          </DetailSection>
+        )}
+
+        {/* ── Audio ── */}
+        {file.mediaType === "audio" && file.durationSeconds != null && (
+          <DetailSection title="Audio">
+            <div className="grid grid-cols-2 gap-2.5">
+              <DetailRow label="Duration" value={formatDuration(file.durationSeconds)} />
+              {file.modifiedAt && <DetailRow label="Modified" value={formatDate(file.modifiedAt)} />}
+            </div>
+          </DetailSection>
+        )}
+
+        {/* ── PDF ── */}
+        {file.extension === "pdf" && (
+          <DetailSection title="Document">
+            <div className="grid grid-cols-2 gap-2.5">
+              {file.pageCount != null && <DetailRow label="Pages" value={`${file.pageCount}`} />}
+              {file.modifiedAt && <DetailRow label="Modified" value={formatDate(file.modifiedAt)} />}
+            </div>
+            {file.pdfTitle   && <DetailRow label="Title"    value={file.pdfTitle} />}
+            {file.pdfAuthor  && <DetailRow label="Author"   value={file.pdfAuthor} />}
+            {file.pdfSubject && <DetailRow label="Subject"  value={file.pdfSubject} />}
+            {file.pdfKeywords && <DetailRow label="Keywords" value={<span className="text-xs text-muted-foreground">{file.pdfKeywords}</span>} />}
+          </DetailSection>
+        )}
+
+        {/* ── Dates (fallback for non-photo/video/pdf) ── */}
+        {file.mediaType !== "photo" && file.mediaType !== "video" && file.extension !== "pdf" && (
+          <DetailSection title="Dates">
+            <div className="grid grid-cols-2 gap-2.5">
+              {file.modifiedAt && <DetailRow label="Modified" value={formatDate(file.modifiedAt)} />}
+              <DetailRow label="Indexed" value={formatDate(file.indexedAt)} />
+            </div>
+          </DetailSection>
+        )}
+
+        {/* Indexed at — always shown at bottom */}
+        <DetailRow label="Indexed" value={<span className="text-xs text-muted-foreground">{formatDate(file.indexedAt)}</span>} />
       </div>
 
-      <div className="p-4 border-t border-border space-y-2">
+      {/* Actions */}
+      <div className="p-4 border-t border-border space-y-2 shrink-0">
         <a href={`/api/media/file/${file.id}/stream`} download={file.name}>
           <Button variant="outline" size="sm" className="w-full gap-2 font-mono text-xs">
             <Download className="w-3.5 h-3.5" />

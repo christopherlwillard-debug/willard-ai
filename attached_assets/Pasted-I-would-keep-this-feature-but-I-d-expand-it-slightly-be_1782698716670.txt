@@ -1,0 +1,165 @@
+I would keep this feature, but I'd expand it slightly because it becomes the foundation for a lot of future functionality.
+
+Here's how I'd rewrite it for Replit.
+
+#46 - Enrich Media Index with Metadata Extraction
+
+What & Why
+
+The Media Center should extract metadata from media files during indexing so users can browse, sort, search, organize, and filter without rescanning files later.
+
+Metadata should become part of the Media Index and power future features like timeline view, map view, duplicate detection, smart collections, and advanced search.
+
+This scan only reads metadata. Original files are never modified.
+
+Done Looks Like
+Photos
+
+During media scan extract metadata from:
+
+JPEG
+JPG
+HEIC
+TIFF
+PNG (where available)
+RAW formats (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2)
+
+Populate:
+
+Date Taken
+Camera Make
+Camera Model
+Lens
+Width
+Height
+Orientation
+File Size
+GPS Latitude
+GPS Longitude
+ISO
+Aperture
+Exposure
+Focal Length
+Flash
+Color Profile
+EXIF JSON (full raw metadata)
+Videos
+
+Extract:
+
+Duration
+Width
+Height
+Codec
+Bitrate
+FPS
+Audio Codec
+Date Created
+PDFs
+
+Extract:
+
+Page Count
+Author
+Title
+Subject
+Keywords
+Media Database
+
+Populate:
+
+exif_json
+width
+height
+duration
+gps_latitude
+gps_longitude
+camera_make
+camera_model
+lens
+date_taken
+modified_at
+file_hash
+Detail Panel
+
+When a media item is selected show:
+
+Photo Information
+
+Preview
+Filename
+Path
+Size
+Resolution
+Date Taken
+Date Modified
+Camera
+Lens
+ISO
+Aperture
+Exposure
+GPS (click to open map)
+File Hash
+
+For videos:
+
+Duration
+Codec
+Resolution
+FPS
+Audio
+
+For PDFs:
+
+Page Count
+Author
+Created Date
+Future Features Enabled
+
+This metadata powers:
+
+Timeline View
+Map View
+Camera Filters
+Date Filters
+Smart Collections
+Duplicate Detection
+Search by Camera
+Search by Lens
+Search by Date
+Search by Resolution
+Search by GPS
+Statistics Dashboard
+Suggested Libraries
+
+Photos
+
+exifr (fast default)
+fallback to ExifTool for unsupported RAW formats
+
+Videos
+
+ffprobe
+
+PDFs
+
+pdf-parse
+
+Hashes
+
+SHA-256
+Relevant Files
+artifacts/api-server/src/lib/media-scanner.ts
+lib/db/src/schema/media_files.ts
+artifacts/willard-ai/src/pages/media.tsx
+One thing I'd add
+
+I'd also tell Replit not to scan the full EXIF every time.
+
+Use this logic:
+
+If the file is new → extract metadata.
+If the file's size or modified date changed → re-extract metadata.
+Otherwise → skip it.
+
+That keeps rescans fast, even with very large photo libraries. This becomes important when you're indexing hundreds of thousands of files on your NAS.
