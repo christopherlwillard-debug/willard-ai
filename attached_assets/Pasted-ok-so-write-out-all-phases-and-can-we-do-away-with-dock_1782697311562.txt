@@ -1,0 +1,366 @@
+ok so write out all phases and can we do away with docker and immich for now
+
+Yes. I actually think this is the right decision.
+
+You've spent a lot of time trying to make Immich fit your architecture, when what you really want is your own Media Center. Immich can always be added later if you decide its AI features are worth it, but I would remove it completely from the roadmap for now.
+
+Here's the roadmap I'd give Replit.
+
+Media Center Roadmap (Docker & Immich Free)
+Philosophy
+
+The Media Center owns the media library.
+
+The NAS is the single source of truth.
+
+The app never copies media onto the computer unless the user explicitly downloads it.
+
+No Docker.
+
+No Immich.
+
+No PostgreSQL.
+
+No AI dependencies.
+
+Everything works directly from the NAS.
+
+Phase 1 – Foundation
+Storage Setup
+
+The user selects the root media folder.
+
+Example:
+
+Z:\MediaCenter
+Z:\Photos
+
+The app remembers this location.
+
+Folder Scanner
+
+Build a scanner that:
+
+Walks every folder
+Reads every supported media file
+Creates a media index
+Detects deleted files
+Detects renamed files
+Detects modified files
+
+Supported initially:
+
+JPG
+JPEG
+PNG
+GIF
+HEIC
+WEBP
+MP4
+MOV
+AVI
+MKV
+PDF
+Media Database
+
+Create a lightweight media database.
+
+Store:
+
+File path
+File name
+Extension
+Size
+Created date
+Modified date
+Folder
+SHA-256 hash
+EXIF metadata
+GPS metadata
+Duration (video)
+Resolution
+Thumbnail status
+
+Original files are never modified.
+
+Phase 2 – Media Browser
+
+Create a full browser.
+
+Views:
+
+Grid
+List
+Timeline
+Folder Tree
+
+Users can:
+
+Browse folders
+Preview images
+Preview videos
+Preview PDFs
+Sort
+Filter
+Thumbnail Engine
+
+Generate thumbnails.
+
+Supported:
+
+Photos
+Videos
+PDFs
+
+Store thumbnails in:
+
+MediaCenter/
+Cache/
+Thumbnails/
+
+Original media is never touched.
+
+Search
+
+Search by:
+
+Filename
+Folder
+Extension
+Date
+Camera
+Resolution
+GPS
+Tags
+Favorites
+
+Instant search using the media database.
+
+Phase 3 – Organization Center
+
+Current organize functionality moves here.
+
+Features:
+
+Rename files
+Batch rename
+Move files
+Copy files
+Merge folders
+Delete empty folders
+Detect duplicates
+Organize by date
+Organize by camera
+Organize by location
+Organize by custom rules
+
+All actions operate directly on NAS files.
+
+Duplicate Center
+
+Use SHA-256 hashes.
+
+Display:
+
+Duplicate preview
+File locations
+Keep/Delete options
+
+No guessing by filename.
+
+Phase 4 – Import Center
+
+No upload interface.
+
+Workflow:
+
+User drags files into:
+
+Incoming/
+
+The app detects new folders during scheduled scans.
+
+Workflow:
+
+Incoming
+
+↓
+
+Scan
+
+↓
+
+Preview Import
+
+↓
+
+Show duplicates
+
+↓
+
+Choose destination
+
+↓
+
+Approve
+
+↓
+
+Move files
+
+↓
+
+Update media index
+
+Nothing is processed automatically without approval.
+
+Supported sources:
+
+Google Photos exports
+iCloud exports
+SD cards
+Camera imports
+Phone backups
+ZIP archives
+Phase 5 – Dashboard
+
+Overview cards:
+
+Photos
+
+Videos
+
+Documents
+
+Storage Used
+
+Largest Folder
+
+Largest Files
+
+Duplicate Count
+
+New Files
+
+Recent Imports
+
+Folders Missing Backups
+
+Missing Metadata
+
+Storage Health
+
+Recent Activity
+
+Phase 6 – Media Tools
+
+Image tools:
+
+Rotate
+Resize
+Convert
+HEIC → JPG
+PNG → JPG
+
+Video tools:
+
+Convert
+Compress
+Rotate
+
+PDF tools:
+
+Merge
+Split
+Preview
+
+ZIP tools:
+
+Preview
+Extract
+Organize contents
+Phase 7 – Collections
+
+Create virtual collections.
+
+Examples:
+
+Family
+
+Vacation
+
+Manufactured Homes
+
+Asphalt
+
+Recipes
+
+Favorites
+
+Collections never move original files.
+
+Phase 8 – Metadata Manager
+
+Edit:
+
+Tags
+Rating
+Favorites
+Description
+Notes
+
+Store metadata separately without modifying originals whenever possible.
+
+Phase 9 – Backup Center
+
+Show:
+
+Last Backup
+
+Folders not backed up
+
+Backup history
+
+Verify copied files using hashes.
+
+Phase 10 – Optional AI (Future)
+
+AI is completely optional.
+
+Possible providers:
+
+Immich
+Google Vision
+OpenAI
+Local AI
+
+Features:
+
+Face Recognition
+
+OCR
+
+Object Detection
+
+Natural Language Search
+
+Automatic Tag Suggestions
+
+The Media Center never depends on AI.
+
+AI only enhances existing features.
+
+Core Principles
+NAS is always the master copy.
+Original files are never altered without user approval.
+The Media Center owns the media database.
+The Media Center generates its own thumbnails.
+Every operation works without Docker.
+Every operation works without Immich.
+AI is an optional enhancement, never a requirement.
+
+I actually think this is a much stronger product.
+
+You're no longer building "something that works because Immich exists." You're building your own digital asset manager.
+
+That also gives you freedom in the future. If one day you buy a mini PC and decide you want AI search, you can plug it in. If a better AI tool than Immich comes along, you can integrate that instead. None of your core architecture has to change because the Media Center remains the system that owns the library, the database, and the workflow.

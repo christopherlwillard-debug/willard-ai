@@ -1,225 +1,670 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  useGetImmichStatus, getGetImmichStatusQueryKey,
-  useGetImmichRecentPhotos, getGetImmichRecentPhotosQueryKey,
-  useGetImmichAlbums, getGetImmichAlbumsQueryKey,
-  useGetImmichPeople, getGetImmichPeopleQueryKey,
-  useGetSettings, getGetSettingsQueryKey,
-} from "@workspace/api-client-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Activity, Image as ImageIcon, Video, Folder, Users, ExternalLink } from "lucide-react";
+  Image as ImageIcon,
+  Video,
+  Music,
+  FileText,
+  File,
+  ScanLine,
+  Loader2,
+  RefreshCw,
+  X,
+  FolderOpen,
+  Search,
+  Download,
+  ExternalLink,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Layers,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 
-function immichUrl(baseUrl: string | undefined, path: string): string | null {
-  if (!baseUrl) return null;
-  return `${baseUrl.replace(/\/$/, "")}${path}`;
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface MediaFile {
+  id: number;
+  nasPath: string;
+  relativePath: string;
+  name: string;
+  extension: string;
+  mimeType: string;
+  mediaType: "photo" | "video" | "audio" | "document" | "other";
+  sizeBytes: number;
+  modifiedAt: string | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  thumbnailPath: string | null;
+  indexedAt: string;
 }
 
-export default function Media() {
-  const { data: status, isLoading: statusLoading } = useGetImmichStatus({
-    query: { queryKey: getGetImmichStatusQueryKey() },
-  });
+interface MediaFilesResponse {
+  files: MediaFile[];
+  total: number;
+  page: number;
+  limit: number;
+}
 
-  const { data: settings } = useGetSettings({
-    query: { queryKey: getGetSettingsQueryKey() },
-  });
+interface ScanJob {
+  id: number;
+  status: "running" | "done" | "failed";
+  nasPath: string;
+  totalFiles: number;
+  indexedFiles: number;
+  skippedFiles: number;
+  thumbnailsGenerated: number;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
 
-  const immichBase = settings?.immichBaseUrl ?? "";
+type MediaType = "all" | "photo" | "video" | "audio" | "document" | "other";
 
-  const { data: photos, isLoading: photosLoading } = useGetImmichRecentPhotos(
-    { limit: 24 },
-    { query: { queryKey: getGetImmichRecentPhotosQueryKey({ limit: 24 }), enabled: status?.connected === true } }
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+const TYPE_TABS: { key: MediaType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: "all",      label: "All",       icon: Layers },
+  { key: "photo",    label: "Photos",    icon: ImageIcon },
+  { key: "video",    label: "Videos",    icon: Video },
+  { key: "audio",    label: "Audio",     icon: Music },
+  { key: "document", label: "Documents", icon: FileText },
+  { key: "other",    label: "Other",     icon: File },
+];
+
+function MediaTypeIcon({ type, className }: { type: string; className?: string }) {
+  switch (type) {
+    case "photo":    return <ImageIcon className={cn("text-blue-400",           className)} />;
+    case "video":    return <Video     className={cn("text-purple-400",         className)} />;
+    case "audio":    return <Music     className={cn("text-green-400",          className)} />;
+    case "document": return <FileText  className={cn("text-amber-400",          className)} />;
+    default:         return <File      className={cn("text-muted-foreground",   className)} />;
+  }
+}
+
+// ── Thumbnail card ────────────────────────────────────────────────────────────
+
+function ThumbnailCard({
+  file,
+  selected,
+  onClick,
+}: {
+  file: MediaFile;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const [thumbError, setThumbError] = useState(false);
+  const canThumb = (file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") && !thumbError;
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "group relative flex flex-col rounded-lg border overflow-hidden text-left transition-all duration-150",
+        "bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary",
+        selected ? "ring-2 ring-primary border-primary" : "border-border",
+      )}
+    >
+      <div className="relative w-full aspect-square bg-muted flex items-center justify-center overflow-hidden">
+        {canThumb ? (
+          <img
+            src={`/api/media/thumbnail/${file.id}`}
+            alt={file.name}
+            className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-muted-foreground p-2">
+            <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
+            <span className="text-xs font-mono uppercase">{file.extension || "—"}</span>
+          </div>
+        )}
+        {file.mediaType === "video" && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-black/50 rounded-full p-2">
+              <Play className="w-4 h-4 text-white fill-white" />
+            </div>
+          </div>
+        )}
+        {file.durationSeconds !== null && (
+          <span className="absolute bottom-1 right-1 text-[10px] font-mono bg-black/70 text-white px-1 rounded">
+            {formatDuration(file.durationSeconds)}
+          </span>
+        )}
+      </div>
+      <div className="p-2">
+        <p className="text-xs font-mono truncate text-foreground leading-tight" title={file.name}>
+          {file.name}
+        </p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+          {formatBytes(file.sizeBytes)}
+        </p>
+      </div>
+    </button>
   );
+}
 
-  const { data: albums, isLoading: albumsLoading } = useGetImmichAlbums({
-    query: { queryKey: getGetImmichAlbumsQueryKey(), enabled: status?.connected === true },
-  });
+// ── Scan status banner ────────────────────────────────────────────────────────
 
-  const { data: people, isLoading: peopleLoading } = useGetImmichPeople({
-    query: { queryKey: getGetImmichPeopleQueryKey(), enabled: status?.connected === true },
-  });
+function ScanBanner({ job, onDismiss }: { job: ScanJob | null; onDismiss: () => void }) {
+  if (!job) return null;
 
-  if (statusLoading) return <Skeleton className="w-full h-96" />;
-
-  if (!status?.connected) {
+  if (job.status === "done") {
     return (
-      <div className="flex flex-col items-center justify-center h-96 text-center">
-        <Activity className="h-12 w-12 text-red-500 mb-4" />
-        <h2 className="text-xl font-bold mb-2 font-mono">IMMICH_DISCONNECTED</h2>
-        <p className="text-muted-foreground text-sm">Configure Immich URL and API key in Settings to view your media library.</p>
+      <div className="flex items-center gap-2 px-4 py-2 bg-green-900/30 border border-green-700/40 rounded-lg text-sm text-green-300 font-mono">
+        <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <span>
+          Scan complete — {job.indexedFiles.toLocaleString()} new,{" "}
+          {job.skippedFiles.toLocaleString()} unchanged of{" "}
+          {job.totalFiles.toLocaleString()} files.
+        </span>
+        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200">
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
     );
   }
 
+  if (job.status === "failed") {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 bg-red-900/30 border border-red-700/40 rounded-lg text-sm text-red-300 font-mono">
+        <AlertCircle className="w-4 h-4 shrink-0" />
+        <span>Scan failed: {job.error}</span>
+        <button onClick={onDismiss} className="ml-auto text-red-400 hover:text-red-200">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  const pct = job.totalFiles > 0
+    ? Math.round(((job.indexedFiles + job.skippedFiles) / job.totalFiles) * 100)
+    : null;
+
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold font-mono tracking-tight">MEDIA_CENTER</h1>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center space-x-2 text-sm font-mono text-green-500">
-            <Activity className="h-4 w-4" />
-            <span>IMMICH CONNECTED</span>
-          </div>
-          {immichBase && (
-            <a
-              href={immichBase}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-mono text-muted-foreground hover:text-primary transition-colors border border-border rounded px-2 py-1"
-            >
-              <ExternalLink className="w-3 h-3" /> Open Immich
-            </a>
-          )}
-        </div>
+    <div className="flex items-center gap-2 px-4 py-2 bg-blue-900/30 border border-blue-700/40 rounded-lg text-sm text-blue-300 font-mono">
+      <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+      <span>
+        Scanning… {(job.indexedFiles + job.skippedFiles).toLocaleString()}
+        {job.totalFiles > 0 ? ` / ${job.totalFiles.toLocaleString()} files` : " files"}
+        {pct !== null ? ` (${pct}%)` : ""}
+      </span>
+    </div>
+  );
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
+function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
+  return (
+    <div className="flex flex-col h-full border-l border-border bg-card w-72 shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <span className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest">Details</span>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <X className="w-4 h-4" />
+        </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[
-          { label: "Photos", value: status.photoCount, icon: ImageIcon },
-          { label: "Videos", value: status.videoCount, icon: Video },
-          { label: "Albums", value: status.albumCount, icon: Folder },
-          { label: "People", value: status.personCount, icon: Users },
-        ].map(({ label, value, icon: Icon }) => (
-          <Card key={label}>
-            <div className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground font-mono">{label.toUpperCase()}</p>
-                <p className="text-2xl font-bold mt-1">{value.toLocaleString()}</p>
-              </div>
-              <Icon className="h-6 w-6 text-muted-foreground" />
+      <div className="w-full aspect-square bg-muted flex items-center justify-center overflow-hidden border-b border-border">
+        {(file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") ? (
+          <img
+            src={`/api/media/thumbnail/${file.id}`}
+            alt={file.name}
+            className="w-full h-full object-contain"
+          />
+        ) : (
+          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+            <MediaTypeIcon type={file.mediaType} className="w-10 h-10" />
+            <span className="text-xs font-mono uppercase">{file.extension || "file"}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div>
+          <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Name</p>
+          <p className="text-sm break-all">{file.name}</p>
+        </div>
+        <div>
+          <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Path</p>
+          <p className="text-xs text-muted-foreground font-mono break-all">{file.relativePath}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Size</p>
+            <p className="text-sm">{formatBytes(file.sizeBytes)}</p>
+          </div>
+          <div>
+            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Type</p>
+            <div className="flex items-center gap-1 mt-0.5">
+              <MediaTypeIcon type={file.mediaType} className="w-4 h-4" />
+              <span className="text-sm capitalize">{file.mediaType}</span>
             </div>
-          </Card>
+          </div>
+          {file.width != null && file.height != null && (
+            <div>
+              <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Dimensions</p>
+              <p className="text-sm">{file.width} × {file.height}</p>
+            </div>
+          )}
+          {file.durationSeconds != null && (
+            <div>
+              <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Duration</p>
+              <p className="text-sm">{formatDuration(file.durationSeconds)}</p>
+            </div>
+          )}
+          <div>
+            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Modified</p>
+            <p className="text-sm">{formatDate(file.modifiedAt)}</p>
+          </div>
+          <div>
+            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Indexed</p>
+            <p className="text-sm">{formatDate(file.indexedAt)}</p>
+          </div>
+        </div>
+        {file.extension && (
+          <div>
+            <p className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest mb-1">Extension</p>
+            <Badge variant="outline" className="font-mono text-xs uppercase">.{file.extension}</Badge>
+          </div>
+        )}
+      </div>
+
+      <div className="p-4 border-t border-border space-y-2">
+        <a href={`/api/media/file/${file.id}/stream`} download={file.name}>
+          <Button variant="outline" size="sm" className="w-full gap-2 font-mono text-xs">
+            <Download className="w-3.5 h-3.5" />
+            Download
+          </Button>
+        </a>
+        <a href={`/api/media/file/${file.id}/stream`} target="_blank" rel="noopener noreferrer">
+          <Button variant="ghost" size="sm" className="w-full gap-2 font-mono text-xs">
+            <ExternalLink className="w-3.5 h-3.5" />
+            Open Original
+          </Button>
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+function EmptyState({ onScan, isScanning }: { onScan: () => void; isScanning: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-6 py-20 text-center">
+      <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
+        <ImageIcon className="w-8 h-8 text-muted-foreground" />
+      </div>
+      <div>
+        <h3 className="text-lg font-semibold font-mono mb-2">No Media Indexed</h3>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          Scan your NAS library to discover and index photos, videos, audio, and documents.
+          Thumbnails are generated on-demand as you browse.
+        </p>
+      </div>
+      <Button onClick={onScan} disabled={isScanning} className="gap-2 font-mono">
+        {isScanning ? (
+          <><Loader2 className="w-4 h-4 animate-spin" />Scanning…</>
+        ) : (
+          <><ScanLine className="w-4 h-4" />Scan Your Library</>
+        )}
+      </Button>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function Media() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const [activeType, setActiveType]   = useState<MediaType>("all");
+  const [search, setSearch]           = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
+  const [selectedFile, setSelectedFile]       = useState<MediaFile | null>(null);
+  const [page, setPage]               = useState(1);
+  const [sort, setSort]               = useState("indexed_desc");
+  const [dismissedJobId, setDismissedJobId]   = useState<number | null>(null);
+
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const LIMIT = 60;
+
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setDebouncedSearch(search), 350);
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  }, [search]);
+
+  useEffect(() => { setPage(1); }, [activeType, debouncedSearch, selectedFolder]);
+
+  // ── Data queries ────────────────────────────────────────────────────────────
+
+  const foldersQuery = useQuery({
+    queryKey: ["media-folders"],
+    queryFn: async () => {
+      const r = await fetch("/api/media/folders");
+      if (!r.ok) throw new Error("Failed to load folders");
+      return r.json() as Promise<{ folders: string[] }>;
+    },
+  });
+
+  const filesQuery = useQuery({
+    queryKey: ["media-files", activeType, debouncedSearch, selectedFolder, page, sort],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: String(LIMIT), page: String(page), sort });
+      if (activeType !== "all") params.set("mediaType", activeType);
+      if (debouncedSearch)      params.set("search", debouncedSearch);
+      if (selectedFolder)       params.set("folder", selectedFolder);
+      const r = await fetch(`/api/media/files?${params}`);
+      if (!r.ok) throw new Error("Failed to load media files");
+      return r.json() as Promise<MediaFilesResponse>;
+    },
+  });
+
+  const scanStatusQuery = useQuery({
+    queryKey: ["media-scan-status"],
+    queryFn: async () => {
+      const r = await fetch("/api/media/scan/status");
+      if (!r.ok) throw new Error("Failed to load scan status");
+      const json = await r.json();
+      return json as ScanJob | null;
+    },
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 1500 : false),
+  });
+
+  useEffect(() => {
+    if (scanStatusQuery.data?.status === "done") {
+      queryClient.invalidateQueries({ queryKey: ["media-files"] });
+      queryClient.invalidateQueries({ queryKey: ["media-folders"] });
+    }
+  }, [scanStatusQuery.data?.status, queryClient]);
+
+  // ── Scan mutation ───────────────────────────────────────────────────────────
+
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/media/scan", { method: "POST" });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error((body as any).error ?? "Scan failed");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["media-scan-status"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const isScanning = scanStatusQuery.data?.status === "running" || scanMutation.isPending;
+  const scanJob    = scanStatusQuery.data ?? null;
+  const showBanner = scanJob !== null && scanJob.id !== dismissedJobId;
+
+  const files      = filesQuery.data?.files ?? [];
+  const total      = filesQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+  const folders    = foldersQuery.data?.folders ?? [];
+
+  const handleScan = useCallback(() => {
+    scanMutation.mutate();
+  }, [scanMutation]);
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+
+      {/* ── Top toolbar ── */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0 flex-wrap">
+        <h2 className="text-sm font-mono font-semibold text-muted-foreground uppercase tracking-widest">
+          Media Center
+        </h2>
+
+        <div className="flex-1 min-w-0" />
+
+        {/* Search */}
+        <div className="relative w-56">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search files…"
+            className="pl-8 h-8 text-xs font-mono"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        {/* Sort */}
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          className="h-8 text-xs font-mono bg-background border border-border rounded-md px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+        >
+          <option value="indexed_desc">Newest indexed</option>
+          <option value="modified_desc">Recently modified</option>
+          <option value="modified_asc">Oldest modified</option>
+          <option value="name_asc">Name A–Z</option>
+          <option value="name_desc">Name Z–A</option>
+          <option value="size_desc">Largest first</option>
+          <option value="size_asc">Smallest first</option>
+        </select>
+
+        {/* Scan button */}
+        <Button
+          size="sm"
+          variant={isScanning ? "ghost" : "default"}
+          onClick={handleScan}
+          disabled={isScanning}
+          className="gap-2 font-mono text-xs h-8"
+        >
+          {isScanning ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" />Scanning…</>
+          ) : (
+            <><ScanLine className="w-3.5 h-3.5" />Scan Library</>
+          )}
+        </Button>
+
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            queryClient.invalidateQueries({ queryKey: ["media-files"] });
+            queryClient.invalidateQueries({ queryKey: ["media-scan-status"] });
+          }}
+          className="h-8 w-8 p-0"
+          title="Refresh"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+
+      {/* ── Scan banner ── */}
+      {showBanner && (
+        <div className="px-4 pt-2 shrink-0">
+          <ScanBanner
+            job={scanJob}
+            onDismiss={() => setDismissedJobId(scanJob?.id ?? null)}
+          />
+        </div>
+      )}
+
+      {/* ── Type tabs ── */}
+      <div className="flex items-center gap-1 px-4 pt-2 border-b border-border shrink-0 overflow-x-auto">
+        {TYPE_TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setActiveType(key)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-2 text-xs font-mono rounded-t-md border-b-2 transition-colors whitespace-nowrap",
+              activeType === key
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
+            )}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+          </button>
         ))}
       </div>
 
-      <Tabs defaultValue="recent" className="w-full">
-        <TabsList>
-          <TabsTrigger value="recent">Recent Media</TabsTrigger>
-          <TabsTrigger value="albums">Albums</TabsTrigger>
-          <TabsTrigger value="people">People</TabsTrigger>
-        </TabsList>
+      {/* ── Body ── */}
+      <div className="flex flex-1 overflow-hidden">
 
-        <TabsContent value="recent" className="mt-4">
-          {photosLoading ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {[...Array(12)].map((_, i) => <Skeleton key={i} className="aspect-square w-full rounded-md" />)}
+        {/* ── Folder sidebar ── */}
+        {folders.length > 0 && (
+          <div className="w-48 shrink-0 border-r border-border overflow-y-auto py-2">
+            <div className="px-3 py-1">
+              <span className="text-[10px] font-mono font-semibold text-muted-foreground uppercase tracking-widest">
+                Folders
+              </span>
+            </div>
+            <button
+              onClick={() => setSelectedFolder(null)}
+              className={cn(
+                "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
+                selectedFolder === null
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+            >
+              <Layers className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">All</span>
+            </button>
+            {folders.map((folder) => (
+              <button
+                key={folder}
+                onClick={() => setSelectedFolder(selectedFolder === folder ? null : folder)}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
+                  selectedFolder === folder
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                )}
+              >
+                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{folder}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ── Main grid ── */}
+        <div className="flex-1 overflow-y-auto">
+          {filesQuery.isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : files.length === 0 && total === 0 && !debouncedSearch && activeType === "all" && !selectedFolder ? (
+            <EmptyState onScan={handleScan} isScanning={isScanning} />
+          ) : files.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-20">
+              <Search className="w-8 h-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground font-mono">No files match your filters.</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="font-mono text-xs"
+                onClick={() => { setSearch(""); setActiveType("all"); setSelectedFolder(null); }}
+              >
+                Clear Filters
+              </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {photos?.map((asset) => {
-                const link = immichUrl(immichBase, `/photos/${asset.id}`);
-                const inner = (
-                  <div className="relative aspect-square group overflow-hidden rounded-md bg-secondary cursor-pointer">
-                    {asset.thumbUrl ? (
-                      <img
-                        src={asset.thumbUrl}
-                        alt={asset.filename}
-                        className="object-cover w-full h-full transition-transform group-hover:scale-105"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        {(asset as any).type === "video"
-                          ? <Video className="h-8 w-8 text-muted-foreground" />
-                          : <ImageIcon className="h-8 w-8 text-muted-foreground" />}
-                      </div>
-                    )}
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                      <ExternalLink className="w-5 h-5 text-white" />
-                    </div>
-                  </div>
-                );
-                return link ? (
-                  <a key={asset.id} href={link} target="_blank" rel="noopener noreferrer" title={`Open ${asset.filename} in Immich`}>
-                    {inner}
-                  </a>
-                ) : (
-                  <div key={asset.id}>{inner}</div>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
+            <div className="p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground font-mono">
+                  {total.toLocaleString()} file{total !== 1 ? "s" : ""}
+                  {debouncedSearch ? ` matching "${debouncedSearch}"` : ""}
+                  {selectedFolder ? ` in /${selectedFolder}` : ""}
+                </span>
+                {totalPages > 1 && (
+                  <span className="text-xs text-muted-foreground font-mono ml-auto">
+                    Page {page} of {totalPages}
+                  </span>
+                )}
+              </div>
 
-        <TabsContent value="albums" className="mt-4">
-          {albumsLoading ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-48 w-full rounded-md" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {albums?.map((album) => {
-                const link = immichUrl(immichBase, `/albums/${album.id}`);
-                const card = (
-                  <Card className="overflow-hidden hover:ring-1 hover:ring-primary transition-all cursor-pointer group">
-                    <div className="aspect-[3/2] bg-secondary relative overflow-hidden">
-                      {album.thumbUrl ? (
-                        <img
-                          src={album.thumbUrl}
-                          alt={album.albumName}
-                          className="object-cover w-full h-full group-hover:scale-105 transition-transform"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Folder className="h-8 w-8 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <ExternalLink className="w-3.5 h-3.5 text-white drop-shadow" />
-                      </div>
-                    </div>
-                    <CardContent className="p-3">
-                      <h3 className="font-medium truncate text-sm">{album.albumName}</h3>
-                      <p className="text-xs text-muted-foreground">{album.assetCount} items</p>
-                    </CardContent>
-                  </Card>
-                );
-                return link ? (
-                  <a key={album.id} href={link} target="_blank" rel="noopener noreferrer">{card}</a>
-                ) : (
-                  <div key={album.id}>{card}</div>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-3">
+                {files.map((file) => (
+                  <ThumbnailCard
+                    key={file.id}
+                    file={file}
+                    selected={selectedFile?.id === file.id}
+                    onClick={() => setSelectedFile(selectedFile?.id === file.id ? null : file)}
+                  />
+                ))}
+              </div>
 
-        <TabsContent value="people" className="mt-4">
-          {peopleLoading ? (
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-4">
-              {[...Array(6)].map((_, i) => <Skeleton key={i} className="aspect-square w-full rounded-full" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-4">
-              {people?.map((person) => {
-                const link = immichUrl(immichBase, `/people/${person.id}`);
-                const card = (
-                  <div className="flex flex-col items-center space-y-2 group cursor-pointer">
-                    <div className="w-20 h-20 rounded-full overflow-hidden bg-secondary ring-2 ring-transparent group-hover:ring-primary transition-all relative">
-                      {person.thumbUrl ? (
-                        <img src={person.thumbUrl} alt={person.name} className="object-cover w-full h-full" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Users className="h-8 w-8 text-muted-foreground" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-center">
-                      <p className="font-medium text-sm truncate w-20">{person.name}</p>
-                      <p className="text-xs text-muted-foreground">{person.assetCount}</p>
-                    </div>
-                  </div>
-                );
-                return link ? (
-                  <a key={person.id} href={link} target="_blank" rel="noopener noreferrer">{card}</a>
-                ) : (
-                  <div key={person.id}>{card}</div>
-                );
-              })}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1}
+                    className="font-mono text-xs h-8"
+                  >
+                    ← Prev
+                  </Button>
+                  <span className="text-xs text-muted-foreground font-mono px-2">
+                    {page} / {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                    className="font-mono text-xs h-8"
+                  >
+                    Next →
+                  </Button>
+                </div>
+              )}
             </div>
           )}
-        </TabsContent>
-      </Tabs>
+        </div>
+
+        {/* ── Detail panel ── */}
+        {selectedFile && (
+          <DetailPanel file={selectedFile} onClose={() => setSelectedFile(null)} />
+        )}
+      </div>
     </div>
   );
 }
