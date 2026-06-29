@@ -48,6 +48,9 @@ const sessionSecret = envSecret ?? randomBytes(32).toString("hex");
 
 const app: Express = express();
 
+// Trust Replit's reverse proxy so express-rate-limit can read X-Forwarded-For
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,
