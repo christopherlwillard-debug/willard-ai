@@ -7,6 +7,8 @@ import {
   useGetSettings,
   useSearchFiles,
   useGetHealthStatus,
+  useGetScanStatus,
+  getGetScanStatusQueryKey,
   getGetSettingsLogoUrl,
 } from "@workspace/api-client-react";
 import { formatBytes } from "@/lib/format";
@@ -165,6 +167,9 @@ export default function Dashboard() {
   const { data: settings } = useGetSettings();
   const { data: recentFiles } = useSearchFiles({ limit: 5 });
   const { data: healthData } = useGetHealthStatus();
+  const { data: scanStatus } = useGetScanStatus({
+    query: { queryKey: getGetScanStatusQueryKey(), refetchInterval: scanTriggered ? 3000 : 30000 },
+  });
 
   const isScanning = data?.isScanning || scanTriggered;
 
@@ -285,6 +290,16 @@ export default function Dashboard() {
   const libraryMessage = data.libraryMessage ?? "";
   const libraryPath = data.libraryPath || nasPath;
 
+  // Surface a failed scan (e.g. "Library Offline") in the Last Scan panel when it
+  // is more recent than the last successful scan — otherwise a stale "completed"
+  // timestamp would hide the failure.
+  const lastFailed = scanStatus?.lastFailed as { error?: string | null; finishedAt?: string | null } | null | undefined;
+  const lastCompleted = scanStatus?.lastCompleted as { finishedAt?: string | null } | null | undefined;
+  const failedAt = lastFailed?.finishedAt ? new Date(lastFailed.finishedAt).getTime() : 0;
+  const completedAt = lastCompleted?.finishedAt ? new Date(lastCompleted.finishedAt).getTime() : (data.lastScanAt ? new Date(data.lastScanAt).getTime() : 0);
+  const showScanFailure = !isScanning && lastFailed != null && failedAt > completedAt;
+  const scanFailureMessage = lastFailed?.error || "Scan failed";
+
   const allHealthy = !isScanning && libraryOnline && (healthData?.database ?? true) && (healthData?.thumbnailsOk ?? true) && (healthData?.missingFiles ?? 0) === 0;
 
   const healthItems = [
@@ -385,9 +400,16 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="border-l border-border pl-8 min-w-fit">
+          <div className="border-l border-border pl-8 min-w-fit max-w-[14rem]">
             <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Scan</p>
-            <p className="text-sm font-medium">{formatRelativeDate(data.lastScanAt)}</p>
+            {showScanFailure ? (
+              <>
+                <p className="text-sm font-medium text-red-400">Failed</p>
+                <p className="text-xs text-muted-foreground truncate" title={scanFailureMessage}>{scanFailureMessage}</p>
+              </>
+            ) : (
+              <p className="text-sm font-medium">{formatRelativeDate(data.lastScanAt)}</p>
+            )}
             <Link href="/settings" className="text-xs text-primary hover:underline mt-0.5 block">
               View Settings
             </Link>

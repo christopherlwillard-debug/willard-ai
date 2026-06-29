@@ -354,20 +354,25 @@ async function peekAllArchives(jobId: number) {
 
 async function runScan(jobId: number, nasPath: string) {
   const startTime = Date.now();
-  // Reserve a per-job temp dir on the NAS (or /tmp fallback). Current scan flow
-  // is in-memory only; this dir is used by future extraction jobs that will stage
-  // files here. Always cleaned up in the finally block.
-  const tempDir = getTempDir(nasPath, String(jobId));
+  // Per-job temp dir is allocated only AFTER reachability is confirmed. Allocating
+  // it earlier would mkdir the NAS path into existence (recursive create) and mask
+  // an offline library, so it must never run before checkNasReachable().
+  let tempDir = "";
   let filesScanned = 0;
   let archivesFound = 0;
   try {
     await db.update(scanJobsTable).set({ status: "running", stage: "Initializing", startedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
 
+    // Validate reachability BEFORE any filesystem writes/dir creation.
     const reach = checkNasReachable(nasPath);
     if (!reach.online) {
       await db.update(scanJobsTable).set({ status: "failed", error: `Library Offline — ${reach.message}`, stage: "Library Offline", finishedAt: new Date() }).where(eq(scanJobsTable.id, jobId));
       return;
     }
+
+    // Reserve a per-job temp dir on the NAS (or /tmp fallback). Used by future
+    // extraction jobs that will stage files here. Always cleaned up in finally.
+    tempDir = getTempDir(nasPath, String(jobId));
 
     ({ filesScanned, archivesFound } = await scanDirectory(nasPath, jobId));
 
@@ -407,7 +412,7 @@ async function runScan(jobId: number, nasPath: string) {
       finishedAt: new Date(),
     }).where(eq(scanJobsTable.id, jobId));
   } finally {
-    cleanTempDir(tempDir);
+    if (tempDir) cleanTempDir(tempDir);
     currentScanJobId = null;
   }
 }
