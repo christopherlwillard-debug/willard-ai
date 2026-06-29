@@ -41,10 +41,12 @@ function TopBar() {
 
   const isScanning = data?.isScanning || (scanPolling && (scanStatus?.isRunning ?? false));
 
-  if (scanPolling && scanStatus && !scanStatus.isRunning) {
-    setScanPolling(false);
-    queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
-  }
+  useEffect(() => {
+    if (scanPolling && scanStatus && !scanStatus.isRunning) {
+      setScanPolling(false);
+      queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
+    }
+  }, [scanPolling, scanStatus, queryClient]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

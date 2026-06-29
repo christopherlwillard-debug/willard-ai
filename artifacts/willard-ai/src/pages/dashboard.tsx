@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import {
   useGetDashboard,
@@ -78,10 +78,12 @@ export default function Dashboard() {
 
   const isScanning = data?.isScanning || (scanPolling && (scanStatus?.isRunning ?? false));
 
-  if (scanPolling && scanStatus && !scanStatus.isRunning) {
-    setScanPolling(false);
-    queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
-  }
+  useEffect(() => {
+    if (scanPolling && scanStatus && !scanStatus.isRunning) {
+      setScanPolling(false);
+      queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
+    }
+  }, [scanPolling, scanStatus, queryClient]);
 
   if (isLoading) {
     return (
@@ -131,14 +133,14 @@ export default function Dashboard() {
       bg: "bg-green-400/10",
     },
     {
-      label: "Archives",
+      label: "Collections",
       value: data.archiveCount.toLocaleString(),
       icon: Archive,
       color: "text-orange-400",
       bg: "bg-orange-400/10",
     },
     {
-      label: "Storage",
+      label: "Storage Used",
       value: hasDiskStats ? formatBytes(diskUsed) : formatBytes(data.totalSizeBytes),
       sub: hasDiskStats ? `of ${formatBytes(diskTotal)}` : `${data.totalFiles.toLocaleString()} files`,
       icon: HardDrive,
@@ -203,7 +205,7 @@ export default function Dashboard() {
       </div>
 
       {/* Library Status card — full width, most prominent */}
-      <Link href="/organize">
+      <Link href="/cleanup">
         <Card className="border-border hover:border-primary/40 transition-colors cursor-pointer group">
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-5">
