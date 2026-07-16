@@ -230,6 +230,28 @@ function SmartRuleEditor({ rule, onChange }: { rule: SmartRule; onChange: (r: Sm
           />
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-xs font-mono text-muted-foreground uppercase mb-2">Min duration (min)</p>
+          <Input
+            type="number"
+            min={0}
+            value={rule.minDurationSeconds != null ? String(rule.minDurationSeconds / 60) : ""}
+            onChange={(e) => onChange({ ...rule, minDurationSeconds: e.target.value ? Number(e.target.value) * 60 : undefined })}
+            className="h-8 text-sm"
+          />
+        </div>
+        <div>
+          <p className="text-xs font-mono text-muted-foreground uppercase mb-2">Max duration (min)</p>
+          <Input
+            type="number"
+            min={0}
+            value={rule.maxDurationSeconds != null ? String(rule.maxDurationSeconds / 60) : ""}
+            onChange={(e) => onChange({ ...rule, maxDurationSeconds: e.target.value ? Number(e.target.value) * 60 : undefined })}
+            className="h-8 text-sm"
+          />
+        </div>
+      </div>
       <label className="flex items-center gap-2 text-sm cursor-pointer">
         <Checkbox
           checked={rule.favoritesOnly ?? false}

@@ -168,7 +168,9 @@ router.get("/media/timeline", async (_req: Request, res: Response) => {
     return;
   }
 
-  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt})`;
+  // Timeline buckets by taken/created only; files missing both go to "undated"
+  // (modifiedAt would misclassify undated items into modified-date buckets).
+  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated})`;
   const baseWhere = and(
     eq(mediaFilesTable.nasPath, nasPath),
     sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
@@ -213,7 +215,7 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
   const limit = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
   const offset = (page - 1) * limit;
 
-  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt})`;
+  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated})`;
   const conditions = [
     eq(mediaFilesTable.nasPath, nasPath),
     sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
@@ -232,7 +234,7 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
     .select()
     .from(mediaFilesTable)
     .where(where)
-    .orderBy(sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt}) DESC NULLS LAST`)
+    .orderBy(sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}) DESC NULLS LAST`)
     .limit(limit)
     .offset(offset);
 
