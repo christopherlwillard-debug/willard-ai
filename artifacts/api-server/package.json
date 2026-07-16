@@ -37,7 +37,8 @@
     "rotating-file-stream": "^3.2.9",
     "sharp": "^0.35.2",
     "tar": "^7.5.17",
-    "ua-parser-js": "^2.0.10"
+    "ua-parser-js": "^2.0.10",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",

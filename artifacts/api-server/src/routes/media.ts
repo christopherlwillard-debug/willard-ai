@@ -25,6 +25,7 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
 
   const mediaType = req.query["mediaType"] as string | undefined;
+  const favorites = req.query["favorites"] as string | undefined;
   const folder    = req.query["folder"]    as string | undefined;
   const search    = req.query["search"]    as string | undefined;
   const sort      = (req.query["sort"]     as string) || "indexed_desc";
@@ -44,6 +45,9 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
   if (search) {
     conditions.push(like(mediaFilesTable.name, `%${search}%`));
+  }
+  if (favorites === "true") {
+    conditions.push(eq(mediaFilesTable.favorite, true));
   }
 
   const where = conditions.length === 1 ? conditions[0] : and(...conditions);
@@ -130,6 +134,109 @@ router.get("/media/folders", async (_req: Request, res: Response) => {
 
   const tree = buildFolderTree(Array.from(folderSet));
   res.json({ tree });
+});
+
+// ── POST /api/media/files/:id/favorite — toggle favorite flag ────────────────
+
+router.post("/media/files/:id/favorite", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const favorite = req.body?.favorite === true;
+
+  const [updated] = await db
+    .update(mediaFilesTable)
+    .set({ favorite, favoritedAt: favorite ? new Date() : null })
+    .where(eq(mediaFilesTable.id, id))
+    .returning({ id: mediaFilesTable.id, favorite: mediaFilesTable.favorite });
+
+  if (!updated) {
+    res.status(404).json({ error: "File not found" });
+    return;
+  }
+  res.json(updated);
+});
+
+// ── GET /api/media/timeline — year/month buckets ─────────────────────────────
+
+router.get("/media/timeline", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.json({ buckets: [], undatedCount: 0 });
+    return;
+  }
+
+  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt})`;
+  const baseWhere = and(
+    eq(mediaFilesTable.nasPath, nasPath),
+    sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
+  );
+
+  const rows = await db
+    .select({
+      ym: sql<string | null>`to_char(${bestDate}, 'YYYY-MM')`,
+      total: count(),
+      coverId: sql<number>`MAX(${mediaFilesTable.id})`,
+    })
+    .from(mediaFilesTable)
+    .where(baseWhere)
+    .groupBy(sql`to_char(${bestDate}, 'YYYY-MM')`)
+    .orderBy(sql`to_char(${bestDate}, 'YYYY-MM') DESC NULLS LAST`);
+
+  const buckets = rows
+    .filter((r) => r.ym != null)
+    .map((r) => {
+      const [year, month] = (r.ym as string).split("-");
+      return { year: parseInt(year, 10), month: parseInt(month, 10), count: Number(r.total), coverFileId: r.coverId };
+    });
+  const undatedCount = rows
+    .filter((r) => r.ym == null)
+    .reduce((acc, r) => acc + Number(r.total), 0);
+
+  res.json({ buckets, undatedCount });
+});
+
+// ── GET /api/media/timeline/items — files for one month (or undated) ─────────
+
+router.get("/media/timeline/items", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.json({ files: [], total: 0 });
+    return;
+  }
+
+  const yearStr = req.query["year"] as string | undefined;
+  const monthStr = req.query["month"] as string | undefined;
+  const page = Math.max(1, parseInt(req.query["page"] as string) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
+  const offset = (page - 1) * limit;
+
+  const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt})`;
+  const conditions = [
+    eq(mediaFilesTable.nasPath, nasPath),
+    sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
+  ];
+
+  if (yearStr && monthStr) {
+    const ym = `${yearStr.padStart(4, "0")}-${monthStr.padStart(2, "0")}`;
+    conditions.push(sql`to_char(${bestDate}, 'YYYY-MM') = ${ym}`);
+  } else {
+    conditions.push(sql`${bestDate} IS NULL`);
+  }
+
+  const where = and(...conditions);
+  const [totalRow] = await db.select({ total: count() }).from(mediaFilesTable).where(where);
+  const files = await db
+    .select()
+    .from(mediaFilesTable)
+    .where(where)
+    .orderBy(sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt}) DESC NULLS LAST`)
+    .limit(limit)
+    .offset(offset);
+
+  res.json({ files, total: Number(totalRow?.total ?? 0), page, limit });
 });
 
 // ── GET /api/media/thumbnail/:id — serve or generate thumbnail ───────────────

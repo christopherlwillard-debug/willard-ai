@@ -567,6 +567,11 @@ export async function runMediaScan(nasPath: string): Promise<number> {
       await db.update(mediaScanJobsTable)
         .set({ status: "done", indexedFiles: indexed, skippedFiles: skipped, finishedAt: new Date() })
         .where(eq(mediaScanJobsTable.id, job.id));
+
+      // Keep collections in sync with the freshly indexed library — newly
+      // indexed files flow into matching auto albums without user action.
+      const { rebuildAutoCollections } = await import("./collections-engine");
+      rebuildAutoCollections(nasPath).catch(() => {});
     } catch (err: any) {
       await db.update(mediaScanJobsTable)
         .set({ status: "failed", error: err?.message ?? "Unknown error", finishedAt: new Date() })

@@ -53,6 +53,35 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS celebration_shown_at timestamp;
   `);
+  await pool.query(`
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS favorite boolean NOT NULL DEFAULT false;
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS favorited_at timestamp;
+    CREATE TABLE IF NOT EXISTS collections (
+      id serial PRIMARY KEY,
+      nas_path text NOT NULL,
+      kind text NOT NULL,
+      name text NOT NULL,
+      description text,
+      auto_key text,
+      removed_at timestamp,
+      rule_json jsonb,
+      cover_file_id integer,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS collections_nas_auto_key_unique ON collections (nas_path, auto_key);
+    CREATE INDEX IF NOT EXISTS collections_nas_kind_idx ON collections (nas_path, kind);
+    CREATE TABLE IF NOT EXISTS collection_items (
+      id serial PRIMARY KEY,
+      collection_id integer NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      media_file_id integer NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+      added_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS collection_items_unique ON collection_items (collection_id, media_file_id);
+    CREATE INDEX IF NOT EXISTS collection_items_file_idx ON collection_items (media_file_id);
+  `);
 }
 
 const PgStore = connectPgSimple(session);

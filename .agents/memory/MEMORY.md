@@ -1,5 +1,6 @@
 - [Drizzle onConflictDoUpdate per-row](drizzle-upsert-excluded.md) — use sql`excluded.col` not a variable reference, or it applies first-row values to all rows
 - [Integrations lib must be pre-built](integrations-lib-build.md) — integrations-openai-ai-server dist/ must exist before API server typecheck; build with tsc --emitDeclarationOnly
+- [Workspace lib stale declarations](workspace-lib-declarations.md) — after adding schema/exports to a composite lib (e.g. @workspace/db), run `npx tsc -b lib/<name>` or dependents' typecheck sees stale dist d.ts
 - [Immich API key proxy pattern](immich-thumbnail-proxy.md) — never expose apiKey in client-visible URLs; use a server-side /api/immich/thumbnail/:type/:id proxy
 - [Vite proxy required for /api in dev](vite-proxy-api.md) — frontend dev server must proxy /api → localhost:8080 or all API calls 404 in Vite
 - [Auth architecture](auth-architecture.md) — session cookie auth pattern; bcryptjs, connect-pg-simple, rate limiting on login route

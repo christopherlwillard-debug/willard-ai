@@ -36,6 +36,8 @@ export interface MediaFile {
   pdfTitle: string | null;
   pdfSubject: string | null;
   pdfKeywords: string | null;
+  favorite: boolean;
+  favoritedAt: string | null;
 }
 
 export interface MediaFilesResponse {

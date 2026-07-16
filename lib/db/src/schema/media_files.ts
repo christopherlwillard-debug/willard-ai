@@ -1,4 +1,4 @@
-import { pgTable, serial, text, bigint, integer, real, timestamp, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, bigint, integer, real, timestamp, index, uniqueIndex, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -59,6 +59,10 @@ export const mediaFilesTable = pgTable("media_files", {
 
   lastScanAction:       text("last_scan_action"),
   lastScannedAt:        timestamp("last_scanned_at"),
+
+  // ── Collections / favorites ───────────────────────────────────────────────
+  favorite:             boolean("favorite").notNull().default(false),
+  favoritedAt:          timestamp("favorited_at"),
 
   indexedAt:            timestamp("indexed_at").notNull().defaultNow(),
 }, (t) => [

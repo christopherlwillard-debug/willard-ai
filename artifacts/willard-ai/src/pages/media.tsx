@@ -28,6 +28,7 @@ import {
   Camera,
   Calendar,
   Aperture,
+  Heart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MediaViewer } from "@/components/media/MediaViewer";
@@ -176,17 +177,22 @@ function ThumbnailCard({
   file,
   selected,
   onClick,
+  onToggleFavorite,
 }: {
   file: MediaFile;
   selected: boolean;
   onClick: () => void;
+  onToggleFavorite?: (file: MediaFile) => void;
 }) {
   const [thumbError, setThumbError] = useState(false);
   const canThumb = (file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") && !thumbError;
 
   return (
-    <button
+    <div
       onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
       className={cn(
         "group relative flex flex-col rounded-lg border overflow-hidden text-left transition-all duration-150",
         "bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary",
@@ -228,7 +234,19 @@ function ThumbnailCard({
           {formatBytes(file.sizeBytes)}
         </p>
       </div>
-    </button>
+      {onToggleFavorite && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite(file); }}
+          title={file.favorite ? "Remove from favorites" : "Add to favorites"}
+          className={cn(
+            "absolute top-1.5 right-1.5 p-1.5 rounded-full bg-black/50 transition-opacity",
+            file.favorite ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+          )}
+        >
+          <Heart className={cn("w-3.5 h-3.5", file.favorite ? "text-red-400 fill-red-400" : "text-white")} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -963,6 +981,26 @@ export default function Media() {
     },
   });
 
+  const favoriteMutation = useMutation({
+    mutationFn: async ({ id, favorite }: { id: number; favorite: boolean }) => {
+      const r = await fetch(`/api/media/files/${id}/favorite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ favorite }),
+      });
+      if (!r.ok) throw new Error("Failed to update favorite");
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["media-files"] });
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["favorite-files"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Favorite failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const thumbnailsMutation = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/library/thumbnails", { method: "POST" });
@@ -1223,6 +1261,7 @@ export default function Media() {
                       file={file}
                       selected={selectedFile?.id === file.id}
                       onClick={() => { setViewerIndex(i); setSelectedFile(file); }}
+                      onToggleFavorite={(f) => favoriteMutation.mutate({ id: f.id, favorite: !f.favorite })}
                     />
                   ))}
                 </div>
