@@ -159,6 +159,59 @@ router.post("/media/files/:id/favorite", async (req: Request, res: Response) => 
   res.json(updated);
 });
 
+// ── DELETE /api/media/files/:id — soft-delete from library ──────────────────
+
+router.delete("/media/files/:id", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [updated] = await db
+    .update(mediaFilesTable)
+    .set({ lastScanAction: "DELETED" } as any)
+    .where(eq(mediaFilesTable.id, id))
+    .returning({ id: mediaFilesTable.id });
+
+  if (!updated) { res.status(404).json({ error: "File not found" }); return; }
+  res.json({ id: updated.id, deleted: true });
+});
+
+// ── PATCH /api/media/files/:id/rename — rename file on disk + DB ─────────────
+
+router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const newName: string = (req.body?.name ?? "").trim();
+  if (!newName || newName.length > 255 || /[/\\<>:"|?*]/.test(newName)) {
+    res.status(400).json({ error: "Invalid file name" }); return;
+  }
+
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+
+  const [file] = await db.select().from(mediaFilesTable).where(eq(mediaFilesTable.id, id)).limit(1);
+  if (!file) { res.status(404).json({ error: "File not found" }); return; }
+
+  const fs = await import("fs");
+  const path = await import("path");
+  const oldAbs = path.join(nasPath, file.relativePath);
+  const dir = path.dirname(file.relativePath);
+  const newRelPath = dir === "." ? newName : `${dir}/${newName}`;
+  const newAbs = path.join(nasPath, newRelPath);
+
+  if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
+  if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
+
+  fs.renameSync(oldAbs, newAbs);
+  const [updated] = await db
+    .update(mediaFilesTable)
+    .set({ name: newName, relativePath: newRelPath })
+    .where(eq(mediaFilesTable.id, id))
+    .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+
+  res.json(updated);
+});
+
 // ── GET /api/media/timeline — year/month buckets ─────────────────────────────
 
 router.get("/media/timeline", async (_req: Request, res: Response) => {

@@ -26,6 +26,7 @@ export interface MediaFile {
   colorProfile: string | null;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
+  placeName: string | null;
   videoCodec: string | null;
   videoBitrate: number | null;
   fps: number | null;

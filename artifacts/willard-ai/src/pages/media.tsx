@@ -1360,6 +1360,13 @@ export default function Media() {
           files={files}
           initialIndex={viewerIndex}
           onClose={() => setViewerIndex(null)}
+          onFavoriteChange={(id, fav) => {
+            favoriteMutation.mutate({ id, favorite: fav });
+          }}
+          onDelete={() => {
+            queryClient.invalidateQueries({ queryKey: ["media-files"] });
+            setViewerIndex(null);
+          }}
         />
       )}
     </div>
