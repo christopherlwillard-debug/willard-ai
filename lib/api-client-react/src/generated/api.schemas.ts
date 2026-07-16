@@ -13,6 +13,15 @@ export interface HealthStatus {
   status: string;
 }
 
+export type AppSettingsScanPerformance = typeof AppSettingsScanPerformance[keyof typeof AppSettingsScanPerformance];
+
+
+export const AppSettingsScanPerformance = {
+  HIGH: 'HIGH',
+  BALANCED: 'BALANCED',
+  LOW: 'LOW',
+} as const;
+
 export interface AppSettings {
   nasPath: string;
   /** @nullable */
@@ -24,7 +33,17 @@ export interface AppSettings {
   otherFilesDestination: string;
   /** @nullable */
   logoPath?: string | null;
+  scanPerformance?: AppSettingsScanPerformance;
 }
+
+export type SettingsInputScanPerformance = typeof SettingsInputScanPerformance[keyof typeof SettingsInputScanPerformance];
+
+
+export const SettingsInputScanPerformance = {
+  HIGH: 'HIGH',
+  BALANCED: 'BALANCED',
+  LOW: 'LOW',
+} as const;
 
 export interface SettingsInput {
   nasPath?: string;
@@ -32,6 +51,7 @@ export interface SettingsInput {
   videosDestination?: string;
   documentsDestination?: string;
   otherFilesDestination?: string;
+  scanPerformance?: SettingsInputScanPerformance;
 }
 
 export interface NasTestInput {

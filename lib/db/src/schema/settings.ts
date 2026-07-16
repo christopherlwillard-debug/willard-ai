@@ -14,6 +14,7 @@ export const appSettingsTable = pgTable("app_settings", {
   documentsDestination: text("documents_destination").notNull().default(""),
   otherFilesDestination: text("other_files_destination").notNull().default(""),
   logoPath: text("logo_path"),
+  scanPerformance: text("scan_performance").notNull().default("BALANCED"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

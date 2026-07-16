@@ -54,6 +54,8 @@ export const mediaFilesTable = pgTable("media_files", {
   // ── Raw EXIF + hash ───────────────────────────────────────────────────────
   exifJson:             jsonb("exif_json"),
   contentHash:          text("content_hash"),
+  quickFingerprint:     text("quick_fingerprint"),
+  scannerVersion:       integer("scanner_version").notNull().default(0),
 
   lastScanAction:       text("last_scan_action"),
   lastScannedAt:        timestamp("last_scanned_at"),
@@ -64,6 +66,8 @@ export const mediaFilesTable = pgTable("media_files", {
   index("media_files_nas_path_idx").on(t.nasPath),
   index("media_files_media_type_idx").on(t.mediaType),
   index("media_files_content_hash_idx").on(t.contentHash),
+  index("media_files_fingerprint_idx").on(t.quickFingerprint),
+  index("media_files_size_idx").on(t.nasPath, t.sizeBytes),
   index("media_files_date_taken_idx").on(t.dateTaken),
   index("media_files_gps_idx").on(t.gpsLatitude, t.gpsLongitude),
 ]);

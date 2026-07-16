@@ -145,7 +145,8 @@ export const GetSettingsResponse = zod.object({
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
-  "logoPath": zod.string().nullish()
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
 })
 
 
@@ -157,7 +158,8 @@ export const UpdateSettingsBody = zod.object({
   "photosDestination": zod.string().optional(),
   "videosDestination": zod.string().optional(),
   "documentsDestination": zod.string().optional(),
-  "otherFilesDestination": zod.string().optional()
+  "otherFilesDestination": zod.string().optional(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -168,7 +170,8 @@ export const UpdateSettingsResponse = zod.object({
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
-  "logoPath": zod.string().nullish()
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
 })
 
 
@@ -974,7 +977,8 @@ export const UploadSettingsLogoResponse = zod.object({
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
-  "logoPath": zod.string().nullish()
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
 })
 
 
@@ -989,7 +993,8 @@ export const DeleteSettingsLogoResponse = zod.object({
   "videosDestination": zod.string(),
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
-  "logoPath": zod.string().nullish()
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
 })
 
 

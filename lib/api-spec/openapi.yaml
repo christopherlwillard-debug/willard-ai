@@ -1183,6 +1183,9 @@ components:
           type: string
         logoPath:
           type: ["string", "null"]
+        scanPerformance:
+          type: string
+          enum: [HIGH, BALANCED, LOW]
       required:
         - nasPath
         - lastScanAt
@@ -1205,6 +1208,9 @@ components:
           type: string
         otherFilesDestination:
           type: string
+        scanPerformance:
+          type: string
+          enum: [HIGH, BALANCED, LOW]
 
     NasTestInput:
       type: object

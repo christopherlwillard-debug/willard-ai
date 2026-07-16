@@ -81,6 +81,7 @@ export default function Settings() {
     videosDestination: "",
     documentsDestination: "",
     otherFilesDestination: "",
+    scanPerformance: "BALANCED" as "HIGH" | "BALANCED" | "LOW",
   });
 
   useEffect(() => {
@@ -91,6 +92,7 @@ export default function Settings() {
         videosDestination: settings.videosDestination ?? "",
         documentsDestination: settings.documentsDestination ?? "",
         otherFilesDestination: settings.otherFilesDestination ?? "",
+        scanPerformance: (settings.scanPerformance ?? "BALANCED") as "HIGH" | "BALANCED" | "LOW",
       });
     }
   }, [settings]);
@@ -203,7 +205,27 @@ export default function Settings() {
             <Activity className="w-5 h-5 mr-2" /> Scanner Status
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="p-4 bg-secondary/50 rounded-lg border border-border space-y-2">
+            <Label>Scan Performance</Label>
+            <select
+              value={form.scanPerformance}
+              onChange={(e) => {
+                const scanPerformance = e.target.value as "HIGH" | "BALANCED" | "LOW";
+                setForm({ ...form, scanPerformance });
+                updateMutation.mutate({ data: { scanPerformance } });
+              }}
+              className="w-full h-9 text-sm font-mono bg-background border border-border rounded-md px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              data-testid="select-scan-performance"
+            >
+              <option value="HIGH">High — fastest scan, heaviest NAS load</option>
+              <option value="BALANCED">Balanced — good speed, NAS stays responsive</option>
+              <option value="LOW">Low impact — slowest scan, minimal NAS load</option>
+            </select>
+            <p className="text-xs text-muted-foreground font-mono">
+              Applies to the next scan. Balanced is recommended for daily use.
+            </p>
+          </div>
           <div className="flex items-center justify-between p-4 bg-secondary/50 rounded-lg border border-primary/20">
             <div>
               <h3 className="font-mono font-bold text-lg">

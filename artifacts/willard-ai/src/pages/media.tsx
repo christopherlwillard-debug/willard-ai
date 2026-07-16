@@ -56,6 +56,11 @@ interface JobCounters {
   thumbnails: number;
 }
 
+interface SkippedFile {
+  path: string;
+  reason: string;
+}
+
 interface JobSummary {
   newFiles: number;
   modifiedFiles: number;
@@ -66,6 +71,28 @@ interface JobSummary {
   thumbnailsGenerated: number;
   elapsedMs: number;
   previousElapsedMs: number | null;
+  skippedFiles?: number;
+  skippedList?: SkippedFile[];
+  duplicateGroups?: number;
+  scanStartedAt?: string;
+  categories?: Record<string, number>;
+  reprocessedFiles?: number;
+}
+
+interface JobActionFile {
+  id: number;
+  relativePath: string;
+  name: string;
+  mediaType: string;
+  sizeBytes: number;
+  modifiedAt: string | null;
+}
+
+interface DuplicateGroup {
+  contentHash: string;
+  sizeBytes: number;
+  count: number;
+  files: { id: number; relativePath: string; name: string; mediaType: string; sizeBytes: number }[];
 }
 
 interface ProgressEvent {
@@ -218,10 +245,36 @@ function formatSpeed(filesPerSec: number): string {
   return `${filesPerSec.toFixed(1)}/s`;
 }
 
-function ScanSummaryCard({ summary, onDismiss }: { summary: JobSummary; onDismiss: () => void }) {
+type SummaryDetail = "NEW" | "MODIFIED" | "MOVED" | "DELETED" | "SKIPPED" | "DUPLICATES" | null;
+
+function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; jobId: number; onDismiss: () => void }) {
   const elapsed = summary.elapsedMs / 1000;
   const prev    = summary.previousElapsedMs !== null ? summary.previousElapsedMs / 1000 : null;
   const saved   = prev !== null ? prev - elapsed : null;
+  const [detail, setDetail] = useState<SummaryDetail>(null);
+
+  const actionFilesQuery = useQuery({
+    queryKey: ["library-job-files", jobId, detail],
+    enabled: detail !== null && detail !== "SKIPPED" && detail !== "DUPLICATES",
+    queryFn: async () => {
+      const r = await fetch(`/api/library/jobs/${jobId}/files?action=${detail}&limit=200`);
+      if (!r.ok) throw new Error("Failed to load files");
+      return r.json() as Promise<{ files: JobActionFile[]; note?: string }>;
+    },
+  });
+
+  const duplicatesQuery = useQuery({
+    queryKey: ["library-duplicates"],
+    enabled: detail === "DUPLICATES",
+    queryFn: async () => {
+      const r = await fetch("/api/library/duplicates");
+      if (!r.ok) throw new Error("Failed to load duplicates");
+      return r.json() as Promise<{ groups: DuplicateGroup[] }>;
+    },
+  });
+
+  const toggle = (d: SummaryDetail) => setDetail((cur) => (cur === d ? null : d));
+  const countBtn = "underline decoration-dotted underline-offset-2 hover:text-green-100 cursor-pointer";
 
   return (
     <div className="rounded-lg border border-green-700/40 bg-green-900/20 px-4 py-3 text-sm font-mono text-green-300">
@@ -232,18 +285,95 @@ function ScanSummaryCard({ summary, onDismiss }: { summary: JobSummary; onDismis
         {saved !== null && saved > 0.5 && (
           <span className="text-green-400 text-xs ml-1">— saved {saved.toFixed(1)}s vs full scan</span>
         )}
-        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200">
+        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200" data-testid="button-dismiss-summary">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-green-400">
-        {summary.newFiles       > 0 && <span>+{summary.newFiles.toLocaleString()} new</span>}
-        {summary.modifiedFiles  > 0 && <span>~{summary.modifiedFiles.toLocaleString()} modified</span>}
-        {summary.movedFiles     > 0 && <span>→{summary.movedFiles.toLocaleString()} moved</span>}
-        {summary.deletedFiles   > 0 && <span className="text-red-400">✕{summary.deletedFiles.toLocaleString()} deleted</span>}
+        {summary.newFiles       > 0 && <button className={countBtn} onClick={() => toggle("NEW")} data-testid="button-summary-new">+{summary.newFiles.toLocaleString()} new</button>}
+        {summary.modifiedFiles  > 0 && <button className={countBtn} onClick={() => toggle("MODIFIED")} data-testid="button-summary-modified">~{summary.modifiedFiles.toLocaleString()} modified</button>}
+        {summary.movedFiles     > 0 && <button className={countBtn} onClick={() => toggle("MOVED")} data-testid="button-summary-moved">→{summary.movedFiles.toLocaleString()} moved</button>}
+        {summary.deletedFiles   > 0 && <button className={cn(countBtn, "text-red-400 hover:text-red-200")} onClick={() => toggle("DELETED")} data-testid="button-summary-deleted">✕{summary.deletedFiles.toLocaleString()} deleted</button>}
         {summary.unchangedFiles > 0 && <span className="text-green-600">{summary.unchangedFiles.toLocaleString()} unchanged</span>}
         {summary.thumbnailsGenerated > 0 && <span>{summary.thumbnailsGenerated.toLocaleString()} thumbnails</span>}
+        {(summary.skippedFiles ?? 0) > 0 && (
+          <button className={cn(countBtn, "text-amber-400 hover:text-amber-200")} onClick={() => toggle("SKIPPED")} data-testid="button-summary-skipped">
+            ⚠{summary.skippedFiles!.toLocaleString()} skipped
+          </button>
+        )}
+        {(summary.duplicateGroups ?? 0) > 0 && (
+          <button className={cn(countBtn, "text-cyan-400 hover:text-cyan-200")} onClick={() => toggle("DUPLICATES")} data-testid="button-summary-duplicates">
+            ⧉{summary.duplicateGroups!.toLocaleString()} duplicate group{summary.duplicateGroups! > 1 ? "s" : ""}
+          </button>
+        )}
+        {(summary.reprocessedFiles ?? 0) > 0 && <span>{summary.reprocessedFiles!.toLocaleString()} re-processed</span>}
       </div>
+
+      {summary.categories && Object.keys(summary.categories).length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-green-600 mt-1.5">
+          {Object.entries(summary.categories)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, n]) => (
+              <span key={type} className="capitalize">{type}s: {n.toLocaleString()}</span>
+            ))}
+        </div>
+      )}
+
+      {/* ── Expandable detail: files behind a count ── */}
+      {detail !== null && detail !== "SKIPPED" && detail !== "DUPLICATES" && (
+        <div className="mt-2 max-h-48 overflow-y-auto rounded border border-green-800/40 bg-black/20 p-2 text-xs space-y-0.5" data-testid="panel-summary-files">
+          {actionFilesQuery.isLoading && <span className="text-green-600">Loading…</span>}
+          {actionFilesQuery.data?.note && <span className="text-green-600">{actionFilesQuery.data.note}</span>}
+          {actionFilesQuery.data?.files.map((f) => (
+            <div key={f.id} className="flex items-center gap-2 text-green-400/90">
+              <span className="truncate flex-1" title={f.relativePath}>{f.relativePath}</span>
+              <span className="text-green-700 shrink-0">{formatBytes(f.sizeBytes)}</span>
+            </div>
+          ))}
+          {actionFilesQuery.data && actionFilesQuery.data.files.length === 0 && !actionFilesQuery.data.note && (
+            <span className="text-green-600">No files to show.</span>
+          )}
+        </div>
+      )}
+
+      {/* ── Expandable detail: skipped files with plain-English reasons ── */}
+      {detail === "SKIPPED" && (
+        <div className="mt-2 max-h-48 overflow-y-auto rounded border border-amber-800/40 bg-black/20 p-2 text-xs space-y-0.5" data-testid="panel-summary-skipped">
+          {(summary.skippedList ?? []).map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="truncate flex-1 text-amber-300/90" title={s.path}>{s.path}</span>
+              <span className="text-amber-500 shrink-0">{s.reason}</span>
+            </div>
+          ))}
+          {(summary.skippedFiles ?? 0) > (summary.skippedList?.length ?? 0) && (
+            <div className="text-amber-600 pt-1">
+              …and {(summary.skippedFiles! - (summary.skippedList?.length ?? 0)).toLocaleString()} more
+            </div>
+          )}
+          {(summary.skippedList ?? []).length === 0 && <span className="text-amber-600">No details recorded.</span>}
+        </div>
+      )}
+
+      {/* ── Expandable detail: duplicate groups ── */}
+      {detail === "DUPLICATES" && (
+        <div className="mt-2 max-h-48 overflow-y-auto rounded border border-cyan-800/40 bg-black/20 p-2 text-xs space-y-2" data-testid="panel-summary-duplicates">
+          <div className="text-cyan-600">Current duplicates across the whole library:</div>
+          {duplicatesQuery.isLoading && <span className="text-cyan-600">Loading…</span>}
+          {duplicatesQuery.data?.groups.map((g) => (
+            <div key={g.contentHash} className="space-y-0.5">
+              <div className="text-cyan-400 font-semibold">
+                {g.count} identical files · {formatBytes(g.sizeBytes)} each
+              </div>
+              {g.files.map((f) => (
+                <div key={f.id} className="pl-3 text-cyan-300/80 truncate" title={f.relativePath}>{f.relativePath}</div>
+              ))}
+            </div>
+          ))}
+          {duplicatesQuery.data && duplicatesQuery.data.groups.length === 0 && (
+            <span className="text-cyan-600">No duplicates found.</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -264,7 +394,7 @@ function ScanBanner({
   if (!progress) return null;
 
   if (progress.status === "DONE" && progress.summary) {
-    return <ScanSummaryCard summary={progress.summary} onDismiss={onDismiss} />;
+    return <ScanSummaryCard summary={progress.summary} jobId={progress.jobId} onDismiss={onDismiss} />;
   }
 
   if (progress.status === "DONE") {

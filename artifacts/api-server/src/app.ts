@@ -37,6 +37,14 @@ export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS logo_path text;
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS scan_performance text NOT NULL DEFAULT 'BALANCED';
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS quick_fingerprint text;
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS scanner_version integer NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS media_files_fingerprint_idx ON media_files (quick_fingerprint);
+    CREATE INDEX IF NOT EXISTS media_files_size_idx ON media_files (nas_path, size_bytes);
   `);
 }
 

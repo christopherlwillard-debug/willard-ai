@@ -1,3 +1,10 @@
+// ── Scanner version ────────────────────────────────────────────────────────────
+// Bump this whenever metadata extraction improves (e.g. new EXIF fields). Items
+// indexed with an older version can be selectively re-processed via the
+// METADATA job — never a full library rebuild.
+
+export const SCANNER_VERSION = 2;
+
 // ── Job type constants ─────────────────────────────────────────────────────────
 
 export type JobType     = "SCAN" | "THUMBNAILS" | "REPAIR" | "VERIFY" | "OPTIMIZE" | "METADATA";
@@ -7,6 +14,30 @@ export type JobStatus   = "PENDING" | "RUNNING" | "PAUSED" | "DONE" | "FAILED" |
 export type CancellationReason = "USER_CANCELLED" | "NAS_OFFLINE" | "SYSTEM_SLEEP" | "POWER_LOSS" | "ERROR";
 export type ScanAction  = "NEW" | "MODIFIED" | "MOVED" | "UNCHANGED" | "DELETED" | "VERIFIED";
 export type ScanPhase   = "walking" | "indexing" | "hashing" | "metadata" | "detecting_moves" | "detecting_deletions" | "finalizing" | "thumbnailing";
+
+// ── Performance throttle ───────────────────────────────────────────────────────
+
+export type ScanPerformance = "HIGH" | "BALANCED" | "LOW";
+
+export interface ThrottleProfile {
+  batchSize:    number;
+  batchDelayMs: number;
+}
+
+export const THROTTLE_PROFILES: Record<ScanPerformance, ThrottleProfile> = {
+  HIGH:     { batchSize: 50, batchDelayMs: 0 },
+  BALANCED: { batchSize: 25, batchDelayMs: 50 },
+  LOW:      { batchSize: 10, batchDelayMs: 400 },
+};
+
+// ── Skipped files ──────────────────────────────────────────────────────────────
+
+export interface SkippedFile {
+  path:   string;
+  reason: string; // plain English, e.g. "Corrupt or unreadable JPG image"
+}
+
+export const MAX_SKIPPED_LISTED = 500;
 
 // ── Summary stored in library_jobs.summary (jsonb) ────────────────────────────
 
@@ -20,6 +51,12 @@ export interface JobSummary {
   thumbnailsGenerated:number;
   elapsedMs:          number;
   previousElapsedMs:  number | null;
+  skippedFiles?:      number;
+  skippedList?:       SkippedFile[];
+  duplicateGroups?:   number;
+  scanStartedAt?:     string; // ISO — key for querying per-action file subsets
+  categories?:        Record<string, number>; // files per media type in this scan
+  reprocessedFiles?:  number; // METADATA jobs
 }
 
 // ── Progress event structure (stable contract — never break clients) ───────────
@@ -32,6 +69,7 @@ export interface JobCounters {
   deleted:    number;
   hashed:     number;
   thumbnails: number;
+  skipped:    number;
 }
 
 export interface ProgressEvent {
@@ -67,10 +105,12 @@ export interface ActiveJobState {
   currentPath:      string;
   counters:         JobCounters;
   speedWindow:      number[];       // epoch ms timestamps for rolling ETA
+  throttle:         ThrottleProfile;
+  skippedList:      SkippedFile[];
 }
 
 export const EMPTY_COUNTERS = (): JobCounters => ({
-  new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0, hashed: 0, thumbnails: 0,
+  new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0, hashed: 0, thumbnails: 0, skipped: 0,
 });
 
 export const PRIORITY_RANK: Record<JobPriority, number> = { HIGH: 3, NORMAL: 2, LOW: 1 };

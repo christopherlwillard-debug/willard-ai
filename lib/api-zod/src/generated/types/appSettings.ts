@@ -5,6 +5,7 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsScanPerformance } from './appSettingsScanPerformance';
 
 export interface AppSettings {
   nasPath: string;
@@ -17,4 +18,5 @@ export interface AppSettings {
   otherFilesDestination: string;
   /** @nullable */
   logoPath?: string | null;
+  scanPerformance?: AppSettingsScanPerformance;
 }

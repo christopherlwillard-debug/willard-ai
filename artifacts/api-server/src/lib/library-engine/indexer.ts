@@ -70,6 +70,63 @@ export async function hashFile(fullPath: string): Promise<string | null> {
   });
 }
 
+// ── Fast content fingerprint ─────────────────────────────────────────────────
+// Reads only the first and last 64 KB of the file plus its size — orders of
+// magnitude cheaper than a full SHA-256 over a network drive, yet strong enough
+// to detect moves/renames and to find duplicate candidates. Full SHA-256 is
+// reserved for confirming candidates (two-stage duplicate detection).
+
+const FINGERPRINT_CHUNK = 64 * 1024;
+
+export async function computeQuickFingerprint(fullPath: string, sizeBytes: number): Promise<string | null> {
+  let fd: fs.promises.FileHandle | null = null;
+  try {
+    fd = await fs.promises.open(fullPath, "r");
+    const hash = createHash("sha256");
+    hash.update(String(sizeBytes));
+    const headLen = Math.min(FINGERPRINT_CHUNK, sizeBytes);
+    if (headLen > 0) {
+      const head = Buffer.alloc(headLen);
+      await fd.read(head, 0, headLen, 0);
+      hash.update(head);
+    }
+    if (sizeBytes > FINGERPRINT_CHUNK) {
+      // Always include the tail for anything larger than one chunk; for files
+      // between 64KB and 128KB the head+tail windows overlap, which is fine —
+      // the digest stays deterministic and covers the whole file.
+      const tail = Buffer.alloc(FINGERPRINT_CHUNK);
+      await fd.read(tail, 0, FINGERPRINT_CHUNK, sizeBytes - FINGERPRINT_CHUNK);
+      hash.update(tail);
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  } finally {
+    await fd?.close().catch(() => {});
+  }
+}
+
+// ── Index prioritization ─────────────────────────────────────────────────────
+// Useful results should appear as soon as possible: photos first, then videos,
+// then documents, then audio, then everything else. Within a category, most
+// recently modified files come first. The ordering is deterministic (final
+// tie-break on path) so a paused scan can resume from a stored cursor index.
+
+const TYPE_PRIORITY: Record<MediaType, number> = {
+  photo: 0, video: 1, document: 2, audio: 3, other: 4,
+};
+
+export function sortFilesByPriority<T extends { ext: string; modifiedAt: Date; fullPath: string }>(files: T[]): T[] {
+  return files.sort((a, b) => {
+    const pa = TYPE_PRIORITY[classifyMediaType(a.ext)];
+    const pb = TYPE_PRIORITY[classifyMediaType(b.ext)];
+    if (pa !== pb) return pa - pb;
+    const ta = a.modifiedAt.getTime(), tb = b.modifiedAt.getTime();
+    if (ta !== tb) return tb - ta; // newest first
+    return a.fullPath < b.fullPath ? -1 : a.fullPath > b.fullPath ? 1 : 0;
+  });
+}
+
 // ── Photo metadata (sharp + exifr) ───────────────────────────────────────────
 
 const SHARP_EXTS = new Set([
@@ -98,6 +155,8 @@ export interface PhotoMeta {
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   exifJson: Record<string, unknown> | null;
+  /** Plain-English reason the file could not be read as an image, or null. */
+  error: string | null;
 }
 
 export async function extractPhotoMeta(fullPath: string, ext: string): Promise<PhotoMeta> {
@@ -107,15 +166,17 @@ export async function extractPhotoMeta(fullPath: string, ext: string): Promise<P
     lens: null, iso: null, aperture: null, exposure: null,
     focalLength: null, flash: null, colorProfile: null,
     gpsLatitude: null, gpsLongitude: null, exifJson: null,
+    error: null,
   };
 
+  let sharpFailed = false;
   if (SHARP_EXTS.has(ext)) {
     try {
       const sharp = (await import("sharp")).default;
       const meta = await sharp(fullPath, { failOn: "none" }).metadata();
       result.width  = meta.width  ?? null;
       result.height = meta.height ?? null;
-    } catch { /* ignore */ }
+    } catch { sharpFailed = true; }
   }
 
   if (EXIF_EXTS.has(ext)) {
@@ -159,6 +220,12 @@ export async function extractPhotoMeta(fullPath: string, ext: string): Promise<P
     } catch { /* non-fatal */ }
   }
 
+  // Only flag as a problem file when the image itself could not be decoded
+  // (EXIF being absent is normal for e.g. screenshots).
+  if (sharpFailed && result.width === null && result.height === null) {
+    result.error = `Corrupt or unreadable ${ext.toUpperCase()} image`;
+  }
+
   return result;
 }
 
@@ -178,11 +245,14 @@ export interface VideoMeta {
   fps: number | null;
   audioCodec: string | null;
   dateCreated: Date | null;
+  /** Plain-English reason the video could not be read, or null. */
+  error: string | null;
 }
 
 const EMPTY_VIDEO_META: VideoMeta = {
   width: null, height: null, durationSeconds: null,
   videoCodec: null, videoBitrate: null, fps: null, audioCodec: null, dateCreated: null,
+  error: null,
 };
 
 export function extractVideoMeta(fullPath: string): VideoMeta {
@@ -190,7 +260,13 @@ export function extractVideoMeta(fullPath: string): VideoMeta {
     "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", fullPath,
   ], { encoding: "utf8", timeout: 15000 });
 
-  if (result.status !== 0 || !result.stdout) return { ...EMPTY_VIDEO_META };
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+    // ffprobe not installed — not the file's fault; don't flag the file
+    return { ...EMPTY_VIDEO_META };
+  }
+  if (result.status !== 0 || !result.stdout) {
+    return { ...EMPTY_VIDEO_META, error: "Unreadable video (corrupt file or unsupported codec)" };
+  }
   try {
     const json = JSON.parse(result.stdout);
     const vs = (json.streams ?? []).find((s: any) => s.codec_type === "video");
@@ -217,9 +293,10 @@ export function extractVideoMeta(fullPath: string): VideoMeta {
       videoCodec: vs?.codec_name ?? null,
       videoBitrate: json.format?.bit_rate ? Math.round(Number(json.format.bit_rate) / 1000) : null,
       fps, audioCodec: as_?.codec_name ?? null, dateCreated,
+      error: null,
     };
   } catch {
-    return { ...EMPTY_VIDEO_META };
+    return { ...EMPTY_VIDEO_META, error: "Unreadable video (corrupt file or unsupported codec)" };
   }
 }
 
@@ -231,6 +308,8 @@ export interface PdfMeta {
   pdfTitle: string | null;
   pdfSubject: string | null;
   pdfKeywords: string | null;
+  /** Plain-English reason the PDF could not be read, or null. */
+  error: string | null;
 }
 
 export async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
@@ -248,9 +327,14 @@ export async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
       pageCount: numPages || null,
       pdfAuthor: strOrNull(info.Author), pdfTitle: strOrNull(info.Title),
       pdfSubject: strOrNull(info.Subject), pdfKeywords: strOrNull(info.Keywords),
+      error: null,
     };
-  } catch {
-    return { pageCount: null, pdfAuthor: null, pdfTitle: null, pdfSubject: null, pdfKeywords: null };
+  } catch (err: any) {
+    const isPassword = err?.name === "PasswordException" || /password/i.test(err?.message ?? "");
+    return {
+      pageCount: null, pdfAuthor: null, pdfTitle: null, pdfSubject: null, pdfKeywords: null,
+      error: isPassword ? "Password-protected PDF" : "Corrupt or unreadable PDF",
+    };
   }
 }
 
@@ -285,10 +369,14 @@ export function walkNas(
   skipDirs: Set<string>,
   results: FileEntry[],
   onDir?: (dir: string) => void,
+  onSkip?: (fullPath: string, reason: string) => void,
 ): void {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-  catch { return; }
+  catch {
+    onSkip?.(dir, "Could not read folder (permission denied or unreadable)");
+    return;
+  }
 
   for (const entry of entries) {
     if (isSystemDir(entry.name)) continue;
@@ -296,13 +384,15 @@ export function walkNas(
     if (entry.isDirectory()) {
       if (skipDirs.has(path.resolve(fullPath))) continue;
       onDir?.(fullPath);
-      walkNas(fullPath, skipDirs, results, onDir);
+      walkNas(fullPath, skipDirs, results, onDir, onSkip);
     } else if (entry.isFile()) {
       try {
         const stat = fs.statSync(fullPath);
         const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
         results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
-      } catch { /* skip unreadable */ }
+      } catch {
+        onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
+      }
     }
   }
 }
