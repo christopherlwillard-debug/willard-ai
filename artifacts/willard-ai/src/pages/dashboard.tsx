@@ -32,6 +32,7 @@ import {
   FolderOpen,
   ScanLine,
   CloudOff,
+  ImagePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LibraryStatusIndicator, LibraryStatusBanner } from "@/components/library/library-status";
@@ -110,6 +111,56 @@ function ThumbnailCard({ file, ext, badgeColor }: {
       </div>
       <p className="text-xs truncate mt-1.5 text-foreground/90">{file.filename}</p>
       <p className="text-[10px] text-muted-foreground mt-0.5">{formatRelativeDate(file.modifiedAt)}</p>
+    </div>
+  );
+}
+
+function ThumbnailJobProgress() {
+  const [stats, setStats] = useState<{ total: number; built: number; missing: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/library/thumbnails/status");
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setStats(data);
+        }
+      } catch { /* ignore */ }
+    };
+    void poll();
+    const interval = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  if (!stats || stats.total === 0 || stats.missing === 0) return null;
+
+  const pct = Math.round((stats.built / stats.total) * 100);
+
+  return (
+    <div className="rounded-lg border border-border bg-card px-5 py-3 flex items-center gap-4">
+      <div className="flex items-center gap-2.5 shrink-0">
+        <div className="w-7 h-7 rounded-full bg-blue-500/20 flex items-center justify-center">
+          <ImagePlus className="w-4 h-4 text-blue-400 animate-pulse" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-blue-400">Generating Thumbnails</p>
+          <p className="text-xs text-muted-foreground">{stats.built.toLocaleString()} of {stats.total.toLocaleString()} built · {stats.missing.toLocaleString()} remaining</p>
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex justify-between text-[10px] text-muted-foreground font-mono mb-1">
+          <span>{pct}% complete</span>
+          <Link href="/settings" className="text-primary hover:underline">Manage</Link>
+        </div>
+        <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+          <div
+            className="h-full bg-blue-500 rounded-full transition-all duration-700"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -340,6 +391,7 @@ export default function Dashboard() {
       <LibraryReadyCelebration />
       <LibraryStatusBanner />
       <BuildingLibraryProgress />
+      <ThumbnailJobProgress />
       <OnboardingChecklist />
 
       {/* ── Hero Banner ─────────────────────────────────────────────────── */}

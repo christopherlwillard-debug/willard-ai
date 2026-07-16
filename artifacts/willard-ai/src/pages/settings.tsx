@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud, Layers, BarChart2, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -204,6 +204,8 @@ export default function Settings() {
       </Card>
 
       <BrandingSection />
+
+      <ThumbnailManagerSection />
 
       <Card className="border-primary/50">
         <CardHeader>
@@ -431,6 +433,234 @@ function LibrarySection() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ThumbnailManagerSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
+  const thumbnailQuality = (settings as any)?.thumbnailQuality ?? "BALANCED";
+  const [localQuality, setLocalQuality] = useState<string | null>(null);
+  const displayQuality = localQuality ?? thumbnailQuality;
+
+  const [thumbStats, setThumbStats] = useState<{ total: number; built: number; missing: number; cacheSizeBytes: number } | null>(null);
+  const [thumbLoading, setThumbLoading] = useState(true);
+  const [thumbError, setThumbError] = useState<string | null>(null);
+
+  const fetchStats = async () => {
+    setThumbLoading(true);
+    setThumbError(null);
+    try {
+      const res = await fetch("/api/library/thumbnails/status");
+      if (!res.ok) throw new Error("Failed to fetch stats");
+      const data = await res.json();
+      setThumbStats(data);
+    } catch (err: any) {
+      setThumbError(err?.message ?? "Failed to load stats");
+    } finally {
+      setThumbLoading(false);
+    }
+  };
+
+  useEffect(() => { void fetchStats(); }, []);
+
+  const updateMutation = useMutation({
+    mutationFn: async (q: string) => {
+      const res = await fetch("/api/library/thumbnails/quality", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quality: q }),
+      });
+      if (!res.ok) throw new Error("Failed to update");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+      toast({ title: "Thumbnail quality updated" });
+    },
+    onError: () => toast({ title: "Failed to update quality", variant: "destructive" }),
+  });
+
+  const rebuildMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/library/thumbnails/rebuild", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to start rebuild");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Thumbnail rebuild started", description: "Existing thumbnails cleared and regeneration begun." });
+      void fetchStats();
+    },
+    onError: (err: any) => toast({ title: "Failed to rebuild cache", description: err?.message, variant: "destructive" }),
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/library/thumbnails/cache", { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to clear cache");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: `Cleared ${data.deleted ?? 0} thumbnails` });
+      void fetchStats();
+    },
+    onError: (err: any) => toast({ title: "Failed to clear cache", description: err?.message, variant: "destructive" }),
+  });
+
+  const startMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/library/thumbnails", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to start");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data.alreadyRunning) {
+        toast({ title: "Thumbnail job already running" });
+      } else {
+        toast({ title: "Thumbnail generation started" });
+      }
+      void fetchStats();
+    },
+    onError: (err: any) => toast({ title: "Failed to start", description: err?.message, variant: "destructive" }),
+  });
+
+  const pct = thumbStats && thumbStats.total > 0
+    ? Math.round((thumbStats.built / thumbStats.total) * 100)
+    : thumbStats?.total === 0 ? 100 : 0;
+
+  return (
+    <>
+      <div className="pt-4">
+        <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
+          <Layers className="w-5 h-5 text-primary" />
+          THUMBNAIL_CACHE
+        </h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Manage thumbnail generation quality and cache. Thumbnails speed up the media library browser.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <BarChart2 className="w-4 h-4" /> Cache Status
+          </CardTitle>
+          <CardDescription>
+            How many thumbnails have been generated vs. total eligible files
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {thumbLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-3 w-full rounded-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : thumbError ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono p-3 bg-secondary/20 rounded border border-dashed">
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+              {thumbError}
+            </div>
+          ) : thumbStats ? (
+            <>
+              {/* Progress bar */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs text-muted-foreground font-mono">
+                  <span>{thumbStats.built.toLocaleString()} built</span>
+                  <span>{pct}%</span>
+                </div>
+                <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-500"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground font-mono">
+                  <span>{thumbStats.missing.toLocaleString()} missing</span>
+                  <span>{thumbStats.total.toLocaleString()} total</span>
+                </div>
+              </div>
+
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
+                  <span className="text-lg font-bold tabular-nums">{thumbStats.built.toLocaleString()}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono mt-0.5">BUILT</span>
+                </div>
+                <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
+                  <span className={`text-lg font-bold tabular-nums ${thumbStats.missing > 0 ? "text-amber-400" : "text-green-400"}`}>
+                    {thumbStats.missing.toLocaleString()}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground font-mono mt-0.5">MISSING</span>
+                </div>
+                <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
+                  <span className="text-lg font-bold tabular-nums">{formatBytes(thumbStats.cacheSizeBytes)}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono mt-0.5">CACHE SIZE</span>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {/* Quality selector */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+              Thumbnail Quality
+            </Label>
+            <select
+              value={displayQuality}
+              onChange={(e) => {
+                const q = e.target.value;
+                setLocalQuality(q);
+                updateMutation.mutate(q);
+              }}
+              className="w-full h-9 text-sm font-mono bg-background border border-border rounded-md px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="FAST">Fast — 256px · smaller files, lower detail</option>
+              <option value="BALANCED">Balanced — 512px · good quality, moderate size</option>
+              <option value="HIGH">High — 1024px · sharpest detail, larger cache</option>
+            </select>
+            <p className="text-xs text-muted-foreground font-mono">
+              Applies to newly generated thumbnails. Use Rebuild to regenerate existing thumbnails at the new quality.
+            </p>
+          </div>
+        </CardContent>
+        <CardFooter className="gap-2 flex-wrap">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="font-mono"
+            disabled={startMutation.isPending || rebuildMutation.isPending}
+            onClick={() => startMutation.mutate()}
+          >
+            {startMutation.isPending
+              ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Starting…</>
+              : <><Play className="w-3.5 h-3.5 mr-1.5" /> Generate Missing</>}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="font-mono"
+            disabled={rebuildMutation.isPending || startMutation.isPending}
+            onClick={() => rebuildMutation.mutate()}
+          >
+            {rebuildMutation.isPending
+              ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Rebuilding…</>
+              : <><RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rebuild Cache</>}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="font-mono text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto"
+            disabled={clearMutation.isPending}
+            onClick={() => clearMutation.mutate()}
+          >
+            {clearMutation.isPending
+              ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Clearing…</>
+              : <><Trash2 className="w-3.5 h-3.5 mr-1.5" /> Clear Cache</>}
+          </Button>
+        </CardFooter>
+      </Card>
+    </>
   );
 }
 

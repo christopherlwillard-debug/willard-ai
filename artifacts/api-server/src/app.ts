@@ -143,6 +143,10 @@ export async function bootstrapSessionTable(): Promise<void> {
       last_used_at timestamp
     );
   `);
+  await pool.query(`
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';
+  `);
 }
 
 const PgStore = connectPgSimple(session);

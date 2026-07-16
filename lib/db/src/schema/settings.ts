@@ -15,6 +15,7 @@ export const appSettingsTable = pgTable("app_settings", {
   otherFilesDestination: text("other_files_destination").notNull().default(""),
   logoPath: text("logo_path"),
   scanPerformance: text("scan_performance").notNull().default("BALANCED"),
+  thumbnailQuality: text("thumbnail_quality").notNull().default("BALANCED"),
   indexingPaused: boolean("indexing_paused").notNull().default(false),
   onboardingDismissedAt: timestamp("onboarding_dismissed_at"),
   celebrationShownAt: timestamp("celebration_shown_at"),

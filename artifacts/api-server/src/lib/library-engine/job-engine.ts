@@ -18,11 +18,27 @@ import {
 } from "./indexer";
 import { getWillardAIDir } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
-import { getThumbnailDir, thumbnailFilename, generateThumbnail } from "../thumbnail-engine";
+import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 const activeJobs = new Map<number, ActiveJobState>();
+
+// ── Thumbnail priority queue (folder-aware boosting) ──────────────────────────
+// Maps nasPath → Set of file IDs that should be processed ASAP before the
+// normal cursor-based sweep continues. Populated via addThumbnailPriority().
+
+const thumbPriorityIds = new Map<string, Set<number>>();
+
+export function addThumbnailPriority(nasPath: string, fileIds: number[]): void {
+  const s = thumbPriorityIds.get(nasPath) ?? new Set<number>();
+  for (const id of fileIds) s.add(id);
+  thumbPriorityIds.set(nasPath, s);
+}
+
+export function clearThumbnailPriority(nasPath: string): void {
+  thumbPriorityIds.delete(nasPath);
+}
 
 // Last completed job's final progress (with summary), so the UI can show the
 // scan-summary card after the job leaves the in-memory active map. Cleared
@@ -672,6 +688,30 @@ async function runScanJob(
     recordCompletion(state, summary);
     activeJobs.delete(jobId);
 
+    // ── Auto-start thumbnail backfill after scan ───────────────────────────
+    try {
+      const [{ missing }] = await db
+        .select({ missing: sql<number>`count(*)::int` })
+        .from(mediaFilesTable)
+        .where(and(
+          eq(mediaFilesTable.nasPath, state.nasPath),
+          isNull(mediaFilesTable.thumbnailPath),
+          or(
+            eq(mediaFilesTable.mediaType, "photo"),
+            eq(mediaFilesTable.mediaType, "video"),
+            eq(mediaFilesTable.extension, "pdf"),
+          ),
+        ));
+      const [settingsRow] = await db.select({ paused: appSettingsTable.indexingPaused })
+        .from(appSettingsTable).limit(1);
+      const isThumbRunning = [...activeJobs.values()].some(
+        j => j.jobType === "THUMBNAILS" && j.nasPath === state.nasPath,
+      );
+      if ((missing ?? 0) > 0 && !isThumbRunning && !settingsRow?.paused) {
+        void startJob({ jobType: "THUMBNAILS", profile: "FULL", nasPath: state.nasPath });
+      }
+    } catch { /* non-fatal */ }
+
     // ── Library Activity feed entry (only when something actually changed) ──
     const changeText = describeChanges({
       newFiles: state.counters.new,
@@ -915,6 +955,12 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       return;
     }
 
+    // Read thumbnail quality setting
+    const [settingsRow] = await db
+      .select({ thumbnailQuality: appSettingsTable.thumbnailQuality })
+      .from(appSettingsTable).limit(1);
+    const thumbQuality = settingsRow?.thumbnailQuality ?? "BALANCED";
+
     // Count total files that need thumbnails
     const [{ count: totalCount }] = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -939,8 +985,8 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
     // Cursor-based batch processing
     let cursor = 0;
 
-    while (true) {
-      // Pause handling
+    // Helper: pause/cancel handling
+    const handlePauseCancel = async (): Promise<boolean> => {
       if (state.pauseRequested) {
         await db.update(libraryJobsTable).set({
           status: "PAUSED",
@@ -948,7 +994,6 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
           cursor: String(cursor),
           processedFiles: state.filesProcessed,
         }).where(eq(libraryJobsTable.id, jobId));
-        // Wait until resume or cancel
         while (state.pauseRequested && !state.cancelRequested) {
           await new Promise((r) => setTimeout(r, 500));
         }
@@ -958,7 +1003,6 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
             .where(eq(libraryJobsTable.id, jobId));
         }
       }
-
       if (state.cancelRequested) {
         await db.update(libraryJobsTable).set({
           status:             "CANCELLED",
@@ -967,10 +1011,66 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
           processedFiles:     state.filesProcessed,
         }).where(eq(libraryJobsTable.id, jobId));
         activeJobs.delete(jobId);
-        return;
+        return true; // cancelled
       }
+      return false;
+    };
 
-      // Fetch next batch
+    // Helper: process a single file
+    const processFile = async (file: { id: number; relativePath: string; extension: string }): Promise<void> => {
+      const sourcePath = path.join(nasPath, file.relativePath);
+      state.currentPath = file.relativePath;
+      tickSpeed(state);
+      try {
+        const result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality);
+        if (!result.error && result.destPath) {
+          await db.update(mediaFilesTable).set({
+            thumbnailPath:        result.destPath,
+            thumbnailGeneratedAt: new Date(),
+          }).where(eq(mediaFilesTable.id, file.id));
+          state.counters.thumbnails++;
+        }
+      } catch { /* skip failed — don't abort the job */ }
+      state.filesProcessed++;
+    };
+
+    // ── Phase 1: drain priority queue (folder-prioritized files) ────────────
+    const prioritySet = thumbPriorityIds.get(nasPath);
+    if (prioritySet && prioritySet.size > 0) {
+      const priorityList = [...prioritySet];
+      clearThumbnailPriority(nasPath);
+
+      for (let i = 0; i < priorityList.length; i += THUMB_BATCH) {
+        if (await handlePauseCancel()) return;
+
+        const batchIds = priorityList.slice(i, i + THUMB_BATCH);
+        const files = await db.select({
+          id: mediaFilesTable.id,
+          relativePath: mediaFilesTable.relativePath,
+          extension: mediaFilesTable.extension,
+        }).from(mediaFilesTable)
+          .where(and(
+            eq(mediaFilesTable.nasPath, nasPath),
+            isNull(mediaFilesTable.thumbnailPath),
+            sql`${mediaFilesTable.id} = ANY(${sql.raw(`ARRAY[${batchIds.join(",")}]`)}::int[])`,
+          ));
+
+        for (const file of files) {
+          if (state.cancelRequested) break;
+          await processFile(file);
+        }
+
+        await db.update(libraryJobsTable)
+          .set({ processedFiles: state.filesProcessed, cursor: String(cursor) })
+          .where(eq(libraryJobsTable.id, jobId));
+      }
+    }
+
+    // ── Phase 2: cursor-based sweep (favorites first, then photos/videos/docs) ─
+    while (true) {
+      if (await handlePauseCancel()) return;
+
+      // Fetch next batch — favorites first, then by media type priority, then by id
       const batch = await db.select({
         id:           mediaFilesTable.id,
         relativePath: mediaFilesTable.relativePath,
@@ -994,30 +1094,10 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
       for (const file of batch) {
         cursor = file.id;
-
         if (state.cancelRequested) break;
-
-        const sourcePath = path.join(nasPath, file.relativePath);
-        state.currentPath = file.relativePath;
-        tickSpeed(state);
-
-        try {
-          const result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath);
-          if (!result.error && result.destPath) {
-            await db.update(mediaFilesTable).set({
-              thumbnailPath:        result.destPath,
-              thumbnailGeneratedAt: new Date(),
-            }).where(eq(mediaFilesTable.id, file.id));
-            state.counters.thumbnails++;
-          }
-        } catch {
-          // Skip failed thumbnails — don't abort the job
-        }
-
-        state.filesProcessed++;
+        await processFile(file);
       }
 
-      // Update progress in DB periodically
       await db.update(libraryJobsTable)
         .set({ processedFiles: state.filesProcessed, cursor: String(cursor) })
         .where(eq(libraryJobsTable.id, jobId));

@@ -9,4 +9,6 @@ export {
   startJob,
   resumeJob,
   recoverInterruptedJobs,
+  addThumbnailPriority,
+  clearThumbnailPriority,
 } from "./job-engine";

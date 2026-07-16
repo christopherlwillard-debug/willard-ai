@@ -4,6 +4,23 @@ import { spawnSync } from "child_process";
 import { getWillardAIDir } from "./nas-storage";
 import { formatMediaToolError } from "./media-tools";
 
+// ── Quality presets ────────────────────────────────────────────────────────────
+
+export type ThumbnailQuality = "FAST" | "BALANCED" | "HIGH";
+
+interface QualityPreset { sizePx: number; quality: number }
+
+const QUALITY_PRESETS: Record<ThumbnailQuality, QualityPreset> = {
+  FAST:     { sizePx: 256, quality: 65 },
+  BALANCED: { sizePx: 512, quality: 80 },
+  HIGH:     { sizePx: 1024, quality: 90 },
+};
+
+export function qualityPreset(q: string | null | undefined): QualityPreset {
+  const key = (q ?? "BALANCED").toUpperCase() as ThumbnailQuality;
+  return QUALITY_PRESETS[key] ?? QUALITY_PRESETS.BALANCED;
+}
+
 // ── Thumbnail directory ────────────────────────────────────────────────────────
 
 export function getThumbnailDir(nasPath: string): string {
@@ -32,13 +49,15 @@ const IMAGE_EXTS = new Set([
 async function generateImageThumbnail(
   sourcePath: string,
   destPath: string,
+  sizePx: number,
+  quality: number,
 ): Promise<string | null> {
   try {
     const sharp = (await import("sharp")).default;
     await sharp(sourcePath, { failOn: "none" })
       .rotate()
-      .resize({ width: 400, height: 400, fit: "inside", withoutEnlargement: true })
-      .webp({ quality: 75 })
+      .resize({ width: sizePx, height: sizePx, fit: "inside", withoutEnlargement: true })
+      .webp({ quality })
       .toFile(destPath);
     return null;
   } catch (err: any) {
@@ -56,6 +75,7 @@ const VIDEO_EXTS = new Set([
 function generateVideoThumbnail(
   sourcePath: string,
   destPath: string,
+  sizePx: number,
 ): string | null {
   const tmpPng = destPath.replace(/\.webp$/, ".tmp.png");
   const result = spawnSync("ffmpeg", [
@@ -63,7 +83,7 @@ function generateVideoThumbnail(
     "-ss", "00:00:01",
     "-i", sourcePath,
     "-frames:v", "1",
-    "-vf", "scale=400:-2",
+    "-vf", `scale=${sizePx}:-2`,
     tmpPng,
   ], { encoding: "buffer", timeout: 30000 });
 
@@ -71,18 +91,18 @@ function generateVideoThumbnail(
     return formatMediaToolError("ffmpeg", result);
   }
 
-  // Convert PNG → WebP via sharp
-  return generateImageThumbnailSync(tmpPng, destPath);
+  return generateImageThumbnailSync(tmpPng, destPath, sizePx);
 }
 
 function generateImageThumbnailSync(
   sourcePath: string,
   destPath: string,
+  sizePx: number,
 ): string | null {
   const result = spawnSync("ffmpeg", [
     "-y",
     "-i", sourcePath,
-    "-vf", "scale=400:-2",
+    "-vf", `scale=${sizePx}:-2`,
     "-frames:v", "1",
     destPath,
   ], { encoding: "buffer", timeout: 15000 });
@@ -93,17 +113,18 @@ function generateImageThumbnailSync(
   return null;
 }
 
-// ── PDF thumbnail via ImageMagick / ffmpeg fallback ───────────────────────────
+// ── PDF thumbnail via ffmpeg ───────────────────────────────────────────────────
 
 function generatePdfThumbnail(
   sourcePath: string,
   destPath: string,
+  sizePx: number,
 ): string | null {
   const result = spawnSync("ffmpeg", [
     "-y",
     "-i", sourcePath,
     "-frames:v", "1",
-    "-vf", "scale=400:-2",
+    "-vf", `scale=${sizePx}:-2`,
     destPath,
   ], { encoding: "buffer", timeout: 30000 });
   if (result.status !== 0) {
@@ -124,6 +145,7 @@ export async function generateThumbnail(
   sourcePath: string,
   extension: string,
   nasPath: string,
+  quality?: string | null,
 ): Promise<ThumbnailResult> {
   const thumbDir = ensureThumbnailDir(nasPath);
   const destPath = path.join(thumbDir, thumbnailFilename(mediaFileId));
@@ -133,16 +155,17 @@ export async function generateThumbnail(
     return { destPath, error: null };
   }
 
+  const preset = qualityPreset(quality);
   const ext = extension.toLowerCase().replace(/^\./, "");
 
   let error: string | null = null;
 
   if (IMAGE_EXTS.has(ext)) {
-    error = await generateImageThumbnail(sourcePath, destPath);
+    error = await generateImageThumbnail(sourcePath, destPath, preset.sizePx, preset.quality);
   } else if (VIDEO_EXTS.has(ext)) {
-    error = generateVideoThumbnail(sourcePath, destPath);
+    error = generateVideoThumbnail(sourcePath, destPath, preset.sizePx);
   } else if (ext === "pdf") {
-    error = generatePdfThumbnail(sourcePath, destPath);
+    error = generatePdfThumbnail(sourcePath, destPath, preset.sizePx);
   } else {
     error = `Unsupported extension: ${ext}`;
   }
@@ -151,4 +174,35 @@ export async function generateThumbnail(
     return { destPath: "", error };
   }
   return { destPath, error: null };
+}
+
+// ── Cache stats ───────────────────────────────────────────────────────────────
+
+export function getThumbnailCacheSizeBytes(nasPath: string): number {
+  const dir = getThumbnailDir(nasPath);
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  try {
+    for (const file of fs.readdirSync(dir)) {
+      try {
+        total += fs.statSync(path.join(dir, file)).size;
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return total;
+}
+
+export function clearThumbnailCache(nasPath: string): number {
+  const dir = getThumbnailDir(nasPath);
+  if (!fs.existsSync(dir)) return 0;
+  let deleted = 0;
+  try {
+    for (const file of fs.readdirSync(dir)) {
+      try {
+        fs.rmSync(path.join(dir, file));
+        deleted++;
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return deleted;
 }

@@ -1,10 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
-import { eq, desc, and, lt, sql, gte } from "drizzle-orm";
+import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
+  addThumbnailPriority,
 } from "../lib/library-engine";
+import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
 import { getWatcherSnapshot } from "../lib/library-watcher";
 import { getRecentActivity, recordActivity } from "../lib/library-activity";
@@ -205,6 +207,132 @@ router.post("/library/thumbnails", async (req: Request, res: Response) => {
   res.json(result);
 });
 
+// ── GET /api/library/thumbnails/status — thumbnail cache stats ────────────────
+
+router.get("/library/thumbnails/status", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.json({ total: 0, built: 0, missing: 0, cacheSizeBytes: 0, activeJob: null });
+    return;
+  }
+
+  const eligibleFilter = and(
+    eq(mediaFilesTable.nasPath, nasPath),
+    or(
+      eq(mediaFilesTable.mediaType, "photo"),
+      eq(mediaFilesTable.mediaType, "video"),
+      eq(mediaFilesTable.extension, "pdf"),
+    ),
+    sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+  );
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(eligibleFilter);
+
+  const [{ built }] = await db
+    .select({ built: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(and(eligibleFilter, sql`${mediaFilesTable.thumbnailPath} IS NOT NULL`));
+
+  const cacheSizeBytes = getThumbnailCacheSizeBytes(nasPath);
+
+  const totalNum = total ?? 0;
+  const builtNum = built ?? 0;
+
+  res.json({
+    total: totalNum,
+    built: builtNum,
+    missing: Math.max(0, totalNum - builtNum),
+    cacheSizeBytes,
+    activeJob: null,
+  });
+});
+
+// ── POST /api/library/thumbnails/prioritize — boost a folder to front ─────────
+
+router.post("/library/thumbnails/prioritize", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const folder = req.body?.folder as string | undefined;
+  if (!folder) {
+    res.status(400).json({ error: "folder is required" });
+    return;
+  }
+
+  // Find files in this folder without thumbnails
+  const folderPrefix = folder.replace(/^\//, "");
+  const files = await db.select({ id: mediaFilesTable.id })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      isNull(mediaFilesTable.thumbnailPath),
+      or(
+        eq(mediaFilesTable.mediaType, "photo"),
+        eq(mediaFilesTable.mediaType, "video"),
+        eq(mediaFilesTable.extension, "pdf"),
+      ),
+      sql`relative_path LIKE ${folderPrefix + "/%"}`,
+    ))
+    .limit(500);
+
+  if (files.length > 0) {
+    addThumbnailPriority(nasPath, files.map(f => f.id));
+  }
+
+  res.json({ boosted: files.length, folder });
+});
+
+// ── DELETE /api/library/thumbnails/cache — wipe thumbnail cache ───────────────
+
+router.delete("/library/thumbnails/cache", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const deleted = clearThumbnailCache(nasPath);
+
+  // Reset thumbnailPath in DB so the backfill job can regenerate them
+  await db.update(mediaFilesTable).set({
+    thumbnailPath: null,
+    thumbnailGeneratedAt: null,
+  }).where(eq(mediaFilesTable.nasPath, nasPath));
+
+  res.json({ deleted });
+});
+
+// ── POST /api/library/thumbnails/rebuild — wipe cache then start fresh job ────
+
+router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  clearThumbnailCache(nasPath);
+
+  await db.update(mediaFilesTable).set({
+    thumbnailPath: null,
+    thumbnailGeneratedAt: null,
+  }).where(eq(mediaFilesTable.nasPath, nasPath));
+
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "FULL",
+    nasPath,
+  });
+
+  res.json(result);
+});
+
 // ── GET /api/library/jobs/:id/files?action=NEW — files touched by a scan ──────
 // Uses the scan's time anchor (summary.scanStartedAt) so the summary counts are
 // clickable: each count maps to the exact files behind it.
@@ -292,6 +420,29 @@ router.get("/library/duplicates", async (_req: Request, res: Response) => {
   }));
 
   res.json({ groups });
+});
+
+// ── PATCH /api/library/thumbnails/quality — update thumbnail quality setting ──
+
+router.patch("/library/thumbnails/quality", async (req: Request, res: Response) => {
+  const quality = req.body?.quality as string | undefined;
+  const allowed = new Set(["FAST", "BALANCED", "HIGH"]);
+  if (!quality || !allowed.has(quality.toUpperCase())) {
+    res.status(400).json({ error: "quality must be FAST, BALANCED, or HIGH" });
+    return;
+  }
+
+  const [existing] = await db.select({ id: appSettingsTable.id }).from(appSettingsTable).limit(1);
+  if (!existing) {
+    res.status(400).json({ error: "Settings not found" });
+    return;
+  }
+
+  await db.update(appSettingsTable)
+    .set({ thumbnailQuality: quality.toUpperCase() })
+    .where(eq(appSettingsTable.id, existing.id));
+
+  res.json({ thumbnailQuality: quality.toUpperCase() });
 });
 
 // ── GET /api/library/outdated — count of items with an older scanner version ──
