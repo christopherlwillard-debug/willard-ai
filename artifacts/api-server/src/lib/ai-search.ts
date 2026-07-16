@@ -129,6 +129,7 @@ interface RawRow {
   people: unknown; user_tags: unknown; hidden_tags: unknown;
   user_description: string | null; notes: string | null;
   gps_latitude: number | null; gps_longitude: number | null;
+  place_name: string | null;
   similarity: number | null;
 }
 
@@ -176,7 +177,7 @@ export async function executeSearch(
   const sql = `
     SELECT f.id, f.name, f.relative_path, f.media_type, f.size_bytes,
            f.thumbnail_path, f.date_taken, f.favorite,
-           f.gps_latitude, f.gps_longitude,
+           f.gps_latitude, f.gps_longitude, f.place_name,
            a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
            a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
            ${simSelect}
@@ -203,7 +204,7 @@ function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
   const people = strArr(r.people);
   const haystack = [
     r.name, r.relative_path, r.user_description ?? r.description, r.notes,
-    r.ocr_text, r.doc_type, r.scene,
+    r.ocr_text, r.doc_type, r.scene, r.place_name,
     ...tags, ...objects, ...people,
   ].filter(Boolean).join(" ").toLowerCase();
 
@@ -241,7 +242,8 @@ function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
 
   if (intent.location) {
     const loc = intent.location.toLowerCase();
-    if (haystack.includes(loc)) { score += 1; reasons.push(`Location matches ${intent.location}`); }
+    if (r.place_name && r.place_name.toLowerCase().includes(loc)) { score += 1.5; reasons.push(`Taken in ${r.place_name}`); }
+    else if (haystack.includes(loc)) { score += 1; reasons.push(`Location matches ${intent.location}`); }
     else if (r.gps_latitude != null) { reasons.push("Has GPS data"); score += 0.1; }
   }
 
@@ -309,7 +311,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
   const { rows: sims } = await pool.query(
     `SELECT f.id, f.name, f.relative_path, f.media_type, f.size_bytes,
             f.thumbnail_path, f.date_taken, f.favorite,
-            f.gps_latitude, f.gps_longitude,
+            f.gps_latitude, f.gps_longitude, f.place_name,
             a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
             a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
             1 - (a.embedding <=> (SELECT embedding FROM media_ai WHERE media_file_id = $2)) AS similarity

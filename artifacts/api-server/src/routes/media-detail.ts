@@ -125,7 +125,7 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
           focalLength: r.focal_length, flash: r.flash,
         },
         gps: r.gps_latitude != null && r.gps_longitude != null
-          ? { latitude: Number(r.gps_latitude), longitude: Number(r.gps_longitude) }
+          ? { latitude: Number(r.gps_latitude), longitude: Number(r.gps_longitude), placeName: r.place_name ?? null }
           : null,
         video: r.video_codec || r.fps || r.audio_codec
           ? { videoCodec: r.video_codec, videoBitrate: r.video_bitrate, fps: r.fps, audioCodec: r.audio_codec }

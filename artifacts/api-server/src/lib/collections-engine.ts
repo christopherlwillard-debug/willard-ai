@@ -3,6 +3,7 @@ import { collectionsTable, collectionItemsTable, mediaFilesTable } from "@worksp
 import { and, eq, sql, inArray, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { logger } from "./logger";
+import { backfillPlaceNames, getCachedPlaceNames } from "./geocode";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Smart folder rules — evaluated at query time, never materialized.
@@ -161,13 +162,18 @@ async function computeAutoGroups(nasPath: string): Promise<AutoGroup[]> {
       eq(mediaFilesTable.nasPath, nasPath),
       sql`${mediaFilesTable.gpsLatitude} IS NOT NULL AND ${mediaFilesTable.gpsLongitude} IS NOT NULL`,
     ));
+  const cellNames = await getCachedPlaceNames().catch(() => new Map<string, string>());
   for (const row of placeRows) {
-    const lat = Math.round((row.lat as number) * 10) / 10;
-    const lon = Math.round((row.lon as number) * 10) / 10;
+    const lat10 = Math.round((row.lat as number) * 10);
+    const lon10 = Math.round((row.lon as number) * 10);
+    const lat = lat10 / 10;
+    const lon = lon10 / 10;
     const ns = lat >= 0 ? "N" : "S";
     const ew = lon >= 0 ? "E" : "W";
-    const name = `Around ${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}`;
-    add(`place:${lat},${lon}`, name, "Media taken near this location", row.id);
+    const placeName = cellNames.get(`${lat10},${lon10}`);
+    const name = placeName ?? `Around ${Math.abs(lat).toFixed(1)}°${ns}, ${Math.abs(lon).toFixed(1)}°${ew}`;
+    const description = placeName ? `Media taken in and around ${placeName}` : "Media taken near this location";
+    add(`place:${lat},${lon}`, name, description, row.id);
   }
 
   // Document categories.
@@ -219,6 +225,10 @@ export async function rebuildAutoCollections(nasPath: string): Promise<{ collect
   if (rebuildRunning) return { collections: 0, items: 0 };
   rebuildRunning = true;
   try {
+    // Resolve human place names for GPS cells first so place collections get real names.
+    await backfillPlaceNames(nasPath).catch((err) => {
+      logger.warn({ err, nasPath }, "Place name backfill failed — using coordinate names");
+    });
     const groups = await computeAutoGroups(nasPath);
     const keys = groups.map((g) => g.autoKey);
 
@@ -251,8 +261,13 @@ export async function rebuildAutoCollections(nasPath: string): Promise<{ collect
       let collectionId: number;
       if (existing.length > 0) {
         collectionId = existing[0].id;
+        // Upgrade auto-generated coordinate names ("Around 46.9°N, 7.4°E") to real
+        // place names once geocoded — but never touch a user-customized name.
+        const upgradeName = existing[0].name.startsWith("Around ") && existing[0].name !== g.name;
         await db.update(collectionsTable)
-          .set({ updatedAt: new Date() })
+          .set(upgradeName
+            ? { name: g.name, description: g.description, updatedAt: new Date() }
+            : { updatedAt: new Date() })
           .where(eq(collectionsTable.id, collectionId));
       } else {
         const [created] = await db.insert(collectionsTable).values({

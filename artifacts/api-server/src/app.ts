@@ -118,6 +118,14 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS hidden_tags jsonb;
     ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS user_description text;
     ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS notes text;
+    ALTER TABLE media_files ADD COLUMN IF NOT EXISTS place_name text;
+    CREATE TABLE IF NOT EXISTS geo_place_cache (
+      lat10 integer NOT NULL,
+      lon10 integer NOT NULL,
+      name text NOT NULL,
+      resolved_at timestamp NOT NULL DEFAULT now(),
+      PRIMARY KEY (lat10, lon10)
+    );
     CREATE TABLE IF NOT EXISTS search_history (
       id serial PRIMARY KEY,
       query text NOT NULL,

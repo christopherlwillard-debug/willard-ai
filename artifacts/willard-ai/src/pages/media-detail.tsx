@@ -54,7 +54,7 @@ interface DetailResponse {
       iso: number | null; aperture: string | null; exposure: string | null;
       focalLength: string | null; flash: string | null;
     };
-    gps: { latitude: number; longitude: number } | null;
+    gps: { latitude: number; longitude: number; placeName: string | null } | null;
     video: { videoCodec: string | null; videoBitrate: number | null; fps: number | null; audioCodec: string | null } | null;
     pdf: { pageCount: number | null; author: string | null; title: string | null; subject: string | null; keywords: string | null } | null;
   };
@@ -459,7 +459,10 @@ export default function MediaDetail() {
                 loading="lazy"
                 src={`https://www.openstreetmap.org/export/embed.html?bbox=${file.gps.longitude - 0.02}%2C${file.gps.latitude - 0.012}%2C${file.gps.longitude + 0.02}%2C${file.gps.latitude + 0.012}&layer=mapnik&marker=${file.gps.latitude}%2C${file.gps.longitude}`}
               />
-              <p className="mt-2 text-xs text-muted-foreground">
+              {file.gps.placeName && (
+                <p className="mt-2 text-sm font-medium" data-testid="text-place-name">{file.gps.placeName}</p>
+              )}
+              <p className={file.gps.placeName ? "text-xs text-muted-foreground" : "mt-2 text-xs text-muted-foreground"}>
                 {file.gps.latitude.toFixed(5)}, {file.gps.longitude.toFixed(5)}
                 {place && <> · <Link href={`/collections?open=${place.id}`} className="text-primary underline">More from {place.name}</Link></>}
               </p>

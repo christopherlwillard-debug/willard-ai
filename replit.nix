@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.exiftool
     pkgs.wayland
     pkgs.libGL
     pkgs.vulkan-loader

@@ -36,6 +36,7 @@ export const mediaFilesTable = pgTable("media_files", {
   colorProfile:         text("color_profile"),
   gpsLatitude:          real("gps_latitude"),
   gpsLongitude:         real("gps_longitude"),
+  placeName:            text("place_name"),
 
   // ── Video metadata ────────────────────────────────────────────────────────
   videoCodec:           text("video_codec"),
