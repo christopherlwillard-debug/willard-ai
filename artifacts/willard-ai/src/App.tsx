@@ -18,6 +18,7 @@ import Media from "@/pages/media";
 import MediaDetail from "@/pages/media-detail";
 import Library from "@/pages/library";
 import Collections from "@/pages/collections";
+import People from "@/pages/people";
 import Explorer from "@/pages/explorer";
 import Archives from "@/pages/archives";
 import Documents from "@/pages/documents";
@@ -67,6 +68,8 @@ function ProtectedRoutes() {
         <Route path="/media/:id" component={MediaDetail} />
         <Route path="/library" component={Library} />
         <Route path="/collections" component={Collections} />
+        <Route path="/people" component={People} />
+        <Route path="/people/:id" component={People} />
         <Route path="/explorer" component={Explorer} />
         <Route path="/archives" component={Archives} />
         <Route path="/documents" component={Documents} />

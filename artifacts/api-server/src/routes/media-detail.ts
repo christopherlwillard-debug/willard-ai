@@ -224,22 +224,42 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
         )
       : Promise.resolve({ rows: [] as any[] });
 
-    // Same people: overlapping AI person descriptors.
+    // Same people: prefer real face identity (local face recognition); fall
+    // back to AI person-descriptor overlap for items without face data yet.
     const people = strArr(src.people);
-    const samePeoplePromise = people.length
-      ? pool.query(
-          `SELECT ${ITEM_COLS} FROM media_files f
-            JOIN media_ai a ON a.media_file_id = f.id
-           WHERE f.nas_path = $1 AND ${NOT_DELETED} AND f.id <> $2
-             AND a.people IS NOT NULL
-             AND EXISTS (
-               SELECT 1 FROM jsonb_array_elements_text(a.people) p
-                WHERE lower(p.value) = ANY($3::text[])
-             )
-           ORDER BY f.date_taken DESC NULLS LAST LIMIT ${LIM}`,
-          [nasPath, id, people.map((p) => p.toLowerCase())],
-        )
-      : Promise.resolve({ rows: [] as any[] });
+    const samePeoplePromise = (async () => {
+      const { rows: myFaces } = await pool.query(
+        `SELECT DISTINCT person_id FROM faces WHERE media_file_id = $1 AND person_id IS NOT NULL`, [id]);
+      const personIds = myFaces.map((r: any) => Number(r.person_id));
+      if (personIds.length) {
+        return pool.query(
+          `SELECT * FROM (
+             SELECT DISTINCT ON (f.id) ${ITEM_COLS}
+               FROM faces fc
+               JOIN media_files f ON f.id = fc.media_file_id
+              WHERE f.nas_path = $1 AND ${NOT_DELETED} AND f.id <> $2
+                AND fc.person_id = ANY($3::int[])
+              ORDER BY f.id
+           ) sub
+           ORDER BY sub.date_taken DESC NULLS LAST
+           LIMIT ${LIM}`,
+          [nasPath, id, personIds],
+        );
+      }
+      if (!people.length) return { rows: [] as any[] };
+      return pool.query(
+        `SELECT ${ITEM_COLS} FROM media_files f
+          JOIN media_ai a ON a.media_file_id = f.id
+         WHERE f.nas_path = $1 AND ${NOT_DELETED} AND f.id <> $2
+           AND a.people IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text(a.people) p
+              WHERE lower(p.value) = ANY($3::text[])
+           )
+         ORDER BY f.date_taken DESC NULLS LAST LIMIT ${LIM}`,
+        [nasPath, id, people.map((p) => p.toLowerCase())],
+      );
+    })();
 
     // Visually/semantically similar (embedding space).
     const similarPromise = src.has_embedding

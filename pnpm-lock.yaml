@@ -229,6 +229,9 @@ importers:
       node-7z:
         specifier: ^3.0.0
         version: 3.0.0
+      onnxruntime-node:
+        specifier: ^1.24.3
+        version: 1.24.3
       pdf-parse:
         specifier: ^2.4.5
         version: 2.4.5

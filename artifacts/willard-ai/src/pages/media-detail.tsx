@@ -79,6 +79,20 @@ interface RelatedResponse {
   sameCollection: { collectionId: number; name: string; kind: string; items: RelatedItem[] }[];
 }
 
+interface DetectedFace {
+  id: number;
+  personId: number | null;
+  personName: string | null;
+  hasCrop: boolean;
+  score: number;
+  box: { x: number; y: number; w: number; h: number };
+}
+
+interface FacesResponse {
+  scanned: boolean;
+  faces: DetectedFace[];
+}
+
 const isVisual = (t: string) => t === "photo" || t === "image" || t === "video";
 
 // ── Small building blocks ─────────────────────────────────────────────────────
@@ -164,6 +178,14 @@ export default function MediaDetail() {
     queryKey: ["media-related", id],
     queryFn: () => apiFetch(`/media/files/${id}/related`),
     enabled: detailQ.isSuccess, // progressive: basics first, related after
+  });
+
+  const facesQ = useQuery<FacesResponse>({
+    queryKey: ["media-faces", id],
+    queryFn: () => apiFetch(`/media/files/${id}/faces`),
+    enabled: detailQ.isSuccess,
+    // Face scanning runs in the background; poll until this file is scanned.
+    refetchInterval: (q) => (q.state.data && !q.state.data.scanned ? 15_000 : false),
   });
 
   const patchAi = useMutation({
@@ -264,7 +286,7 @@ export default function MediaDetail() {
         <Button variant="secondary" size="sm" onClick={scrollToRelated} data-testid="action-find-similar"><ScanSearch className="mr-1 h-4 w-4" />Find Similar</Button>
         {event && <Button variant="secondary" size="sm" onClick={() => navigate(`/collections?open=${event.id}`)} data-testid="action-same-event"><CalendarDays className="mr-1 h-4 w-4" />Show Same Event</Button>}
         {place && <Button variant="secondary" size="sm" onClick={() => navigate(`/collections?open=${place.id}`)} data-testid="action-same-location"><MapPin className="mr-1 h-4 w-4" />Show Same Location</Button>}
-        {(ai.people?.length ?? 0) > 0 && <Button variant="secondary" size="sm" onClick={scrollToRelated} data-testid="action-same-person"><Users className="mr-1 h-4 w-4" />Show Same Person</Button>}
+        {((ai.people?.length ?? 0) > 0 || (facesQ.data?.faces.length ?? 0) > 0) && <Button variant="secondary" size="sm" onClick={scrollToRelated} data-testid="action-same-person"><Users className="mr-1 h-4 w-4" />Show Same Person</Button>}
         <Button variant="secondary" size="sm" onClick={() => navigate("/media?view=timeline")} data-testid="action-timeline"><Clock className="mr-1 h-4 w-4" />View Timeline</Button>
       </div>
 
@@ -371,11 +393,40 @@ export default function MediaDetail() {
               )}
 
               {/* People */}
-              {(ai.people?.length ?? 0) > 0 && (
+              {((ai.people?.length ?? 0) > 0 || (facesQ.data?.faces.length ?? 0) > 0) && (
                 <SectionCard icon={Users} title="People" testId="card-people">
-                  <div className="flex flex-wrap gap-1.5">
-                    {ai.people!.map((p) => <Badge key={p} variant="outline">{p}</Badge>)}
-                  </div>
+                  {(facesQ.data?.faces.length ?? 0) > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {facesQ.data!.faces.map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => f.personId != null && navigate(`/people/${f.personId}`)}
+                          className="flex items-center gap-2 rounded-full border bg-muted/40 py-1 pl-1 pr-3 text-sm transition hover:ring-2 hover:ring-primary"
+                          title={f.personName ? `View ${f.personName}` : "View this person"}
+                          data-testid={`face-chip-${f.id}`}
+                        >
+                          {f.hasCrop ? (
+                            <img src={`/api/faces/${f.id}/crop`} alt={f.personName ?? "Detected face"} className="h-8 w-8 rounded-full object-cover" />
+                          ) : (
+                            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted"><Users className="h-4 w-4 text-muted-foreground" /></span>
+                          )}
+                          <span className={f.personName ? "font-medium" : "text-muted-foreground"}>
+                            {f.personName ?? "Unnamed person"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {(facesQ.data?.faces.length ?? 0) > 0 && (
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      Faces recognized locally — click a face to browse this person, or name them on the People page.
+                    </p>
+                  )}
+                  {(ai.people?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {ai.people!.map((p) => <Badge key={p} variant="outline">{p}</Badge>)}
+                    </div>
+                  )}
                   {rel && rel.samePeople.length > 0 && (
                     <div className="mt-3">
                       <p className="mb-2 text-xs font-medium text-muted-foreground">Also featuring the same people</p>

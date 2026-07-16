@@ -19,6 +19,7 @@ import libraryRouter from "./library";
 import systemRouter from "./system";
 import collectionsRouter from "./collections";
 import searchRouter from "./search";
+import facesRouter from "./faces";
 
 const router: IRouter = Router();
 
@@ -42,5 +43,6 @@ router.use(libraryRouter);
 router.use(systemRouter);
 router.use(collectionsRouter);
 router.use(searchRouter);
+router.use(facesRouter);
 
 export default router;

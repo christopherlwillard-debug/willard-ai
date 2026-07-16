@@ -15,6 +15,7 @@ import {
   Zap,
   BookImage,
   FolderHeart,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout, getGetSettingsLogoUrl } from "@workspace/api-client-react";
@@ -54,6 +55,7 @@ const navigation = [
   { name: "Media", href: "/media", icon: ImageIcon },
   { name: "Library", href: "/library", icon: BookImage },
   { name: "Collections", href: "/collections", icon: FolderHeart },
+  { name: "People", href: "/people", icon: Users },
   { name: "Archives", href: "/archives", icon: Archive },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "Operations", href: "/organize", icon: Boxes },

@@ -13,3 +13,4 @@ export * from "./library_jobs";
 export * from "./collections";
 export * from "./library_activity";
 export * from "./media_ai";
+export * from "./faces";

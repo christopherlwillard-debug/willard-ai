@@ -16,6 +16,7 @@ import { recoverInterruptedJobs } from "./lib/library-engine";
 import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
+import { startFaceRecognition } from "./lib/face-recognition";
 
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
@@ -141,6 +142,37 @@ export async function bootstrapSessionTable(): Promise<void> {
       intent_json jsonb,
       created_at timestamp NOT NULL DEFAULT now(),
       last_used_at timestamp
+    );
+    CREATE TABLE IF NOT EXISTS people (
+      id serial PRIMARY KEY,
+      name text,
+      cover_face_id integer,
+      face_count integer NOT NULL DEFAULT 0,
+      centroid vector(512),
+      hidden boolean NOT NULL DEFAULT false,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS faces (
+      id serial PRIMARY KEY,
+      media_file_id integer NOT NULL,
+      person_id integer,
+      box_x real NOT NULL,
+      box_y real NOT NULL,
+      box_w real NOT NULL,
+      box_h real NOT NULL,
+      score real NOT NULL,
+      crop_path text,
+      embedding vector(512),
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS faces_file_idx ON faces (media_file_id);
+    CREATE INDEX IF NOT EXISTS faces_person_idx ON faces (person_id);
+    CREATE TABLE IF NOT EXISTS face_scan_state (
+      media_file_id integer PRIMARY KEY,
+      face_version integer NOT NULL DEFAULT 1,
+      face_count integer NOT NULL DEFAULT 0,
+      scanned_at timestamp NOT NULL DEFAULT now(),
+      error text
     );
   `);
   await pool.query(`
@@ -281,6 +313,7 @@ startLibraryMonitor();
 // batching, auto-recovery — keeps the index live without manual rescans.
 startLibraryWatcher();
 startAiEnrichment();
+startFaceRecognition();
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
