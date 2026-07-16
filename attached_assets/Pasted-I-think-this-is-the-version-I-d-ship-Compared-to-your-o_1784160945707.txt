@@ -1,0 +1,80 @@
+I think this is the version I'd ship.
+
+Compared to your original #78, it's no longer "how to run a Node app"—it's "how Willard AI should feel the first time someone opens it." That's a much stronger product direction.
+
+There are only two small things I'd still add.
+
+1. Library health monitoring
+
+Since this is an AI media center, the app should notice when the library becomes unavailable.
+
+For example, if your WD My Cloud goes offline or Z:\ disconnects:
+
+Media Library Offline
+
+Your media library isn't currently available.
+
+Last known location:
+Z:\
+
+Retry Connection
+
+Browse for New Location
+
+This is much friendlier than letting searches silently fail.
+
+I'd add a requirement like:
+
+Library health monitoring: Continuously monitor the configured library location. If it becomes unavailable (network drive disconnected, NAS offline, permissions lost), notify the user in plain English, pause indexing automatically, and offer Retry or Change Library Location. Automatically resume indexing when the library becomes available again.
+
+2. First-run completion
+
+When indexing finishes, celebrate it.
+
+Instead of silently removing the progress indicator:
+
+Your media library is ready!
+
+54,212 Photos
+
+5,023 Videos
+
+28,411 Documents
+
+Everything has been indexed.
+
+Start searching naturally.
+
+Examples:
+
+"Show vacation pictures."
+
+"Find every PDF about flooring."
+
+"Play birthday videos."
+
+It gives users confidence that the application is ready.
+
+Final thoughts
+
+I wouldn't change anything else.
+
+You've evolved this task from:
+
+"Make Windows launch easier."
+
+into:
+
+"Create a polished first-use experience for an AI-powered media center."
+
+That's exactly the right direction for Willard AI.
+
+If I were planning the roadmap, I'd probably make these the next milestones after #78:
+
+#79 – AI Library Scanner (high-speed indexing, metadata extraction, duplicate detection)
+#80 – AI Collections (automatic albums like Family, Pets, Vacations, Receipts, Business)
+#81 – Natural Language Search ("Show me every picture with my truck in the snow.")
+#82 – Continuous Library Watcher (real-time monitoring of My Cloud for new or changed files)
+#83 – Media Detail View (AI-generated descriptions, tags, related items, timeline, maps, and people)
+
+Those features build directly on the foundation #78 establishes and move Willard AI toward being an intelligent media organizer rather than just another file browser.

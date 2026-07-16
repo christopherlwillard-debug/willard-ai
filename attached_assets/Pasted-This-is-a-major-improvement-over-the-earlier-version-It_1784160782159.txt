@@ -1,0 +1,160 @@
+This is a major improvement over the earlier version. It has shifted from "developer launcher" to "product experience," which matches what Willard AI is supposed to be.
+
+I only have a few suggestions that I think would make it even stronger.
+
+1. Rename "Welcome Flow" to "Library Setup"
+
+"Welcome" only happens once. You may eventually want users to add another NAS, external drive, or local folder.
+
+I'd call it:
+
+Library Setup
+
+Then the same UI can be reused later under:
+
+Settings → Libraries
+
+That avoids building a one-off wizard.
+
+2. Don't assume WD My Cloud
+
+Today you're using a WD My Cloud.
+
+Tomorrow someone might have:
+
+Synology
+QNAP
+USB hard drive
+Internal HDD
+Windows share
+OneDrive sync folder
+
+I'd slightly change:
+
+"We found your WD My Cloud"
+
+to
+
+We found a media library.
+
+Z:\
+
+Looks like a network drive.
+
+Would you like to use it?
+
+If it's obviously a WD share you can mention that, but I'd keep the product storage-agnostic.
+
+3. "Building your library" should continue in the background
+
+This is probably the biggest UX improvement.
+
+Instead of forcing people to wait until everything is indexed...
+
+Do this:
+
+Building your media library...
+
+Photos
+12,314 / 54,212
+
+Videos
+3,114 / 5,023
+
+Documents
+6,221 / 28,411
+
+You can start using Willard AI now.
+
+[Indexing continues in the background]
+
+Then drop them into the dashboard immediately.
+
+Modern apps (Google Photos, Plex, Jellyfin) all do this.
+
+4. Add an onboarding checklist
+
+Instead of immediately throwing someone into the dashboard:
+
+✓ Library Connected
+
+✓ AI Ready
+
+☐ Finish scanning
+
+☐ Enable face recognition
+
+☐ Enable object recognition
+
+☐ Create first Collection
+
+
+Once everything is done...
+
+The checklist disappears forever.
+
+5. Add "Rescan Library"
+
+Not because users should need it often...
+
+But because they'll expect it.
+
+Settings →
+
+Library
+
+Last Scan
+
+Currently Watching
+
+Rescan
+
+Pause Indexing
+
+
+Even if everything watches automatically.
+
+6. This is the only thing I'd actually change in #78
+
+I'd remove ALL references to:
+
+Node
+pnpm
+PostgreSQL
+.env
+
+from the Done Looks Like section.
+
+Those belong under:
+
+Implementation Notes
+
+The success criteria should describe what the user experiences, not how it's implemented.
+
+For example:
+
+Instead of:
+
+Missing node_modules: silently recreated...
+
+Say:
+
+If application components are missing or corrupted, the launcher repairs them automatically without exposing technical terminology.
+
+That gives the developer freedom to change the implementation later without rewriting the specification.
+
+My overall rating
+
+I'd genuinely rate this 9.8/10 as a product specification.
+
+It's now focused on:
+
+the user experience,
+graceful failure handling,
+first-run onboarding,
+self-repair,
+future extensibility.
+
+The only thing I'd adjust is separating user-facing requirements from implementation details. That will make the document more maintainable if you later swap technologies (for example, replacing PostgreSQL with another database or changing the startup process) without changing the intended experience.
+
+I think this version is ready to build.

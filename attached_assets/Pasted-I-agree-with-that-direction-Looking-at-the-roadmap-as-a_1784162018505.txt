@@ -1,0 +1,60 @@
+I agree with that direction.
+
+Looking at the roadmap as a whole, it now feels like a cohesive product roadmap rather than a collection of features.
+
+The dependency chain is exactly how I would build it:
+
+#78 – Easy Launch & First-Time Setup
+Users can install, launch, repair, and connect a library.
+Without this, nothing else matters.
+#79 – AI Library Scanner
+Creates the canonical media records.
+Extracts metadata.
+Builds the searchable foundation.
+#82 – Continuous Library Watcher
+Keeps the canonical records synchronized with the NAS.
+Prevents the library from becoming stale.
+#81 – AI Search & Discovery
+Operates entirely against the live library index.
+Never has to scan the filesystem itself.
+#83 – Intelligent Media Detail View
+Simply presents everything already known about an item.
+Writes user corrections back to the same canonical record.
+
+That separation of responsibilities is exactly what you want.
+
+About #80 (AI Collections)
+
+I actually agree with leaving it unapproved for now.
+
+Earlier, Collections felt like a core feature. After seeing the architecture mature, I now think Collections should be built on top of the scanner, watcher, and search instead of alongside them.
+
+That means Collections can become much smarter:
+
+Dynamic ("Photos taken at Yellowstone")
+AI-generated ("Family BBQs")
+Manual collections
+Hybrid collections (manual + AI)
+Saved searches as collections
+Smart rules ("All PDFs tagged Flooring")
+
+It deserves its own specification when the underlying systems are already in place.
+
+One thing I'd do before implementation
+
+Before approving #78, I'd create a short project document—something like Architecture.md or SYSTEM_OVERVIEW.md—that isn't a roadmap task but defines the permanent rules of the system.
+
+It would contain principles such as:
+
+Canonical Media Record (single source of truth)
+Background-first architecture (heavy work always runs in background jobs)
+Local-first processing (AI runs locally where practical)
+Graceful degradation (missing metadata, GPS, faces, or optional components never break the UI)
+Progressive loading (show useful information immediately; enrich over time)
+Incremental by default (never rebuild if an incremental update will do)
+User edits override AI (manual corrections are preserved and take precedence over AI-generated values)
+Storage-agnostic (works with WD My Cloud, Synology, QNAP, USB drives, local disks, and Windows shares)
+
+Those aren't implementation tasks—they're architectural rules. Having them written down gives every future feature a consistent foundation.
+
+Overall, I think you're at the point where the planning has paid off. I'd stop expanding the roadmap and begin implementation with #78. As you build, you'll naturally discover refinements, but the architecture is now solid enough that you're unlikely to need major redesigns later.

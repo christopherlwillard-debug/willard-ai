@@ -1,0 +1,311 @@
+#78 - Windows One-Click Starter (Revised)
+What & Why
+
+Willard AI should be runnable by anyone without using Command Prompt, PowerShell, or VS Code.
+
+A Windows user should be able to:
+
+Download the project
+Extract the ZIP
+Double-click Start Willard AI.bat
+Wait
+Browser opens automatically
+
+The starter should handle all common first-run setup, explain problems in plain English, and never assume the user understands Node.js or terminals.
+
+Done Looks Like
+One-click launch
+
+A user can:
+
+Download project
+Extract ZIP
+Double-click Start Willard AI.bat
+
+No terminal commands required.
+
+Friendly prerequisite checker
+
+Before starting anything, the launcher checks for:
+
+Node.js
+pnpm
+PostgreSQL
+FFmpeg
+.env
+node_modules
+
+Every failure should be shown like this:
+
+❌ Node.js is not installed.
+
+Willard AI needs Node.js to run.
+
+Download here:
+https://nodejs.org/
+
+After installing, close this window and
+double-click Start Willard AI.bat again.
+
+Press any key to exit...
+
+Not:
+
+ENOENT
+PATH ERROR
+command not found
+
+No stack traces.
+
+Automatic first-run setup
+
+If
+
+node_modules
+
+doesn't exist:
+
+Display
+
+First time setup detected.
+
+Installing required packages...
+
+This normally takes 2–5 minutes.
+
+Automatically run
+
+pnpm install
+
+No user interaction required.
+
+.env helper
+
+If
+
+.env
+
+doesn't exist:
+
+Ask
+
+A configuration file is missing.
+
+Create one now? (Y/N)
+
+If yes:
+
+Copy
+
+.env.example
+
+to
+
+.env
+
+Then display
+
+Open .env and edit this line:
+
+DATABASE_URL=
+
+After saving the file,
+run Start Willard AI again.
+
+Pause.
+
+PostgreSQL check
+
+Detect if PostgreSQL exists.
+
+If missing:
+
+PostgreSQL isn't installed.
+
+Willard AI stores data in PostgreSQL.
+
+Download:
+https://www.postgresql.org/download/windows/
+
+After installation,
+double-click Start Willard AI again.
+Database connection check (new)
+
+Don't just verify PostgreSQL exists.
+
+Also verify:
+
+server is running
+connection succeeds
+
+If not:
+
+Unable to connect to PostgreSQL.
+
+Possible causes:
+
+• PostgreSQL isn't running
+• DATABASE_URL is incorrect
+• Password is wrong
+
+Check your .env file.
+
+Press any key to exit...
+
+This prevents mysterious startup failures later.
+
+FFmpeg check
+
+If missing:
+
+FFmpeg wasn't found.
+
+Video processing features won't work.
+
+Install from:
+
+https://ffmpeg.org/download.html
+API launch
+
+Start
+
+pnpm api
+
+(or whatever Task #76 established)
+
+in its own window.
+
+Title:
+
+Willard AI API Server
+Web launch
+
+Start
+
+pnpm dev
+
+Title:
+
+Willard AI Web App
+Readiness detection (improved)
+
+Instead of sleeping 10 seconds,
+
+poll
+
+http://localhost:5000
+
+every second.
+
+Maximum:
+
+60 seconds
+
+When ready:
+
+Open
+
+http://localhost:5000
+Startup status
+
+While waiting:
+
+Starting API...
+
+Waiting for API...
+
+Starting Web App...
+
+Waiting for browser...
+
+Launching Willard AI...
+
+No blank window.
+
+Browser
+
+Only open the browser once.
+
+If already open, don't spawn additional tabs.
+
+Stop instructions
+
+Display:
+
+Willard AI is running.
+
+To stop:
+
+Close both command windows.
+
+or
+
+Press Ctrl+C inside each window.
+Optional quality-of-life improvement (Highly Recommended)
+
+Create
+
+Stop Willard AI.bat
+
+which automatically closes both processes.
+
+No hunting through Task Manager.
+
+Logging (new)
+
+Create
+
+logs/
+
+Automatically save:
+
+logs/api.log
+
+logs/web.log
+
+This makes troubleshooting dramatically easier.
+
+Replit safety
+
+If running inside Replit:
+
+Launcher immediately exits.
+
+No changes to cloud deployment.
+
+No effect on Replit workflows.
+
+LOCAL_SETUP.md
+
+Rewrite to begin with:
+
+Running Willard AI
+The Easy Way
+Download the project
+Extract it
+Double-click Start Willard AI.bat
+Follow any on-screen instructions
+Your browser will open automatically
+Manual Setup (Advanced)
+
+Keep the existing manual instructions below as a fallback.
+
+Out of Scope
+Windows installer (.exe)
+Electron desktop app
+Automatic installation of Node.js
+Automatic PostgreSQL installation
+Automatic FFmpeg installation
+Changes to existing API or web startup scripts
+Changes to ports or environment loading
+Relevant Files
+Start Willard AI.bat
+Start Willard AI.ps1 (new)
+Stop Willard AI.bat (new)
+LOCAL_SETUP.md
+.env.example
+artifacts/api-server/package.json
+artifacts/willard-ai/vite.config.ts
+replit.md
+
+I would also add one more feature that users tend to love: automatic updates. On startup, the launcher could detect whether the project is a Git clone and, if so, ask "Check for updates?" and run git pull before launching. It's completely optional but saves you from manually updating your local copy whenever you improve Willard AI.

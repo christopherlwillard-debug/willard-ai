@@ -1,0 +1,199 @@
+That's actually a better-defined product, and I'd optimize #78 for that.
+
+Think of apps like:
+
+Plex
+Jellyfin
+Emby
+Google Photos
+
+When you launch them, you don't care what they're doing internally—you just want your library to open.
+
+I'd change the goal of #78
+
+Instead of:
+
+Windows One-Click Starter
+
+I'd call it:
+
+Easy Launch & First-Time Setup
+
+The launcher should make Willard AI feel like a normal media application.
+
+The startup should feel like this
+Willard AI
+
+Preparing your media library...
+
+✓ AI Engine Ready
+
+✓ Database Ready
+
+✓ Media Library Ready
+
+✓ Watching My Cloud
+
+Opening Willard AI...
+
+Not:
+
+Checking Node.js...
+
+Checking pnpm...
+
+Checking PostgreSQL...
+
+Those are implementation details.
+
+First launch
+
+If it's the first time:
+
+Welcome to Willard AI
+
+Let's set up your media library.
+
+Where are your files?
+
+☑ WD My Cloud
+
+☐ Local Folders
+
+☐ External Drive
+
+[Continue]
+Detect My Cloud automatically
+
+If your WD My Cloud is mounted as Z:\:
+
+We found your WD My Cloud.
+
+Library Location
+
+Z:\
+
+Would you like to use it?
+
+[Yes]
+
+If it isn't mounted:
+
+No WD My Cloud was detected.
+
+Browse to your media folder.
+
+[Browse...]
+Build the library
+
+Instead of saying:
+
+Installing packages...
+
+show something meaningful to the user:
+
+Building your media library...
+
+Photos
+
+███████░░░░░
+
+Videos
+
+██████████░░
+
+Documents
+
+█████░░░░░░
+
+Creating AI search index...
+
+Now the user understands what's happening.
+
+Launch into the library
+
+Instead of a blank page, open to:
+
+Welcome back.
+
+Photos
+
+Videos
+
+Documents
+
+Collections
+
+Recent Files
+
+Search everything...
+
+It should immediately feel like a media center.
+
+Keep the technical checks hidden
+
+Your current checks are still good:
+
+Node.js
+pnpm
+PostgreSQL
+FFmpeg
+.env
+
+But they should only appear if there's a problem.
+
+For example:
+
+Willard AI couldn't start.
+
+The media database isn't available.
+
+Click Repair to fix it.
+
+[Repair]
+
+Not:
+
+PostgreSQL connection failed.
+
+unless the user clicks Show Details.
+
+Add a "Repair Willard AI" button
+
+This is the one feature I think your current spec is missing.
+
+Alongside:
+
+Start Willard AI.bat
+Stop Willard AI.bat
+
+add:
+
+Repair Willard AI.bat
+
+It would:
+
+Check dependencies.
+Reinstall packages if needed.
+Verify the database.
+Rebuild the search index if necessary.
+Verify the My Cloud connection.
+Repair common configuration issues.
+
+Most users would never need to understand why something broke—they'd just click Repair Willard AI.
+
+My only major change to #78
+
+Don't think of it as a launcher.
+
+Think of it as the startup experience for a polished media center.
+
+The user should never think:
+
+"I'm starting a Node app."
+
+They should think:
+
+"I'm opening my AI media library."
+
+If you can make startup feel as seamless as opening Plex or Jellyfin while keeping all the technical complexity behind the scenes, you'll have the kind of experience you're aiming for.

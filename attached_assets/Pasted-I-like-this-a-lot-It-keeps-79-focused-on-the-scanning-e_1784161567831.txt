@@ -1,0 +1,637 @@
+I like this a lot. It keeps #79 focused on the scanning engine instead of trying to become AI search or media management. I would make a few additions because this is going to be the foundation of everything else. If the scanner is solid, every future feature becomes easier.
+Add a Metadata Cache
+The scanner shouldn't have to reopen every file on every rescan.
+Done looks like
+Each indexed file stores:
+Full path
+File size
+Last modified timestamp
+Fast content fingerprint
+Extracted metadata
+Last indexed timestamp
+Scanner version
+If none of those values changed, reuse cached metadata immediately.
+This makes rescans dramatically faster.
+
+Versioned Scanner
+Eventually you'll improve metadata extraction.
+If you add GPS parsing six months from now, you shouldn't force everyone to delete their library.
+Add:
+Scanner versioning: Every indexed item stores the metadata schema/scanner version used to produce it. Future scanner improvements can selectively reprocess outdated items without rebuilding the entire library.
+
+Better Duplicate Detection
+I wouldn't rely on hashing every file immediately.
+I'd make it a two-stage process.
+Stage 1 (fast)
+Same file size
+Same filename (optional)
+Similar timestamps
+↓
+Potential duplicate
+↓
+Stage 2
+SHA-256 (or equivalent)
+Confirm duplicate
+That prevents hashing 50 TB of media unnecessarily.
+
+Add Cancel / Resume
+Large NAS scans may take hours.
+The user should be able to:
+Pause Scan
+
+Resume Scan
+
+Cancel Scan
+If canceled:
+Resume later where it left off.
+Not from the beginning.
+
+Index Prioritization
+Instead of scanning alphabetically...
+Scan like this:
+Photos
+Videos
+Documents
+Everything else
+Or even better:
+Recently modified folders first.
+That gives users useful results much sooner.
+
+Scan Summary
+After every scan:
+Scan Complete
+
+54,212 Photos
+
+5,023 Videos
+
+28,411 Documents
+
+812 New Files
+
+17 Updated Files
+
+3 Duplicate Groups
+
+4 Files Skipped
+Clicking any number should show that subset.
+
+Error Reporting
+Instead of:
+4 files skipped
+Allow:
+Skipped Files
+
+IMG0003.JPG
+
+Corrupt JPEG
+
+Resume.pdf
+
+Password Protected
+
+Video.mov
+
+Unsupported Codec
+That makes troubleshooting much easier.
+
+Throttling
+Very important for NAS performance.
+Allow:
+Performance
+
+High
+
+Balanced
+
+Low
+So indexing doesn't saturate the network.
+
+Acceptance Test I'd Add
+Rename 10,000 files without changing their contents. Verify the scanner updates paths efficiently without unnecessarily re-extracting metadata or treating every file as new.
+This catches an important real-world case when users reorganize folders.
+
+Overall
+I'd rate this 10/10 as the scanner specification with these additions.
+My recommended roadmap would then be:
+✅ #78 — Easy Launch & First-Time Setup
+✅ #79 — AI Library Scanner
+#80 — Continuous Library Watcher
+#81 — AI Search Engine
+#82 — AI Collections
+#83 — Media Details
+#84 — Timeline & Maps
+#85 — Duplicate Manager
+The first two establish a rock-solid foundation. Once the scanner exists, every other feature can build on the same indexed metadata instead of rescanning files repeatedly.
+I think this is another strong task. I would actually make #82 the "brains" of keeping the library healthy, not just a file watcher. The only things I'd add are around reliability and recovery.
+
+1. Event + Sweep Hybrid (Explicit Requirement)
+Right now you mention SMB fallbacks. I'd make the architecture explicit.
+Hybrid watching: Use native filesystem change notifications when available for near real-time updates. Automatically fall back to lightweight periodic verification sweeps for network shares (such as SMB/My Cloud) where events are unreliable. The user should experience a single, seamless "live library" regardless of the underlying mechanism.
+That lets the implementation choose the best strategy per library.
+
+2. Catch-up After Downtime
+Suppose:
+NAS is offline for 3 days.
+User copies 10,000 photos.
+NAS comes back.
+The watcher should say:
+Library Reconnected
+
+Checking for changes...
+
+2,341 new files
+
+127 updated files
+
+18 deleted files
+Not:
+Full rescan started...
+I'd make this an explicit requirement.
+
+3. Watcher Status
+The dashboard should expose the watcher's health.
+Example:
+Library Status
+
+● Connected
+
+Watching
+
+Last Change
+
+12 seconds ago
+
+Last Scan
+
+2 minutes ago
+If paused:
+Watching Paused
+If disconnected:
+Library Offline
+
+4. Preserve Identity
+This is probably the most important addition.
+You already say:
+metadata, favorites and collections survive.
+I'd broaden that.
+A renamed file should keep:
+Metadata
+Collections
+Favorites
+AI-generated descriptions
+Manual tags
+Notes
+Ratings
+Future face assignments
+Future people assignments
+Basically:
+Every piece of user or AI knowledge attached to a file remains attached after renames or moves whenever the file can be confidently identified.
+That'll save you a lot of pain later.
+
+5. Burst Protection
+Real NAS devices often receive thousands of files at once.
+Instead of:
+10,000 indexing jobs
+Batch them.
+1,247 new files detected
+
+Preparing updates...
+One indexing session.
+Not thousands.
+
+6. Conflict Detection
+If a file changes while you're indexing it:
+Photo updated during indexing.
+
+Restarting analysis...
+Rather than storing inconsistent metadata.
+
+7. Watcher Recovery
+If the watcher crashes:
+Watcher restarted automatically.
+
+Checking for missed changes...
+Users shouldn't have to restart Willard AI.
+
+8. Acceptance Test I'd Add
+Copy 25,000 files into the watched library while the watcher is already running. Verify they are batched efficiently into background indexing jobs without freezing the application or creating duplicate work.
+That simulates a real-world scenario of importing a large camera archive.
+
+9. My Favorite Addition
+This one ties #78, #79, and #82 together beautifully.
+Instead of:
+Indexing...
+Show:
+Library Activity
+
+17 new files
+
+3 updated
+
+2 moved
+
+1 deleted
+
+Updated 8 seconds ago
+It makes the application feel alive and gives users confidence that it's keeping up with their library.
+
+Overall
+I think #82 is now the bridge between #79 (scanner) and #81 (search).
+Once this exists:
+#79 builds the library.
+#82 keeps it current.
+#81 can trust that search results are always based on the latest library state.
+#83 (Media Details) can safely attach AI-generated information to stable file identities that survive moves and renames.
+That's exactly the kind of foundation you want before adding more advanced AI features.
+I actually think #81 is the feature that will define whether Willard AI feels "smart" or just "organized." It's already a solid spec, but I'd expand it because search is going to be the centerpiece of the app.
+
+I'd rename it slightly
+#81 – AI Search & Discovery
+The goal isn't just finding files—it's helping users discover things they forgot they had.
+
+1. Conversational Search
+Don't limit it to one query.
+For example:
+Show me pictures from Yellowstone.
+
+Only the ones with waterfalls.
+
+Now just the ones we took at sunset.
+
+Exclude screenshots.
+Each follow-up should refine the previous result instead of starting over.
+Done looks like
+Follow-up questions operate on the current search context until the user starts a new search.
+
+2. Hybrid Search (Very Important)
+Use all available signals together:
+File name
+Folder
+Metadata
+EXIF
+OCR
+AI image understanding
+Document text
+Dates
+GPS
+Collections
+Favorites
+Manual tags
+Future AI descriptions
+A query like:
+"Pictures of my truck at the lake in 2024"
+should combine every one of those if available.
+
+3. Explain Why It Matched
+This is one of the biggest UX improvements.
+Instead of:
+IMG_4821.jpg
+Show:
+Matched because:
+
+✓ Truck detected
+
+✓ Lake detected
+
+✓ Taken July 2024
+
+✓ GPS matches Kentucky Lake
+Users trust AI more when it explains itself.
+
+4. Search Suggestions
+Before typing:
+Search everything...
+
+Try:
+
+Vacation photos
+
+Receipts
+
+Videos
+
+Recently Added
+
+Dogs
+
+Home Depot
+After typing:
+flo...
+Suggestions:
+Flooring
+
+Floor Plans
+
+Florida
+
+Flooring Receipts
+
+5. Similar Search Everywhere
+Not just images.
+Allow:
+Similar photos
+Similar videos
+Similar documents
+Similar PDFs
+For example:
+Right-click invoice →
+Find Similar
+Returns invoices with similar layouts or content.
+
+6. Search Filters
+Natural language should be enough most of the time, but users still expect filters.
+Media Type
+
+Photo
+
+Video
+
+Document
+
+Audio
+
+Date
+
+People
+
+Objects
+
+Location
+
+Collections
+
+Favorites
+The filters should work together with natural language.
+
+7. Save Searches
+Huge feature.
+Saved Searches
+
+Pictures with dogs
+
+Invoices
+
+Videos from Arizona
+
+Home Depot Receipts
+They're effectively dynamic smart folders.
+
+8. Search History
+Recent Searches
+
+Vacation
+
+Flooring
+
+Dogs
+
+Invoices
+
+Truck
+Small feature, big usability improvement.
+
+9. Search Confidence
+Sometimes AI isn't certain.
+Instead of treating everything equally:
+Very Likely
+
+Likely
+
+Possible
+Or simply rank by confidence.
+
+10. No Results
+Instead of:
+No Results
+Show:
+No photos matched.
+
+Try:
+
+• Remove "2024"
+
+• Search "truck"
+
+• Search all media instead of photos
+
+• Browse similar collections
+
+11. Acceptance Tests I'd Add
+Complex query
+Show me pictures of my truck at sunset in Kentucky from last summer.
+Returns relevant photos using:
+object recognition
+dates
+GPS
+metadata
+
+Conversational refinement
+Show vacation photos.
+
+Only Yellowstone.
+
+Only waterfalls.
+
+Only sunsets.
+Should narrow the previous results.
+
+OCR + Object
+Show Home Depot receipts.
+Uses:
+OCR
+document classification
+
+Similar Search
+Choose one image.
+Find Similar.
+Returns visually similar images without duplicates.
+
+12. One thing I would NOT add yet
+I would not add AI chat over the entire library here.
+For example:
+Which vacation had the most waterfall pictures?
+or
+Which truck appears most often?
+Those belong in a later milestone, maybe #86 – AI Media Assistant.
+Keep #81 focused on finding media, not analyzing the entire library.
+
+Overall
+I'd honestly rate this 10/10 with these additions.
+Your roadmap is becoming very coherent:
+#78 → Easy Launch & First-Time Setup
+#79 → AI Library Scanner
+#80 → AI Collections
+#81 → AI Search & Discovery
+#82 → Continuous Library Watcher
+#83 → Media Details
+The only sequencing change I'd suggest is moving #82 (Continuous Library Watcher) before #81. A search engine is much more reliable when the library is always current, and the watcher ensures that newly added, moved, or deleted files are reflected in search results without requiring manual rescans. That creates a stronger foundation for the search experience.
+I think this is another excellent milestone, but I would actually expand it because this is the page users will spend the most time on. It's the equivalent of the photo viewer in Google Photos or the movie page in Plex.
+I'd rename it
+#83 – Intelligent Media Detail View
+It better reflects that this page is assembling information from multiple systems rather than just showing file properties.
+
+1. File Information
+Besides AI information, users still expect the basics.
+Add a collapsible File Information section:
+File name
+File path
+File type
+Size
+Resolution
+Duration (videos)
+Date created
+Date modified
+Camera/device (if available)
+Folder location
+That makes the page useful even when AI data isn't available.
+
+2. AI Confidence
+If the AI says:
+"A golden retriever playing in a yard."
+Users should be able to see whether it's confident.
+For example:
+Description
+
+A golden retriever playing in a yard.
+
+Confidence: High
+Or simply use a subtle confidence indicator.
+
+3. Editable AI
+One of the biggest long-term improvements:
+Allow users to correct AI mistakes.
+For example:
+AI says:
+Dog
+User changes it to:
+Coyote
+The correction becomes part of that item's metadata without overwriting the original AI output.
+
+4. Related Items Categories
+Instead of one generic section:
+Related Items
+Break it into:
+Same Event
+Same Day
+Same Location
+Similar Images
+Same People
+Same Collection
+That makes the relationships much easier to understand.
+
+5. Event Detection
+Instead of every photo standing alone:
+Birthday Party
+
+June 15, 2025
+
+84 Photos
+
+6 Videos
+Opening one item should let users jump to the whole event.
+
+6. EXIF Viewer
+For photographers (or just curious users):
+A collapsible section with:
+Camera
+Lens
+Exposure
+ISO
+Aperture
+Focal length
+Hidden by default.
+
+7. Document Preview
+For PDFs and Office files:
+Instead of just metadata:
+Show a preview of the first page.
+For images:
+Large preview.
+For videos:
+Playable preview.
+
+8. AI Actions
+Since this is the detail page, add contextual actions like:
+Find Similar
+More Like This
+Show Same Event
+Show Same Person
+Show Same Location
+View Timeline
+Everything is centered around the current item.
+
+9. User Notes
+Very valuable.
+Every media item can have:
+Notes
+
+"This was the first flooring job for Willard's."
+
+"This was our Arizona vacation."
+These notes should become searchable.
+
+10. Progressive Loading
+You already mention progressive loading.
+I'd make the order explicit:
+Preview
+Basic metadata
+Timeline
+Related items
+AI description
+AI tags
+Faces
+Maps
+Similar items
+The page should never feel like it's waiting.
+
+11. Acceptance Tests I'd Add
+Missing AI
+Open an item before AI processing finishes.
+The page should still be fully usable while AI sections load later.
+
+AI Correction
+User edits an AI tag.
+Search immediately reflects the correction.
+
+Related Navigation
+Opening a related item should preserve navigation so users can continue exploring naturally.
+
+Notes
+Add a note.
+Search for words from the note.
+Item appears.
+
+12. Future-Proof the Page
+One design suggestion:
+Make every section modular.
+For example:
+Preview
+
+Description
+
+Tags
+
+People
+
+Map
+
+Timeline
+
+Related
+
+Notes
+
+File Information
+Each section can be omitted independently.
+That way, if a PDF has no GPS or faces, the page simply doesn't render those cards instead of showing empty placeholders.
+
+Overall
+I think this is a 10/10 milestone with these additions.
+One thing I especially like is that your roadmap now builds naturally:
+#78 – Easy Launch & First-Time Setup
+#79 – AI Library Scanner
+#82 – Continuous Library Watcher
+#81 – AI Search
+#83 – Intelligent Media Detail View
+Each milestone depends on the previous one, and by the time you reach #83, the detail page becomes the place where all the scanner, watcher, search, and AI metadata come together into a single, rich view of each media item.
