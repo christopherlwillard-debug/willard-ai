@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -15,6 +15,9 @@ export const appSettingsTable = pgTable("app_settings", {
   otherFilesDestination: text("other_files_destination").notNull().default(""),
   logoPath: text("logo_path"),
   scanPerformance: text("scan_performance").notNull().default("BALANCED"),
+  indexingPaused: boolean("indexing_paused").notNull().default(false),
+  onboardingDismissedAt: timestamp("onboarding_dismissed_at"),
+  celebrationShownAt: timestamp("celebration_shown_at"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

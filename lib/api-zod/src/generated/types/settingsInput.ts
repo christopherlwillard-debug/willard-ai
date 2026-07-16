@@ -14,4 +14,6 @@ export interface SettingsInput {
   documentsDestination?: string;
   otherFilesDestination?: string;
   scanPerformance?: SettingsInputScanPerformance;
+  onboardingDismissed?: boolean;
+  celebrationShown?: boolean;
 }

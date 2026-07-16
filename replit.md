@@ -1,6 +1,8 @@
-# [Project name]
+# Willard AI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Personal NAS Media & Data Center — indexes, organizes, and searches a user's local media drive with AI assistance.
+
+Deep-dive into how the pieces fit together: **`ARCHITECTURE.md`**.
 
 ## Run & Operate
 
@@ -18,7 +20,11 @@ The server reads files directly from disk, so it can only see a user's local
 drive (e.g. a Windows `Z:`) when it runs on that machine — on Replit's cloud
 those paths are unreachable and the library reports "Library Offline".
 
-- Full Windows/local setup guide: **`LOCAL_SETUP.md`**
+- Full Windows/local setup guide: **`LOCAL_SETUP.md`** — the easy path is the
+  root-level launcher scripts (`Start Willard AI.bat`, `Stop Willard AI.bat`,
+  `Repair Willard AI.bat`, backed by `scripts/launcher/*.ps1`). They are
+  Windows-only and exit immediately on Replit/non-Windows. Launcher logs go to
+  the git-ignored `logs/` folder.
 - Copy `.env.example` → `.env` for local configuration. The API server loads the
   root `.env` automatically (via `--env-file-if-exists`); on Replit it is absent
   and the platform supplies env vars instead.

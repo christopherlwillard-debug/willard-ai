@@ -63,10 +63,16 @@ async function getOrCreateSettings() {
   return created;
 }
 
+// Never send credential hashes to the client.
+function sanitizeSettings<T extends Record<string, unknown>>(settings: T): Omit<T, "passwordHash" | "recoveryKeyHash"> {
+  const { passwordHash: _p, recoveryKeyHash: _r, ...rest } = settings;
+  return rest as Omit<T, "passwordHash" | "recoveryKeyHash">;
+}
+
 router.get("/settings", async (_req, res) => {
   try {
     const settings = await getOrCreateSettings();
-    res.json(settings);
+    res.json(sanitizeSettings(settings));
   } catch (err) {
     res.status(500).json({ error: "Failed to load settings" });
   }
@@ -76,20 +82,22 @@ router.put("/settings", async (req, res) => {
   try {
     const body = UpdateSettingsBody.parse(req.body);
     const existing = await getOrCreateSettings();
-    const [updated] = await db
-      .update(appSettingsTable)
-      .set({ ...body })
-      .where(eq(appSettingsTable.id, existing.id))
-      .returning();
 
+    // Boolean flags → timestamp columns (one-way switches from the UI)
+    const { onboardingDismissed, celebrationShown, ...rest } = body;
+    const extra: Record<string, unknown> = {};
+    if (onboardingDismissed === true) extra["onboardingDismissedAt"] = new Date();
+    if (celebrationShown === true) extra["celebrationShownAt"] = new Date();
+
+    // Validate a changed library location BEFORE persisting anything: a failed
+    // save must not commit. Also never auto-create a WillardAI directory for a
+    // location we cannot reach (e.g. a Windows "Z:" drive) — doing so creates a
+    // fake local folder that later masks the offline state by reporting "online".
     if (body.nasPath && body.nasPath !== existing.nasPath) {
-      // Never auto-create a WillardAI directory for a location we cannot reach
-      // (e.g. a Windows "Z:" drive). Doing so creates a fake local folder that
-      // later masks the offline state by reporting "online".
       const reach = checkNasReachable(body.nasPath);
       if (!reach.online) {
         res.status(422).json({
-          error: `Library Offline — ${reach.message}. The library location was saved, but it cannot be reached from this server, so no WillardAI directory was created.`,
+          error: `Library Offline — ${reach.message}. The library location was NOT saved because it cannot be reached from this server.`,
         });
         return;
       }
@@ -101,13 +109,19 @@ router.put("/settings", async (req, res) => {
         const msg = err instanceof Error ? err.message : "Unknown error";
         logger.warn({ err, nasPath: body.nasPath }, "Failed to create WillardAI directory on NAS");
         res.status(422).json({
-          error: `Settings saved, but WillardAI directory could not be created at '${body.nasPath}/WillardAI': ${msg}. Ensure the NAS path is mounted and writable.`,
+          error: `Library location was NOT saved: the WillardAI directory could not be created at '${body.nasPath}/WillardAI': ${msg}. Ensure the path is mounted and writable.`,
         });
         return;
       }
     }
 
-    res.json(updated);
+    const [updated] = await db
+      .update(appSettingsTable)
+      .set({ ...rest, ...extra })
+      .where(eq(appSettingsTable.id, existing.id))
+      .returning();
+
+    res.json(sanitizeSettings(updated));
   } catch (err) {
     res.status(400).json({ error: "Invalid request" });
   }
@@ -217,7 +231,7 @@ router.post(
         .returning();
 
       logger.info({ destPath }, "Branding logo uploaded");
-      res.json(updated);
+      res.json(sanitizeSettings(updated));
     } catch (err) {
       logger.error({ err }, "Failed to upload logo");
       res.status(500).json({ error: "Failed to upload logo" });
@@ -236,7 +250,7 @@ router.delete("/settings/logo", async (_req, res) => {
       .set({ logoPath: null })
       .where(eq(appSettingsTable.id, settings.id))
       .returning();
-    res.json(updated);
+    res.json(sanitizeSettings(updated));
   } catch (err) {
     res.status(500).json({ error: "Failed to remove logo" });
   }

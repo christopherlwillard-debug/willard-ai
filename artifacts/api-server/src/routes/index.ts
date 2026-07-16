@@ -15,6 +15,7 @@ import organizeRouter from "./organize";
 import optimizeRouter from "./optimize";
 import mediaRouter from "./media";
 import libraryRouter from "./library";
+import systemRouter from "./system";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(organizeRouter);
 router.use(optimizeRouter);
 router.use(mediaRouter);
 router.use(libraryRouter);
+router.use(systemRouter);
 
 export default router;

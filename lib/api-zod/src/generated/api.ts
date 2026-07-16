@@ -146,7 +146,10 @@ export const GetSettingsResponse = zod.object({
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
   "logoPath": zod.string().nullish(),
-  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish()
 })
 
 
@@ -159,7 +162,9 @@ export const UpdateSettingsBody = zod.object({
   "videosDestination": zod.string().optional(),
   "documentsDestination": zod.string().optional(),
   "otherFilesDestination": zod.string().optional(),
-  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "onboardingDismissed": zod.boolean().optional(),
+  "celebrationShown": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -171,7 +176,10 @@ export const UpdateSettingsResponse = zod.object({
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
   "logoPath": zod.string().nullish(),
-  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish()
 })
 
 
@@ -978,7 +986,10 @@ export const UploadSettingsLogoResponse = zod.object({
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
   "logoPath": zod.string().nullish(),
-  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish()
 })
 
 
@@ -994,7 +1005,114 @@ export const DeleteSettingsLogoResponse = zod.object({
   "documentsDestination": zod.string(),
   "otherFilesDestination": zod.string(),
   "logoPath": zod.string().nullish(),
-  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional()
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Server environment awareness (local vs cloud, platform)
+ */
+export const GetSystemEnvironmentResponse = zod.object({
+  "isReplit": zod.boolean(),
+  "isLocal": zod.boolean(),
+  "platform": zod.string(),
+  "isWindows": zod.boolean(),
+  "driveDetectionAvailable": zod.boolean()
+})
+
+
+/**
+ * @summary Detect reachable drives/mounts (local servers only)
+ */
+export const GetSystemDrivesResponse = zod.object({
+  "available": zod.boolean(),
+  "drives": zod.array(zod.object({
+  "path": zod.string(),
+  "label": zod.string(),
+  "kind": zod.enum(['network', 'external', 'local']),
+  "online": zod.boolean(),
+  "itemCount": zod.number().nullable(),
+  "message": zod.string()
+}))
+})
+
+
+/**
+ * @summary Smart library health snapshot (reachability, indexing, reconnect)
+ */
+export const GetLibraryHealthResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Immediately re-check library reachability ("Retry Now")
+ */
+export const RetryLibraryConnectionResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Dismiss the one-time "library reconnected" announcement
+ */
+export const AcknowledgeLibraryReconnectResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Pause background indexing (and any running job)
+ */
+export const PauseIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Resume background indexing (and the most recent paused job)
+ */
+export const ResumeIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
 })
 
 

@@ -13,6 +13,7 @@ import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs } from "./lib/library-engine";
+import { startLibraryMonitor } from "./lib/library-monitor";
 
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
@@ -45,6 +46,12 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS scanner_version integer NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS media_files_fingerprint_idx ON media_files (quick_fingerprint);
     CREATE INDEX IF NOT EXISTS media_files_size_idx ON media_files (nas_path, size_bytes);
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS indexing_paused boolean NOT NULL DEFAULT false;
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS onboarding_dismissed_at timestamp;
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS celebration_shown_at timestamp;
   `);
 }
 
@@ -171,6 +178,10 @@ checkMediaToolsOnStartup();
 
 // Recover library jobs interrupted mid-run
 recoverInterruptedJobs().catch(() => {});
+
+// Smart Library Health: watch reachability, auto-pause on offline,
+// auto-rescan (incremental) on reconnect
+startLibraryMonitor();
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.

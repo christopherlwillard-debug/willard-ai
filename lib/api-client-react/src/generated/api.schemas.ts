@@ -5,6 +5,88 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+export interface SystemEnvironment {
+  isReplit: boolean;
+  isLocal: boolean;
+  platform: string;
+  isWindows: boolean;
+  driveDetectionAvailable: boolean;
+}
+
+export type DriveCandidateKind = typeof DriveCandidateKind[keyof typeof DriveCandidateKind];
+
+
+export const DriveCandidateKind = {
+  network: 'network',
+  external: 'external',
+  local: 'local',
+} as const;
+
+export interface DriveCandidate {
+  path: string;
+  label: string;
+  kind: DriveCandidateKind;
+  online: boolean;
+  /** @nullable */
+  itemCount: number | null;
+  message: string;
+}
+
+export interface DriveList {
+  available: boolean;
+  drives: DriveCandidate[];
+}
+
+export type LibraryHealthStatusProperty = typeof LibraryHealthStatusProperty[keyof typeof LibraryHealthStatusProperty];
+
+
+export const LibraryHealthStatusProperty = {
+  unconfigured: 'unconfigured',
+  online: 'online',
+  offline: 'offline',
+} as const;
+
+/**
+ * @nullable
+ */
+export type LibraryHealthActiveJob = { [key: string]: unknown } | null;
+
+/**
+ * @nullable
+ */
+export type LibraryHealthLastCompleted = { [key: string]: unknown } | null;
+
+export interface LibraryHealth {
+  status: LibraryHealthStatusProperty;
+  path: string;
+  message: string;
+  /** @nullable */
+  lastCheckAt: string | null;
+  /** @nullable */
+  lastOnlineAt: string | null;
+  /** @nullable */
+  offlineSince: string | null;
+  /** @nullable */
+  reconnectedAt: string | null;
+  /** @nullable */
+  reconnectScanJobId: number | null;
+  indexingPaused: boolean;
+  watching: boolean;
+  /** @nullable */
+  lastScanAt?: string | null;
+  /** @nullable */
+  activeJob?: LibraryHealthActiveJob;
+  /** @nullable */
+  lastCompleted?: LibraryHealthLastCompleted;
+}
+
+export interface IndexingToggleResult {
+  ok: boolean;
+  indexingPaused: boolean;
+  /** @nullable */
+  resumedJobId?: number | null;
+}
+
 export interface LogoUpload {
   file: Blob;
 }
@@ -34,6 +116,11 @@ export interface AppSettings {
   /** @nullable */
   logoPath?: string | null;
   scanPerformance?: AppSettingsScanPerformance;
+  indexingPaused?: boolean;
+  /** @nullable */
+  onboardingDismissedAt?: string | null;
+  /** @nullable */
+  celebrationShownAt?: string | null;
 }
 
 export type SettingsInputScanPerformance = typeof SettingsInputScanPerformance[keyof typeof SettingsInputScanPerformance];
@@ -52,6 +139,8 @@ export interface SettingsInput {
   documentsDestination?: string;
   otherFilesDestination?: string;
   scanPerformance?: SettingsInputScanPerformance;
+  onboardingDismissed?: boolean;
+  celebrationShown?: boolean;
 }
 
 export interface NasTestInput {

@@ -32,6 +32,10 @@ tags:
     description: Authentication operations
   - name: organize
     description: Organization Center — extract, route and move files
+  - name: system
+    description: Server environment awareness and drive detection
+  - name: library
+    description: Smart library health and indexing controls
 
 paths:
   /healthz:
@@ -1147,8 +1151,211 @@ paths:
               schema:
                 $ref: "#/components/schemas/AppSettings"
 
+  /system/environment:
+    get:
+      operationId: getSystemEnvironment
+      tags: [system]
+      summary: Server environment awareness (local vs cloud, platform)
+      responses:
+        "200":
+          description: Environment info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemEnvironment"
+
+  /system/drives:
+    get:
+      operationId: getSystemDrives
+      tags: [system]
+      summary: Detect reachable drives/mounts (local servers only)
+      responses:
+        "200":
+          description: Detected drives
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriveList"
+
+  /library/health:
+    get:
+      operationId: getLibraryHealth
+      tags: [library]
+      summary: Smart library health snapshot (reachability, indexing, reconnect)
+      responses:
+        "200":
+          description: Library health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryHealth"
+
+  /library/retry:
+    post:
+      operationId: retryLibraryConnection
+      tags: [library]
+      summary: Immediately re-check library reachability ("Retry Now")
+      responses:
+        "200":
+          description: Refreshed library health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryHealth"
+
+  /library/reconnect-ack:
+    post:
+      operationId: acknowledgeLibraryReconnect
+      tags: [library]
+      summary: Dismiss the one-time "library reconnected" announcement
+      responses:
+        "200":
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResult"
+
+  /library/indexing/pause:
+    post:
+      operationId: pauseIndexing
+      tags: [library]
+      summary: Pause background indexing (and any running job)
+      responses:
+        "200":
+          description: Indexing paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingToggleResult"
+
+  /library/indexing/resume:
+    post:
+      operationId: resumeIndexing
+      tags: [library]
+      summary: Resume background indexing (and the most recent paused job)
+      responses:
+        "200":
+          description: Indexing resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingToggleResult"
+
 components:
   schemas:
+    SystemEnvironment:
+      type: object
+      properties:
+        isReplit:
+          type: boolean
+        isLocal:
+          type: boolean
+        platform:
+          type: string
+        isWindows:
+          type: boolean
+        driveDetectionAvailable:
+          type: boolean
+      required:
+        - isReplit
+        - isLocal
+        - platform
+        - isWindows
+        - driveDetectionAvailable
+
+    DriveCandidate:
+      type: object
+      properties:
+        path:
+          type: string
+        label:
+          type: string
+        kind:
+          type: string
+          enum: [network, external, local]
+        online:
+          type: boolean
+        itemCount:
+          type: ["integer", "null"]
+        message:
+          type: string
+      required:
+        - path
+        - label
+        - kind
+        - online
+        - itemCount
+        - message
+
+    DriveList:
+      type: object
+      properties:
+        available:
+          type: boolean
+        drives:
+          type: array
+          items:
+            $ref: "#/components/schemas/DriveCandidate"
+      required:
+        - available
+        - drives
+
+    LibraryHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [unconfigured, online, offline]
+        path:
+          type: string
+        message:
+          type: string
+        lastCheckAt:
+          type: ["string", "null"]
+        lastOnlineAt:
+          type: ["string", "null"]
+        offlineSince:
+          type: ["string", "null"]
+        reconnectedAt:
+          type: ["string", "null"]
+        reconnectScanJobId:
+          type: ["integer", "null"]
+        indexingPaused:
+          type: boolean
+        watching:
+          type: boolean
+        lastScanAt:
+          type: ["string", "null"]
+        activeJob:
+          type: ["object", "null"]
+        lastCompleted:
+          type: ["object", "null"]
+      required:
+        - status
+        - path
+        - message
+        - lastCheckAt
+        - lastOnlineAt
+        - offlineSince
+        - reconnectedAt
+        - reconnectScanJobId
+        - indexingPaused
+        - watching
+
+    IndexingToggleResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        indexingPaused:
+          type: boolean
+        resumedJobId:
+          type: ["integer", "null"]
+      required:
+        - ok
+        - indexingPaused
+
     LogoUpload:
       type: object
       required: [file]
@@ -1186,6 +1393,12 @@ components:
         scanPerformance:
           type: string
           enum: [HIGH, BALANCED, LOW]
+        indexingPaused:
+          type: boolean
+        onboardingDismissedAt:
+          type: ["string", "null"]
+        celebrationShownAt:
+          type: ["string", "null"]
       required:
         - nasPath
         - lastScanAt
@@ -1211,6 +1424,10 @@ components:
         scanPerformance:
           type: string
           enum: [HIGH, BALANCED, LOW]
+        onboardingDismissed:
+          type: boolean
+        celebrationShown:
+          type: boolean
 
     NasTestInput:
       type: object

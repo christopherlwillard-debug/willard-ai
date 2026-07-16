@@ -19,4 +19,9 @@ export interface AppSettings {
   /** @nullable */
   logoPath?: string | null;
   scanPerformance?: AppSettingsScanPerformance;
+  indexingPaused?: boolean;
+  /** @nullable */
+  onboardingDismissedAt?: string | null;
+  /** @nullable */
+  celebrationShownAt?: string | null;
 }

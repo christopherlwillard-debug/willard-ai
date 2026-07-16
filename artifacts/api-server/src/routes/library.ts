@@ -5,6 +5,7 @@ import { eq, desc, and, lt, sql, gte } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
 } from "../lib/library-engine";
+import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 
 const router = Router();
@@ -13,6 +14,61 @@ async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
   return row?.nasPath ?? null;
 }
+
+// ── GET /api/library/health — smart library health snapshot ──────────────────
+
+router.get("/library/health", async (_req: Request, res: Response) => {
+  const health = getLibraryHealthSnapshot();
+  const activeId = getActiveJobId();
+  const activeJob = activeId !== null ? getJobProgress(activeId) : null;
+  const lastCompleted = activeId === null ? getLastCompletedProgress() : null;
+  const [row] = await db.select({ lastScanAt: appSettingsTable.lastScanAt })
+    .from(appSettingsTable).limit(1);
+  res.json({
+    ...health,
+    lastScanAt: row?.lastScanAt?.toISOString() ?? null,
+    activeJob,
+    lastCompleted,
+  });
+});
+
+// ── POST /api/library/retry — user-triggered "Retry Now" reachability check ──
+
+router.post("/library/retry", async (_req: Request, res: Response) => {
+  const health = await runLibraryCheck();
+  res.json(health);
+});
+
+// ── POST /api/library/reconnect-ack — dismiss the one-time reconnect banner ──
+
+router.post("/library/reconnect-ack", (_req: Request, res: Response) => {
+  acknowledgeReconnect();
+  res.json({ ok: true });
+});
+
+// ── POST /api/library/indexing/pause | resume — user-facing indexing switch ──
+
+router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
+  await db.update(appSettingsTable).set({ indexingPaused: true });
+  const activeId = getActiveJobId();
+  if (activeId !== null) requestPause(activeId);
+  res.json({ ok: true, indexingPaused: true });
+});
+
+router.post("/library/indexing/resume", async (_req: Request, res: Response) => {
+  await db.update(appSettingsTable).set({ indexingPaused: false });
+  // Resume the most recent paused job, if any.
+  const [paused] = await db.select().from(libraryJobsTable)
+    .where(eq(libraryJobsTable.status, "PAUSED"))
+    .orderBy(desc(libraryJobsTable.createdAt))
+    .limit(1);
+  let resumedJobId: number | null = null;
+  if (paused) {
+    const ok = await resumeJob(paused.id);
+    if (ok) resumedJobId = paused.id;
+  }
+  res.json({ ok: true, indexingPaused: false, resumedJobId });
+});
 
 // ── POST /api/library/scan — start a scan job ────────────────────────────────
 

@@ -15,7 +15,11 @@ import {
   uploadSettingsLogo,
   useDeleteSettingsLogo,
   getGetSettingsLogoUrl,
+  useGetLibraryHealth, getGetLibraryHealthQueryKey,
+  usePauseIndexing,
+  useResumeIndexing,
 } from "@workspace/api-client-react";
+import { LibrarySetup } from "@/components/library/library-setup";
 import { useMutation } from "@tanstack/react-query";
 import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -106,6 +110,8 @@ export default function Settings() {
       <div>
         <h1 className="text-3xl font-bold font-mono tracking-tight">SYSTEM_CONFIGURATION</h1>
       </div>
+
+      <LibrarySection />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
@@ -295,6 +301,136 @@ export default function Settings() {
       <SecuritySection />
       <StorageSection />
     </div>
+  );
+}
+
+function LibrarySection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [changing, setChanging] = useState(false);
+
+  const { data: health } = useGetLibraryHealth({
+    query: { queryKey: getGetLibraryHealthQueryKey(), refetchInterval: 10000 },
+  });
+  const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
+  const { data: scanStatus } = useGetScanStatus({
+    query: { queryKey: getGetScanStatusQueryKey(), refetchInterval: 5000 },
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: getGetLibraryHealthQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+  };
+
+  const rescanMutation = useStartScan({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Rescan started" });
+        queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+        invalidate();
+      },
+      onError: (err: any) => toast({ title: "Couldn't start rescan", description: err?.message, variant: "destructive" }),
+    },
+  });
+  const pauseMutation = usePauseIndexing({
+    mutation: { onSuccess: () => { toast({ title: "Indexing paused" }); invalidate(); } },
+  });
+  const resumeMutation = useResumeIndexing({
+    mutation: { onSuccess: () => { toast({ title: "Indexing resumed" }); invalidate(); } },
+  });
+
+  const online = health?.status === "online";
+  const offline = health?.status === "offline";
+  const paused = health?.indexingPaused ?? false;
+  const lastSync = health?.lastCheckAt ? formatDate(health.lastCheckAt) : "—";
+
+  const statusRows = [
+    { label: "Connected", ok: online, detail: offline ? (health?.message || "Library unreachable") : null },
+    { label: "Watching for changes", ok: Boolean(health?.watching) && !paused, detail: paused ? "Indexing paused" : null },
+    { label: "AI Index up to date", ok: online && !scanStatus?.isRunning && Boolean(settings?.lastScanAt), detail: scanStatus?.isRunning ? "Indexing in progress" : null },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center"><HardDrive className="w-5 h-5 mr-2" /> Libraries</CardTitle>
+        <CardDescription>Your media library location, health, and indexing controls.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {changing || !settings?.nasPath ? (
+          <div className="py-2">
+            <LibrarySetup
+              title={settings?.nasPath ? "Change your media library" : "Set up your media library"}
+              subtitle="Pick a detected drive or enter the folder path where your media lives."
+              onDone={() => { setChanging(false); invalidate(); }}
+            />
+            {settings?.nasPath && (
+              <Button variant="ghost" size="sm" className="w-full mt-3" onClick={() => setChanging(false)}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Currently Watching</p>
+                <p className="text-sm font-mono truncate" title={health?.path || settings.nasPath}>{health?.path || settings.nasPath}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Scan</p>
+                <p className="text-sm">{settings.lastScanAt ? formatDate(settings.lastScanAt) : "Never"}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Sync Check</p>
+                <p className="text-sm">{lastSync}</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3 space-y-2">
+              {statusRows.map(({ label, ok, detail }) => (
+                <div key={label} className="flex items-center gap-2 text-sm">
+                  {ok
+                    ? <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                    : <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />}
+                  <span>{label}</span>
+                  {detail && <span className="text-xs text-muted-foreground ml-auto">{detail}</span>}
+                </div>
+              ))}
+              {offline && (
+                <p className="text-xs text-amber-400 pt-1">
+                  Your media library is currently offline{health?.lastOnlineAt ? ` — last successful connection ${formatDate(health.lastOnlineAt)}` : ""}. Willard AI will reconnect automatically.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={rescanMutation.isPending || scanStatus?.isRunning || offline}
+                onClick={() => rescanMutation.mutate()}
+              >
+                {scanStatus?.isRunning
+                  ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Scanning…</>
+                  : <><RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rescan</>}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={pauseMutation.isPending || resumeMutation.isPending}
+                onClick={() => (paused ? resumeMutation.mutate() : pauseMutation.mutate())}
+              >
+                {paused ? <><Play className="w-3.5 h-3.5 mr-1.5" /> Resume Indexing</> : <><Lock className="w-3.5 h-3.5 mr-1.5" /> Pause Indexing</>}
+              </Button>
+              <Button variant="outline" size="sm" className="ml-auto" onClick={() => setChanging(true)}>
+                <FolderOpen className="w-3.5 h-3.5 mr-1.5" /> Change Library
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

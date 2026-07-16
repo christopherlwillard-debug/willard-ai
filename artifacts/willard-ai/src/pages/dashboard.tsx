@@ -34,6 +34,10 @@ import {
   CloudOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LibraryStatusIndicator, LibraryStatusBanner } from "@/components/library/library-status";
+import { OnboardingChecklist } from "@/components/library/onboarding-checklist";
+import { BuildingLibraryProgress } from "@/components/library/building-progress";
+import { LibraryReadyCelebration } from "@/components/library/celebration";
 import { useQueryClient } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -332,6 +336,11 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4">
+      <LibraryReadyCelebration />
+      <LibraryStatusBanner />
+      <BuildingLibraryProgress />
+      <OnboardingChecklist />
+
       {/* ── Hero Banner ─────────────────────────────────────────────────── */}
       <div
         className="relative flex items-center justify-between rounded-xl border border-border overflow-hidden"
@@ -341,7 +350,10 @@ export default function Dashboard() {
         }}
       >
         <div className="px-8 py-6 z-10">
-          <h1 className="text-3xl font-bold tracking-tight text-white">Welcome back, Willard!</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight text-white">Welcome back, Willard!</h1>
+            <LibraryStatusIndicator />
+          </div>
           <p className="text-blue-200/70 mt-1.5 text-sm">
             Here&apos;s what&apos;s happening with your media library today.
           </p>

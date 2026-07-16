@@ -34,6 +34,7 @@ import type {
   CleanupSummary,
   DashboardSummary,
   DocumentListResult,
+  DriveList,
   DuplicateGroupResult,
   EmptyFolder,
   FileSearchResult,
@@ -44,7 +45,9 @@ import type {
   GetOldFilesParams,
   HealthStatus,
   IndexedFile,
+  IndexingToggleResult,
   LargeFileResult,
+  LibraryHealth,
   LibraryHealthStatus,
   ListArchivesParams,
   ListDocumentsParams,
@@ -71,7 +74,8 @@ import type {
   SearchFilesParams,
   SessionsResult,
   SettingsInput,
-  StorageStats
+  StorageStats,
+  SystemEnvironment
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -3996,5 +4000,516 @@ export const useDeleteSettingsLogo = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getDeleteSettingsLogoMutationOptions(options));
+    }
+
+export const getGetSystemEnvironmentUrl = () => {
+
+
+
+
+  return `/api/system/environment`
+}
+
+/**
+ * @summary Server environment awareness (local vs cloud, platform)
+ */
+export const getSystemEnvironment = async ( options?: RequestInit): Promise<SystemEnvironment> => {
+
+  return customFetch<SystemEnvironment>(getGetSystemEnvironmentUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSystemEnvironmentQueryKey = () => {
+    return [
+    `/api/system/environment`
+    ] as const;
+    }
+
+
+export const getGetSystemEnvironmentQueryOptions = <TData = Awaited<ReturnType<typeof getSystemEnvironment>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSystemEnvironment>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSystemEnvironmentQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemEnvironment>>> = ({ signal }) => getSystemEnvironment({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSystemEnvironment>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSystemEnvironmentQueryResult = NonNullable<Awaited<ReturnType<typeof getSystemEnvironment>>>
+export type GetSystemEnvironmentQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Server environment awareness (local vs cloud, platform)
+ */
+
+export function useGetSystemEnvironment<TData = Awaited<ReturnType<typeof getSystemEnvironment>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSystemEnvironment>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSystemEnvironmentQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetSystemDrivesUrl = () => {
+
+
+
+
+  return `/api/system/drives`
+}
+
+/**
+ * @summary Detect reachable drives/mounts (local servers only)
+ */
+export const getSystemDrives = async ( options?: RequestInit): Promise<DriveList> => {
+
+  return customFetch<DriveList>(getGetSystemDrivesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSystemDrivesQueryKey = () => {
+    return [
+    `/api/system/drives`
+    ] as const;
+    }
+
+
+export const getGetSystemDrivesQueryOptions = <TData = Awaited<ReturnType<typeof getSystemDrives>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSystemDrives>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSystemDrivesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemDrives>>> = ({ signal }) => getSystemDrives({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSystemDrives>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSystemDrivesQueryResult = NonNullable<Awaited<ReturnType<typeof getSystemDrives>>>
+export type GetSystemDrivesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Detect reachable drives/mounts (local servers only)
+ */
+
+export function useGetSystemDrives<TData = Awaited<ReturnType<typeof getSystemDrives>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSystemDrives>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSystemDrivesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetLibraryHealthUrl = () => {
+
+
+
+
+  return `/api/library/health`
+}
+
+/**
+ * @summary Smart library health snapshot (reachability, indexing, reconnect)
+ */
+export const getLibraryHealth = async ( options?: RequestInit): Promise<LibraryHealth> => {
+
+  return customFetch<LibraryHealth>(getGetLibraryHealthUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetLibraryHealthQueryKey = () => {
+    return [
+    `/api/library/health`
+    ] as const;
+    }
+
+
+export const getGetLibraryHealthQueryOptions = <TData = Awaited<ReturnType<typeof getLibraryHealth>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryHealth>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetLibraryHealthQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLibraryHealth>>> = ({ signal }) => getLibraryHealth({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getLibraryHealth>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetLibraryHealthQueryResult = NonNullable<Awaited<ReturnType<typeof getLibraryHealth>>>
+export type GetLibraryHealthQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Smart library health snapshot (reachability, indexing, reconnect)
+ */
+
+export function useGetLibraryHealth<TData = Awaited<ReturnType<typeof getLibraryHealth>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryHealth>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetLibraryHealthQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRetryLibraryConnectionUrl = () => {
+
+
+
+
+  return `/api/library/retry`
+}
+
+/**
+ * @summary Immediately re-check library reachability ("Retry Now")
+ */
+export const retryLibraryConnection = async ( options?: RequestInit): Promise<LibraryHealth> => {
+
+  return customFetch<LibraryHealth>(getRetryLibraryConnectionUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getRetryLibraryConnectionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryLibraryConnection>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof retryLibraryConnection>>, TError,void, TContext> => {
+
+const mutationKey = ['retryLibraryConnection'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retryLibraryConnection>>, void> = () => {
+
+
+          return  retryLibraryConnection(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetryLibraryConnectionMutationResult = NonNullable<Awaited<ReturnType<typeof retryLibraryConnection>>>
+
+    export type RetryLibraryConnectionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Immediately re-check library reachability ("Retry Now")
+ */
+export const useRetryLibraryConnection = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryLibraryConnection>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof retryLibraryConnection>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getRetryLibraryConnectionMutationOptions(options));
+    }
+
+export const getAcknowledgeLibraryReconnectUrl = () => {
+
+
+
+
+  return `/api/library/reconnect-ack`
+}
+
+/**
+ * @summary Dismiss the one-time "library reconnected" announcement
+ */
+export const acknowledgeLibraryReconnect = async ( options?: RequestInit): Promise<OkResult> => {
+
+  return customFetch<OkResult>(getAcknowledgeLibraryReconnectUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getAcknowledgeLibraryReconnectMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>, TError,void, TContext> => {
+
+const mutationKey = ['acknowledgeLibraryReconnect'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>, void> = () => {
+
+
+          return  acknowledgeLibraryReconnect(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AcknowledgeLibraryReconnectMutationResult = NonNullable<Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>>
+
+    export type AcknowledgeLibraryReconnectMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Dismiss the one-time "library reconnected" announcement
+ */
+export const useAcknowledgeLibraryReconnect = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof acknowledgeLibraryReconnect>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getAcknowledgeLibraryReconnectMutationOptions(options));
+    }
+
+export const getPauseIndexingUrl = () => {
+
+
+
+
+  return `/api/library/indexing/pause`
+}
+
+/**
+ * @summary Pause background indexing (and any running job)
+ */
+export const pauseIndexing = async ( options?: RequestInit): Promise<IndexingToggleResult> => {
+
+  return customFetch<IndexingToggleResult>(getPauseIndexingUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getPauseIndexingMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pauseIndexing>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof pauseIndexing>>, TError,void, TContext> => {
+
+const mutationKey = ['pauseIndexing'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof pauseIndexing>>, void> = () => {
+
+
+          return  pauseIndexing(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PauseIndexingMutationResult = NonNullable<Awaited<ReturnType<typeof pauseIndexing>>>
+
+    export type PauseIndexingMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Pause background indexing (and any running job)
+ */
+export const usePauseIndexing = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pauseIndexing>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof pauseIndexing>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getPauseIndexingMutationOptions(options));
+    }
+
+export const getResumeIndexingUrl = () => {
+
+
+
+
+  return `/api/library/indexing/resume`
+}
+
+/**
+ * @summary Resume background indexing (and the most recent paused job)
+ */
+export const resumeIndexing = async ( options?: RequestInit): Promise<IndexingToggleResult> => {
+
+  return customFetch<IndexingToggleResult>(getResumeIndexingUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getResumeIndexingMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumeIndexing>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof resumeIndexing>>, TError,void, TContext> => {
+
+const mutationKey = ['resumeIndexing'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resumeIndexing>>, void> = () => {
+
+
+          return  resumeIndexing(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResumeIndexingMutationResult = NonNullable<Awaited<ReturnType<typeof resumeIndexing>>>
+
+    export type ResumeIndexingMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Resume background indexing (and the most recent paused job)
+ */
+export const useResumeIndexing = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumeIndexing>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof resumeIndexing>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getResumeIndexingMutationOptions(options));
     }
 

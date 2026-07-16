@@ -5,6 +5,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Layout } from "@/components/layout/layout";
 import { AuthProvider, useAuth } from "@/context/auth-context";
+import {
+  useGetSettings,
+  getGetSettingsQueryKey,
+  useGetSystemEnvironment,
+} from "@workspace/api-client-react";
+import { LibrarySetup } from "@/components/library/library-setup";
 import { Loader2 } from "lucide-react";
 
 import Dashboard from "@/pages/dashboard";
@@ -36,6 +42,22 @@ const queryClient = new QueryClient({
 });
 
 function ProtectedRoutes() {
+  // First-run experience: when the server runs locally and no library is
+  // configured yet, open into Library Setup instead of a bare dashboard.
+  // On Replit/cloud (isLocal=false) behavior is unchanged.
+  const { data: settings, isLoading: settingsLoading } = useGetSettings({
+    query: { queryKey: getGetSettingsQueryKey() },
+  });
+  const { data: env } = useGetSystemEnvironment();
+
+  if (!settingsLoading && settings && !settings.nasPath && env?.isLocal) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
+        <LibrarySetup />
+      </div>
+    );
+  }
+
   return (
     <Layout>
       <Switch>
