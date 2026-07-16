@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
@@ -209,6 +210,12 @@ function DetailSheet({ item, onClose, onSimilar }: {
           {isVisualMediaType(item.mediaType) && (
             <img src={`${API}/media/thumbnail/${item.id}`} alt={item.name} className="w-full rounded-lg" />
           )}
+          <Link href={`/media/${item.id}`}>
+            <Button variant="default" size="sm" className="w-full gap-2 text-xs" data-testid="button-open-detail">
+              <Sparkles className="h-3.5 w-3.5" />
+              Open Detail Page
+            </Button>
+          </Link>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className={conf.className}>{conf.label} match</Badge>
             {item.favorite && <Badge variant="outline" className="bg-yellow-500/15 text-yellow-400 border-yellow-500/30">Favorite</Badge>}

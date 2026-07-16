@@ -113,6 +113,11 @@ export async function bootstrapSessionTable(): Promise<void> {
       error text
     );
     CREATE UNIQUE INDEX IF NOT EXISTS media_ai_file_idx ON media_ai (media_file_id);
+    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS people jsonb;
+    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS user_tags jsonb;
+    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS hidden_tags jsonb;
+    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS user_description text;
+    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS notes text;
     CREATE TABLE IF NOT EXISTS search_history (
       id serial PRIMARY KEY,
       query text NOT NULL,

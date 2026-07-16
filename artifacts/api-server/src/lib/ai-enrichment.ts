@@ -23,7 +23,7 @@ import { logger } from "./logger";
 
 const TICK_MS = 20_000;
 const BATCH_PER_TICK = 3;
-const AI_VERSION = 1;
+const AI_VERSION = 2; // v2: adds people descriptors
 const CHAT_MODEL = "gpt-5.4";
 
 const MAX_DOC_TEXT = 6_000;
@@ -57,6 +57,7 @@ interface AiAnalysis {
   ocrText: string | null;
   docType: string | null;
   scene: string | null;
+  people: string[];
 }
 
 const VISION_PROMPT = `You are an expert photo/video analyst for a personal media library.
@@ -65,6 +66,7 @@ Analyze the image and return STRICT JSON with keys:
  "tags": ["5-12 lowercase content/scene tags e.g. beach, sunset, snow, family"],
  "objects": ["concrete objects visible e.g. truck, dog, waterfall, receipt"],
  "ocr_text": "any readable text in the image, or null",
+ "people": ["short visual descriptor for each clearly visible person e.g. 'man in red jacket', 'toddler in stroller' — empty array if none"],
  "scene": "one of: outdoor, indoor, nature, city, beach, mountains, forest, water, sunset, night, document, screenshot, people, food, vehicle, other"}
 Return JSON only.`;
 
@@ -89,6 +91,7 @@ async function analyzeImage(thumbnailPath: string): Promise<AiAnalysis> {
     ocrText: typeof parsed.ocr_text === "string" && parsed.ocr_text.trim() ? parsed.ocr_text.trim() : null,
     docType: null,
     scene: typeof parsed.scene === "string" ? parsed.scene : null,
+    people: Array.isArray(parsed.people) ? parsed.people.map(String).slice(0, 12) : [],
   };
 }
 
@@ -136,6 +139,7 @@ async function analyzeDocument(name: string, text: string | null): Promise<AiAna
     ocrText: text,
     docType: typeof parsed.doc_type === "string" ? parsed.doc_type : null,
     scene: "document",
+    people: [],
   };
 }
 
@@ -179,13 +183,52 @@ function buildEmbeddingText(file: PendingFile, a: AiAnalysis): string {
     a.description,
     a.tags.join(" "),
     a.objects.join(" "),
+    a.people.join(" "),
     a.scene,
     a.docType,
     a.ocrText ? a.ocrText.slice(0, 2000) : null,
     file.cameraMake, file.cameraModel,
     file.dateTaken ? new Date(file.dateTaken).toISOString().slice(0, 10) : null,
+    // User corrections & notes are part of the item's meaning.
+    file.userDescription,
+    file.userTags?.join(" ") ?? null,
+    file.notes ? file.notes.slice(0, 2000) : null,
   ];
   return parts.filter(Boolean).join("\n");
+}
+
+/**
+ * Recompute a file's embedding from the CURRENT canonical row (AI output +
+ * user corrections + notes). Called after user edits so search reflects the
+ * correction immediately. Fully local — nothing leaves the machine.
+ */
+export async function recomputeEmbedding(fileId: number): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT f.name, f.relative_path, f.camera_make, f.camera_model, f.date_taken,
+            a.description, a.tags, a.objects, a.people, a.scene, a.doc_type, a.ocr_text,
+            a.user_tags, a.user_description, a.notes
+       FROM media_files f
+       JOIN media_ai a ON a.media_file_id = f.id
+      WHERE f.id = $1`,
+    [fileId],
+  );
+  const r = rows[0];
+  if (!r) return;
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+  const file: PendingFile = {
+    id: fileId, name: r.name, relativePath: r.relative_path, mediaType: "",
+    thumbnailPath: null, fullPath: "", cameraMake: r.camera_make,
+    cameraModel: r.camera_model, dateTaken: r.date_taken,
+    userTags: arr(r.user_tags), userDescription: r.user_description, notes: r.notes,
+  };
+  const analysis: AiAnalysis = {
+    description: r.description, tags: arr(r.tags), objects: arr(r.objects),
+    ocrText: r.ocr_text, docType: r.doc_type, scene: r.scene, people: arr(r.people),
+  };
+  const embedding = await embedText(buildEmbeddingText(file, analysis));
+  if (embedding.length) {
+    await pool.query(`UPDATE media_ai SET embedding = $1 WHERE media_file_id = $2`, [toVectorLiteral(embedding), fileId]);
+  }
 }
 
 // ── Work selection ────────────────────────────────────────────────────────────
@@ -200,14 +243,19 @@ interface PendingFile {
   cameraMake: string | null;
   cameraModel: string | null;
   dateTaken: string | null;
+  userTags: string[] | null;
+  userDescription: string | null;
+  notes: string | null;
 }
 
 async function fetchPending(nasPath: string, limit: number): Promise<{ rows: PendingFile[]; total: number }> {
   const { rows } = await pool.query(
     `SELECT f.id, f.name, f.relative_path, f.media_type, f.thumbnail_path,
             f.camera_make, f.camera_model, f.date_taken,
+            u.user_tags, u.user_description, u.notes,
             count(*) OVER () AS total
        FROM media_files f
+       LEFT JOIN media_ai u ON u.media_file_id = f.id
        LEFT JOIN media_ai a ON a.media_file_id = f.id AND a.ai_version >= $2
       WHERE f.nas_path = $1
         AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')
@@ -229,6 +277,9 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
       cameraMake: r.camera_make,
       cameraModel: r.camera_model,
       dateTaken: r.date_taken,
+      userTags: Array.isArray(r.user_tags) ? r.user_tags.map(String) : null,
+      userDescription: r.user_description ?? null,
+      notes: r.notes ?? null,
     })),
   };
 }
@@ -248,13 +299,13 @@ async function enrichOne(file: PendingFile): Promise<void> {
       analysis = await analyzeDocument(file.name, text);
     } else {
       // No visual/text content available (yet) — index name & metadata only.
-      analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null };
+      analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null, people: [] };
     }
 
     const embedding = await embedText(buildEmbeddingText(file, analysis));
     await pool.query(
-      `INSERT INTO media_ai (media_file_id, description, tags, objects, ocr_text, doc_type, scene, embedding, ai_version, analyzed_at, error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),NULL)
+      `INSERT INTO media_ai (media_file_id, description, tags, objects, ocr_text, doc_type, scene, people, embedding, ai_version, analyzed_at, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),NULL)
        ON CONFLICT (media_file_id) DO UPDATE SET
          description = excluded.description,
          tags        = excluded.tags,
@@ -262,6 +313,7 @@ async function enrichOne(file: PendingFile): Promise<void> {
          ocr_text    = excluded.ocr_text,
          doc_type    = excluded.doc_type,
          scene       = excluded.scene,
+         people      = excluded.people,
          embedding   = excluded.embedding,
          ai_version  = excluded.ai_version,
          analyzed_at = now(),
@@ -270,6 +322,7 @@ async function enrichOne(file: PendingFile): Promise<void> {
         file.id, analysis.description,
         JSON.stringify(analysis.tags), JSON.stringify(analysis.objects),
         analysis.ocrText, analysis.docType, analysis.scene,
+        JSON.stringify(analysis.people),
         embedding.length ? toVectorLiteral(embedding) : null,
         AI_VERSION,
       ],

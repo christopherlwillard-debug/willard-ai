@@ -27,6 +27,13 @@ export const mediaAiTable = pgTable("media_ai", {
   ocrText:      text("ocr_text"),               // visible/extracted text
   docType:      text("doc_type"),               // receipt, invoice, manual, letter…
   scene:        text("scene"),                  // outdoor, beach, city, sunset…
+  people:       jsonb("people"),                // string[] — person descriptors ("man in red jacket")
+
+  // ── User corrections & annotations (never overwritten by re-enrichment) ────
+  userTags:        jsonb("user_tags"),          // string[] — tags the user added
+  hiddenTags:      jsonb("hidden_tags"),        // string[] — AI tags the user removed (original preserved in tags)
+  userDescription: text("user_description"),    // user-corrected description (AI original kept in description)
+  notes:           text("notes"),               // free-text user notes, searchable
 
   // ── Semantic embedding ─────────────────────────────────────────────────────
   embedding:    vector384("embedding"),

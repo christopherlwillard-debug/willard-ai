@@ -29,7 +29,9 @@ import {
   Calendar,
   Aperture,
   Heart,
+  Sparkles,
 } from "lucide-react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { MediaViewer } from "@/components/media/MediaViewer";
 import type { MediaFile, MediaFilesResponse } from "@/types/media";
@@ -737,6 +739,12 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
 
       {/* Actions */}
       <div className="p-4 border-t border-border space-y-2 shrink-0">
+        <Link href={`/media/${file.id}`}>
+          <Button variant="default" size="sm" className="w-full gap-2 font-mono text-xs" data-testid="button-open-detail">
+            <Sparkles className="w-3.5 h-3.5" />
+            Open Detail Page
+          </Button>
+        </Link>
         <a href={`/api/media/file/${file.id}/stream`} download={file.name}>
           <Button variant="outline" size="sm" className="w-full gap-2 font-mono text-xs">
             <Download className="w-3.5 h-3.5" />

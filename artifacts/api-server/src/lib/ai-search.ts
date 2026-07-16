@@ -126,6 +126,8 @@ interface RawRow {
   date_taken: Date | null; favorite: boolean;
   description: string | null; tags: unknown; objects: unknown;
   ocr_text: string | null; doc_type: string | null; scene: string | null;
+  people: unknown; user_tags: unknown; hidden_tags: unknown;
+  user_description: string | null; notes: string | null;
   gps_latitude: number | null; gps_longitude: number | null;
   similarity: number | null;
 }
@@ -176,6 +178,7 @@ export async function executeSearch(
            f.thumbnail_path, f.date_taken, f.favorite,
            f.gps_latitude, f.gps_longitude,
            a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
+           a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
            ${simSelect}
       FROM media_files f
       LEFT JOIN media_ai a ON a.media_file_id = f.id
@@ -193,11 +196,15 @@ export async function executeSearch(
 }
 
 function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
-  const tags = strArr(r.tags);
+  // Effective tags: AI tags minus user-hidden ones, plus user-added ones.
+  const hidden = new Set(strArr(r.hidden_tags));
+  const tags = [...strArr(r.tags).filter((t) => !hidden.has(t)), ...strArr(r.user_tags)];
   const objects = strArr(r.objects);
+  const people = strArr(r.people);
   const haystack = [
-    r.name, r.relative_path, r.description, r.ocr_text, r.doc_type, r.scene,
-    ...tags, ...objects,
+    r.name, r.relative_path, r.user_description ?? r.description, r.notes,
+    r.ocr_text, r.doc_type, r.scene,
+    ...tags, ...objects, ...people,
   ].filter(Boolean).join(" ").toLowerCase();
 
   // Exclusions are hard filters.
@@ -227,6 +234,7 @@ function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
 
   for (const kw of intent.keywords) {
     if (r.name.toLowerCase().includes(kw)) { score += 1; reasons.push(`Name contains "${kw}"`); }
+    else if (r.notes?.toLowerCase().includes(kw)) { score += 1; reasons.push(`Your note mentions "${kw}"`); }
     else if (r.ocr_text?.toLowerCase().includes(kw)) { score += 0.9; reasons.push(`Text mentions "${kw}"`); }
     else if (haystack.includes(kw)) { score += 0.4; }
   }
@@ -263,7 +271,7 @@ function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
     thumbnailPath: r.thumbnail_path,
     dateTaken: r.date_taken ? new Date(r.date_taken).toISOString() : null,
     favorite: r.favorite,
-    description: r.description,
+    description: r.user_description ?? r.description,
     confidence,
     score: Math.round(score * 100) / 100,
     reasons: reasons.slice(0, 5),
@@ -303,6 +311,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
             f.thumbnail_path, f.date_taken, f.favorite,
             f.gps_latitude, f.gps_longitude,
             a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
+            a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
             1 - (a.embedding <=> (SELECT embedding FROM media_ai WHERE media_file_id = $2)) AS similarity
        FROM media_files f
        JOIN media_ai a ON a.media_file_id = f.id
@@ -325,7 +334,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
     thumbnailPath: r.thumbnail_path,
     dateTaken: r.date_taken ? new Date(r.date_taken).toISOString() : null,
     favorite: r.favorite,
-    description: r.description,
+    description: r.user_description ?? r.description,
     confidence: (r.similarity ?? 0) >= 0.6 ? "very_likely" : (r.similarity ?? 0) >= 0.45 ? "likely" : "possible",
     score: Math.round((r.similarity ?? 0) * 100) / 100,
     reasons: [`${Math.round((r.similarity ?? 0) * 100)}% similar content`],
