@@ -17,6 +17,7 @@ import mediaRouter from "./media";
 import libraryRouter from "./library";
 import systemRouter from "./system";
 import collectionsRouter from "./collections";
+import searchRouter from "./search";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(mediaRouter);
 router.use(libraryRouter);
 router.use(systemRouter);
 router.use(collectionsRouter);
+router.use(searchRouter);
 
 export default router;

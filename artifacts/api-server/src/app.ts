@@ -15,6 +15,7 @@ import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
+import { startAiEnrichment } from "./lib/ai-enrichment";
 
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
@@ -94,6 +95,40 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS library_activity_nas_path_idx ON library_activity (nas_path);
     CREATE INDEX IF NOT EXISTS library_activity_created_at_idx ON library_activity (created_at);
+  `);
+  await pool.query(`
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE TABLE IF NOT EXISTS media_ai (
+      id serial PRIMARY KEY,
+      media_file_id integer NOT NULL,
+      description text,
+      tags jsonb,
+      objects jsonb,
+      ocr_text text,
+      doc_type text,
+      scene text,
+      embedding vector(384),
+      ai_version integer NOT NULL DEFAULT 1,
+      analyzed_at timestamp,
+      error text
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS media_ai_file_idx ON media_ai (media_file_id);
+    CREATE TABLE IF NOT EXISTS search_history (
+      id serial PRIMARY KEY,
+      query text NOT NULL,
+      intent_json jsonb,
+      result_count integer NOT NULL DEFAULT 0,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS search_history_created_idx ON search_history (created_at);
+    CREATE TABLE IF NOT EXISTS saved_searches (
+      id serial PRIMARY KEY,
+      name text NOT NULL,
+      query text NOT NULL,
+      intent_json jsonb,
+      created_at timestamp NOT NULL DEFAULT now(),
+      last_used_at timestamp
+    );
   `);
 }
 
@@ -228,6 +263,7 @@ startLibraryMonitor();
 // Continuous Library Watcher: native fs events + sweep fallback, burst
 // batching, auto-recovery — keeps the index live without manual rescans.
 startLibraryWatcher();
+startAiEnrichment();
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
