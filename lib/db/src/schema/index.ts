@@ -11,3 +11,4 @@ export * from "./media_files";
 export * from "./media_scan_jobs";
 export * from "./library_jobs";
 export * from "./collections";
+export * from "./library_activity";

@@ -1,6 +1,7 @@
 import { db, appSettingsTable } from "@workspace/db";
 import { checkNasReachable } from "./nas-storage";
 import { getActiveJobId, requestPause, startJob } from "./library-engine";
+import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
 
 /**
@@ -104,6 +105,7 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         state.reconnectedAt = new Date();
         state.offlineSince = null;
         logger.info({ nasPath }, "Library reconnected — checking for new media");
+        void recordActivity(nasPath, "reconnected", "Library reconnected. Checking for changes…");
         if (!indexingPaused) {
           try {
             const result = await startJob({ jobType: "SCAN", profile: "QUICK", nasPath });
@@ -126,6 +128,8 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         } else {
           logger.warn({ nasPath, reason: reach.message }, "Library went offline");
         }
+        void recordActivity(nasPath, "offline",
+          "Library went offline. Watching paused — Willard AI will reconnect automatically.");
       }
       state.status = "offline";
     }

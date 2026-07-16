@@ -67,7 +67,7 @@ export function LibraryStatusIndicator() {
     tone = "text-red-400 border-red-500/30 bg-red-500/10";
   } else if (health.indexingPaused) {
     icon = <PauseCircle className="w-3.5 h-3.5" />;
-    text = "Indexing paused";
+    text = "Watching Paused";
     tone = "text-amber-400 border-amber-500/30 bg-amber-500/10";
   } else if (indexing) {
     icon = <Loader2 className="w-3.5 h-3.5 animate-spin" />;
@@ -79,10 +79,23 @@ export function LibraryStatusIndicator() {
     tone = "text-green-400 border-green-500/30 bg-green-500/10";
   }
 
+  const watcher = (health as unknown as {
+    watcher?: { lastChangeAt?: string | null; mechanism?: string };
+    lastScanAt?: string | null;
+  }).watcher;
+  const lastScanAt = (health as unknown as { lastScanAt?: string | null }).lastScanAt;
+  const tooltip = [
+    `Library: ${health.path || "not configured"}`,
+    `Last check ${formatAgo(health.lastCheckAt)}`,
+    watcher?.lastChangeAt ? `Last change ${formatAgo(watcher.lastChangeAt)}` : null,
+    lastScanAt ? `Last scan ${formatAgo(lastScanAt)}` : null,
+    watcher?.mechanism === "sweep" ? "Watching via periodic sweeps" : null,
+  ].filter(Boolean).join(" • ");
+
   return (
     <div
       className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium", tone)}
-      title={`Library: ${health.path || "not configured"} • Last check ${formatAgo(health.lastCheckAt)}`}
+      title={tooltip}
     >
       {icon}
       <span>{text}</span>

@@ -17,6 +17,7 @@ import {
   PHOTO_EXTS, VIDEO_META_EXTS,
 } from "./indexer";
 import { getWillardAIDir } from "../nas-storage";
+import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail } from "../thumbnail-engine";
 
 // ── In-memory state ───────────────────────────────────────────────────────────
@@ -437,7 +438,7 @@ async function runScanJob(
         } else {
           // Cheap first: fast content fingerprint (first/last 64 KB + size).
           state.phase = "hashing";
-          const quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
+          let quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
           if (quickFingerprint === null) {
             recordSkip(state, relativePath, "Could not read file (permission denied or unreadable)");
             state.filesProcessed++;
@@ -501,20 +502,42 @@ async function runScanJob(
           let pdfKeywords: string | null = null;
           let metaError: string | null = null;
 
-          if (mediaType === "photo") {
-            const meta = await extractPhotoMeta(f.fullPath, f.ext);
-            ({ width, height, orientation, dateTaken, cameraMake, cameraModel, lens,
-               iso, aperture, exposure, focalLength, flash, colorProfile,
-               gpsLatitude, gpsLongitude, exifJson } = meta);
-            metaError = meta.error;
-          } else if (VIDEO_META_EXTS.has(f.ext)) {
-            const meta = extractVideoMeta(f.fullPath);
-            ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
-            metaError = meta.error;
-          } else if (f.ext === "pdf") {
-            const meta = await extractPdfMeta(f.fullPath);
-            ({ pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords } = meta);
-            metaError = meta.error;
+          const extractAll = async (): Promise<void> => {
+            if (mediaType === "photo") {
+              const meta = await extractPhotoMeta(f.fullPath, f.ext);
+              ({ width, height, orientation, dateTaken, cameraMake, cameraModel, lens,
+                 iso, aperture, exposure, focalLength, flash, colorProfile,
+                 gpsLatitude, gpsLongitude, exifJson } = meta);
+              metaError = meta.error;
+            } else if (VIDEO_META_EXTS.has(f.ext)) {
+              const meta = extractVideoMeta(f.fullPath);
+              ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
+              metaError = meta.error;
+            } else if (f.ext === "pdf") {
+              const meta = await extractPdfMeta(f.fullPath);
+              ({ pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords } = meta);
+              metaError = meta.error;
+            }
+          };
+          await extractAll();
+
+          // ── Conflict detection: file changed while being indexed ─────────
+          // Re-stat after extraction; if size/mtime moved under us, re-read
+          // the fingerprint and metadata once so we never store a mix of
+          // old-file and new-file values.
+          try {
+            const after = fs.statSync(f.fullPath);
+            if (after.size !== f.sizeBytes || after.mtime.getTime() !== f.modifiedAt.getTime()) {
+              f.sizeBytes = after.size;
+              f.modifiedAt = after.mtime;
+              const refreshedFp = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
+              if (refreshedFp !== null) quickFingerprint = refreshedFp;
+              await extractAll();
+              state.counters.reanalyzed++;
+            }
+          } catch {
+            // File vanished mid-index — deletion detection will handle it on
+            // the next pass; keep what we read for now.
           }
 
           // Problem file: metadata could not be extracted. The file is still
@@ -648,6 +671,24 @@ async function runScanJob(
 
     recordCompletion(state, summary);
     activeJobs.delete(jobId);
+
+    // ── Library Activity feed entry (only when something actually changed) ──
+    const changeText = describeChanges({
+      newFiles: state.counters.new,
+      modifiedFiles: state.counters.modified,
+      movedFiles: state.counters.moved,
+      deletedFiles: state.counters.deleted,
+    });
+    if (changeText) {
+      await recordActivity(state.nasPath, "scan_summary", changeText, {
+        jobId,
+        newFiles: state.counters.new,
+        modifiedFiles: state.counters.modified,
+        movedFiles: state.counters.moved,
+        deletedFiles: state.counters.deleted,
+        elapsedMs,
+      });
+    }
 
   } catch (err: any) {
     await failJob(jobId, "ERROR", err?.message ?? "Unknown error");

@@ -6,6 +6,8 @@ import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
 } from "../lib/library-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
+import { getWatcherSnapshot } from "../lib/library-watcher";
+import { getRecentActivity, recordActivity } from "../lib/library-activity";
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 
 const router = Router();
@@ -29,7 +31,18 @@ router.get("/library/health", async (_req: Request, res: Response) => {
     lastScanAt: row?.lastScanAt?.toISOString() ?? null,
     activeJob,
     lastCompleted,
+    watcher: getWatcherSnapshot(),
   });
+});
+
+// ── GET /api/library/activity — friendly Library Activity feed ───────────────
+
+router.get("/library/activity", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.json({ entries: [] }); return; }
+  const limit = Math.min(100, parseInt(req.query["limit"] as string) || 20);
+  const entries = await getRecentActivity(nasPath, limit);
+  res.json({ entries });
 });
 
 // ── POST /api/library/retry — user-triggered "Retry Now" reachability check ──
@@ -52,6 +65,8 @@ router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
   await db.update(appSettingsTable).set({ indexingPaused: true });
   const activeId = getActiveJobId();
   if (activeId !== null) requestPause(activeId);
+  const nasPath = await getNasPath();
+  if (nasPath) void recordActivity(nasPath, "paused", "Indexing paused — live watching is on hold until you resume.");
   res.json({ ok: true, indexingPaused: true });
 });
 
@@ -67,6 +82,8 @@ router.post("/library/indexing/resume", async (_req: Request, res: Response) => 
     const ok = await resumeJob(paused.id);
     if (ok) resumedJobId = paused.id;
   }
+  const nasPath = await getNasPath();
+  if (nasPath) void recordActivity(nasPath, "resumed", "Indexing resumed — watching for library changes again.");
   res.json({ ok: true, indexingPaused: false, resumedJobId });
 });
 

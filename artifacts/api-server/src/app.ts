@@ -14,6 +14,7 @@ import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/na
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 import { startLibraryMonitor } from "./lib/library-monitor";
+import { startLibraryWatcher } from "./lib/library-watcher";
 
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
@@ -81,6 +82,18 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS collection_items_unique ON collection_items (collection_id, media_file_id);
     CREATE INDEX IF NOT EXISTS collection_items_file_idx ON collection_items (media_file_id);
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS library_activity (
+      id serial PRIMARY KEY,
+      nas_path text NOT NULL,
+      kind text NOT NULL,
+      message text NOT NULL,
+      details jsonb,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS library_activity_nas_path_idx ON library_activity (nas_path);
+    CREATE INDEX IF NOT EXISTS library_activity_created_at_idx ON library_activity (created_at);
   `);
 }
 
@@ -211,6 +224,10 @@ recoverInterruptedJobs().catch(() => {});
 // Smart Library Health: watch reachability, auto-pause on offline,
 // auto-rescan (incremental) on reconnect
 startLibraryMonitor();
+
+// Continuous Library Watcher: native fs events + sweep fallback, burst
+// batching, auto-recovery — keeps the index live without manual rescans.
+startLibraryWatcher();
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.

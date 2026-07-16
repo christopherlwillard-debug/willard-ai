@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LibraryStatusIndicator, LibraryStatusBanner } from "@/components/library/library-status";
+import { LibraryActivityFeed } from "@/components/library/library-activity";
 import { OnboardingChecklist } from "@/components/library/onboarding-checklist";
 import { BuildingLibraryProgress } from "@/components/library/building-progress";
 import { LibraryReadyCelebration } from "@/components/library/celebration";
@@ -449,6 +450,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Library Activity feed ───────────────────────────────────────── */}
+      <LibraryActivityFeed />
 
       {/* ── Recently Added + Quick Actions ──────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
