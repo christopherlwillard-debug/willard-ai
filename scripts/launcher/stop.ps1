@@ -1,4 +1,4 @@
-# Stop Willard AI — stops only what the launcher started.
+# Stop Willard AI - stops only what the launcher started.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows

@@ -1,4 +1,4 @@
-# Willard AI launcher — shared helpers.
+# Willard AI launcher - shared helpers.
 # Friendly, non-technical output in the happy path; technical detail goes to
 # log files and is shown only on request.
 
@@ -88,7 +88,7 @@ function Get-EnvValue($key) {
 }
 
 function Test-DatabaseConnection {
-    # Live connection test using the app's own database driver — no extra
+    # Live connection test using the app's own database driver - no extra
     # tools needed. Returns $true/$false; detail lands in the api log.
     $dbUrl = Get-EnvValue "DATABASE_URL"
     if (-not $dbUrl) { return $false }

@@ -1,4 +1,4 @@
-# Repair Willard AI — self-heals common problems, then gives a plain verdict.
+# Repair Willard AI - self-heals common problems, then gives a plain verdict.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -15,7 +15,7 @@ if ($tracked) {
     $apiAlive = Test-ProcessAlive $tracked.api
     $webAlive = Test-ProcessAlive $tracked.web
     if ($apiAlive -or $webAlive) {
-        Write-Info "Willard AI is currently running — stopping it so it can be repaired..."
+        Write-Info "Willard AI is currently running - stopping it so it can be repaired..."
         Stop-TrackedProcesses | Out-Null
         Start-Sleep -Seconds 2
         Write-Ok "Stopped the running copy."
@@ -60,7 +60,7 @@ $envPath = Join-Path $Root ".env"
 if (Test-Path $envPath) {
     Write-Ok "Settings file is present."
 } elseif (Ensure-EnvFile) {
-    Write-Ok "Settings file was missing — recreated it."
+    Write-Ok "Settings file was missing - recreated it."
 } else {
     Write-Bad "Settings file is missing and could not be recreated."
     $problems += "The file .env.example is missing from the folder. Re-download Willard AI."
@@ -74,7 +74,7 @@ if ((Test-Command "pnpm") -and (Test-Command "node")) {
         Write-Ok "Application components are complete."
     } else {
         Write-Bad "Application components could not be repaired."
-        $problems += ("Component repair failed — see " + (Join-Path $LogDir "repair-install.log"))
+        $problems += ("Component repair failed - see " + (Join-Path $LogDir "repair-install.log"))
     }
 }
 
@@ -116,9 +116,9 @@ c.connect()
         if ($result -like "OK *") {
             Write-Ok ("Media library location is reachable (" + $result.Substring(3) + ").")
         } elseif ($result -like "OFFLINE *") {
-            Write-Warn ("Your media library location (" + $result.Substring(8) + ") isn't reachable right now. Reconnect the drive — Willard AI will pick it up automatically.")
+            Write-Warn ("Your media library location (" + $result.Substring(8) + ") isn't reachable right now. Reconnect the drive - Willard AI will pick it up automatically.")
         } elseif ($result -eq "UNSET") {
-            Write-Info "No media library configured yet — Willard AI will help you set one up when it starts."
+            Write-Info "No media library configured yet - Willard AI will help you set one up when it starts."
         }
     }
 }
@@ -126,7 +126,7 @@ c.connect()
 # ── Verdict ───────────────────────────────────────────────────────────────────
 Write-Host ""
 if ($problems.Count -eq 0) {
-    Write-Host "  Everything looks good — double-click 'Start Willard AI.bat'." -ForegroundColor Green
+    Write-Host "  Everything looks good - double-click 'Start Willard AI.bat'." -ForegroundColor Green
 } else {
     Write-Host "  A few things still need your attention:" -ForegroundColor Yellow
     foreach ($p in $problems) {

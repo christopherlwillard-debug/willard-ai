@@ -1,4 +1,4 @@
-# Start Willard AI — friendly media-center style launcher.
+# Start Willard AI - friendly media-center style launcher.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -19,7 +19,7 @@ if ($tracked -and (Test-ProcessAlive $tracked.api) -and (Test-ProcessAlive $trac
         Start-Sleep -Seconds 2
     } else { exit 0 }
 } elseif ($tracked) {
-    # Stale state from a crashed previous run — clear it silently.
+    # Stale state from a crashed previous run - clear it silently.
     Stop-TrackedProcesses | Out-Null
 }
 
@@ -61,7 +61,7 @@ if ($needInstall) {
     & pnpm install --silent *> $installLog
     if ($LASTEXITCODE -ne 0) {
         Show-Failure "Willard AI couldn't finish setting itself up." `
-            ("pnpm install failed — see " + $installLog)
+            ("pnpm install failed - see " + $installLog)
         Pause-BeforeClose; exit 1
     }
 }
