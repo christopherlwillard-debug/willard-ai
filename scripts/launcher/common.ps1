@@ -112,6 +112,46 @@ c.connect().then(() => c.query('SELECT 1')).then(() => { console.log('ok'); proc
     }
 }
 
+function Ensure-AppDatabase {
+    # Creates the Willard AI database if it doesn't exist yet, then verifies
+    # the connection. Returns $true on success, $false on failure.
+    $dbUrl = Get-EnvValue "DATABASE_URL"
+    if (-not $dbUrl) { return $false }
+    $createJs = @"
+const { Client } = require('pg');
+const url = new URL(process.env.WILLARD_DB_URL);
+const dbName = url.pathname.slice(1);
+// Connect to the default 'postgres' maintenance database to run CREATE DATABASE
+url.pathname = '/postgres';
+const c = new Client({ connectionString: url.toString(), connectionTimeoutMillis: 5000 });
+c.connect()
+  .then(() => c.query("SELECT 1 FROM pg_database WHERE datname = '" + dbName + "'"))
+  .then(r => {
+    if (r.rows.length === 0) {
+      return c.query('CREATE DATABASE "' + dbName + '"').then(() => {
+        console.log('created');
+      });
+    } else {
+      console.log('exists');
+    }
+  })
+  .then(() => { process.exit(0); })
+  .catch(e => { console.error(e.message); process.exit(1); });
+"@
+    $tmp = Join-Path $env:TEMP "willard-db-create.js"
+    Set-Content -Path $tmp -Value $createJs
+    $env:WILLARD_DB_URL = $dbUrl
+    try {
+        $out = & node $tmp 2>&1
+        $okExit = ($LASTEXITCODE -eq 0)
+        if (-not $okExit) { Add-Content $ApiLog ("[launcher] Database create failed: " + ($out -join " ")) }
+        return $okExit
+    } finally {
+        Remove-Item $tmp -ErrorAction SilentlyContinue
+        Remove-Item Env:\WILLARD_DB_URL -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-PortFree($port) {
     $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     return (-not $conn)

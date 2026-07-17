@@ -1,0 +1,223 @@
+Microsoft Windows [Version 10.0.26200.8737]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\WillardAI>cd C:\WillardAI
+
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installcd C:\WillardAI
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 29m ago)
+artifacts/api-server                     | [WARN] Moving @types/bcryptjs that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/cors that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/connect-pg-simple that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/cookie-parser that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/express that was installed by a different package manager to "node_modules/.ignored"
+[WARN] 216 other warnings
+artifacts/api-server                     | [WARN] deprecated @types/bcryptjs@3.0.0
+artifacts/api-server                     | [WARN] deprecated @types/tar@7.0.87
+artifacts/mockup-sandbox                 | [WARN] deprecated recharts@2.15.4
+[WARN] 6 deprecated subdependencies found: boolean@3.2.0, glob@7.2.3, inflight@1.0.6, rimraf@3.0.2, uuid@3.4.0, uuid@7.0.3
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1234, reused 1158, downloaded 2, added 1184, done
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 110ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installcd C:\WillardAI
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 41s ago)
+Lockfile is up to date, resolution step is skipped
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1184, reused 1158, downloaded 0, added 1184, done
+
+devDependencies:
++ @playwright/test 1.61.1
++ prettier 3.8.4
++ typescript 5.9.3
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 137ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installpnpm install
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 1m ago)
+Lockfile is up to date, resolution step is skipped
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1184, reused 1158, downloaded 0, added 1184, done
+
+devDependencies:
++ @playwright/test 1.61.1
++ prettier 3.8.4
++ typescript 5.9.3
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 76ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>powershell -Command "$j = Get-Content 'package.json' -Raw | ConvertFrom-Json; $j.scripts.PSObject.Properties.Remove('preinstall'); ConvertTo-Json $j -Depth 10 | Set-Content 'package.json'"
+
+C:\WillardAI>pnpm install
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 5m ago)
+Lockfile is up to date, resolution step is skipped
+Already up to date
+[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: esbuild@0.27.3, onnxruntime-node@1.24.3, protobufjs@7.6.5, sharp@0.34.5
+
+Run "pnpm approve-builds" to pick which dependencies should be allowed to run scripts.
+
+C:\WillardAI>pnpm approve-builds
+√ Choose which packages to build (Press <space> to select, <a> to toggle all, <i> to invert selection) esbuild, onnxrunt
+ime-node, protobufjs, sharp
+√ The next packages will now be built: esbuild, onnxruntime-node, protobufjs, sharp.
+Do you approve? Yes
+node_modules/.pnpm/esbuild@0.27.3/node_modules/esbuild: Running postinstall script, done in 2.2s
+node_modules/.pnpm/onnxruntime-node@1.24.3/node_modules/onnxruntime-node: Running postinstall script, done in 254ms
+node_modules/.pnpm/protobufjs@7.6.5/node_modules/protobufjs: Running postinstall script, done in 93ms
+node_modules/.pnpm/sharp@0.34.5/node_modules/sharp: Running install script, done in 127ms
+
+C:\WillardAI>"Start Willard AI.bat"
+The argument 'C:\WillardAI\scripts\launcher\start.ps1' to the -File parameter does not exist. Provide the path to an existing '.ps1' file as an argument to the -File parameter.
+Windows PowerShell 5.1
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+
+C:\WillardAI>dir C:\WillardAI
+ Volume in drive C is Local Disk
+ Volume Serial Number is 60E0-35DF
+
+ Directory of C:\WillardAI
+
+07/16/2026  08:18 PM    <DIR>          .
+07/16/2026  07:44 PM    <DIR>          .agents
+07/16/2026  07:44 PM    <DIR>          .config
+07/16/2026  07:40 PM             1,523 .env
+07/15/2026  11:00 PM             1,479 .env.example
+07/16/2026  07:44 PM    <DIR>          .git
+07/15/2026  11:00 PM             1,058 .gitignore
+07/16/2026  07:46 PM    <DIR>          .local
+07/15/2026  11:00 PM                56 .npmrc
+07/15/2026  11:00 PM             1,166 .replit
+07/15/2026  11:00 PM               201 .replitignore
+07/15/2026  11:00 PM             2,570 ARCHITECTURE.md
+07/16/2026  07:48 PM    <DIR>          artifacts
+07/16/2026  07:48 PM    <DIR>          attached_assets
+07/16/2026  07:48 PM    <DIR>          e2e
+07/16/2026  07:48 PM    <DIR>          lib
+07/15/2026  11:00 PM             5,608 LOCAL_SETUP.md
+07/16/2026  07:48 PM    <DIR>          logs
+07/16/2026  08:12 PM    <DIR>          node_modules
+07/16/2026  08:15 PM               677 package.json
+07/15/2026  11:00 PM               691 playwright.config.ts
+07/16/2026  08:10 PM           499,773 pnpm-lock.yaml
+07/16/2026  08:18 PM             4,643 pnpm-workspace.yaml
+07/15/2026  11:00 PM               121 Repair Willard AI.bat
+07/15/2026  11:00 PM             3,001 replit.md
+07/15/2026  11:00 PM               526 replit.nix
+07/15/2026  11:00 PM               113 Start Willard AI.bat
+07/15/2026  11:00 PM               112 Stop Willard AI.bat
+07/15/2026  11:00 PM               692 tsconfig.base.json
+07/15/2026  11:00 PM               365 tsconfig.json
+              19 File(s)        524,375 bytes
+              11 Dir(s)  15,525,629,952 bytes free
+
+C:\WillardAI>dir C:\WillardAI\scripts
+ Volume in drive C is Local Disk
+ Volume Serial Number is 60E0-35DF
+
+ Directory of C:\WillardAI
+
+File Not Found
+
+C:\WillardAI>xcopy /E /I /H /Y "C:\Users\Chris\OneDrive\Desktop\Willards-Media-Center\Willards-Media-Center\scripts" "C:\WillardAI\scripts"
+File not found - scripts
+0 File(s) copied
+
+C:\WillardAI>powershell -NoProfile -Command "$files = 'scripts\launcher\start.ps1','scripts\launcher\common.ps1','scripts\launcher\repair.ps1','scripts\launcher\stop.ps1'; foreach ($f in $files) { (Get-Content $f -Raw -Encoding UTF8) -replace [char]0x2014,'-' | Set-Content $f -Encoding UTF8 }"
+Get-Content : Cannot find path 'C:\WillardAI\scripts\launcher\start.ps1' because it does not exist.
+At line:1 char:154
++ ...  foreach ($f in $files) { (Get-Content $f -Raw -Encoding UTF8) -repla ...
++                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WillardAI\scripts\launcher\start.ps1:String) [Get-Content], ItemNotF
+   oundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+
+Get-Content : Cannot find path 'C:\WillardAI\scripts\launcher\common.ps1' because it does not exist.
+At line:1 char:154
++ ...  foreach ($f in $files) { (Get-Content $f -Raw -Encoding UTF8) -repla ...
++                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WillardAI\scripts\launcher\common.ps1:String) [Get-Content], ItemNot
+   FoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+
+Get-Content : Cannot find path 'C:\WillardAI\scripts\launcher\repair.ps1' because it does not exist.
+At line:1 char:154
++ ...  foreach ($f in $files) { (Get-Content $f -Raw -Encoding UTF8) -repla ...
++                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WillardAI\scripts\launcher\repair.ps1:String) [Get-Content], ItemNot
+   FoundException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+
+Get-Content : Cannot find path 'C:\WillardAI\scripts\launcher\stop.ps1' because it does not exist.
+At line:1 char:154
++ ...  foreach ($f in $files) { (Get-Content $f -Raw -Encoding UTF8) -repla ...
++                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\WillardAI\scripts\launcher\stop.ps1:String) [Get-Content], ItemNotFo
+   undException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+
+
+C:\WillardAI>

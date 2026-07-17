@@ -1,0 +1,106 @@
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installcd C:\WillardAI
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 29m ago)
+artifacts/api-server                     | [WARN] Moving @types/bcryptjs that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/cors that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/connect-pg-simple that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/cookie-parser that was installed by a different package manager to "node_modules/.ignored"
+artifacts/api-server                     | [WARN] Moving @types/express that was installed by a different package manager to "node_modules/.ignored"
+[WARN] 216 other warnings
+artifacts/api-server                     | [WARN] deprecated @types/bcryptjs@3.0.0
+artifacts/api-server                     | [WARN] deprecated @types/tar@7.0.87
+artifacts/mockup-sandbox                 | [WARN] deprecated recharts@2.15.4
+[WARN] 6 deprecated subdependencies found: boolean@3.2.0, glob@7.2.3, inflight@1.0.6, rimraf@3.0.2, uuid@3.4.0, uuid@7.0.3
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1234, reused 1158, downloaded 2, added 1184, done
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 110ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installcd C:\WillardAI
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 41s ago)
+Lockfile is up to date, resolution step is skipped
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1184, reused 1158, downloaded 0, added 1184, done
+
+devDependencies:
++ @playwright/test 1.61.1
++ prettier 3.8.4
++ typescript 5.9.3
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 137ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>rmdir /S /Q node_modules
+
+C:\WillardAI>pnpm installpnpm install
+Scope: all 11 workspace projects
+✓ Lockfile passes supply-chain policies (verified 1m ago)
+Lockfile is up to date, resolution step is skipped
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1184, reused 1158, downloaded 0, added 1184, done
+
+devDependencies:
++ @playwright/test 1.61.1
++ prettier 3.8.4
++ typescript 5.9.3
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm…
+│ 'sh' is not recognized as an internal or external command,
+│ operable program or batch file.
+└─ Failed in 76ms at C:\WillardAI
+[ELIFECYCLE] Command failed with exit code 1.
+[ERROR] Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+
+pnpm: Command failed with exit code 1: "C:\Program Files\nodejs\node.exe" "C:\Users\Chris\AppData\Roaming\npm\node_modules\pnpm\bin\pnpm.mjs" install
+    at getFinalError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:88106:14)
+    at makeError (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:90413:21)
+    at getSyncResult (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92257:10)
+    at spawnSubprocessSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92217:14)
+    at execaCoreSync (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:92147:23)
+    at callBoundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94675:23)
+    at boundExeca (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94652:49)
+    at sync2 (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:94811:10)
+    at runPnpmCli (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:248250:5)
+    at runDepsStatusCheck (file:///C:/Users/Chris/AppData/Roaming/npm/node_modules/pnpm/dist/pnpm.mjs:250016:7)
+
+C:\WillardAI>

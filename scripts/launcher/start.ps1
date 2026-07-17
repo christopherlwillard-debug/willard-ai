@@ -68,9 +68,21 @@ if ($needInstall) {
 Write-Ok "AI Engine Ready"
 
 # ── Database ──────────────────────────────────────────────────────────────────
-if (-not (Test-DatabaseConnection)) {
+Write-Info "Checking database..."
+if (-not (Ensure-AppDatabase)) {
     Show-Failure "Willard AI couldn't start. The media database isn't available. Run 'Repair Willard AI' to fix it." `
-        ("The database connection in .env (DATABASE_URL) did not respond. Is PostgreSQL running? See " + $ApiLog)
+        ("Could not connect to PostgreSQL or create the 'willard' database. Is PostgreSQL running? Check DATABASE_URL in .env. See " + $ApiLog)
+    Pause-BeforeClose; exit 1
+}
+
+# Run database migrations (creates tables on first launch; safe to re-run).
+Write-Info "Setting up database tables..."
+$dbUrl = Get-EnvValue "DATABASE_URL"
+$env:DATABASE_URL = $dbUrl
+$migrateOut = & pnpm --filter @workspace/db run push-force 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Show-Failure "Willard AI couldn't finish setting up its database." `
+        ("drizzle-kit push failed:`n" + ($migrateOut -join "`n"))
     Pause-BeforeClose; exit 1
 }
 Write-Ok "Database Ready"
