@@ -1,15 +1,13 @@
 import { defineConfig } from "drizzle-kit";
-import path from "path";
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import path from "path";
 
 // Auto-load the root .env so `pnpm --filter @workspace/db run push` works
 // on a fresh Windows clone without manually exporting DATABASE_URL first.
+// drizzle-kit runs with cwd = lib/db/, so root .env is two levels up.
 if (!process.env.DATABASE_URL) {
   try {
-    const envPath = path.resolve(__dirname, "../../.env");
+    const envPath = path.resolve(process.cwd(), "../../.env");
     const lines = readFileSync(envPath, "utf-8").split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
@@ -28,7 +26,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 export default defineConfig({
-  schema: path.join(__dirname, "./src/schema/index.ts"),
+  schema: "./src/schema/index.ts",
   dialect: "postgresql",
   dbCredentials: {
     url: process.env.DATABASE_URL,
