@@ -97,8 +97,8 @@ export async function bootstrapSessionTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS library_activity_nas_path_idx ON library_activity (nas_path);
     CREATE INDEX IF NOT EXISTS library_activity_created_at_idx ON library_activity (created_at);
   `);
+  // Base tables — no vector dependency
   await pool.query(`
-    CREATE EXTENSION IF NOT EXISTS vector;
     CREATE TABLE IF NOT EXISTS media_ai (
       id serial PRIMARY KEY,
       media_file_id integer NOT NULL,
@@ -108,7 +108,6 @@ export async function bootstrapSessionTable(): Promise<void> {
       ocr_text text,
       doc_type text,
       scene text,
-      embedding vector(384),
       ai_version integer NOT NULL DEFAULT 1,
       analyzed_at timestamp,
       error text
@@ -148,7 +147,6 @@ export async function bootstrapSessionTable(): Promise<void> {
       name text,
       cover_face_id integer,
       face_count integer NOT NULL DEFAULT 0,
-      centroid vector(512),
       hidden boolean NOT NULL DEFAULT false,
       created_at timestamp NOT NULL DEFAULT now()
     );
@@ -162,7 +160,6 @@ export async function bootstrapSessionTable(): Promise<void> {
       box_h real NOT NULL,
       score real NOT NULL,
       crop_path text,
-      embedding vector(512),
       created_at timestamp NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS faces_file_idx ON faces (media_file_id);
@@ -175,6 +172,19 @@ export async function bootstrapSessionTable(): Promise<void> {
       error text
     );
   `);
+
+  // pgvector extension + vector columns — optional, gracefully skipped if not installed.
+  // Install pgvector to enable AI similarity search and face recognition embeddings.
+  try {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await pool.query(`
+      ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS embedding vector(384);
+      ALTER TABLE people    ADD COLUMN IF NOT EXISTS centroid  vector(512);
+      ALTER TABLE faces     ADD COLUMN IF NOT EXISTS embedding vector(512);
+    `);
+  } catch {
+    logger.warn("pgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.");
+  }
   await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';

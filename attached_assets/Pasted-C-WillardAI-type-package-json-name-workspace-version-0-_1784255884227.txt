@@ -1,0 +1,105 @@
+C:\WillardAI>type package.json
+{
+    "name": "workspace",
+    "version": "0.0.0",
+    "license": "MIT",
+    "scripts": {
+        "build": "pnpm run typecheck && pnpm -r --if-present run build",
+        "typecheck:libs": "tsc --build",
+        "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    },
+    "private": true,
+    "devDependencies": {
+        "@playwright/test": "^1.61.1",
+        "prettier": "^3.8.4",
+        "typescript": "~5.9.3"
+    },
+    "dependencies": {
+        "@rollup/rollup-win32-x64-msvc": "^4.62.2",
+        "@tailwindcss/oxide-win32-x64-msvc": "^4.3.2",
+        "lightningcss-win32-x64-msvc": "^1.32.0"
+    }
+}
+
+C:\WillardAI>
+
+That explains everything.
+
+This is not the Willard AI application.
+
+This package.json is just a workspace shell. It has:
+
+No start script
+No dev script
+No install script
+No database scripts
+No Express/Vite/Next dependencies
+No Drizzle/Prisma
+No React
+No server
+
+It's basically an empty workspace.
+
+That also explains why:
+❌ setup-db.cjs doesn't exist.
+❌ There is nothing to start.
+❌ There is no database to initialize.
+I think I know what happened
+
+The ZIP that was created is missing almost all of the application code.
+
+A full Willard AI project should contain things like:
+
+apps/
+server/
+client/
+packages/
+shared/
+src/
+drizzle/
+prisma/
+vite.config.ts
+
+or something very similar.
+
+Instead yours only has:
+
+artifacts/
+attached_assets/
+lib/
+
+which means the actual app wasn't included.
+
+Let's verify
+
+Run:
+
+dir artifacts
+
+then
+
+dir artifacts /s /b
+
+I'm curious if the source code accidentally ended up inside artifacts.
+
+My recommendation
+
+I don't think this project is repairable by adding one missing file.
+
+I think the ZIP you have is the wrong export.
+
+Since we've been building Willard AI together and it's a very large business management system, the fastest path is to rebuild a proper Windows installation package containing:
+
+✅ complete frontend
+✅ complete backend
+✅ database
+✅ setup scripts
+✅ Start Willard AI.bat
+✅ Stop Willard AI.bat
+✅ Repair Willard AI.bat
+✅ automatic installer
+✅ portable/local deployment
+
+That way you can unzip it on any Windows PC, click Start Willard AI, and it just works.
+
+Based on what you've shown me, the current ZIP is missing the actual application, not just a setup script.
