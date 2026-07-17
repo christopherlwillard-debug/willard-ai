@@ -67,22 +67,22 @@ if ($needInstall) {
 }
 Write-Ok "AI Engine Ready"
 
-# ── Database ──────────────────────────────────────────────────────────────────
-Write-Info "Checking database..."
-if (-not (Ensure-AppDatabase)) {
-    Show-Failure "Willard AI couldn't start. The media database isn't available. Run 'Repair Willard AI' to fix it." `
-        ("Could not connect to PostgreSQL or create the 'willard' database. Is PostgreSQL running? Check DATABASE_URL in .env. See " + $ApiLog)
+# ── First-run check ───────────────────────────────────────────────────────────
+$apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
+if (-not (Test-Path $apiDist)) {
+    Show-Failure "Willard AI hasn't been set up yet on this computer." `
+        ("API dist not found at: " + $apiDist)
+    Write-Host ""
+    Write-Host "  Please double-click 'Setup Willard AI.bat' first." -ForegroundColor White
     Pause-BeforeClose; exit 1
 }
 
-# Run database migrations (creates tables on first launch; safe to re-run).
-Write-Info "Setting up database tables..."
-$dbUrl = Get-EnvValue "DATABASE_URL"
-$env:DATABASE_URL = $dbUrl
-$migrateOut = & pnpm --filter @workspace/db run push-force 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Show-Failure "Willard AI couldn't finish setting up its database." `
-        ("drizzle-kit push failed:`n" + ($migrateOut -join "`n"))
+# ── Database ──────────────────────────────────────────────────────────────────
+Write-Info "Checking database..."
+if (-not (Test-DatabaseConnection)) {
+    Show-Failure "Willard AI couldn't start. The media database isn't available." `
+        ("Could not connect to PostgreSQL. Is it running? Check DATABASE_URL in .env. See " + $ApiLog)
+    Write-Host "  If this is a fresh install, run 'Setup Willard AI.bat' first." -ForegroundColor White
     Pause-BeforeClose; exit 1
 }
 Write-Ok "Database Ready"
@@ -113,7 +113,7 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
 Write-Info "Starting Willard AI..."
 
 $apiProc = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "title Willard AI - Library Service && pnpm --filter @workspace/api-server run dev >> `"$ApiLog`" 2>&1" `
+    -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file-if-exists=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
     -WorkingDirectory $Root -WindowStyle Minimized -PassThru
 $webProc = Start-Process -FilePath "cmd.exe" `
     -ArgumentList "/c", "title Willard AI - App && pnpm --filter @workspace/willard-ai run dev >> `"$WebLog`" 2>&1" `
