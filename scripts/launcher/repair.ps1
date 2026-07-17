@@ -9,7 +9,7 @@ Write-Banner "Checking and repairing your installation..."
 
 $problems = @()
 
-# ── Clear stale state from a crashed previous run ─────────────────────────────
+# -- Clear stale state from a crashed previous run ----------------------------
 $tracked = Read-TrackedPids
 if ($tracked) {
     $apiAlive = Test-ProcessAlive $tracked.api
@@ -25,7 +25,7 @@ if ($tracked) {
     }
 }
 
-# ── Helper programs ───────────────────────────────────────────────────────────
+# -- Helper programs ----------------------------------------------------------
 if (Test-Command "node") {
     Write-Ok "Node.js is installed."
 } else {
@@ -55,7 +55,7 @@ if (Test-Command "ffmpeg") {
     Write-Host "        To add it:  winget install Gyan.FFmpeg" -ForegroundColor Gray
 }
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# -- Configuration ------------------------------------------------------------
 $envPath = Join-Path $Root ".env"
 if (Test-Path $envPath) {
     Write-Ok "Settings file is present."
@@ -66,7 +66,7 @@ if (Test-Path $envPath) {
     $problems += "The file .env.example is missing from the folder. Re-download Willard AI."
 }
 
-# ── Application components ────────────────────────────────────────────────────
+# -- Application components ---------------------------------------------------
 if ((Test-Command "pnpm") -and (Test-Command "node")) {
     Write-Info "Checking application components (this can take a few minutes)..."
     & pnpm install --silent *> (Join-Path $LogDir "repair-install.log")
@@ -78,7 +78,7 @@ if ((Test-Command "pnpm") -and (Test-Command "node")) {
     }
 }
 
-# ── Database connection ───────────────────────────────────────────────────────
+# -- Database connection -------------------------------------------------------
 if ((Test-Command "node") -and (Test-Path $envPath)) {
     if (Test-DatabaseConnection) {
         Write-Ok "Media database connection works."
@@ -88,7 +88,7 @@ if ((Test-Command "node") -and (Test-Path $envPath)) {
     }
 }
 
-# ── Media library location ────────────────────────────────────────────────────
+# -- Media library location ---------------------------------------------------
 # Best-effort: read the configured library path from the database and check it.
 if ((Test-Command "node") -and (Test-Path $envPath)) {
     $dbUrl = Get-EnvValue "DATABASE_URL"
@@ -123,7 +123,7 @@ c.connect()
     }
 }
 
-# ── Verdict ───────────────────────────────────────────────────────────────────
+# -- Verdict ------------------------------------------------------------------
 Write-Host ""
 if ($problems.Count -eq 0) {
     Write-Host "  Everything looks good - double-click 'Start Willard AI.bat'." -ForegroundColor Green

@@ -1,5 +1,5 @@
 /**
- * Willard AI — one-shot database setup script.
+ * Willard AI - one-shot database setup script.
  * Creates all tables from scratch on a fresh PostgreSQL database.
  * Safe to re-run: every statement uses CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
  *
@@ -12,7 +12,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-// ── 1. Load DATABASE_URL from root .env ──────────────────────────────────────
+// -- 1. Load DATABASE_URL from root .env --------------------------------------
 function loadEnv() {
   const envPath = path.join(__dirname, '.env');
   if (!fs.existsSync(envPath)) return;
@@ -35,14 +35,14 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// ── 2. Find the pg package in pnpm's virtual store ───────────────────────────
+// -- 2. Find the pg package in pnpm's virtual store ---------------------------
 function findPg() {
   // Direct (some pnpm configs hoist to root node_modules)
   try { return require('pg'); } catch {}
 
   const pnpmDir = path.join(__dirname, 'node_modules', '.pnpm');
   if (!fs.existsSync(pnpmDir)) {
-    throw new Error('node_modules/.pnpm not found — run `pnpm install` first.');
+    throw new Error('node_modules/.pnpm not found - run `pnpm install` first.');
   }
   const entries = fs.readdirSync(pnpmDir);
   // Match pg@X.Y.Z but not pg-pool, pg-protocol, pg-types, etc.
@@ -53,7 +53,7 @@ function findPg() {
 
 const { Client } = findPg();
 
-// ── 3. Create the willard database if it doesn't exist ───────────────────────
+// -- 3. Create the willard database if it doesn't exist -----------------------
 async function ensureDatabase() {
   const url    = new URL(DATABASE_URL);
   const dbName = url.pathname.slice(1);
@@ -72,11 +72,14 @@ async function ensureDatabase() {
   await admin.end();
 }
 
-// ── 4. All SQL to create/migrate every table ─────────────────────────────────
-const SETUP_SQL = [
-
-  // pgvector extension (needed for AI embeddings)
+// -- 4. Optional extensions (failures are non-fatal) --------------------------
+const OPTIONAL_SQL = [
+  // pgvector - needed for AI embeddings; not available on all systems
   `CREATE EXTENSION IF NOT EXISTS vector`,
+];
+
+// -- 5. All SQL to create/migrate every table ---------------------------------
+const SETUP_SQL = [
 
   // Session store (connect-pg-simple)
   `CREATE TABLE IF NOT EXISTS "session" (
@@ -404,9 +407,9 @@ const SETUP_SQL = [
   )`,
 ];
 
-// ── 5. Run everything ─────────────────────────────────────────────────────────
+// -- 6. Run everything --------------------------------------------------------
 async function main() {
-  console.log('\n  Willard AI — Database Setup\n');
+  console.log('\n  Willard AI - Database Setup\n');
 
   await ensureDatabase();
 
@@ -414,6 +417,18 @@ async function main() {
   await client.connect();
   console.log('  Connected to database.\n');
 
+  // Optional extensions (pgvector etc.) - failures are non-fatal
+  for (const sql of OPTIONAL_SQL) {
+    const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
+    try {
+      await client.query(sql);
+      process.stdout.write('  [OK] ' + label + '\n');
+    } catch (e) {
+      process.stdout.write('  [--] ' + label + ' (optional, skipped: ' + e.message.split('\n')[0] + ')\n');
+    }
+  }
+
+  // Required tables - failures are fatal
   let ok = 0;
   let fail = 0;
   for (const sql of SETUP_SQL) {
@@ -431,11 +446,12 @@ async function main() {
 
   await client.end();
 
-  console.log('\n  ─────────────────────────────────────────');
+  console.log('\n  -----------------------------------------');
   if (fail === 0) {
     console.log('  All tables ready. You can now start Willard AI.\n');
   } else {
-    console.log(`  Done with ${fail} error(s) — see above. The app may still work if errors were non-critical.\n`);
+    console.log('  Done with ' + fail + ' error(s) - see above. The app may still work if errors were non-critical.\n');
+    process.exit(1);
   }
 }
 
