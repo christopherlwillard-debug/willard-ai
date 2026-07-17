@@ -7,7 +7,7 @@ Ensure-LogDir
 
 Write-Banner "Preparing your media library..."
 
-# ── Already running? ──────────────────────────────────────────────────────────
+# -- Already running? ---------------------------------------------------------
 $tracked = Read-TrackedPids
 if ($tracked -and (Test-ProcessAlive $tracked.api) -and (Test-ProcessAlive $tracked.web)) {
     Write-Ok "Willard AI is already running."
@@ -23,7 +23,7 @@ if ($tracked -and (Test-ProcessAlive $tracked.api) -and (Test-ProcessAlive $trac
     Stop-TrackedProcesses | Out-Null
 }
 
-# ── Required helper programs ─────────────────────────────────────────────────
+# -- Required helper programs -------------------------------------------------
 if (-not (Test-Command "node")) {
     Show-Failure "Willard AI needs one more program before it can start: Node.js." `
         "Node.js was not found on PATH."
@@ -39,24 +39,23 @@ if (-not (Test-Command "pnpm")) {
     Pause-BeforeClose; exit 1
 }
 
-# ── Optional media component (warn only) ─────────────────────────────────────
+# -- Optional media component (warn only) -------------------------------------
 $ffmpegOk = Test-Command "ffmpeg"
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# -- Configuration ------------------------------------------------------------
 if (Ensure-EnvFile) {
     Write-Ok "Created your settings file automatically."
 }
 
-# ── Application components (first launch can take a few minutes) ─────────────
+# -- Packages (only if missing) -----------------------------------------------
 $nodeModules = Join-Path $Root "node_modules"
 $needInstall = -not (Test-Path $nodeModules)
 if (-not $needInstall) {
-    # Detect a corrupted/partial install: the workspace's own packages missing
     $probe = Join-Path $Root "node_modules\.pnpm"
     if (-not (Test-Path $probe)) { $needInstall = $true }
 }
 if ($needInstall) {
-    Write-Info "First launch can take a few minutes while Willard AI sets itself up..."
+    Write-Info "Installing packages (first launch takes a few minutes)..."
     $installLog = Join-Path $LogDir "setup.log"
     & pnpm install --silent *> $installLog
     if ($LASTEXITCODE -ne 0) {
@@ -65,9 +64,9 @@ if ($needInstall) {
         Pause-BeforeClose; exit 1
     }
 }
-Write-Ok "AI Engine Ready"
+Write-Ok "Packages ready"
 
-# ── First-run check ───────────────────────────────────────────────────────────
+# -- First-run check ----------------------------------------------------------
 $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
 if (-not (Test-Path $apiDist)) {
     Show-Failure "Willard AI hasn't been set up yet on this computer." `
@@ -77,7 +76,7 @@ if (-not (Test-Path $apiDist)) {
     Pause-BeforeClose; exit 1
 }
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# -- Database -----------------------------------------------------------------
 Write-Info "Checking database..."
 if (-not (Test-DatabaseConnection)) {
     Show-Failure "Willard AI couldn't start. The media database isn't available." `
@@ -87,19 +86,19 @@ if (-not (Test-DatabaseConnection)) {
 }
 Write-Ok "Database Ready"
 
-# ── Ports ─────────────────────────────────────────────────────────────────────
+# -- Ports --------------------------------------------------------------------
 foreach ($port in 8080, 5000) {
     if (-not (Test-PortFree $port)) {
         $ownerPid = Get-PortOwnerPid $port
         $ownerName = ""
         try { $ownerName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName } catch { }
-        Show-Failure "Another program on this computer is blocking Willard AI from starting." `
-            ("Port " + $port + " is in use by process " + $ownerPid + " (" + $ownerName + "). Close that program or restart the computer, then try again.")
+        Show-Failure "Another program is blocking Willard AI from starting." `
+            ("Port " + $port + " is in use by process " + $ownerPid + " (" + $ownerName + "). Close that program or restart, then try again.")
         Pause-BeforeClose; exit 1
     }
 }
 
-# ── Optional update check (only if this copy is a Git clone) ─────────────────
+# -- Optional update check (only if this copy is a Git clone) -----------------
 if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
     $answer = Read-Host "  Check for updates before starting? (y/N)"
     if ($answer -match '^[Yy]') {
@@ -109,7 +108,7 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
     }
 }
 
-# ── Start both parts of the app (separately visible & controllable) ──────────
+# -- Start both parts of the app ----------------------------------------------
 Write-Info "Starting Willard AI..."
 
 $apiProc = Start-Process -FilePath "cmd.exe" `
@@ -128,7 +127,7 @@ function Fail-And-CleanUp($friendly, $technical) {
     exit 1
 }
 
-# ── Wait for readiness (no fixed sleeps; up to 60s each) ─────────────────────
+# -- Wait for readiness (no fixed sleeps; up to 60s each) ---------------------
 if (-not (Wait-ForUrl $ApiUrl "your library" 60)) {
     Fail-And-CleanUp "Willard AI couldn't start. The library service never became ready." `
         ("The API did not respond on port 8080 within 60 seconds. See " + $ApiLog)
@@ -142,10 +141,10 @@ if (-not (Wait-ForUrl $WebUrl "the app" 60)) {
 Write-Ok "App Ready"
 
 if (-not $ffmpegOk) {
-    Write-Warn "Media processing is limited: thumbnails and video previews are off until FFmpeg is installed (winget install Gyan.FFmpeg)."
+    Write-Warn "Thumbnails are off until FFmpeg is installed (winget install Gyan.FFmpeg)."
 }
 
-# ── Open the browser exactly once ─────────────────────────────────────────────
+# -- Open browser -------------------------------------------------------------
 Write-Host ""
 Write-Host "  Opening Willard AI..." -ForegroundColor Cyan
 Start-Process $AppUrl

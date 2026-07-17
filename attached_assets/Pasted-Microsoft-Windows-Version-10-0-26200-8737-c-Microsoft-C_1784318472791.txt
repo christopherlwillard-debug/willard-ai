@@ -1,0 +1,43 @@
+Microsoft Windows [Version 10.0.26200.8737]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Willards-Media-Center>Setup Willard AI.bat
+'Setup' is not recognized as an internal or external command,
+operable program or batch file.
+
+C:\Willards-Media-Center> "Setup Willard AI.bat"
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:57 char:64
++ Write-Info "Installing packages (largest step â€” a few minutes)..."
++                                                                ~
+Unexpected token ')' in expression or statement.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:61 char:94
++ ...  installation failed." ("pnpm install failed â€” see " + $installLog)
++                                                                         ~
+Unexpected token ')' in expression or statement.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:63 char:1
++ }
++ ~
+Unexpected token '}' in expression or statement.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:72 char:92
++ ... failed. Is PostgreSQL running?" ("setup-db.cjs failed â€” see " + $db ...
++                                                               ~~~
+Unexpected token 'see' in expression or statement.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:72 char:91
++ ... tup failed. Is PostgreSQL running?" ("setup-db.cjs failed â€” see " + ...
++                                                                  ~
+Missing closing ')' in expression.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:71 char:26
++ if ($LASTEXITCODE -ne 0) {
++                          ~
+Missing closing '}' in statement block or type definition.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:83 char:74
++ ... how-Failure "API build failed." ("Build failed â€” see " + $buildLog)
++                                                                         ~
+Unexpected token ')' in expression or statement.
+At C:\Willards-Media-Center\scripts\launcher\setup.ps1:85 char:1
++ }
++ ~
+Unexpected token '}' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : UnexpectedToken
+

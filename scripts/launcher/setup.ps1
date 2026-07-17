@@ -1,4 +1,4 @@
-# Willard AI — First-time setup (run once per machine, safe to re-run).
+# Willard AI - First-time setup (run once per machine, safe to re-run).
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -7,10 +7,10 @@ Ensure-LogDir
 
 Write-Banner "Willard AI Setup"
 Write-Host "  This runs once to get Willard AI ready on your computer." -ForegroundColor Gray
-Write-Host "  Grab a coffee — it takes 2-5 minutes." -ForegroundColor Gray
+Write-Host "  Grab a coffee -- it takes 2-5 minutes." -ForegroundColor Gray
 Write-Host ""
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
+# -- Node.js ------------------------------------------------------------------
 if (-not (Test-Command "node")) {
     Write-Bad "Node.js is required but not found."
     Write-Host ""
@@ -20,7 +20,7 @@ if (-not (Test-Command "node")) {
 }
 Write-Ok ("Node.js " + (& node --version) + " found")
 
-# ── pnpm ──────────────────────────────────────────────────────────────────────
+# -- pnpm ---------------------------------------------------------------------
 if (-not (Test-Command "pnpm")) {
     Write-Info "Installing pnpm package manager..."
     & npm install -g pnpm --silent
@@ -32,12 +32,12 @@ if (-not (Test-Command "pnpm")) {
 }
 Write-Ok "pnpm ready"
 
-# ── Settings file (.env) ──────────────────────────────────────────────────────
+# -- Settings file (.env) -----------------------------------------------------
 if (Ensure-EnvFile) {
     Write-Ok "Created settings file"
 }
 
-# ── PostgreSQL password setup ─────────────────────────────────────────────────
+# -- PostgreSQL password setup ------------------------------------------------
 $dbUrl = Get-EnvValue "DATABASE_URL"
 $needsPassword = (-not $dbUrl) -or ($dbUrl -match "your.password|change.me|<password>|PASSWORD")
 if ($needsPassword) {
@@ -53,43 +53,41 @@ if ($needsPassword) {
     Write-Ok "Database connection configured"
 }
 
-# ── Packages ──────────────────────────────────────────────────────────────────
-Write-Info "Installing packages (largest step — a few minutes)..."
+# -- Packages -----------------------------------------------------------------
+Write-Info "Installing packages (this is the longest step -- a few minutes)..."
 $installLog = Join-Path $LogDir "setup-install.log"
 & pnpm install *> $installLog
 if ($LASTEXITCODE -ne 0) {
-    Show-Failure "Package installation failed." ("pnpm install failed — see " + $installLog)
+    Show-Failure "Package installation failed." ("pnpm install failed - see " + $installLog)
     Pause-BeforeClose; exit 1
 }
 Write-Ok "Packages installed"
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# -- Database -----------------------------------------------------------------
 Write-Info "Setting up database..."
 $env:DATABASE_URL = Get-EnvValue "DATABASE_URL"
 $dbLog = Join-Path $LogDir "setup-db.log"
 & node (Join-Path $Root "setup-db.cjs") *> $dbLog
 if ($LASTEXITCODE -ne 0) {
-    Show-Failure "Database setup failed. Is PostgreSQL running?" ("setup-db.cjs failed — see " + $dbLog)
+    Show-Failure "Database setup failed. Is PostgreSQL running?" ("setup-db.cjs failed - see " + $dbLog)
     Write-Host "  Make sure PostgreSQL is running, then try again." -ForegroundColor White
     Pause-BeforeClose; exit 1
 }
 Write-Ok "Database ready"
 
-# ── Build API server ──────────────────────────────────────────────────────────
+# -- Build API server ---------------------------------------------------------
 Write-Info "Building API server..."
 $buildLog = Join-Path $LogDir "setup-build.log"
 & pnpm --filter @workspace/api-server run build *> $buildLog
 if ($LASTEXITCODE -ne 0) {
-    Show-Failure "API build failed." ("Build failed — see " + $buildLog)
+    Show-Failure "API build failed." ("Build failed - see " + $buildLog)
     Pause-BeforeClose; exit 1
 }
 Write-Ok "API server built"
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+# -- Done ---------------------------------------------------------------------
 Write-Host ""
-Write-Host "  ──────────────────────────────────────────────────" -ForegroundColor Green
 Write-Host "  Setup complete!  Willard AI is ready to use." -ForegroundColor Green
-Write-Host "  ──────────────────────────────────────────────────" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Next step:  double-click 'Start Willard AI.bat'" -ForegroundColor White
 Write-Host ""
