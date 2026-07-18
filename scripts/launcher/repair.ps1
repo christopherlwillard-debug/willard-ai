@@ -69,7 +69,7 @@ if (Test-Path $envPath) {
 # -- Application components ---------------------------------------------------
 if ((Test-Command "pnpm") -and (Test-Command "node")) {
     Write-Info "Checking application components (this can take a few minutes)..."
-    & pnpm install --silent *> (Join-Path $LogDir "repair-install.log")
+    & pnpm install --ignore-scripts --silent *> (Join-Path $LogDir "repair-install.log")
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "Application components are complete."
     } else {
@@ -88,40 +88,6 @@ if ((Test-Command "node") -and (Test-Path $envPath)) {
     }
 }
 
-# -- Media library location ---------------------------------------------------
-# Best-effort: read the configured library path from the database and check it.
-if ((Test-Command "node") -and (Test-Path $envPath)) {
-    $dbUrl = Get-EnvValue "DATABASE_URL"
-    if ($dbUrl) {
-        $checkJs = @"
-const { Client } = require('pg');
-const fs = require('fs');
-const c = new Client({ connectionString: process.env.WILLARD_DB_TEST_URL, connectionTimeoutMillis: 5000 });
-c.connect()
- .then(() => c.query('SELECT nas_path FROM app_settings LIMIT 1'))
- .then((r) => {
-   const p = r.rows[0] && r.rows[0].nas_path;
-   if (!p) { console.log('UNSET'); process.exit(0); }
-   try { fs.readdirSync(p); console.log('OK ' + p); } catch { console.log('OFFLINE ' + p); }
-   process.exit(0);
- })
- .catch(() => { console.log('SKIP'); process.exit(0); });
-"@
-        $tmp = Join-Path $env:TEMP "willard-lib-check.js"
-        Set-Content -Path $tmp -Value $checkJs
-        $env:WILLARD_DB_TEST_URL = $dbUrl
-        $result = (& node $tmp 2>$null | Select-Object -First 1)
-        Remove-Item $tmp -ErrorAction SilentlyContinue
-        Remove-Item Env:\WILLARD_DB_TEST_URL -ErrorAction SilentlyContinue
-        if ($result -like "OK *") {
-            Write-Ok ("Media library location is reachable (" + $result.Substring(3) + ").")
-        } elseif ($result -like "OFFLINE *") {
-            Write-Warn ("Your media library location (" + $result.Substring(8) + ") isn't reachable right now. Reconnect the drive - Willard AI will pick it up automatically.")
-        } elseif ($result -eq "UNSET") {
-            Write-Info "No media library configured yet - Willard AI will help you set one up when it starts."
-        }
-    }
-}
 
 # -- Verdict ------------------------------------------------------------------
 Write-Host ""

@@ -88,22 +88,30 @@ function Get-EnvValue($key) {
 }
 
 function Test-DatabaseConnection {
-    # Live connection test using the app's own database driver - no extra
-    # tools needed. Returns $true/$false; detail lands in the api log.
+    # TCP reachability check using Node's built-in net module - no npm
+    # packages needed. Returns $true/$false; detail lands in the api log.
     $dbUrl = Get-EnvValue "DATABASE_URL"
     if (-not $dbUrl) { return $false }
     $testJs = @"
-const { Client } = require('pg');
-const c = new Client({ connectionString: process.env.WILLARD_DB_TEST_URL, connectionTimeoutMillis: 5000 });
-c.connect().then(() => c.query('SELECT 1')).then(() => { console.log('ok'); process.exit(0); })
- .catch((e) => { console.error(e.message); process.exit(1); });
+var net = require('net');
+var url = new URL(process.env.WILLARD_DB_TEST_URL);
+var port = parseInt(url.port) || 5432;
+var host = url.hostname || 'localhost';
+var s = net.createConnection({ port: port, host: host });
+s.setTimeout(5000);
+s.on('connect', function() { s.destroy(); process.exit(0); });
+s.on('timeout', function() { s.destroy(); process.exit(1); });
+s.on('error', function(e) { process.stderr.write(e.message + '\n'); process.exit(1); });
 "@
     $tmp = Join-Path $env:TEMP "willard-db-test.js"
     Set-Content -Path $tmp -Value $testJs
     $env:WILLARD_DB_TEST_URL = $dbUrl
     try {
+        $savedPref = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
         $out = & node $tmp 2>&1
         $okExit = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $savedPref
         if (-not $okExit) { Add-Content $ApiLog ("[launcher] Database test failed: " + ($out -join " ")) }
         return $okExit
     } finally {

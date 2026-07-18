@@ -56,7 +56,7 @@ if ($needsPassword) {
 # -- Packages -----------------------------------------------------------------
 Write-Info "Installing packages (this is the longest step -- a few minutes)..."
 $installLog = Join-Path $LogDir "setup-install.log"
-& pnpm install *> $installLog
+& pnpm install --ignore-scripts *> $installLog
 if ($LASTEXITCODE -ne 0) {
     Show-Failure "Package installation failed." ("pnpm install failed - see " + $installLog)
     Pause-BeforeClose; exit 1
