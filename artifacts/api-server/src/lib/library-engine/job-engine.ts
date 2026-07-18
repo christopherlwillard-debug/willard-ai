@@ -229,24 +229,51 @@ function saveDirMtimeCache(nasPath: string, cache: Map<string, number>): void {
   } catch { /* non-fatal */ }
 }
 
-// Mark files in directories that were skipped by dir-mtime cache as UNCHANGED
-// and add them to seenPaths so deletion detection stays accurate.
-// Returns the number of files marked.
-async function markSkippedDirFilesUnchanged(
+// Resolve files in directories that were short-circuited by the dir-mtime cache.
+//
+// The dir-mtime cache tells us no entries were added, removed, or renamed inside
+// the directory (directory mtime reflects structural changes only).  However,
+// in-place file content modifications do NOT update parent directory mtime on
+// most filesystems — so we MUST still stat every individual file to detect them.
+//
+// This function:
+//   1. Queries all non-deleted DB records for the skipped dirs
+//   2. Stats each file on disk
+//   3. Returns:
+//      - unchangedIds  — IDs whose size+mtime still match the DB record
+//      - filesToProcess — entries where size or mtime changed (need full indexing)
+//   4. Adds all seen paths to seenPaths for deletion detection
+//
+// Files that can no longer be stat'd are NOT added to unchangedIds or
+// filesToProcess — they stay out of seenPaths so deletion detection catches them.
+
+interface SkippedDirResult {
+  unchangedIds:   number[];
+  filesToProcess: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }>;
+}
+
+async function resolveSkippedDirs(
   skippedDirs: string[],
   nasPath: string,
-  scanStartedAt: Date,
   seenPaths: Set<string>,
-): Promise<number> {
-  if (skippedDirs.length === 0) return 0;
-  let total = 0;
+  profile: JobProfile,
+): Promise<SkippedDirResult> {
+  if (skippedDirs.length === 0) return { unchangedIds: [], filesToProcess: [] };
+
+  const unchangedIds:   number[]  = [];
+  const filesToProcess: SkippedDirResult["filesToProcess"] = [];
   const DIRS_PER_QUERY = 50;
 
   for (let i = 0; i < skippedDirs.length; i += DIRS_PER_QUERY) {
     const batch = skippedDirs.slice(i, i + DIRS_PER_QUERY);
     const conditions = batch.map(d => sql`${mediaFilesTable.relativePath} LIKE ${d + "/%"}`);
     const rows = await db
-      .select({ id: mediaFilesTable.id, relativePath: mediaFilesTable.relativePath })
+      .select({
+        id:           mediaFilesTable.id,
+        relativePath: mediaFilesTable.relativePath,
+        sizeBytes:    mediaFilesTable.sizeBytes,
+        modifiedAt:   mediaFilesTable.modifiedAt,
+      })
       .from(mediaFilesTable)
       .where(and(
         eq(mediaFilesTable.nasPath, nasPath),
@@ -254,17 +281,30 @@ async function markSkippedDirFilesUnchanged(
         or(...conditions),
       ));
 
-    for (const row of rows) seenPaths.add(row.relativePath);
+    for (const row of rows) {
+      const fullPath = path.join(nasPath, row.relativePath.replace(/\//g, path.sep));
+      try {
+        const stat = fs.statSync(fullPath);
+        seenPaths.add(row.relativePath);
 
-    const ids = rows.map(r => r.id);
-    for (let j = 0; j < ids.length; j += 1000) {
-      await db.update(mediaFilesTable)
-        .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
-        .where(inArray(mediaFilesTable.id, ids.slice(j, j + 1000)));
+        const sizeMatch  = stat.size === row.sizeBytes;
+        const mtimeMatch = row.modifiedAt !== null &&
+          stat.mtime.getTime() === row.modifiedAt.getTime();
+
+        if (sizeMatch && mtimeMatch && profile !== "FULL") {
+          unchangedIds.push(row.id);
+        } else {
+          const name = row.relativePath.split("/").pop()!;
+          const ext  = path.extname(name).replace(/^\./, "").toLowerCase();
+          filesToProcess.push({ fullPath, name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
+        }
+      } catch {
+        // File is gone — intentionally not added to seenPaths so deletion detection handles it
+      }
     }
-    total += rows.length;
   }
-  return total;
+
+  return { unchangedIds, filesToProcess };
 }
 
 // ── Job controls ──────────────────────────────────────────────────────────────
@@ -565,26 +605,42 @@ async function runScanJob(
     // 128 KB per-file read that computeQuickFingerprint requires entirely.
     const isFirstScan = existingByPath.size === 0;
 
-    // ── Optimization 2: mark skipped-directory files as UNCHANGED ────────
-    // walkNas already skipped their stat calls; now query the DB so deletion
-    // detection remains accurate and counters stay correct.
+    // ── Optimization 3: batch unchanged stamps ───────────────────────────
+    // Buffer IDs and flush with a single WHERE id = ANY(...) instead of one
+    // UPDATE per unchanged file.  Declared before Optimization 2 so the
+    // resolveSkippedDirs path can feed IDs into the same buffer.
+    const unchangedBuf: number[] = [];
+    const UNCHANGED_FLUSH = 500;
+
+    // ── Optimization 2: resolve skipped-directory files ──────────────────
+    // walkNas skipped readdirSync for unchanged directories (saving readdir
+    // overhead), but directory mtime only reflects structural changes
+    // (add/remove/rename entries).  In-place file edits do NOT update parent
+    // directory mtime on most filesystems, so we MUST still stat every known
+    // file individually to detect modifications.
+    //
+    // resolveSkippedDirs:
+    //   • queries the DB for all known files in those dirs
+    //   • stats each file on disk
+    //   • unchanged (size+mtime match) → added to unchangedBuf for batch stamp
+    //   • modified → appended to files[] for full indexing in the main loop
+    //   • gone → stays out of seenPaths → caught by deletion detection
     if (skippedDirs.length > 0 && !isFirstScan) {
-      const skippedCount = await markSkippedDirFilesUnchanged(
-        skippedDirs, state.nasPath, scanStartedAt, seenPaths,
+      const { unchangedIds, filesToProcess } = await resolveSkippedDirs(
+        skippedDirs, state.nasPath, seenPaths, state.profile,
       );
-      state.counters.unchanged += skippedCount;
-      state.filesProcessed    += skippedCount;
-      state.filesTotal        += skippedCount;
+
+      unchangedBuf.push(...unchangedIds);
+      state.counters.unchanged += unchangedIds.length;
+      state.filesProcessed    += unchangedIds.length;
+
+      if (filesToProcess.length > 0) files.push(...filesToProcess);
+
+      state.filesTotal = files.length + unchangedIds.length;
       await db.update(libraryJobsTable)
         .set({ totalFiles: state.filesTotal })
         .where(eq(libraryJobsTable.id, jobId));
     }
-
-    // ── Optimization 3: batch unchanged stamps ───────────────────────────
-    // Buffer IDs and flush with a single WHERE id = ANY(...) instead of one
-    // UPDATE per unchanged file.
-    const unchangedBuf: number[] = [];
-    const UNCHANGED_FLUSH = 500;
 
     const flushUnchanged = async (): Promise<void> => {
       if (unchangedBuf.length === 0) return;
