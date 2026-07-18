@@ -1,0 +1,674 @@
+C:\Willards-Media-Center\lib\integrations-openai-ai-server\src\client.ts:4
+  throw new Error(
+        ^
+
+Error: AI_INTEGRATIONS_OPENAI_BASE_URL must be set. Did you forget to provision the OpenAI AI integration?
+    at <anonymous> (C:\Willards-Media-Center\lib\integrations-openai-ai-server\src\client.ts:4:9)
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.18.0
+C:\Willards-Media-Center\lib\integrations-openai-ai-server\src\client.ts:4
+  throw new Error(
+        ^
+
+Error: AI_INTEGRATIONS_OPENAI_BASE_URL must be set. Did you forget to provision the OpenAI AI integration?
+    at <anonymous> (C:\Willards-Media-Center\lib\integrations-openai-ai-server\src\client.ts:4:9)
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.18.0
+[22:38:40.141] [33mWARN[39m (23252): [36mffmpeg not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffmpeg"
+[22:38:40.142] [33mWARN[39m (23252): [36mffprobe not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffprobe"
+[22:38:40.260] [33mWARN[39m (23252): [36mpgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.[39m
+[22:38:40.266] [32mINFO[39m (23252): [36mServer listening[39m
+    [35mport[39m: 8080
+[22:38:40.759] [32mINFO[39m (23252): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 1,
+      "method": "GET",
+      "url": "/api/healthz"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 6
+[22:43:01.990] [33mWARN[39m (6656): [36mffmpeg not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffmpeg"
+[22:43:01.993] [33mWARN[39m (6656): [36mffprobe not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffprobe"
+[22:43:02.083] [33mWARN[39m (6656): [36mpgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.[39m
+[22:43:02.089] [32mINFO[39m (6656): [36mServer listening[39m
+    [35mport[39m: 8080
+[22:43:02.230] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 1,
+      "method": "GET",
+      "url": "/api/healthz"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 4
+[22:43:19.393] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 2,
+      "method": "GET",
+      "url": "/api/auth/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 17
+[22:43:40.308] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 3,
+      "method": "POST",
+      "url": "/api/auth/setup"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 660
+[22:44:55.084] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 4,
+      "method": "GET",
+      "url": "/api/auth/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 15
+[22:44:55.670] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 6,
+      "method": "GET",
+      "url": "/api/settings"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 241
+[22:44:55.872] [32mINFO[39m (6656): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 7,
+      "method": "GET",
+      "url": "/api/files/search"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 442
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:44:56.121] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 8,
+      "method": "GET",
+      "url": "/api/health/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 690
+[22:44:56.167] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 11,
+      "method": "GET",
+      "url": "/api/settings/logo"
+    }
+    [35mres[39m: {
+      "statusCode": 404
+    }
+    [35mresponseTime[39m: 45
+[22:44:56.392] [32mINFO[39m (6656): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 5,
+      "method": "GET",
+      "url": "/api/dashboard"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 1062
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:44:56.431] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 10,
+      "method": "GET",
+      "url": "/api/system/environment"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 999
+[22:44:57.075] [32mINFO[39m (6656): [36mrequest aborted[39m
+    [35mreq[39m: {
+      "id": 9,
+      "method": "GET",
+      "url": "/api/scan/status"
+    }
+    [35mres[39m: {
+      "statusCode": null
+    }
+    [35mresponseTime[39m: 1644
+[22:45:00.555] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 12,
+      "method": "GET",
+      "url": "/api/system/drives"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 3333
+[22:45:00.557] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 13,
+      "method": "GET",
+      "url": "/api/system/environment"
+    }
+    [35mres[39m: {
+      "statusCode": 304
+    }
+    [35mresponseTime[39m: 3334
+[22:45:04.279] [32mINFO[39m (6656): [36mWillardAI directory bootstrapped on NAS[39m
+    [35mnasPath[39m: "Z:\"
+[22:45:04.285] [32mINFO[39m (6656): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 14,
+      "method": "PUT",
+      "url": "/api/settings"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 1155
+^C[22:47:10.036] [33mWARN[39m (13288): [36mffmpeg not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffmpeg"
+[22:47:10.037] [33mWARN[39m (13288): [36mffprobe not found — thumbnails, video metadata, and media conversion are unavailable until it is installed. Install FFmpeg and make sure 'ffmpeg' and 'ffprobe' are on your PATH. Windows: `winget install Gyan.FFmpeg` (or download from https://www.gyan.dev/ffmpeg/builds/) then restart your terminal. macOS: `brew install ffmpeg`. Linux: install the 'ffmpeg' package.[39m
+    [35mbin[39m: "ffprobe"
+[22:47:11.135] [32mINFO[39m (13288): [36mNAS storage initialized from persisted settings[39m
+    [35mnasPath[39m: "Z:\"
+[22:47:11.169] [33mWARN[39m (13288): [36mpgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.[39m
+[22:47:11.174] [32mINFO[39m (13288): [36mServer listening[39m
+    [35mport[39m: 8080
+[22:47:11.665] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 1,
+      "method": "GET",
+      "url": "/api/healthz"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 5
+[22:47:14.822] [32mINFO[39m (13288): [36mLibrary watcher active (native filesystem events)[39m
+    [35mnasPath[39m: "Z:\"
+[22:47:14.825] [33mWARN[39m (13288): [36mLibrary watcher errored — will restart automatically[39m
+    err: {
+      "type": "Error",
+      "message": "UNKNOWN: unknown error, watch",
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[22:47:16.966] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 2,
+      "method": "GET",
+      "url": "/api/auth/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 21
+[22:47:17.234] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 3,
+      "method": "GET",
+      "url": "/api/dashboard"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 12
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:47:17.249] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 4,
+      "method": "GET",
+      "url": "/api/settings"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 20
+[22:47:17.252] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 5,
+      "method": "GET",
+      "url": "/api/files/search"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 23
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:47:18.863] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 7,
+      "method": "GET",
+      "url": "/api/scan/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 1630
+[22:47:18.873] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 8,
+      "method": "GET",
+      "url": "/api/system/environment"
+    }
+    [35mres[39m: {
+      "statusCode": 304
+    }
+    [35mresponseTime[39m: 798
+[22:47:18.874] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 6,
+      "method": "GET",
+      "url": "/api/health/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 1643
+[22:47:18.881] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 10,
+      "method": "GET",
+      "url": "/api/dashboard"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 10
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:47:18.912] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 9,
+      "method": "GET",
+      "url": "/api/settings/logo"
+    }
+    [35mres[39m: {
+      "statusCode": 404
+    }
+    [35mresponseTime[39m: 837
+[22:47:18.921] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 11,
+      "method": "GET",
+      "url": "/api/files/search"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 49
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:47:20.781] [32mINFO[39m (13288): [36mLibrary watcher active (native filesystem events)[39m
+    [35mnasPath[39m: "Z:\"
+[22:47:20.787] [33mWARN[39m (13288): [36mLibrary watcher errored — will restart automatically[39m
+    err: {
+      "type": "Error",
+      "message": "UNKNOWN: unknown error, watch",
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[22:51:45.351] [32mINFO[39m (13288): [36mWatcher triggered incremental scan[39m
+    [35mnasPath[39m: "Z:\"
+    [35msource[39m: "recovery"
+    [35mpendingChanges[39m: 0
+[22:51:45.356] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 12,
+      "method": "GET",
+      "url": "/api/media/folders"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 264568
+Error: read ECONNRESET
+    at <anonymous> (C:\Willards-Media-Center\node_modules\.pnpm\pg-pool@3.14.0_pg@8.22.0\node_modules\pg-pool\index.js:45:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async PGStore._asyncQuery (C:\Willards-Media-Center\node_modules\.pnpm\connect-pg-simple@10.0.0\node_modules\connect-pg-simple\index.js:322:21)
+[22:51:45.370] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 14,
+      "method": "GET",
+      "url": "/api/library/jobs/active"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 264581
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:51:45.371] [32mINFO[39m (13288): [36mrequest aborted[39m
+    [35mreq[39m: {
+      "id": 18,
+      "method": "GET",
+      "url": "/api/library/health"
+    }
+    [35mres[39m: {
+      "statusCode": null
+    }
+    [35mresponseTime[39m: 5
+[22:51:45.372] [32mINFO[39m (13288): [36mrequest aborted[39m
+    [35mreq[39m: {
+      "id": 17,
+      "method": "GET",
+      "url": "/api/files/search"
+    }
+    [35mres[39m: {
+      "statusCode": null
+    }
+    [35mresponseTime[39m: 7
+[22:51:45.412] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 13,
+      "method": "GET",
+      "url": "/api/media/files"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 264623
+[22:51:45.416] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 16,
+      "method": "GET",
+      "url": "/api/settings"
+    }
+    [35mres[39m: {
+      "statusCode": 304
+    }
+    [35mresponseTime[39m: 52
+[22:51:45.437] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 19,
+      "method": "GET",
+      "url": "/api/library/thumbnails/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 70
+[22:51:47.416] [32mINFO[39m (13288): [36mLibrary watcher active (native filesystem events)[39m
+    [35mnasPath[39m: "Z:\"
+[22:51:48.199] [33mWARN[39m (13288): [36mLibrary watcher errored — will restart automatically[39m
+    err: {
+      "type": "Error",
+      "message": "UNKNOWN: unknown error, watch",
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[22:51:49.656] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 20,
+      "method": "POST",
+      "url": "/api/settings/test-nas"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 1475
+[22:51:49.665] [32mINFO[39m (13288): [36mBranding logo uploaded[39m
+    [35mdestPath[39m: "C:\Willards-Media-Center\data\branding\logo.png"
+[22:51:49.668] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 21,
+      "method": "POST",
+      "url": "/api/scan"
+    }
+    [35mres[39m: {
+      "statusCode": 202
+    }
+    [35mresponseTime[39m: 1475
+[22:53:09.561] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 22,
+      "method": "PUT",
+      "url": "/api/settings"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 81368
+[22:53:09.563] [32mINFO[39m (13288): [36mrequest errored[39m
+    [35mreq[39m: {
+      "id": 15,
+      "method": "GET",
+      "url": "/api/dashboard"
+    }
+    [35mres[39m: {
+      "statusCode": 500
+    }
+    [35mresponseTime[39m: 84199
+    err: {
+      "type": "Error",
+      "message": "failed with status code 500",
+      "stack":
+          Error: failed with status code 500
+              at onResFinished (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:115:39)
+              at ServerResponse.onResponseComplete (C:\Willards-Media-Center\node_modules\.pnpm\pino-http@10.5.0\node_modules\pino-http\logger.js:178:14)
+              at ServerResponse.emit (node:events:521:24)
+              at onFinish (node:_http_outgoing:1031:10)
+              at callback (node:internal/streams/writable:764:21)
+              at afterWrite (node:internal/streams/writable:708:5)
+              at afterWriteTick (node:internal/streams/writable:694:10)
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+    }
+[22:53:09.581] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 23,
+      "method": "POST",
+      "url": "/api/settings/logo"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 81387
+[22:53:09.582] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 24,
+      "method": "POST",
+      "url": "/api/scan"
+    }
+    [35mres[39m: {
+      "statusCode": 202
+    }
+    [35mresponseTime[39m: 81387
+[22:54:28.436] [32mINFO[39m (13288): [36mLibrary watcher active (native filesystem events)[39m
+    [35mnasPath[39m: "Z:\"
+[22:54:28.445] [33mWARN[39m (13288): [36mLibrary watcher errored — will restart automatically[39m
+    err: {
+      "type": "Error",
+      "message": "UNKNOWN: unknown error, watch",
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[22:54:29.182] [32mINFO[39m (13288): [36mLibrary watcher active (native filesystem events)[39m
+    [35mnasPath[39m: "Z:\"
+Error: write ECONNRESET
+    at <anonymous> (C:\Willards-Media-Center\node_modules\.pnpm\pg-pool@3.14.0_pg@8.22.0\node_modules\pg-pool\index.js:45:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async PGStore._asyncQuery (C:\Willards-Media-Center\node_modules\.pnpm\connect-pg-simple@10.0.0\node_modules\connect-pg-simple\index.js:322:21)
+[22:54:29.191] [33mWARN[39m (13288): [36mLibrary watcher errored — will restart automatically[39m
+    err: {
+      "type": "Error",
+      "message": "UNKNOWN: unknown error, watch",
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[22:54:29.201] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 26,
+      "method": "GET",
+      "url": "/api/faces/people"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 763
+[22:54:29.363] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 27,
+      "method": "GET",
+      "url": "/api/optimize/jobs"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 180
+[22:54:29.370] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 29,
+      "method": "GET",
+      "url": "/api/library/thumbnails/status"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 186
+[22:54:29.372] [32mINFO[39m (13288): [36mrequest completed[39m
+    [35mreq[39m: {
+      "id": 25,
+      "method": "GET",
+      "url": "/api/collections"
+    }
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 935
+^C

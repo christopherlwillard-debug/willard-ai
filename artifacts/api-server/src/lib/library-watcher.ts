@@ -197,7 +197,7 @@ function openWatcher(nasPath: string): void {
     });
     watcher.on("error", (err) => {
       logger.warn({ err }, "Library watcher errored — will restart automatically");
-      handleWatcherFailure(nasPath);
+      handleWatcherFailure(nasPath, err);
     });
     watcher.on("close", () => {
       // Unexpected close (we null the reference before intentional closes).
@@ -214,12 +214,24 @@ function openWatcher(nasPath: string): void {
   }
 }
 
-function handleWatcherFailure(nasPath: string): void {
+function handleWatcherFailure(nasPath: string, err?: Error): void {
   const wasOurs = state.fsWatcher !== null;
   closeWatcher();
   if (!wasOurs) return;
   state.restarts++;
   state.needsCatchUp = true;
+
+  // Network/SMB drives on Windows raise UNKNOWN errors that recur immediately.
+  // After a few failures switch permanently to sweep mode instead of looping.
+  const code = (err as any)?.code;
+  const isNetworkError = code === "UNKNOWN" || code === "ENOSYS";
+  if (isNetworkError || state.restarts >= 3) {
+    state.eventsUnsupported = true;
+    logger.info({ nasPath, code, restarts: state.restarts },
+      "Native file watching unavailable on this path — falling back to periodic sweeps");
+    return;
+  }
+
   void recordActivity(nasPath, "watcher_restart",
     "Live watching restarted automatically — checking for missed changes…",
     { restarts: state.restarts });

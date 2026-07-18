@@ -84,6 +84,12 @@ if (-not (Test-DatabaseConnection)) {
     Write-Host "  If this is a fresh install, run 'Setup Willard AI.bat' first." -ForegroundColor White
     Pause-BeforeClose; exit 1
 }
+$env:DATABASE_URL = Get-EnvValue "DATABASE_URL"
+$dbMigrateLog = Join-Path $LogDir "db-migrate.log"
+& node (Join-Path $Root "setup-db.cjs") *> $dbMigrateLog
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Schema migration had warnings - see db-migrate.log (app may still work)"
+}
 Write-Ok "Database Ready"
 
 # -- Ports --------------------------------------------------------------------

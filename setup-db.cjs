@@ -81,6 +81,22 @@ const OPTIONAL_SQL = [
 // -- 5. All SQL to create/migrate every table ---------------------------------
 const SETUP_SQL = [
 
+  // indexed_files (general file index used by dashboard, search, and scan engine)
+  `CREATE TABLE IF NOT EXISTS indexed_files (
+    id           serial PRIMARY KEY,
+    path         text NOT NULL UNIQUE,
+    filename     text NOT NULL,
+    extension    text NOT NULL DEFAULT '',
+    file_type    text NOT NULL DEFAULT 'other',
+    size_bytes   bigint NOT NULL DEFAULT 0,
+    modified_at  timestamp,
+    folder       text NOT NULL DEFAULT '',
+    source       text NOT NULL DEFAULT 'local',
+    content_hash text,
+    indexed_at   timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS indexed_files_content_hash_idx ON indexed_files (content_hash)`,
+
   // Session store (connect-pg-simple)
   `CREATE TABLE IF NOT EXISTS "session" (
     "sid"    varchar      NOT NULL COLLATE "default",
