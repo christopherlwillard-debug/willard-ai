@@ -2,7 +2,7 @@
 # Friendly, non-technical output in the happy path; technical detail goes to
 # log files and is shown only on request.
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 # Project root = two levels up from this script
 $script:Root    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
