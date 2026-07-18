@@ -47,22 +47,17 @@ if (Ensure-EnvFile) {
     Write-Ok "Created your settings file automatically."
 }
 
-# -- Packages (only if missing) -----------------------------------------------
-$nodeModules = Join-Path $Root "node_modules"
-$needInstall = -not (Test-Path $nodeModules)
-if (-not $needInstall) {
-    $probe = Join-Path $Root "node_modules\.pnpm"
-    if (-not (Test-Path $probe)) { $needInstall = $true }
-}
-if ($needInstall) {
-    Write-Info "Installing packages (first launch takes a few minutes)..."
-    $installLog = Join-Path $LogDir "setup.log"
-    & pnpm install --ignore-scripts --silent *> $installLog
-    if ($LASTEXITCODE -ne 0) {
-        Show-Failure "Willard AI couldn't finish setting itself up." `
-            ("pnpm install failed - see " + $installLog)
-        Pause-BeforeClose; exit 1
-    }
+# -- Packages -----------------------------------------------------------------
+# Always run pnpm install so platform-specific native binaries (e.g. the
+# Windows Rollup binary) are present even after a git pull that overwrote
+# the lockfile.  pnpm is fast when nothing has changed (~1-2s).
+Write-Info "Checking packages..."
+$installLog = Join-Path $LogDir "setup.log"
+& pnpm install --ignore-scripts --silent *> $installLog
+if ($LASTEXITCODE -ne 0) {
+    Show-Failure "Willard AI couldn't finish setting itself up." `
+        ("pnpm install failed - see " + $installLog)
+    Pause-BeforeClose; exit 1
 }
 Write-Ok "Packages ready"
 

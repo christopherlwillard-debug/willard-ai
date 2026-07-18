@@ -16,8 +16,8 @@ $script:LogDir  = Join-Path $Root "logs"
 $script:PidFile = Join-Path $LogDir "willard.pids.json"
 $script:ApiLog  = Join-Path $LogDir "api.log"
 $script:WebLog  = Join-Path $LogDir "web.log"
-$script:ApiUrl  = "http://localhost:8080/api/healthz"
-$script:WebUrl  = "http://localhost:5000"
+$script:ApiUrl  = "http://127.0.0.1:8080/api/healthz"
+$script:WebUrl  = "http://127.0.0.1:5000"
 $script:AppUrl  = "http://localhost:5000"
 
 function Assert-LocalWindows {
