@@ -4,11 +4,11 @@
 
 $ErrorActionPreference = "Continue"
 
-# GitHub mirror - change OWNER to your GitHub username after creating the repo.
-# This is the only place the URL lives; update.ps1 and setup.ps1 both read it.
-$script:GithubRepo    = "https://github.com/OWNER/willard-ai"
+# GitHub mirror - this is the only place the URL lives.
+# update.ps1 and setup.ps1 both read these constants.
+$script:GithubRepo    = "https://github.com/christopherlwillard-debug/willard-ai"
 $script:GithubBranch  = "main"
-$script:GithubRawBase = "https://raw.githubusercontent.com/OWNER/willard-ai/main"
+$script:GithubRawBase = "https://raw.githubusercontent.com/christopherlwillard-debug/willard-ai/main"
 
 # Project root = two levels up from this script
 $script:Root    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
