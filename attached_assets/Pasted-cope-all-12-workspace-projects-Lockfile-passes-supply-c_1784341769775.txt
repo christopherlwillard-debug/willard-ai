@@ -1,0 +1,49 @@
+cope: all 12 workspace projects
+Γ£ô Lockfile passes supply-chain policies (verified 1d ago)
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +1184
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1184, reused 496, downloaded 0, added 0
+
+   Γò¡ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓò«
+   Γöé                                          Γöé
+   Γöé   Update available! 11.13.1 ΓåÆ 11.14.0.   Γöé
+   Γöé   Changelog: https://pnpm.io/v/11.14.0   Γöé
+   Γöé     To update, run: pnpm add -g pnpm     Γöé
+   Γöé                                          Γöé
+   Γò░ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓò»
+
+Progress: resolved 1184, reused 1155, downloaded 0, added 9
+Progress: resolved 1184, reused 1155, downloaded 0, added 31
+Progress: resolved 1184, reused 1156, downloaded 0, added 46
+Progress: resolved 1184, reused 1156, downloaded 0, added 48
+Progress: resolved 1184, reused 1156, downloaded 0, added 118
+Progress: resolved 1184, reused 1158, downloaded 0, added 191
+Progress: resolved 1184, reused 1158, downloaded 0, added 260
+Progress: resolved 1184, reused 1158, downloaded 0, added 423
+Progress: resolved 1184, reused 1158, downloaded 0, added 532
+Progress: resolved 1184, reused 1158, downloaded 0, added 725
+Progress: resolved 1184, reused 1158, downloaded 0, added 893
+Progress: resolved 1184, reused 1158, downloaded 0, added 895
+Progress: resolved 1184, reused 1158, downloaded 0, added 967
+Progress: resolved 1184, reused 1158, downloaded 0, added 976
+Progress: resolved 1184, reused 1158, downloaded 0, added 1070
+Progress: resolved 1184, reused 1158, downloaded 0, added 1071
+Progress: resolved 1184, reused 1158, downloaded 0, added 1096
+Progress: resolved 1184, reused 1158, downloaded 0, added 1137
+Progress: resolved 1184, reused 1158, downloaded 0, added 1180
+Progress: resolved 1184, reused 1158, downloaded 0, added 1182
+Progress: resolved 1184, reused 1158, downloaded 0, added 1183
+Progress: resolved 1184, reused 1158, downloaded 0, added 1184, done
+
+devDependencies:
++ @playwright/test 1.61.1
++ prettier 3.8.4
++ typescript 5.9.3
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm instead" >&2; exit 1 ;; esac'
+. preinstall: 'sh' is not recognized as an internal or external command,
+. preinstall: operable program or batch file.
+. preinstall: Failed
+[ELIFECYCLE] Command failed with exit code 1.
