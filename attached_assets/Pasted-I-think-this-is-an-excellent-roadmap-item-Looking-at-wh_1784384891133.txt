@@ -1,0 +1,236 @@
+I think this is an excellent roadmap item. Looking at what you've described, it's targeting exactly the bottlenecks that make NAS-based media libraries feel slow.
+
+Here's how I'd prioritize it.
+
+1. Skip fingerprinting on the first scan ⭐⭐⭐⭐⭐ (Highest ROI)
+
+This is essentially free performance.
+
+On a first scan:
+
+There are no existing fingerprints.
+There are no files to compare against.
+Therefore move detection cannot happen.
+
+Reading 128 KB from every file just to produce a fingerprint you'll never use is wasted I/O.
+
+I'd even make it smarter:
+
+if (existingMediaCount === 0) {
+    skipQuickFingerprint = true;
+}
+
+After the initial scan, enable fingerprinting automatically for rescans.
+
+2. Parallel metadata extraction ⭐⭐⭐⭐⭐
+
+This is probably where you'll see the biggest real-world improvement.
+
+Right now your app is doing:
+
+Photo 1
+↓
+Photo 2
+↓
+Photo 3
+↓
+Photo 4
+
+Instead:
+
+Photo 1 \
+Photo 2  \
+Photo 3   > 8 concurrent workers
+Photo 4  /
+Photo 5 /
+Photo 6
+
+NAS drives love concurrent reads.
+
+Immich does exactly this.
+
+I'd even make concurrency configurable:
+
+Slow HDD NAS:        4
+Gigabit NAS:         8
+SSD NAS:            12
+NVMe Server:        16
+
+Default:
+
+8
+3. Batch INSERTs ⭐⭐⭐⭐⭐
+
+This is another huge win.
+
+Instead of
+
+INSERT
+INSERT
+INSERT
+INSERT
+INSERT
+
+Do
+
+INSERT
+200 rows
+
+That alone can reduce database time by an order of magnitude.
+
+4. Batch unchanged updates ⭐⭐⭐⭐☆
+
+Exactly.
+
+Updating
+
+UNCHANGED
+
+100,000 times individually destroys performance.
+
+Instead:
+
+UPDATE media_files
+SET last_scan_action='UNCHANGED'
+WHERE id = ANY(...)
+
+Every few hundred files.
+
+5. Increase batch size ⭐⭐⭐⭐☆
+
+I'd actually go a little farther.
+
+Instead of hardcoded profiles:
+
+LOW = 25
+
+BALANCED = 100
+
+HIGH = 300
+
+I'd make the scanner adaptive.
+
+If it detects:
+
+SSD
+Gigabit network
+CPU isn't saturated
+
+it can automatically increase.
+
+If RAM starts climbing:
+
+Reduce concurrency.
+One thing I think is missing
+
+I'd add one more optimization.
+
+6. Directory mtime short-circuit ⭐⭐⭐⭐⭐
+
+Right now you're still walking every file.
+
+Instead:
+
+Vacation 2025/
+
+Modified:
+March 1
+
+If:
+
+Vacation 2025
+
+hasn't changed since last scan...
+
+Skip the ENTIRE directory.
+
+No file enumeration.
+
+No stat calls.
+
+Nothing.
+
+Just:
+
+Skip 8,432 files
+
+This is how many professional media managers become incredibly fast on rescans.
+
+Another improvement
+7. Persist directory checkpoints
+
+If the scan stops here:
+
+Photos
+    2019
+    2020
+    2021
+    2022
+        January
+        February
+        March  ← stopped here
+
+Resume here instead of rescanning:
+
+2019
+2020
+2021
+2022
+January
+February
+My only architectural change
+
+I'd split scanning into two phases:
+
+Phase 1 (Fast)
+Walk directories
+
+stat()
+
+Detect changes
+
+Queue work
+
+No metadata.
+
+No EXIF.
+
+No thumbnails.
+
+No AI.
+
+Goal:
+
+Know every changed file.
+Phase 2 (Workers)
+8 metadata workers
+
+↓
+
+EXIF
+
+↓
+
+Hash
+
+↓
+
+Thumbnail
+
+↓
+
+DB insert
+
+This keeps the scanner continuously feeding workers rather than blocking on individual files.
+
+Overall
+
+I'd rate this roadmap item 9.8/10. It targets the biggest performance bottlenecks and should make a dramatic difference.
+
+With the addition of:
+
+directory-level change detection,
+resumable directory checkpoints,
+and a two-phase pipeline,
+
+I think Willard AI could realistically match or even outperform Immich on rescans, especially on large NAS libraries where minimizing unnecessary network I/O is the key to speed.
