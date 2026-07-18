@@ -9,6 +9,12 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": ["linux", "win32", "darwin"],
+      "cpu": ["x64", "arm64"]
+    }
+  },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "prettier": "^3.8.4",
