@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
-import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, nasLogStream } from "../lib/nas-storage";
+import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -94,7 +94,7 @@ router.put("/settings", async (req, res) => {
     // location we cannot reach (e.g. a Windows "Z:" drive) — doing so creates a
     // fake local folder that later masks the offline state by reporting "online".
     if (body.nasPath && body.nasPath !== existing.nasPath) {
-      const reach = checkNasReachable(body.nasPath);
+      const reach = await checkNasReachableAsync(body.nasPath);
       if (!reach.online) {
         res.status(422).json({
           error: `Library Offline — ${reach.message}. The library location was NOT saved because it cannot be reached from this server.`,
@@ -160,7 +160,7 @@ router.post("/settings/reinit-nas-dirs", async (_req, res) => {
 router.post("/settings/test-nas", async (req, res) => {
   try {
     const { path: nasPath } = req.body as { path: string };
-    const r = checkNasReachable(nasPath);
+    const r = await checkNasReachableAsync(nasPath);
     res.json({
       accessible: r.online,
       message: r.online ? r.message.replace(/^Online/, "Accessible") : r.message,
