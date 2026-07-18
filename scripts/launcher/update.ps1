@@ -118,8 +118,11 @@ if (-not $updatedViaGit) {
         Write-Info ("Check your internet connection and try again. Details: " + $updateLog)
         Pause-BeforeClose; exit 1
     }
-    Write-Ok ("Downloaded " + $filesToUpdate.Count + " files.")
-    $script:ApiSourceChanged = $true
+    Write-Ok ("Downloaded " + $filesToUpdate.Count + " launcher and config files.")
+    # Direct download cannot fetch API source trees - only scripts and config
+    # are updated. API source requires git. Rebuild is skipped accordingly.
+    $script:ApiSourceChanged = $false
+    Write-Info "Note: API source updates require git. Install git and re-run for full updates."
 }
 
 # Refresh packages
