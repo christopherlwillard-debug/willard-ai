@@ -57,7 +57,7 @@ if (-not $needInstall) {
 if ($needInstall) {
     Write-Info "Installing packages (first launch takes a few minutes)..."
     $installLog = Join-Path $LogDir "setup.log"
-    & pnpm install --silent *> $installLog
+    & pnpm install --ignore-scripts --silent *> $installLog
     if ($LASTEXITCODE -ne 0) {
         Show-Failure "Willard AI couldn't finish setting itself up." `
             ("pnpm install failed - see " + $installLog)
