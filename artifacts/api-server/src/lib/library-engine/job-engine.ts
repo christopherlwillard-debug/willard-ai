@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, libraryJobsTable, appSettingsTable } from "@workspace/db";
-import { eq, and, lt, sql, isNull, or, gt } from "drizzle-orm";
+import { eq, and, lt, sql, isNull, or, gt, inArray } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
   type CancellationReason, type ScanPhase, type ScanAction,
@@ -125,6 +125,146 @@ function computeEta(
 function tickSpeed(state: ActiveJobState): void {
   state.speedWindow.push(Date.now());
   if (state.speedWindow.length > WINDOW_SIZE) state.speedWindow.shift();
+}
+
+// ── Concurrency semaphore ─────────────────────────────────────────────────────
+// Limits the number of concurrent async file-I/O operations (fingerprinting +
+// metadata extraction).  On a NAS, having 6–8 concurrent reads saturates the
+// SMB connection without overwhelming the NAS CPU or RAM.
+
+function createSemaphore(n: number): <T>(fn: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return function run<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const execute = () => {
+        active++;
+        fn().then(resolve, reject).finally(() => {
+          active--;
+          if (queue.length > 0) queue.shift()!();
+        });
+      };
+      if (active < n) execute();
+      else queue.push(execute);
+    });
+  };
+}
+
+// ── Batch upsert set (excluded.* references) ──────────────────────────────────
+// Used by onConflictDoUpdate for multi-row batch inserts so each row's own
+// values are applied (not the first row's values for all).
+
+const MEDIA_FILE_UPSERT_SET = {
+  name:                 sql`excluded.name`,
+  extension:            sql`excluded.extension`,
+  mimeType:             sql`excluded.mime_type`,
+  mediaType:            sql`excluded.media_type`,
+  sizeBytes:            sql`excluded.size_bytes`,
+  modifiedAt:           sql`excluded.modified_at`,
+  width:                sql`excluded.width`,
+  height:               sql`excluded.height`,
+  orientation:          sql`excluded.orientation`,
+  durationSeconds:      sql`excluded.duration_seconds`,
+  dateTaken:            sql`excluded.date_taken`,
+  cameraMake:           sql`excluded.camera_make`,
+  cameraModel:          sql`excluded.camera_model`,
+  lens:                 sql`excluded.lens`,
+  iso:                  sql`excluded.iso`,
+  aperture:             sql`excluded.aperture`,
+  exposure:             sql`excluded.exposure`,
+  focalLength:          sql`excluded.focal_length`,
+  flash:                sql`excluded.flash`,
+  colorProfile:         sql`excluded.color_profile`,
+  gpsLatitude:          sql`excluded.gps_latitude`,
+  gpsLongitude:         sql`excluded.gps_longitude`,
+  exifJson:             sql`excluded.exif_json`,
+  videoCodec:           sql`excluded.video_codec`,
+  videoBitrate:         sql`excluded.video_bitrate`,
+  fps:                  sql`excluded.fps`,
+  audioCodec:           sql`excluded.audio_codec`,
+  dateCreated:          sql`excluded.date_created`,
+  pageCount:            sql`excluded.page_count`,
+  pdfAuthor:            sql`excluded.pdf_author`,
+  pdfTitle:             sql`excluded.pdf_title`,
+  pdfSubject:           sql`excluded.pdf_subject`,
+  pdfKeywords:          sql`excluded.pdf_keywords`,
+  contentHash:          sql`excluded.content_hash`,
+  quickFingerprint:     sql`excluded.quick_fingerprint`,
+  scannerVersion:       sql`excluded.scanner_version`,
+  lastScanAction:       sql`excluded.last_scan_action`,
+  lastScannedAt:        sql`excluded.last_scanned_at`,
+  thumbnailPath:        sql`excluded.thumbnail_path`,
+  thumbnailGeneratedAt: sql`excluded.thumbnail_generated_at`,
+  indexedAt:            sql`excluded.indexed_at`,
+} as const;
+
+// ── Directory mtime cache (rescan short-circuit) ──────────────────────────────
+// Saved as JSON after each successful scan so the next rescan can skip entire
+// directory trees that haven't changed.  Stored in the WillardAI cache folder
+// on the NAS itself.
+
+function dirMtimeCachePath(nasPath: string): string {
+  return path.join(getWillardAIDir(nasPath), "cache", "dir-scan-cache.json");
+}
+
+function loadDirMtimeCache(nasPath: string): Map<string, number> {
+  try {
+    const raw = fs.readFileSync(dirMtimeCachePath(nasPath), "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed?.v === 1 && typeof parsed.dirs === "object") {
+      return new Map(Object.entries(parsed.dirs as Record<string, number>));
+    }
+  } catch { /* no cache yet — first scan */ }
+  return new Map();
+}
+
+function saveDirMtimeCache(nasPath: string, cache: Map<string, number>): void {
+  try {
+    const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      dirMtimeCachePath(nasPath),
+      JSON.stringify({ v: 1, dirs: Object.fromEntries(cache) }),
+    );
+  } catch { /* non-fatal */ }
+}
+
+// Mark files in directories that were skipped by dir-mtime cache as UNCHANGED
+// and add them to seenPaths so deletion detection stays accurate.
+// Returns the number of files marked.
+async function markSkippedDirFilesUnchanged(
+  skippedDirs: string[],
+  nasPath: string,
+  scanStartedAt: Date,
+  seenPaths: Set<string>,
+): Promise<number> {
+  if (skippedDirs.length === 0) return 0;
+  let total = 0;
+  const DIRS_PER_QUERY = 50;
+
+  for (let i = 0; i < skippedDirs.length; i += DIRS_PER_QUERY) {
+    const batch = skippedDirs.slice(i, i + DIRS_PER_QUERY);
+    const conditions = batch.map(d => sql`${mediaFilesTable.relativePath} LIKE ${d + "/%"}`);
+    const rows = await db
+      .select({ id: mediaFilesTable.id, relativePath: mediaFilesTable.relativePath })
+      .from(mediaFilesTable)
+      .where(and(
+        eq(mediaFilesTable.nasPath, nasPath),
+        sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+        or(...conditions),
+      ));
+
+    for (const row of rows) seenPaths.add(row.relativePath);
+
+    const ids = rows.map(r => r.id);
+    for (let j = 0; j < ids.length; j += 1000) {
+      await db.update(mediaFilesTable)
+        .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
+        .where(inArray(mediaFilesTable.id, ids.slice(j, j + 1000)));
+    }
+    total += rows.length;
+  }
+  return total;
 }
 
 // ── Job controls ──────────────────────────────────────────────────────────────
@@ -343,9 +483,26 @@ async function runScanJob(
     const willardDir = path.resolve(getWillardAIDir(state.nasPath));
     const skipDirs   = new Set([willardDir]);
     const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
-    walkNas(path.resolve(scanRoot), skipDirs, files, undefined, (skippedPath, reason) => {
-      recordSkip(state, path.relative(state.nasPath, skippedPath).replace(/\\/g, "/"), reason);
-    });
+
+    // Load the directory mtime cache from the previous scan so we can skip
+    // entire unchanged directory trees without stat'ing every file inside them.
+    const dirCacheIn  = loadDirMtimeCache(state.nasPath);
+    const dirCacheOut = new Map<string, number>();
+    const skippedDirs: string[] = [];
+
+    walkNas(
+      path.resolve(scanRoot),
+      skipDirs,
+      files,
+      undefined,
+      (skippedPath, reason) => {
+        recordSkip(state, path.relative(state.nasPath, skippedPath).replace(/\\/g, "/"), reason);
+      },
+      dirCacheIn,
+      dirCacheOut,
+      skippedDirs,
+      path.resolve(state.nasPath),
+    );
 
     // Prioritized ordering: photos → videos → documents → audio → other;
     // newest-modified first within each category. Deterministic, so a stored
@@ -403,11 +560,214 @@ async function runScanJob(
     // Track which DB paths we've seen (for deletion detection)
     const seenPaths = new Set<string>();
 
+    // ── Optimization 1: skip fingerprinting on first scan ────────────────
+    // When no existing records exist, move detection is impossible — skip the
+    // 128 KB per-file read that computeQuickFingerprint requires entirely.
+    const isFirstScan = existingByPath.size === 0;
+
+    // ── Optimization 2: mark skipped-directory files as UNCHANGED ────────
+    // walkNas already skipped their stat calls; now query the DB so deletion
+    // detection remains accurate and counters stay correct.
+    if (skippedDirs.length > 0 && !isFirstScan) {
+      const skippedCount = await markSkippedDirFilesUnchanged(
+        skippedDirs, state.nasPath, scanStartedAt, seenPaths,
+      );
+      state.counters.unchanged += skippedCount;
+      state.filesProcessed    += skippedCount;
+      state.filesTotal        += skippedCount;
+      await db.update(libraryJobsTable)
+        .set({ totalFiles: state.filesTotal })
+        .where(eq(libraryJobsTable.id, jobId));
+    }
+
+    // ── Optimization 3: batch unchanged stamps ───────────────────────────
+    // Buffer IDs and flush with a single WHERE id = ANY(...) instead of one
+    // UPDATE per unchanged file.
+    const unchangedBuf: number[] = [];
+    const UNCHANGED_FLUSH = 500;
+
+    const flushUnchanged = async (): Promise<void> => {
+      if (unchangedBuf.length === 0) return;
+      const ids = unchangedBuf.splice(0);
+      await db.update(mediaFilesTable)
+        .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
+        .where(inArray(mediaFilesTable.id, ids));
+    };
+
+    // ── Optimization 4: concurrency semaphore for parallel metadata I/O ──
+    const sem = createSemaphore(state.throttle.concurrency);
+
+    // Persist cursor on a 10-second time-gate instead of every batch
+    const PERSIST_INTERVAL_MS = 10_000;
+    let lastPersistAt = Date.now();
+
+    // ── processOneFile closure ────────────────────────────────────────────
+    // Handles fingerprinting + metadata extraction for a single changed file.
+    // Returns a result describing what to write; all DB writes are batched by
+    // the caller so Promise.all can run multiple of these concurrently.
+    interface FileResult {
+      action:            "NEW" | "MODIFIED" | "MOVED" | "SKIP";
+      relativePath:      string;
+      name:              string;
+      targetId?:         number;
+      quickFingerprint?: string | null;
+      sizeBytes?:        number;
+      modifiedAt?:       Date;
+      values?:           typeof mediaFilesTable.$inferInsert;
+      skipReason?:       string;
+    }
+
+    const processOneFile = async (f: { fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }): Promise<FileResult> => {
+      const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
+      state.currentPath = relativePath;
+
+      const existing = existingByPath.get(relativePath);
+      let quickFingerprint: string | null = null;
+      let action: "NEW" | "MODIFIED" | "MOVED";
+      let targetId: number | undefined;
+      let contentHash: string | null = null;
+      let currentSize  = f.sizeBytes;
+      let currentMtime = f.modifiedAt;
+
+      if (!existing) {
+        if (!isFirstScan) {
+          // Compute fingerprint for move detection
+          state.phase = "hashing";
+          quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
+          if (quickFingerprint === null) {
+            state.filesProcessed++;
+            tickSpeed(state);
+            return { action: "SKIP", relativePath, name: f.name, skipReason: "Could not read file (permission denied or unreadable)" };
+          }
+
+          // Stage 1: fingerprint match — atomic (JS single-threaded, no await between check+delete)
+          const movedFromId = existingByFingerprint.get(quickFingerprint);
+          if (movedFromId !== undefined) {
+            existingByFingerprint.delete(quickFingerprint);
+            state.counters.moved++;
+            state.filesProcessed++;
+            tickSpeed(state);
+            return { action: "MOVED", relativePath, name: f.name, targetId: movedFromId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
+          }
+
+          // Stage 2: legacy full-hash rows (rows without fingerprints from before v2)
+          if (legacySizes.has(f.sizeBytes)) {
+            contentHash = await hashFile(f.fullPath);
+            state.counters.hashed++;
+            const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
+            if (legacyId !== undefined) {
+              if (contentHash) existingByHash.delete(contentHash);
+              state.counters.moved++;
+              state.filesProcessed++;
+              tickSpeed(state);
+              return { action: "MOVED", relativePath, name: f.name, targetId: legacyId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
+            }
+          }
+        }
+        action = "NEW";
+        // On first scan quickFingerprint stays null — move detection is impossible anyway
+      } else {
+        // MODIFIED — delete stale thumbnail file so it gets regenerated
+        const thumbDir = getThumbnailDir(state.nasPath);
+        const oldThumb = path.join(thumbDir, thumbnailFilename(existing.id));
+        try { fs.unlinkSync(oldThumb); } catch { /* gone */ }
+
+        state.phase = "hashing";
+        quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
+        if (quickFingerprint === null) {
+          state.filesProcessed++;
+          tickSpeed(state);
+          return { action: "SKIP", relativePath, name: f.name, skipReason: "Could not read file (permission denied or unreadable)" };
+        }
+        action = "MODIFIED";
+      }
+
+      // ── Extract metadata ──────────────────────────────────────────────
+      state.phase = "metadata";
+      const mediaType = classifyMediaType(f.ext);
+      const mimeType  = guessMimeType(f.ext);
+
+      let width: number | null = null, height: number | null = null;
+      let orientation: number | null = null, durationSeconds: number | null = null;
+      let dateTaken: Date | null = null, cameraMake: string | null = null;
+      let cameraModel: string | null = null, lens: string | null = null;
+      let iso: number | null = null, aperture: number | null = null;
+      let exposure: string | null = null, focalLength: number | null = null;
+      let flash: string | null = null, colorProfile: string | null = null;
+      let gpsLatitude: number | null = null, gpsLongitude: number | null = null;
+      let exifJson: Record<string, unknown> | null = null;
+      let videoCodec: string | null = null, videoBitrate: number | null = null;
+      let fps: number | null = null, audioCodec: string | null = null;
+      let dateCreated: Date | null = null;
+      let pageCount: number | null = null, pdfAuthor: string | null = null;
+      let pdfTitle: string | null = null, pdfSubject: string | null = null;
+      let pdfKeywords: string | null = null;
+      let metaError: string | null = null;
+
+      const extractAll = async (): Promise<void> => {
+        if (mediaType === "photo") {
+          const meta = await extractPhotoMeta(f.fullPath, f.ext);
+          ({ width, height, orientation, dateTaken, cameraMake, cameraModel, lens,
+             iso, aperture, exposure, focalLength, flash, colorProfile,
+             gpsLatitude, gpsLongitude, exifJson } = meta);
+          metaError = meta.error;
+        } else if (VIDEO_META_EXTS.has(f.ext)) {
+          const meta = extractVideoMeta(f.fullPath);
+          ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
+          metaError = meta.error;
+        } else if (f.ext === "pdf") {
+          const meta = await extractPdfMeta(f.fullPath);
+          ({ pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords } = meta);
+          metaError = meta.error;
+        }
+      };
+      await extractAll();
+
+      // ── Conflict detection: file changed while being indexed ──────────
+      // Re-stat after extraction; if size/mtime moved, re-read once so we
+      // never store a mix of old-file and new-file values.
+      try {
+        const after = fs.statSync(f.fullPath);
+        if (after.size !== currentSize || after.mtime.getTime() !== currentMtime.getTime()) {
+          currentSize  = after.size;
+          currentMtime = after.mtime;
+          const refreshedFp = await computeQuickFingerprint(f.fullPath, currentSize);
+          if (refreshedFp !== null) quickFingerprint = refreshedFp;
+          await extractAll();
+          state.counters.reanalyzed++;
+        }
+      } catch {
+        // File vanished mid-index — deletion detection will handle it on the next pass
+      }
+
+      if (metaError) recordSkip(state, relativePath, metaError);
+
+      const values: typeof mediaFilesTable.$inferInsert = {
+        nasPath: state.nasPath, relativePath,
+        name: f.name, extension: f.ext, mimeType, mediaType,
+        sizeBytes: currentSize, modifiedAt: currentMtime,
+        width, height, orientation, durationSeconds,
+        dateTaken, cameraMake, cameraModel, lens, iso, aperture,
+        exposure, focalLength, flash, colorProfile, gpsLatitude, gpsLongitude, exifJson,
+        videoCodec, videoBitrate, fps, audioCodec, dateCreated,
+        pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords,
+        contentHash, quickFingerprint, scannerVersion: SCANNER_VERSION,
+        lastScanAction: action, lastScannedAt: scanStartedAt,
+        thumbnailPath: null, thumbnailGeneratedAt: null, indexedAt: new Date(),
+      };
+
+      state.filesProcessed++;
+      tickSpeed(state);
+      return { action, relativePath, name: f.name, values };
+    };
+
+    // ── Main scan loop ────────────────────────────────────────────────────
     const BATCH = state.throttle.batchSize;
 
     for (let i = startCursor; i < files.length; i += BATCH) {
-      // ── Pause/cancel check ─────────────────────────────────────────────
+      // Pause / cancel — flush pending writes before stopping
       if (state.cancelRequested) {
+        await flushUnchanged();
         await db.update(libraryJobsTable).set({
           status: "CANCELLED",
           cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
@@ -420,7 +780,7 @@ async function runScanJob(
       }
 
       if (state.pauseRequested) {
-        // Store cursor (file index) + counters so we can resume exactly here
+        await flushUnchanged();
         await db.update(libraryJobsTable).set({
           status:         "PAUSED",
           cursor:         String(i),
@@ -432,187 +792,93 @@ async function runScanJob(
         return;
       }
 
-      const batch = files.slice(i, i + BATCH);
+      const batchFiles = files.slice(i, i + BATCH);
+      const toProcess: typeof batchFiles = [];
 
-      for (const f of batch) {
+      // Classify synchronously: unchanged files need zero I/O
+      for (const f of batchFiles) {
         const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
         seenPaths.add(relativePath);
-        state.currentPath = relativePath;
 
-        const existing = existingByPath.get(relativePath);
-        const unchanged = existing &&
+        const existing   = existingByPath.get(relativePath);
+        const isUnchanged = existing &&
           existing.sizeBytes === f.sizeBytes &&
           existing.modifiedAt?.getTime() === f.modifiedAt.getTime() &&
-          state.profile !== "FULL"; // Full Verify always re-processes
+          state.profile !== "FULL";
 
-        if (unchanged) {
-          // Metadata cache hit — never reopen the file. Just stamp it as seen.
-          await db.update(mediaFilesTable)
-            .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
-            .where(eq(mediaFilesTable.id, existing!.id));
+        if (isUnchanged) {
+          unchangedBuf.push(existing!.id);
           state.counters.unchanged++;
+          state.filesProcessed++;
+          tickSpeed(state);
         } else {
-          // Cheap first: fast content fingerprint (first/last 64 KB + size).
-          state.phase = "hashing";
-          let quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
-          if (quickFingerprint === null) {
-            recordSkip(state, relativePath, "Could not read file (permission denied or unreadable)");
-            state.filesProcessed++;
-            tickSpeed(state);
-            continue;
-          }
-
-          let action: ScanAction;
-          let targetId: number | undefined;
-          let contentHash: string | null = null;
-
-          if (!existing) {
-            // Move detection stage 1: fingerprint match (cheap)
-            const movedFromId = existingByFingerprint.get(quickFingerprint);
-            if (movedFromId !== undefined) {
-              action = "MOVED";
-              targetId = movedFromId;
-              existingByFingerprint.delete(quickFingerprint);
-            } else if (legacySizes.has(f.sizeBytes)) {
-              // Stage 2 (only for legacy rows without fingerprints): full hash
-              contentHash = await hashFile(f.fullPath);
-              state.counters.hashed++;
-              const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
-              if (legacyId !== undefined) {
-                action = "MOVED";
-                targetId = legacyId;
-                if (contentHash) existingByHash.delete(contentHash);
-              } else {
-                action = "NEW";
-              }
-            } else {
-              action = "NEW";
-            }
-          } else {
-            action = "MODIFIED";
-            // Delete stale thumbnail
-            const thumbDir = getThumbnailDir(state.nasPath);
-            const oldThumb = path.join(thumbDir, thumbnailFilename(existing.id));
-            try { fs.unlinkSync(oldThumb); } catch { /* gone */ }
-          }
-
-          // ── Extract metadata ─────────────────────────────────────────────
-          state.phase = "metadata";
-          const mediaType = classifyMediaType(f.ext);
-          const mimeType  = guessMimeType(f.ext);
-
-          let width: number | null = null, height: number | null = null;
-          let orientation: number | null = null, durationSeconds: number | null = null;
-          let dateTaken: Date | null = null, cameraMake: string | null = null;
-          let cameraModel: string | null = null, lens: string | null = null;
-          let iso: number | null = null, aperture: number | null = null;
-          let exposure: string | null = null, focalLength: number | null = null;
-          let flash: string | null = null, colorProfile: string | null = null;
-          let gpsLatitude: number | null = null, gpsLongitude: number | null = null;
-          let exifJson: Record<string, unknown> | null = null;
-          let videoCodec: string | null = null, videoBitrate: number | null = null;
-          let fps: number | null = null, audioCodec: string | null = null;
-          let dateCreated: Date | null = null;
-          let pageCount: number | null = null, pdfAuthor: string | null = null;
-          let pdfTitle: string | null = null, pdfSubject: string | null = null;
-          let pdfKeywords: string | null = null;
-          let metaError: string | null = null;
-
-          const extractAll = async (): Promise<void> => {
-            if (mediaType === "photo") {
-              const meta = await extractPhotoMeta(f.fullPath, f.ext);
-              ({ width, height, orientation, dateTaken, cameraMake, cameraModel, lens,
-                 iso, aperture, exposure, focalLength, flash, colorProfile,
-                 gpsLatitude, gpsLongitude, exifJson } = meta);
-              metaError = meta.error;
-            } else if (VIDEO_META_EXTS.has(f.ext)) {
-              const meta = extractVideoMeta(f.fullPath);
-              ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
-              metaError = meta.error;
-            } else if (f.ext === "pdf") {
-              const meta = await extractPdfMeta(f.fullPath);
-              ({ pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords } = meta);
-              metaError = meta.error;
-            }
-          };
-          await extractAll();
-
-          // ── Conflict detection: file changed while being indexed ─────────
-          // Re-stat after extraction; if size/mtime moved under us, re-read
-          // the fingerprint and metadata once so we never store a mix of
-          // old-file and new-file values.
-          try {
-            const after = fs.statSync(f.fullPath);
-            if (after.size !== f.sizeBytes || after.mtime.getTime() !== f.modifiedAt.getTime()) {
-              f.sizeBytes = after.size;
-              f.modifiedAt = after.mtime;
-              const refreshedFp = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
-              if (refreshedFp !== null) quickFingerprint = refreshedFp;
-              await extractAll();
-              state.counters.reanalyzed++;
-            }
-          } catch {
-            // File vanished mid-index — deletion detection will handle it on
-            // the next pass; keep what we read for now.
-          }
-
-          // Problem file: metadata could not be extracted. The file is still
-          // indexed (name/size/dates) but counted + listed with a plain reason
-          // so the scan never stalls on corrupt or password-protected files.
-          if (metaError) {
-            recordSkip(state, relativePath, metaError);
-          }
-
-          const fileValues = {
-            nasPath: state.nasPath, relativePath,
-            name: f.name, extension: f.ext, mimeType, mediaType,
-            sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
-            width, height, orientation, durationSeconds,
-            dateTaken, cameraMake, cameraModel, lens, iso, aperture,
-            exposure, focalLength, flash, colorProfile, gpsLatitude, gpsLongitude, exifJson,
-            videoCodec, videoBitrate, fps, audioCodec, dateCreated,
-            pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords,
-            contentHash, quickFingerprint, scannerVersion: SCANNER_VERSION,
-            lastScanAction: action as string, lastScannedAt: scanStartedAt,
-            thumbnailPath: null, thumbnailGeneratedAt: null, indexedAt: new Date(),
-          };
-
-          if (action === "MOVED" && targetId !== undefined) {
-            // Move/rename: update the path on the existing record. All
-            // previously extracted metadata is kept — nothing is re-processed.
-            await db.update(mediaFilesTable).set({
-              relativePath, name: f.name, sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
-              quickFingerprint,
-              lastScanAction: "MOVED", lastScannedAt: scanStartedAt, indexedAt: new Date(),
-            }).where(eq(mediaFilesTable.id, targetId));
-            state.counters.moved++;
-          } else {
-            await db.insert(mediaFilesTable).values(fileValues).onConflictDoUpdate({
-              target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
-              set: { ...fileValues },
-            });
-            if (action === "NEW") state.counters.new++;
-            else state.counters.modified++;
-          }
-
-          state.phase = "indexing";
+          toProcess.push(f);
         }
-
-        state.filesProcessed++;
-        tickSpeed(state);
       }
 
-      // Persist progress + cursor every batch (survives crashes/restarts)
-      await db.update(libraryJobsTable)
-        .set({ processedFiles: state.filesProcessed, cursor: String(Math.min(i + BATCH, files.length)) })
-        .where(eq(libraryJobsTable.id, jobId));
+      if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
 
-      // Performance throttle: brief pause between batches on Balanced/Low so
-      // the NAS stays responsive for other users during the scan.
-      if (state.throttle.batchDelayMs > 0) {
-        await new Promise((r) => setTimeout(r, state.throttle.batchDelayMs));
+      // Process changed files concurrently — the semaphore limits parallel NAS I/O
+      const results = await Promise.all(toProcess.map(f => sem(() => processOneFile(f))));
+
+      // Apply results: batch-insert NEW/MODIFIED, individual-update MOVED
+      const upsertRows: (typeof mediaFilesTable.$inferInsert)[] = [];
+      for (const result of results) {
+        if (result.action === "SKIP") {
+          recordSkip(state, result.relativePath, result.skipReason!);
+        } else if (result.action === "MOVED" && result.targetId !== undefined) {
+          // Rename/move — update the existing record's path in place
+          await db.update(mediaFilesTable).set({
+            relativePath:     result.relativePath,
+            name:             result.name,
+            sizeBytes:        result.sizeBytes ?? 0,
+            modifiedAt:       result.modifiedAt ?? new Date(),
+            quickFingerprint: result.quickFingerprint ?? null,
+            lastScanAction:   "MOVED" as ScanAction,
+            lastScannedAt:    scanStartedAt,
+            indexedAt:        new Date(),
+          }).where(eq(mediaFilesTable.id, result.targetId));
+        } else if (result.values) {
+          upsertRows.push(result.values);
+        }
+      }
+
+      // Batch-upsert NEW + MODIFIED rows 200 at a time using excluded.* refs
+      for (let j = 0; j < upsertRows.length; j += 200) {
+        const chunk = upsertRows.slice(j, j + 200);
+        await db.insert(mediaFilesTable).values(chunk).onConflictDoUpdate({
+          target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
+          set: MEDIA_FILE_UPSERT_SET,
+        });
+      }
+      for (const row of upsertRows) {
+        if (row.lastScanAction === "NEW") state.counters.new++;
+        else state.counters.modified++;
+      }
+
+      state.phase = "indexing";
+
+      // Persist cursor on a 10-second time-gate (not every batch)
+      const now = Date.now();
+      if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
+        await flushUnchanged();
+        await db.update(libraryJobsTable)
+          .set({ processedFiles: state.filesProcessed, cursor: String(Math.min(i + BATCH, files.length)) })
+          .where(eq(libraryJobsTable.id, jobId));
+        lastPersistAt = now;
+      } else if (state.throttle.batchDelayMs > 0) {
+        await new Promise(r => setTimeout(r, state.throttle.batchDelayMs));
       }
     }
+
+    // Final flush of buffered unchanged IDs + cursor persist
+    await flushUnchanged();
+    await db.update(libraryJobsTable)
+      .set({ processedFiles: state.filesProcessed, cursor: String(files.length) })
+      .where(eq(libraryJobsTable.id, jobId));
+
+    // Save the current directory mtime cache for the next rescan
+    saveDirMtimeCache(state.nasPath, dirCacheOut);
 
     // ── Phase: detecting deletions ─────────────────────────────────────────
     state.phase = "detecting_deletions";
@@ -626,14 +892,7 @@ async function runScanJob(
       ))
       .returning({ id: mediaFilesTable.id });
 
-    // Only count paths that weren't seen
-    let deletedCount = 0;
-    for (const row of deletedRows) {
-      // We need to double-check via seenPaths — but since we updated lastScannedAt for seen files above,
-      // any record with lastScannedAt < scanStartedAt was not seen in this scan
-      deletedCount++;
-    }
-    state.counters.deleted = deletedCount;
+    state.counters.deleted = deletedRows.length;
 
     // ── Duplicate detection (two-stage: size+fingerprint groups → confirm with
     //    full SHA-256 only for candidates) ──────────────────────────────────

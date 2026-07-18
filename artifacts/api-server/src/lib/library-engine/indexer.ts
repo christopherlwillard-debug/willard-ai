@@ -363,6 +363,13 @@ export interface FileEntry {
 }
 
 // ── NAS walker ────────────────────────────────────────────────────────────────
+// Optional dir-mtime-cache params enable the directory short-circuit optimisation:
+//   dirCacheIn  — relPath→mtimeMs from the previous scan's saved cache
+//   dirCacheOut — relPath→mtimeMs being built for the current scan (saved at end)
+//   skippedDirs — populated with dirs that were skipped due to an mtime match
+//   nasRoot     — absolute root of the NAS (required when using the dir cache)
+//
+// Backward-compatible: callers that omit the cache params get the original behaviour.
 
 export function walkNas(
   dir: string,
@@ -370,31 +377,68 @@ export function walkNas(
   results: FileEntry[],
   onDir?: (dir: string) => void,
   onSkip?: (fullPath: string, reason: string) => void,
+  dirCacheIn?: ReadonlyMap<string, number>,
+  dirCacheOut?: Map<string, number>,
+  skippedDirs?: string[],
+  nasRoot?: string,
 ): void {
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-  catch {
-    onSkip?.(dir, "Could not read folder (permission denied or unreadable)");
-    return;
-  }
+  const useDirCache =
+    dirCacheIn !== undefined &&
+    dirCacheOut !== undefined &&
+    skippedDirs !== undefined &&
+    nasRoot !== undefined;
 
-  for (const entry of entries) {
-    if (isSystemDir(entry.name)) continue;
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (skipDirs.has(path.resolve(fullPath))) continue;
-      onDir?.(fullPath);
-      walkNas(fullPath, skipDirs, results, onDir, onSkip);
-    } else if (entry.isFile()) {
-      try {
-        const stat = fs.statSync(fullPath);
-        const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
-        results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
-      } catch {
-        onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
+  function recurse(currentDir: string): void {
+    // ── Directory mtime short-circuit ───────────────────────────────────
+    // If the directory's mtime matches the last-scan cache entry we can skip
+    // walking all its descendants entirely — nothing was added, removed, or
+    // renamed inside it.  File-content modifications don't change parent-dir
+    // mtime on most filesystems, but for a photo/video NAS that tradeoff is
+    // acceptable (content changes update the file's own mtime and are caught
+    // when the directory IS walked due to an add/remove event changing its mtime).
+    if (useDirCache) {
+      const relDir = path.relative(nasRoot!, currentDir).replace(/\\/g, "/");
+      if (relDir && relDir !== ".") {
+        try {
+          const dStat = fs.statSync(currentDir);
+          const mtimeMs = dStat.mtimeMs;
+          dirCacheOut!.set(relDir, mtimeMs);
+          const cached = dirCacheIn!.get(relDir);
+          if (cached !== undefined && mtimeMs === cached) {
+            skippedDirs!.push(relDir);
+            return;
+          }
+        } catch { /* fall through to normal walk */ }
+      }
+    }
+
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(currentDir, { withFileTypes: true }); }
+    catch {
+      onSkip?.(currentDir, "Could not read folder (permission denied or unreadable)");
+      return;
+    }
+
+    for (const entry of entries) {
+      if (isSystemDir(entry.name)) continue;
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        if (skipDirs.has(path.resolve(fullPath))) continue;
+        onDir?.(fullPath);
+        recurse(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          const stat = fs.statSync(fullPath);
+          const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
+          results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
+        } catch {
+          onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
+        }
       }
     }
   }
+
+  recurse(dir);
 }
 
 // ── Utility ───────────────────────────────────────────────────────────────────

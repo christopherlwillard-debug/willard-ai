@@ -22,12 +22,13 @@ export type ScanPerformance = "HIGH" | "BALANCED" | "LOW";
 export interface ThrottleProfile {
   batchSize:    number;
   batchDelayMs: number;
+  concurrency:  number;
 }
 
 export const THROTTLE_PROFILES: Record<ScanPerformance, ThrottleProfile> = {
-  HIGH:     { batchSize: 50, batchDelayMs: 0 },
-  BALANCED: { batchSize: 25, batchDelayMs: 50 },
-  LOW:      { batchSize: 10, batchDelayMs: 400 },
+  HIGH:     { batchSize: 200, batchDelayMs: 0,   concurrency: 8 },
+  BALANCED: { batchSize: 100, batchDelayMs: 0,   concurrency: 6 },
+  LOW:      { batchSize: 20,  batchDelayMs: 200, concurrency: 2 },
 };
 
 // ── Skipped files ──────────────────────────────────────────────────────────────
