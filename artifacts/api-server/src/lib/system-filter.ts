@@ -22,17 +22,17 @@ export const DEFAULT_SCANNER_SETTINGS: ScannerSettings = {
   followSymlinks:     false,
 };
 
-// ── Skip reason (camelCase — used as dry-run API response keys) ───────────────
+// ── Canonical skip reason codes ───────────────────────────────────────────────
+// These five codes are used in skipped-files logging and the dry-run API.
+// Temp files, sidecar files, and empty dirs are folded into system_file /
+// system_directory to keep the external API surface stable and minimal.
 
 export type SkipReason =
-  | "systemFile"
-  | "hiddenFile"
-  | "tempFile"
-  | "sidecarFile"
-  | "userIgnoredFolder"
-  | "userIgnoredExtension"
-  | "systemDirectory"
-  | "emptyFolder";
+  | "system_file"         // metadata/temp/sidecar files excluded by system rules
+  | "hidden_file"         // dot-prefix files when ignoreHiddenFiles is on
+  | "user_ignored_folder" // user-configured folder exclusion
+  | "user_ignored_extension" // user-configured extension exclusion
+  | "system_directory";   // system/hidden directories (including empty dirs)
 
 // ── File-name / extension sets ────────────────────────────────────────────────
 
@@ -51,11 +51,10 @@ const SIDECAR_EXTS = new Set([
 ]);
 
 // ── Directory filter ──────────────────────────────────────────────────────────
-//
 // "WillardAI" is always excluded (the app's own data directory).
 // All other categories are gated on their respective toggles when settings
-// are provided.  When settings are omitted (legacy callers) the original
-// default behaviour is preserved.
+// are provided.  When settings are omitted (legacy callers) original default
+// behaviour is preserved: all hidden/@/# dirs and SYSTEM_DIR_NAMES are skipped.
 
 const ALWAYS_SKIP_DIR_NAMES = new Set(["WillardAI"]);
 
@@ -78,7 +77,7 @@ export function isSystemDir(name: string, settings?: ScannerSettings): boolean {
     return false;
   }
 
-  // No settings — preserve original default behaviour (all hidden / @/#/system)
+  // No settings — preserve original default behaviour
   return (
     name.startsWith(".") ||
     name.startsWith("@") ||
@@ -88,9 +87,8 @@ export function isSystemDir(name: string, settings?: ScannerSettings): boolean {
 }
 
 // ── File filter ───────────────────────────────────────────────────────────────
-//
+// Returns the canonical skip reason if the file should be excluded, or null.
 // Each category is gated on its corresponding settings toggle.
-// Returns the skip reason if the file should be excluded, or null to include it.
 
 export function checkSystemFile(
   name: string,
@@ -99,42 +97,41 @@ export function checkSystemFile(
 ): SkipReason | null {
   const nameLower = name.toLowerCase();
 
-  // Apple resource-fork sidecars (._filename) — ignoreSidecarFiles
+  // Apple resource-fork sidecars (._filename) — ignoreSidecarFiles → system_file
   if (name.startsWith("._")) {
-    return settings.ignoreSidecarFiles ? "sidecarFile" : null;
+    return settings.ignoreSidecarFiles ? "system_file" : null;
   }
 
-  // Sidecar extensions (.thm, .xmp, .aae) — ignoreSidecarFiles
+  // Sidecar extensions (.thm, .xmp, .aae) — ignoreSidecarFiles → system_file
   if (SIDECAR_EXTS.has(ext)) {
-    return settings.ignoreSidecarFiles ? "sidecarFile" : null;
+    return settings.ignoreSidecarFiles ? "system_file" : null;
   }
 
-  // Known system metadata file names — ignoreSystemFiles
+  // Known system metadata file names — ignoreSystemFiles → system_file
   if (SYSTEM_FILE_NAMES.has(nameLower)) {
-    return settings.ignoreSystemFiles ? "systemFile" : null;
+    return settings.ignoreSystemFiles ? "system_file" : null;
   }
 
-  // Hidden files (dot-prefix, e.g. .gitkeep) — ignoreHiddenFiles
+  // Hidden files (dot-prefix) — ignoreHiddenFiles → hidden_file
   if (name.startsWith(".")) {
-    return settings.ignoreHiddenFiles ? "hiddenFile" : null;
+    return settings.ignoreHiddenFiles ? "hidden_file" : null;
   }
 
-  // Office temp files (~$document.docx) — ignoreTempFiles
+  // Office temp files (~$document.docx) — ignoreTempFiles → system_file
   if (name.startsWith("~$")) {
-    return settings.ignoreTempFiles ? "tempFile" : null;
+    return settings.ignoreTempFiles ? "system_file" : null;
   }
 
-  // Temp extensions (.tmp, .temp) — ignoreTempFiles
+  // Temp extensions (.tmp, .temp) — ignoreTempFiles → system_file
   if (ext === "tmp" || ext === "temp") {
-    return settings.ignoreTempFiles ? "tempFile" : null;
+    return settings.ignoreTempFiles ? "system_file" : null;
   }
 
   // User-configured ignored extensions
   if (settings.ignoredExtensions.length > 0) {
     const extNorm = ext.toLowerCase().replace(/^\./, "");
-    if (settings.ignoredExtensions.map((e) => e.toLowerCase().replace(/^\./, "")).includes(extNorm)) {
-      return "userIgnoredExtension";
-    }
+    const userExts = settings.ignoredExtensions.map((e) => e.toLowerCase().replace(/^\./, ""));
+    if (userExts.includes(extNorm)) return "user_ignored_extension";
   }
 
   return null;

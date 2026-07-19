@@ -6,7 +6,7 @@ import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getWillardAIDir } from "./nas-storage";
 import { getThumbnailDir, thumbnailFilename } from "./thumbnail-engine";
-import { isSystemDir, isSystemFile, DEFAULT_SCANNER_SETTINGS, type ScannerSettings } from "./system-filter";
+import { isSystemDir, isSystemFile, isInIgnoredFolder, DEFAULT_SCANNER_SETTINGS, type ScannerSettings } from "./system-filter";
 
 // ── Media type classification ─────────────────────────────────────────────────
 
@@ -291,7 +291,14 @@ function walkNas(
   skipDirs: Set<string>,
   results: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }>,
   settings: ScannerSettings = DEFAULT_SCANNER_SETTINGS,
+  nasRoot?: string,
 ): void {
+  // Check user-configured ignored folders before reading the directory
+  if (nasRoot && settings.ignoredFolders.length > 0) {
+    const relDir = path.relative(nasRoot, dir).replace(/\\/g, "/");
+    if (relDir && relDir !== "." && isInIgnoredFolder(relDir, settings.ignoredFolders)) return;
+  }
+
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -301,10 +308,9 @@ function walkNas(
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      // isSystemDir only for dirs (prevents hidden files being mis-typed)
       if (isSystemDir(entry.name, settings)) continue;
       if (skipDirs.has(path.resolve(fullPath))) continue;
-      walkNas(fullPath, skipDirs, results, settings);
+      walkNas(fullPath, skipDirs, results, settings, nasRoot);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
       if (isSystemFile(entry.name, ext, settings)) continue;
@@ -381,7 +387,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
 
       // Collect all files
       const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
-      walkNas(path.resolve(nasPath), skipDirs, files, scannerSettings);
+      walkNas(path.resolve(nasPath), skipDirs, files, scannerSettings, path.resolve(nasPath));
 
       await db.update(mediaScanJobsTable)
         .set({ totalFiles: files.length })

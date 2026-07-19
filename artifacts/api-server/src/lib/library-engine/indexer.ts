@@ -378,7 +378,7 @@ export function walkNas(
         for (const ignored of settings.ignoredFolders) {
           const norm = ignored.replace(/\\/g, "/").replace(/\/$/, "");
           if (relDir === norm || relDir.startsWith(norm + "/")) {
-            onSkip?.(currentDir, "userIgnoredFolder");
+            onSkip?.(currentDir, "user_ignored_folder");
             return;
           }
         }
@@ -422,7 +422,7 @@ export function walkNas(
 
     // Ignore empty directories when the toggle is enabled
     if (settings.ignoreEmptyFolders && entries.length === 0) {
-      onSkip?.(currentDir, "emptyFolder");
+      onSkip?.(currentDir, "system_directory");
       return;
     }
 
@@ -436,7 +436,7 @@ export function walkNas(
     if (entry.isDirectory()) {
       // isSystemDir only applies to directories (prevents misclassifying hidden files)
       if (isSystemDir(entry.name, settings)) {
-        onSkip?.(fullPath, "systemDirectory");
+        onSkip?.(fullPath, "system_directory");
         return;
       }
       if (skipDirs.has(path.resolve(fullPath))) return;
