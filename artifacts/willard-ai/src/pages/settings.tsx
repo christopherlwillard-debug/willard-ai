@@ -20,7 +20,7 @@ import {
   useResumeIndexing,
 } from "@workspace/api-client-react";
 import { LibrarySetup } from "@/components/library/library-setup";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { NasTestResult } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
