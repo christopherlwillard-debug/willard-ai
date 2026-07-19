@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
-import { isSystemDir, checkSystemFile, type ScannerSettings } from "../system-filter";
+import { isSystemDir, checkSystemFile, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
 
 export { isSystemDir };
 
@@ -363,12 +363,7 @@ export function walkNas(
     skippedDirs !== undefined &&
     nasRoot !== undefined;
 
-  const settings: ScannerSettings = scannerSettings ?? {
-    ignoredFolders: [], ignoredExtensions: [],
-    ignoreHiddenFiles: true, ignoreSystemFiles: true,
-    ignoreTempFiles: true, ignoreSidecarFiles: true,
-    ignoreEmptyFolders: false, followSymlinks: false,
-  };
+  const settings: ScannerSettings = scannerSettings ?? DEFAULT_SCANNER_SETTINGS;
 
   function recurse(currentDir: string): void {
     // ── User-configured ignored folder check ────────────────────────────
@@ -600,12 +595,7 @@ export async function walkNasAsync(
     skippedDirs !== undefined &&
     nasRoot     !== undefined;
 
-  const settings: ScannerSettings = scannerSettings ?? {
-    ignoredFolders: [], ignoredExtensions: [],
-    ignoreHiddenFiles: true, ignoreSystemFiles: true,
-    ignoreTempFiles: true, ignoreSidecarFiles: true,
-    ignoreEmptyFolders: false, followSymlinks: false,
-  };
+  const settings: ScannerSettings = scannerSettings ?? DEFAULT_SCANNER_SETTINGS;
 
   async function recurse(currentDir: string): Promise<void> {
     if (stopSignal?.stop) return;

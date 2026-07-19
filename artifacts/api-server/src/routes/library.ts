@@ -109,6 +109,7 @@ router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
       ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
       ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
       followSymlinks:     appSettingsTable.followSymlinks,
+      indexOtherFiles:    appSettingsTable.indexOtherFiles,
     }).from(appSettingsTable).limit(1);
 
     const { walkNas } = await import("../lib/library-engine/indexer");
@@ -130,19 +131,21 @@ router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
       ignoreSidecarFiles: settingsRow?.ignoreSidecarFiles ?? true,
       ignoreEmptyFolders: settingsRow?.ignoreEmptyFolders ?? false,
       followSymlinks:     settingsRow?.followSymlinks     ?? false,
+      indexOtherFiles:    settingsRow?.indexOtherFiles    ?? true,
     };
 
     const willardDir = path.resolve(getWillardAIDir(nasPath));
     const skipDirs   = new Set([willardDir]);
     const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
 
-    // Fixed schema — five canonical skip-reason keys, all initialized to 0
+    // Fixed schema — canonical skip-reason keys, all initialized to 0
     const skipped = {
       system_file:          0,
       hidden_file:          0,
       user_ignored_folder:  0,
       user_ignored_extension: 0,
       system_directory:     0,
+      other_type_excluded:  0,
     };
 
     walkNas(

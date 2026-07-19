@@ -677,6 +677,16 @@ function ScannerSettingsSection() {
           <CardDescription>Preview how many files would be scanned with current exclusion settings — without changing anything.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {!settings.indexOtherFiles && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 font-mono flex items-start gap-2">
+              <span className="shrink-0 mt-px">⚠</span>
+              <span>
+                <strong>Other file types excluded</strong> — executables, archives, disk images, and similar
+                files (exe, dll, iso, zip, rar, 7z, msi, bin, dat, bak, cfg, bat, sh…) are skipped by the scanner.
+                These will also appear as <em>other_type_excluded</em> in the dry-run skipped breakdown below.
+              </span>
+            </div>
+          )}
           <Button
             variant="secondary"
             size="sm"
