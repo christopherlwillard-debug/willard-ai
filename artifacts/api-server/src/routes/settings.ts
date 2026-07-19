@@ -270,6 +270,7 @@ router.get("/settings/scanner", async (_req, res) => {
       ignoreSidecarFiles: settings.ignoreSidecarFiles ?? true,
       ignoreEmptyFolders: settings.ignoreEmptyFolders ?? false,
       followSymlinks:     settings.followSymlinks     ?? false,
+      indexOtherFiles:    settings.indexOtherFiles    ?? true,
     });
   } catch {
     res.status(500).json({ error: "Failed to load scanner settings" });
@@ -297,7 +298,7 @@ router.put("/settings/scanner", async (req, res) => {
     if (ignoredFolders    !== undefined) patch["ignoredFolders"]    = ignoredFolders;
     if (ignoredExtensions !== undefined) patch["ignoredExtensions"] = ignoredExtensions;
 
-    for (const key of ["ignoreHiddenFiles","ignoreSystemFiles","ignoreTempFiles","ignoreSidecarFiles","ignoreEmptyFolders","followSymlinks"] as const) {
+    for (const key of ["ignoreHiddenFiles","ignoreSystemFiles","ignoreTempFiles","ignoreSidecarFiles","ignoreEmptyFolders","followSymlinks","indexOtherFiles"] as const) {
       if (typeof body[key] === "boolean") patch[key] = body[key];
     }
 
@@ -321,6 +322,7 @@ router.put("/settings/scanner", async (req, res) => {
       ignoreSidecarFiles: updated.ignoreSidecarFiles ?? true,
       ignoreEmptyFolders: updated.ignoreEmptyFolders ?? false,
       followSymlinks:     updated.followSymlinks     ?? false,
+      indexOtherFiles:    updated.indexOtherFiles    ?? true,
     });
   } catch {
     res.status(500).json({ error: "Failed to update scanner settings" });

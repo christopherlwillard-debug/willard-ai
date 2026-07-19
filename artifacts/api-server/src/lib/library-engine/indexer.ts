@@ -469,6 +469,12 @@ export function walkNas(
         return;
       }
 
+      // Skip unclassified (non-media, non-document) files when the toggle is off
+      if (!settings.indexOtherFiles && classifyMediaType(ext) === "other") {
+        onSkip?.(fullPath, "other_type_excluded");
+        return;
+      }
+
       try {
         const stat = fs.statSync(fullPath);
         results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
@@ -694,6 +700,12 @@ export async function walkNasAsync(
       const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
       const skipReason = checkSystemFile(entry.name, ext, settings);
       if (skipReason !== null) { onSkip?.(fullPath, skipReason); return; }
+
+      // Skip unclassified (non-media, non-document) files when the toggle is off
+      if (!settings.indexOtherFiles && classifyMediaType(ext) === "other") {
+        onSkip?.(fullPath, "other_type_excluded");
+        return;
+      }
 
       if (stopSignal?.stop) return;
 

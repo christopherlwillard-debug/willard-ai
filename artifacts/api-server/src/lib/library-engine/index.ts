@@ -11,4 +11,6 @@ export {
   recoverInterruptedJobs,
   addThumbnailPriority,
   clearThumbnailPriority,
+  notifyUiConnected,
+  waitForUiConnected,
 } from "./job-engine";

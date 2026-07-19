@@ -27,6 +27,7 @@ export const appSettingsTable = pgTable("app_settings", {
   ignoreSidecarFiles: boolean("ignore_sidecar_files").notNull().default(true),
   ignoreEmptyFolders: boolean("ignore_empty_folders").notNull().default(false),
   followSymlinks:     boolean("follow_symlinks").notNull().default(false),
+  indexOtherFiles:    boolean("index_other_files").notNull().default(true),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

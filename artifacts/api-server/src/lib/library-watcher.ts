@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { db, appSettingsTable } from "@workspace/db";
 import { checkNasReachable } from "./nas-storage";
-import { getActiveJobId, startJob } from "./library-engine";
+import { getActiveJobId, startJob, waitForUiConnected } from "./library-engine";
 import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
 
@@ -326,7 +326,13 @@ export async function runWatcherHeartbeat(): Promise<void> {
 
 export function startLibraryWatcher(): void {
   if (heartbeatTimer) return;
-  setTimeout(() => { runWatcherHeartbeat().catch(() => {}); }, 4_000);
-  heartbeatTimer = setInterval(() => { runWatcherHeartbeat().catch(() => {}); }, HEARTBEAT_MS);
-  heartbeatTimer.unref?.();
+  // Defer the first heartbeat until the UI connects (first authenticated request)
+  // or the 30-second fallback fires.  Prevents the initial sweep from competing
+  // with the UI for NAS bandwidth before the user sees the first page.
+  waitForUiConnected().then(() => {
+    if (heartbeatTimer) return; // guard against duplicate calls
+    runWatcherHeartbeat().catch(() => {});
+    heartbeatTimer = setInterval(() => { runWatcherHeartbeat().catch(() => {}); }, HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
+  }).catch(() => {});
 }

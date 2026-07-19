@@ -9,6 +9,7 @@ export interface ScannerSettings {
   ignoreSidecarFiles: boolean;
   ignoreEmptyFolders: boolean;
   followSymlinks:     boolean;
+  indexOtherFiles:    boolean;
 }
 
 export const DEFAULT_SCANNER_SETTINGS: ScannerSettings = {
@@ -20,6 +21,7 @@ export const DEFAULT_SCANNER_SETTINGS: ScannerSettings = {
   ignoreSidecarFiles: true,
   ignoreEmptyFolders: false,
   followSymlinks:     false,
+  indexOtherFiles:    true,
 };
 
 // ── Canonical skip reason codes ───────────────────────────────────────────────
@@ -28,11 +30,12 @@ export const DEFAULT_SCANNER_SETTINGS: ScannerSettings = {
 // system_directory to keep the external API surface stable and minimal.
 
 export type SkipReason =
-  | "system_file"         // metadata/temp/sidecar files excluded by system rules
-  | "hidden_file"         // dot-prefix files when ignoreHiddenFiles is on
-  | "user_ignored_folder" // user-configured folder exclusion
+  | "system_file"          // metadata/temp/sidecar files excluded by system rules
+  | "hidden_file"          // dot-prefix files when ignoreHiddenFiles is on
+  | "user_ignored_folder"  // user-configured folder exclusion
   | "user_ignored_extension" // user-configured extension exclusion
-  | "system_directory";   // system/hidden directories (including empty dirs)
+  | "system_directory"     // system/hidden directories (including empty dirs)
+  | "other_type_excluded"; // indexOtherFiles=false skips unclassified file types
 
 // ── File-name / extension sets ────────────────────────────────────────────────
 

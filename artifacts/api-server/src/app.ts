@@ -12,7 +12,7 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
-import { recoverInterruptedJobs } from "./lib/library-engine";
+import { recoverInterruptedJobs, notifyUiConnected } from "./lib/library-engine";
 import { warmThumbnailCache } from "./routes/media";
 import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
@@ -199,7 +199,8 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS ignore_temp_files    boolean NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS ignore_sidecar_files boolean NOT NULL DEFAULT true,
       ADD COLUMN IF NOT EXISTS ignore_empty_folders boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS follow_symlinks      boolean NOT NULL DEFAULT false;
+      ADD COLUMN IF NOT EXISTS follow_symlinks      boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS index_other_files    boolean NOT NULL DEFAULT true;
   `);
   await pool.query(`
     DELETE FROM media_files
@@ -289,6 +290,10 @@ const PUBLIC_PATHS = new Set([
   "/auth/recover",
 ]);
 
+// Fire the startup gate on the very first authenticated API request.
+// Trips at most once per process; subsequent calls to notifyUiConnected() are no-ops.
+let _firstAuthSeen = false;
+
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {
   if (PUBLIC_PATHS.has(req.path)) {
     return next();
@@ -305,6 +310,10 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
       res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
       return;
     }
+  }
+  if (!_firstAuthSeen) {
+    _firstAuthSeen = true;
+    notifyUiConnected();
   }
   sess.lastSeenAt = new Date().toISOString();
   next();

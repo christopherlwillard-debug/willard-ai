@@ -48,6 +48,26 @@ export function clearThumbnailPriority(nasPath: string): void {
 // when a new job starts.
 let lastCompletedProgress: ProgressEvent | null = null;
 
+// ── Startup gate ──────────────────────────────────────────────────────────────
+// Defers background scans until the first authenticated UI request arrives, or
+// until 30 seconds elapse — whichever is first.  This keeps the app instantly
+// browsable at startup without competing with the UI for NAS I/O.
+
+let _uiConnectedResolve: (() => void) | null = null;
+const _uiConnectedPromise = new Promise<void>(resolve => {
+  _uiConnectedResolve = resolve;
+  const t = setTimeout(resolve, 30_000);
+  (t as any).unref?.();
+});
+
+export function notifyUiConnected(): void {
+  if (_uiConnectedResolve) { _uiConnectedResolve(); _uiConnectedResolve = null; }
+}
+
+export function waitForUiConnected(): Promise<void> {
+  return _uiConnectedPromise;
+}
+
 export function getLastCompletedProgress(): ProgressEvent | null {
   return lastCompletedProgress;
 }
@@ -548,6 +568,7 @@ async function runScanJob(
         ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
         ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
         followSymlinks:     appSettingsTable.followSymlinks,
+        indexOtherFiles:    appSettingsTable.indexOtherFiles,
       }).from(appSettingsTable).limit(1);
       if (settingsRow) scannerSettings = {
         ignoredFolders:    settingsRow.ignoredFolders ?? [],
@@ -558,6 +579,7 @@ async function runScanJob(
         ignoreSidecarFiles: settingsRow.ignoreSidecarFiles ?? true,
         ignoreEmptyFolders: settingsRow.ignoreEmptyFolders ?? false,
         followSymlinks:     settingsRow.followSymlinks ?? false,
+        indexOtherFiles:    settingsRow.indexOtherFiles ?? true,
       };
     } catch { /* use defaults if settings table not yet migrated */ }
 

@@ -449,6 +449,7 @@ interface ScannerSettings {
   ignoreSidecarFiles: boolean;
   ignoreEmptyFolders: boolean;
   followSymlinks:     boolean;
+  indexOtherFiles:    boolean;
 }
 
 const SCANNER_DEFAULTS: ScannerSettings = {
@@ -456,6 +457,7 @@ const SCANNER_DEFAULTS: ScannerSettings = {
   ignoreHiddenFiles: true, ignoreSystemFiles: true,
   ignoreTempFiles: true, ignoreSidecarFiles: true,
   ignoreEmptyFolders: false, followSymlinks: false,
+  indexOtherFiles: true,
 };
 
 function ScannerSettingsSection() {
@@ -545,6 +547,7 @@ function ScannerSettingsSection() {
     { key: "ignoreSidecarFiles", label: "Skip sidecar files",      description: "Camera sidecar thumbnails (.thm)" },
     { key: "ignoreEmptyFolders", label: "Skip empty folders",      description: "Don't record folders with no indexable files" },
     { key: "followSymlinks",     label: "Follow symbolic links",   description: "Index files reached via symlinks (use with care to avoid loops)" },
+    { key: "indexOtherFiles",    label: "Index other file types",  description: "Include executables, archives, disk images, and other non-media files (exe, dll, iso, zip…)" },
   ];
 
   if (loading) return (
@@ -585,6 +588,16 @@ function ScannerSettingsSection() {
               />
             </div>
           ))}
+          {!settings.indexOtherFiles && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 font-mono flex items-start gap-2">
+              <span className="shrink-0 mt-px">⚠</span>
+              <span>
+                Other file types excluded from indexing — executables, archives, disk images, and similar
+                files (exe, dll, iso, zip…) will be skipped by the scanner.
+                Enable <strong>Index other file types</strong> above to include them.
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
