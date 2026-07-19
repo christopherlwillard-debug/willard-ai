@@ -528,6 +528,101 @@ router.patch("/library/thumbnails/quality", async (req: Request, res: Response) 
   res.json({ thumbnailQuality: quality.toUpperCase() });
 });
 
+// ── POST /api/library/scan/benchmark — synthetic NAS timing benchmark ─────────
+// Walks up to `size` files, measures raw I/O latency + metadata extraction
+// speed WITHOUT touching media_files. Records as a BENCHMARK job so it appears
+// in the diagnostics history table.
+
+router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(400).json({ error: "NAS path not configured" }); return; }
+
+  const sizeParam = req.query["size"] as string | undefined;
+  const sampleLimit = sizeParam === "full" ? Infinity :
+                      sizeParam === "10000" ? 10000 :
+                      sizeParam === "5000"  ? 5000  : 1000;
+
+  try {
+    const { walkNas, extractPhotoMeta, extractVideoMeta, PHOTO_EXTS, VIDEO_META_EXTS } = await import("../lib/library-engine/indexer");
+    const { getWillardAIDir: _wDir } = await import("../lib/nas-storage");
+    const fs   = await import("fs");
+    const path = await import("path");
+    const { DEFAULT_SCANNER_SETTINGS } = await import("../lib/system-filter");
+
+    try { fs.statSync(nasPath); } catch {
+      res.status(503).json({ error: "NAS is offline" });
+      return;
+    }
+
+    const willardDir = path.resolve(_wDir(nasPath));
+    const skipDirs   = new Set([willardDir]);
+    const allFiles: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
+
+    const walkStart = Date.now();
+    walkNas(
+      path.resolve(nasPath), skipDirs, allFiles,
+      undefined, undefined, undefined, undefined, undefined,
+      path.resolve(nasPath), DEFAULT_SCANNER_SETTINGS,
+    );
+    const walkTimeMs = Date.now() - walkStart;
+
+    const sampled = sampleLimit === Infinity ? allFiles : allFiles.slice(0, sampleLimit);
+
+    // Stat each file to measure raw NAS I/O latency
+    const latencies: number[] = [];
+    let totalSizeBytes = 0;
+    for (const f of sampled) {
+      const t0 = Date.now();
+      try { fs.statSync(f.fullPath); } catch { continue; }
+      latencies.push(Date.now() - t0);
+      totalSizeBytes += f.sizeBytes;
+    }
+    const avgNasLatencyMs = latencies.length > 0
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
+    const maxNasLatencyMs = latencies.length > 0 ? Math.round(Math.max(...latencies)) : 0;
+
+    // Run metadata extraction on up to 100 photo/video files
+    let metadataExtracted = 0;
+    let metadataExtractionTimeMs = 0;
+    const metaSample = sampled.filter(f => PHOTO_EXTS.has(f.ext) || VIDEO_META_EXTS.has(f.ext)).slice(0, 100);
+    for (const f of metaSample) {
+      const t0 = Date.now();
+      try {
+        if (PHOTO_EXTS.has(f.ext)) await extractPhotoMeta(f.fullPath, f.ext);
+        else extractVideoMeta(f.fullPath);
+        metadataExtractionTimeMs += Date.now() - t0;
+        metadataExtracted++;
+      } catch { /* skip unreadable file */ }
+    }
+
+    const elapsedMs    = Date.now() - walkStart;
+    const elapsedSecs  = elapsedMs / 1000;
+    const diagnostics  = {
+      walkTimeMs,
+      dirCacheHits:    0, dirCacheMisses:  0, skippedByReason: {},
+      metadataExtracted, hashesGenerated: 0, dbWriteBatches: 0,
+      avgNasLatencyMs, maxNasLatencyMs, peakConcurrency: 1,
+      throughputFilesPerSec: elapsedSecs > 0 ? Math.round((sampled.length / elapsedSecs) * 10) / 10 : 0,
+      throughputMBPerSec:    elapsedSecs > 0 ? Math.round((totalSizeBytes / (1024 * 1024) / elapsedSecs) * 100) / 100 : 0,
+      peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs, totalSizeBytes,
+    };
+
+    const [benchJob] = await db.insert(libraryJobsTable).values({
+      jobType:  "SCAN", profile: "BENCHMARK", priority: "NORMAL", status: "DONE", nasPath,
+      startedAt:      new Date(Date.now() - elapsedMs),
+      finishedAt:     new Date(),
+      processedFiles: sampled.length,
+      totalFiles:     allFiles.length,
+      summary:        { benchmark: true, sampleSize: sampled.length, totalFiles: allFiles.length, elapsedMs } as any,
+      diagnostics:    diagnostics as any,
+    }).returning({ id: libraryJobsTable.id });
+
+    res.json({ jobId: benchJob?.id, filesWalked: allFiles.length, sampleSize: sampled.length, elapsedMs, diagnostics });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Benchmark failed" });
+  }
+});
+
 // ── GET /api/library/outdated — count of items with an older scanner version ──
 
 router.get("/library/outdated", async (_req: Request, res: Response) => {

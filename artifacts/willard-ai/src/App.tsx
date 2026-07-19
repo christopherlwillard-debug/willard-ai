@@ -30,6 +30,7 @@ import Chat from "@/pages/chat";
 import Settings from "@/pages/settings";
 import LoginPage from "@/pages/login";
 import NotFound from "@/pages/not-found";
+import Diagnostics from "@/pages/diagnostics";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +80,7 @@ function ProtectedRoutes() {
         <Route path="/search" component={Search} />
         <Route path="/chat" component={Chat} />
         <Route path="/settings" component={Settings} />
+        <Route path="/diagnostics" component={Diagnostics} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

@@ -213,6 +213,10 @@ export async function bootstrapSessionTable(): Promise<void> {
       OR name LIKE '._%'
       OR name LIKE '~$%';
   `);
+  await pool.query(`
+    ALTER TABLE library_jobs
+      ADD COLUMN IF NOT EXISTS diagnostics jsonb;
+  `);
 }
 
 const PgStore = connectPgSimple(session);

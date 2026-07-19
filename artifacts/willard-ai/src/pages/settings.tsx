@@ -53,6 +53,24 @@ export default function Settings() {
     query: { queryKey: getGetScanHistoryQueryKey() }
   });
 
+  const { data: diagScans } = useQuery<{ scans: Array<{ status: string; diagnostics: { throughputFilesPerSec: number } | null }> }>({
+    queryKey: ["diagnostics-scans-typical"],
+    queryFn: async () => {
+      const res = await fetch("/api/diagnostics/scans");
+      if (!res.ok) return { scans: [] };
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const typicalFilesPerSec = (() => {
+    const vals = (diagScans?.scans ?? [])
+      .filter(s => s.status === "DONE" && (s.diagnostics?.throughputFilesPerSec ?? 0) > 0)
+      .slice(0, 5)
+      .map(s => s.diagnostics!.throughputFilesPerSec);
+    if (vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  })();
+
   const updateMutation = useUpdateSettings({
     mutation: {
       onSuccess: () => {
@@ -248,9 +266,16 @@ export default function Settings() {
                   Stage: {scanStatus.current.stage} | Files: {scanStatus.current.filesScanned}
                 </p>
               ) : (
-                <p className="text-sm text-muted-foreground mt-1 font-mono">
-                  Total indexed: {settings?.totalFilesIndexed.toLocaleString()} files
-                </p>
+                <div>
+                  <p className="text-sm text-muted-foreground mt-1 font-mono">
+                    Total indexed: {settings?.totalFilesIndexed.toLocaleString()} files
+                  </p>
+                  {typicalFilesPerSec !== null && (
+                    <p className="text-xs text-muted-foreground/70 font-mono">
+                      Typical: {typicalFilesPerSec.toFixed(1)} files/sec
+                    </p>
+                  )}
+                </div>
               )}
             </div>
             <Button 

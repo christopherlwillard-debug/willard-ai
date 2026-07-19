@@ -116,3 +116,24 @@ export const EMPTY_COUNTERS = (): JobCounters => ({
 });
 
 export const PRIORITY_RANK: Record<JobPriority, number> = { HIGH: 3, NORMAL: 2, LOW: 1 };
+
+// ── Per-scan diagnostics stored in library_jobs.diagnostics (jsonb) ───────────
+
+export interface ScanDiagnostics {
+  walkTimeMs:               number;
+  dirCacheHits:             number;
+  dirCacheMisses:           number;
+  skippedByReason:          Record<string, number>;
+  metadataExtracted:        number;
+  hashesGenerated:          number;
+  dbWriteBatches:           number;
+  avgNasLatencyMs:          number;
+  maxNasLatencyMs:          number;
+  peakConcurrency:          number;
+  throughputFilesPerSec:    number;
+  throughputMBPerSec:       number;
+  peakQueueDepth:           number;
+  dbWriteTimeMs:            number;
+  metadataExtractionTimeMs: number;
+  totalSizeBytes:           number;
+}

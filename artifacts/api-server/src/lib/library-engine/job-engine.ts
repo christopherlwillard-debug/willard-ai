@@ -7,7 +7,7 @@ import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
   type CancellationReason, type ScanPhase, type ScanAction,
   type ActiveJobState, type ProgressEvent, type JobSummary, type JobCounters,
-  type ScanPerformance, type ThrottleProfile, type SkippedFile,
+  type ScanPerformance, type ThrottleProfile, type SkippedFile, type ScanDiagnostics,
   EMPTY_COUNTERS, PRIORITY_RANK, THROTTLE_PROFILES, SCANNER_VERSION, MAX_SKIPPED_LISTED,
 } from "./types";
 import {
@@ -282,6 +282,14 @@ class ConcurrencyController {
     }
 
     return { newCount: this._count, changed: this._count !== prev, reason };
+  }
+
+  get avgLatencyMs(): number {
+    if (this.samples.length === 0) return 0;
+    return Math.round(this.samples.reduce((a, b) => a + b, 0) / this.samples.length);
+  }
+  get maxLatencyMs(): number {
+    return this.samples.length === 0 ? 0 : Math.round(Math.max(...this.samples));
   }
 }
 
@@ -742,14 +750,29 @@ async function runScanJob(
       const rows = upsertBuf.splice(0);
       try {
         for (let j = 0; j < rows.length; j += BATCH_FLUSH_SIZE) {
+          const _dbT0 = Date.now();
           await db.insert(mediaFilesTable).values(rows.slice(j, j + BATCH_FLUSH_SIZE)).onConflictDoUpdate({
             target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
             set: MEDIA_FILE_UPSERT_SET,
           });
+          diagDbWriteTimeMs += Date.now() - _dbT0;
+          diagDbWriteBatches++;
         }
         lastBatchFlushAt = Date.now();
       } finally { batchFlushing = false; }
     };
+
+    // ── Diagnostics tracking ──────────────────────────────────────────────
+    let diagWalkTimeMs          = 0;
+    let diagMetadataExtracted   = 0;
+    let diagDbWriteBatches      = 0;
+    let diagDbWriteTimeMs       = 0;
+    let diagMetaExtractionMs    = 0;
+    let diagPeakConcurrency     = INITIAL_WORKERS;
+    let diagPeakQueueDepth      = 0;
+    let diagTotalSizeBytes      = 0;
+    const diagSkippedByReason: Record<string, number> = {};
+
     const maybeFlushBatch = async (): Promise<void> => {
       const qDepth = queue.size;
       // Near-empty queue: flush immediately so results appear in the library sooner
@@ -888,7 +911,10 @@ async function runScanJob(
           metaError = meta.error;
         }
       };
+      const _metaT0 = Date.now();
       await extractAll();
+      diagMetaExtractionMs += Date.now() - _metaT0;
+      diagMetadataExtracted++;
 
       // ── Conflict detection: file changed while being indexed ──────────
       // Re-stat after extraction; if size/mtime moved, re-read once so we
@@ -949,6 +975,7 @@ async function runScanJob(
     };
 
     // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
+    const diagWalkStart = Date.now();
     const walkDone = walkNasAsync(
       path.resolve(scanRoot),
       skipDirs,
@@ -961,6 +988,7 @@ async function runScanJob(
       undefined, // onDir
       (skippedPath, reason) => {
         recordSkip(state, path.relative(state.nasPath, skippedPath).replace(/\\/g, "/"), reason);
+        diagSkippedByReason[reason] = (diagSkippedByReason[reason] ?? 0) + 1;
       },
       dirCacheIn,
       dirCacheOut,
@@ -1072,9 +1100,11 @@ async function runScanJob(
               tickSpeed(state);
               if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
             } else {
+              if (activeWorkerCount > diagPeakConcurrency) diagPeakConcurrency = activeWorkerCount;
               const t0     = Date.now();
               const result = await processOneFile(f);
               concCtrl.recordLatency(Date.now() - t0);
+              diagTotalSizeBytes += f.sizeBytes;
 
               if (result.action === "SKIP") {
                 recordSkip(state, result.relativePath, result.skipReason!);
@@ -1126,6 +1156,7 @@ async function runScanJob(
 
     // Concurrency controller — runs every 5 s until the walk completes
     const ctrlInterval = setInterval(() => {
+      if (queue.size > diagPeakQueueDepth) diagPeakQueueDepth = queue.size;
       const { newCount, changed, reason } = concCtrl.adjust(queue.size);
       if (changed) {
         const prev    = targetWorkerCount;
@@ -1140,6 +1171,7 @@ async function runScanJob(
 
     // Walk and workers run concurrently; walk closes the queue when done
     await walkDone;
+    diagWalkTimeMs = Date.now() - diagWalkStart;
 
     // Queue is now closed; drain all remaining work.  Keep the controller
     // alive through the drain so concurrency still adapts while a large
@@ -1243,12 +1275,33 @@ async function runScanJob(
       categories,
     };
 
+    const _diagElapsedSecs = elapsedMs / 1000;
+    const diagnostics: ScanDiagnostics = {
+      walkTimeMs:               diagWalkTimeMs,
+      dirCacheHits:             skippedDirs.length,
+      dirCacheMisses:           Math.max(0, dirCacheOut.size - skippedDirs.length),
+      skippedByReason:          diagSkippedByReason,
+      metadataExtracted:        diagMetadataExtracted,
+      hashesGenerated:          state.counters.hashed,
+      dbWriteBatches:           diagDbWriteBatches,
+      avgNasLatencyMs:          concCtrl.avgLatencyMs,
+      maxNasLatencyMs:          concCtrl.maxLatencyMs,
+      peakConcurrency:          diagPeakConcurrency,
+      throughputFilesPerSec:    _diagElapsedSecs > 0 ? Math.round((state.filesProcessed / _diagElapsedSecs) * 10) / 10 : 0,
+      throughputMBPerSec:       _diagElapsedSecs > 0 ? Math.round((diagTotalSizeBytes / (1024 * 1024) / _diagElapsedSecs) * 100) / 100 : 0,
+      peakQueueDepth:           diagPeakQueueDepth,
+      dbWriteTimeMs:            diagDbWriteTimeMs,
+      metadataExtractionTimeMs: diagMetaExtractionMs,
+      totalSizeBytes:           diagTotalSizeBytes,
+    };
+
     await db.update(libraryJobsTable).set({
       status:         "DONE",
       finishedAt:     new Date(),
       processedFiles: state.filesProcessed,
       totalFiles:     state.filesTotal,
       summary,
+      diagnostics:    diagnostics as unknown as Record<string, unknown>,
     }).where(eq(libraryJobsTable.id, jobId));
 
     recordCompletion(state, summary);

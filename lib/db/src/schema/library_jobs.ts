@@ -18,6 +18,7 @@ export const libraryJobsTable = pgTable("library_jobs", {
   totalFiles:         integer("total_files"),
   processedFiles:     integer("processed_files").notNull().default(0),
   summary:            jsonb("summary"),
+  diagnostics:        jsonb("diagnostics"),
   error:              text("error"),
   createdAt:          timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
