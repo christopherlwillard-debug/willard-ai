@@ -54,9 +54,9 @@ export function LibraryStatusIndicator() {
   const { data: health } = useLibraryHealth();
   if (!health || health.status === "unconfigured") return null;
 
-  const job = health.activeJob as { filesScanned?: number; totalFiles?: number | null; stage?: string } | null | undefined;
+  const job = health.activeJob as { filesProcessed?: number; filesTotal?: number | null; stage?: string } | null | undefined;
   const indexing = job != null;
-  const pct = indexing && job?.totalFiles ? Math.min(100, Math.round(((job.filesScanned ?? 0) / job.totalFiles) * 100)) : null;
+  const pct = indexing && job?.filesTotal ? Math.min(100, Math.round(((job.filesProcessed ?? 0) / job.filesTotal) * 100)) : null;
 
   let icon;
   let text;
@@ -71,7 +71,7 @@ export function LibraryStatusIndicator() {
     tone = "text-amber-400 border-amber-500/30 bg-amber-500/10";
   } else if (indexing) {
     icon = <Loader2 className="w-3.5 h-3.5 animate-spin" />;
-    text = pct != null ? `Indexing ${pct}%` : `Indexing… ${(job?.filesScanned ?? 0).toLocaleString()} files`;
+    text = pct != null ? `Indexing ${pct}%` : `Indexing… ${(job?.filesProcessed ?? 0).toLocaleString()} files`;
     tone = "text-blue-400 border-blue-500/30 bg-blue-500/10";
   } else {
     icon = <CheckCircle2 className="w-3.5 h-3.5" />;
@@ -159,7 +159,7 @@ export function LibraryStatusBanner() {
 
   // Reconnected announcement — shown until acknowledged.
   if (health.reconnectedAt) {
-    const job = health.activeJob as { filesScanned?: number } | null | undefined;
+    const job = health.activeJob as { filesProcessed?: number } | null | undefined;
     return (
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
         <Sparkles className="w-5 h-5 text-green-400 shrink-0" />
@@ -167,7 +167,7 @@ export function LibraryStatusBanner() {
           <p className="text-sm font-semibold text-green-300">Library reconnected. Checking for new media…</p>
           <p className="text-xs text-green-200/70">
             {job
-              ? `Indexing only new and changed files — ${(job.filesScanned ?? 0).toLocaleString()} checked so far.`
+              ? `Indexing only new and changed files — ${(job.filesProcessed ?? 0).toLocaleString()} checked so far.`
               : "Only new and changed files will be indexed."}
           </p>
         </div>

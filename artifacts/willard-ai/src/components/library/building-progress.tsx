@@ -22,15 +22,15 @@ export function BuildingLibraryProgress() {
   });
 
   const job = health?.activeJob as {
-    filesScanned?: number;
-    totalFiles?: number | null;
+    filesProcessed?: number;
+    filesTotal?: number | null;
     stage?: string | null;
   } | null | undefined;
 
   if (!job) return null;
 
-  const scanned = job.filesScanned ?? 0;
-  const total = job.totalFiles ?? null;
+  const scanned = job.filesProcessed ?? 0;
+  const total = job.filesTotal ?? null;
   const pct = total && total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : null;
 
   const count = (type: string) =>
