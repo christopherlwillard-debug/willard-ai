@@ -914,7 +914,9 @@ async function runScanJob(
       const _metaT0 = Date.now();
       await extractAll();
       diagMetaExtractionMs += Date.now() - _metaT0;
-      diagMetadataExtracted++;
+      if (mediaType === "photo" || VIDEO_META_EXTS.has(f.ext) || f.ext === "pdf") {
+        diagMetadataExtracted++;
+      }
 
       // ── Conflict detection: file changed while being indexed ──────────
       // Re-stat after extraction; if size/mtime moved, re-read once so we

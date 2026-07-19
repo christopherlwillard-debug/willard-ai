@@ -34,7 +34,7 @@ router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
   }).from(libraryJobsTable)
     .where(and(...conditions))
     .orderBy(desc(libraryJobsTable.createdAt))
-    .limit(50);
+    .limit(20);
 
   res.json({ scans: jobs });
 });
