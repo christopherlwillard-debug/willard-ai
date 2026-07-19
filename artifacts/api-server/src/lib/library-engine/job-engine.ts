@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { mediaFilesTable, libraryJobsTable, appSettingsTable } from "@workspace/db";
+import { mediaFilesTable, libraryJobsTable, appSettingsTable, archivesTable } from "@workspace/db";
 import { eq, and, lt, ne, sql, isNull, or, gt, inArray } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
@@ -548,6 +548,39 @@ async function runScanJob(
     // newest-modified first within each category. Deterministic, so a stored
     // cursor index remains meaningful across pause/resume.
     sortFilesByPriority(files);
+
+    // ── Archive indexing ─────────────────────────────────────────────────
+    // Upsert discovered archives into archivesTable so the Archive Index page
+    // and the Operations Center "pick from indexed" dropdown stay populated.
+    // On conflict we only refresh size/folder/timestamp; peekStatus and
+    // peekEntries are intentionally left untouched so already-peeked archives
+    // keep their content metadata.
+    {
+      const ARCHIVE_EXTS_SET = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "txz", "cab", "iso"]);
+      const archiveRows = files
+        .filter(f => ARCHIVE_EXTS_SET.has(f.ext.toLowerCase()))
+        .map(f => ({
+          path: f.fullPath,
+          filename: f.name,
+          sizeBytes: f.sizeBytes,
+          modifiedAt: f.modifiedAt,
+          folder: path.dirname(f.fullPath),
+          category: "General",
+          peekStatus: "pending",
+        }));
+      for (let ai = 0; ai < archiveRows.length; ai += 100) {
+        const chunk = archiveRows.slice(ai, ai + 100);
+        await db.insert(archivesTable).values(chunk).onConflictDoUpdate({
+          target: archivesTable.path,
+          set: {
+            sizeBytes: sql`excluded.size_bytes`,
+            modifiedAt: sql`excluded.modified_at`,
+            folder:     sql`excluded.folder`,
+            indexedAt:  sql`NOW()`,
+          },
+        });
+      }
+    }
 
     state.filesTotal = files.length;
     state.filesProcessed = Math.min(startCursor, files.length);

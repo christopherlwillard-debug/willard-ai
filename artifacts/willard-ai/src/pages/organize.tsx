@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useListOrganizeJobs, getListOrganizeJobsQueryKey,
   useCreateOrganizeJob,
@@ -73,9 +74,9 @@ function StepIndicator({ current }: { current: Step }) {
 
 // ── Setup Step ──────────────────────────────────────────────────────────────
 
-function SetupStep({ onCreated }: { onCreated: (id: number) => void }) {
+function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) => void; initialPath?: string }) {
   const { toast } = useToast();
-  const [form, setForm] = useState({ sourceType: "archive", sourcePath: "", archiveId: "", archiveDisposition: "keep", conflictPolicy: "keep_existing" });
+  const [form, setForm] = useState({ sourceType: "archive", sourcePath: initialPath, archiveId: "", archiveDisposition: "keep", conflictPolicy: "keep_existing" });
   const { data: archivesData } = useListArchives({ limit: 200, offset: 0 });
   const createMutation = useCreateOrganizeJob({
     mutation: {
@@ -1442,11 +1443,22 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Organize() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const extractPath = searchParams.get("extract") ?? "";
+
   const [activeJobId, setActiveJobId]       = useState<number | null>(null);
   const [showNew, setShowNew]               = useState(false);
   const [showRecovery, setShowRecovery]     = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Auto-open the New Job sheet when ?extract=<path> is present in the URL
+  useEffect(() => {
+    if (extractPath) {
+      setActiveJobId(null);
+      setShowNew(true);
+    }
+  }, [extractPath]);
 
   const { data: jobs, isLoading } = useListOrganizeJobs({
     query: { queryKey: getListOrganizeJobsQueryKey(), refetchInterval: 5000 },
@@ -1471,7 +1483,7 @@ export default function Organize() {
     },
   });
 
-  const closeSheet = () => { setActiveJobId(null); setShowNew(false); };
+  const closeSheet = () => { setActiveJobId(null); setShowNew(false); if (extractPath) setSearchParams({}); };
 
   return (
     <div className="space-y-6">
@@ -1603,10 +1615,11 @@ export default function Organize() {
             </SheetHeader>
             <div className="mt-6">
               <StepIndicator current={0} />
-              <SetupStep onCreated={(id) => {
+              <SetupStep initialPath={extractPath} onCreated={(id) => {
                 queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
                 setShowNew(false);
                 setActiveJobId(id);
+                if (extractPath) setSearchParams({});
               }} />
             </div>
           </SheetContent>

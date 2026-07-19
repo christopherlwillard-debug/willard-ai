@@ -44,9 +44,9 @@ export default function Explorer() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [selectedFile, setSelectedFile] = useState<FolderEntry | null>(null);
 
-  const { data, isLoading } = useListFolder(
+  const { data, isLoading, isError } = useListFolder(
     { path: currentPath },
-    { query: { queryKey: getListFolderQueryKey({ path: currentPath }) } }
+    { query: { queryKey: getListFolderQueryKey({ path: currentPath }), retry: 0 } }
   );
 
   const navigateTo = (newPath: string) => setCurrentPath(newPath);
@@ -123,6 +123,12 @@ export default function Explorer() {
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center">
                   <div className="space-y-2 p-4"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" /></div>
+                </TableCell>
+              </TableRow>
+            ) : isError ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground font-mono text-sm">
+                  {currentPath === "" ? "NAS drive is offline or not configured — check Settings" : "Cannot read folder (drive may be offline)"}
                 </TableCell>
               </TableRow>
             ) : sorted.length === 0 ? (

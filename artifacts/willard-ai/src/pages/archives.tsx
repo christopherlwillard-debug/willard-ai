@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
-import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter, RefreshCw } from "lucide-react";
+import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter, RefreshCw, PackageOpen } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -170,6 +171,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
 }
 
 export default function Archives() {
+  const navigate = useNavigate();
   const [page, setPage] = useState(0);
   const limit = 50;
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -276,7 +278,7 @@ export default function Archives() {
               <TableHead className="text-right">Size</TableHead>
               <TableHead className="text-right">Modified</TableHead>
               <TableHead className="text-center">Status</TableHead>
-              <TableHead className="w-20"></TableHead>
+              <TableHead className="w-32"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -336,9 +338,20 @@ export default function Archives() {
                   </span>
                 </TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => setSelectedArchiveId(archive.id)}>
-                    <Eye className="w-3.5 h-3.5 mr-1" /> Peek
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => setSelectedArchiveId(archive.id)}>
+                      <Eye className="w-3.5 h-3.5 mr-1" /> Peek
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-primary hover:text-primary"
+                      title="Extract this archive via Operations Center"
+                      onClick={() => navigate(`/organize?extract=${encodeURIComponent(archive.path)}`)}
+                    >
+                      <PackageOpen className="w-3.5 h-3.5 mr-1" /> Extract
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
