@@ -302,6 +302,26 @@ function isSystemDir(name: string): boolean {
   return name.startsWith(".") || name.startsWith("@") || name.startsWith("#") || SYSTEM_DIR_NAMES.has(name);
 }
 
+// ── System files to skip ───────────────────────────────────────────────────────
+
+const SKIP_FILE_NAMES = new Set([
+  // Windows thumbnail/metadata databases
+  "Thumbs.db", "Thumbs.db:encryptable", "ehthumbs.db", "ehthumbs_vista.db",
+  // Windows shell config
+  "desktop.ini", "autorun.inf",
+  // macOS metadata
+  ".DS_Store", ".localized", ".AppleDouble", ".AppleDesktop",
+  // Office temp files handled by prefix check below
+]);
+
+function isSystemFile(name: string): boolean {
+  if (name.startsWith(".")) return true;        // hidden files (.DS_Store, .gitkeep, etc.)
+  if (name.startsWith("~$")) return true;       // Office temp files (~$document.docx)
+  const upper = name.toUpperCase();
+  if (SKIP_FILE_NAMES.has(name) || SKIP_FILE_NAMES.has(upper)) return true;
+  return false;
+}
+
 // ── Directory walker ───────────────────────────────────────────────────────────
 
 function walkNas(
@@ -322,6 +342,7 @@ function walkNas(
       if (skipDirs.has(path.resolve(fullPath))) continue;
       walkNas(fullPath, skipDirs, results);
     } else if (entry.isFile()) {
+      if (isSystemFile(entry.name)) continue;
       try {
         const stat = fs.statSync(fullPath);
         const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
