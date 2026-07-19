@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { conversations, messages, indexedFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
+import { conversations, messages, mediaFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
 import { eq, desc, count, sql, ilike, and } from "drizzle-orm";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import {
@@ -10,19 +10,21 @@ import {
 
 const router: IRouter = Router();
 
+const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
+
 /** Query the local index for files matching a keyword, return summary. */
 async function searchLocalFiles(keyword: string): Promise<string> {
   try {
     const files = await db.select({
-      filename: indexedFilesTable.filename,
-      fileType: indexedFilesTable.fileType,
-      sizeBytes: indexedFilesTable.sizeBytes,
-      folder: indexedFilesTable.folder,
-      modifiedAt: indexedFilesTable.modifiedAt,
+      filename:  mediaFilesTable.name,
+      fileType:  mediaFilesTable.mediaType,
+      sizeBytes: mediaFilesTable.sizeBytes,
+      folder:    mediaFilesTable.relativePath,
+      modifiedAt: mediaFilesTable.modifiedAt,
     })
-      .from(indexedFilesTable)
-      .where(ilike(indexedFilesTable.filename, `%${keyword}%`))
-      .orderBy(desc(indexedFilesTable.sizeBytes))
+      .from(mediaFilesTable)
+      .where(and(NOT_DELETED, ilike(mediaFilesTable.name, `%${keyword}%`)))
+      .orderBy(desc(mediaFilesTable.sizeBytes))
       .limit(10);
 
     if (files.length === 0) return `No local files found matching "${keyword}".`;
@@ -39,10 +41,10 @@ async function searchLocalFiles(keyword: string): Promise<string> {
 /** Query storage breakdown for context. */
 async function getStorageContext(): Promise<string> {
   const breakdown = await db.select({
-    fileType: indexedFilesTable.fileType,
-    fileCount: count(),
-    totalBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
-  }).from(indexedFilesTable).groupBy(indexedFilesTable.fileType).orderBy(desc(sql`SUM(${indexedFilesTable.sizeBytes})`));
+    fileType:   mediaFilesTable.mediaType,
+    fileCount:  count(),
+    totalBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+  }).from(mediaFilesTable).where(NOT_DELETED).groupBy(mediaFilesTable.mediaType).orderBy(desc(sql`SUM(${mediaFilesTable.sizeBytes})`));
 
   if (breakdown.length === 0) return "";
   return "Storage by type:\n" + breakdown.map(r =>
@@ -53,10 +55,10 @@ async function getStorageContext(): Promise<string> {
 /** Query top large files. */
 async function getLargeFilesContext(): Promise<string> {
   const large = await db.select({
-    filename: indexedFilesTable.filename,
-    sizeBytes: indexedFilesTable.sizeBytes,
-    folder: indexedFilesTable.folder,
-  }).from(indexedFilesTable).orderBy(desc(indexedFilesTable.sizeBytes)).limit(5);
+    filename:  mediaFilesTable.name,
+    sizeBytes: mediaFilesTable.sizeBytes,
+    folder:    mediaFilesTable.relativePath,
+  }).from(mediaFilesTable).where(NOT_DELETED).orderBy(desc(mediaFilesTable.sizeBytes)).limit(5);
 
   if (large.length === 0) return "";
   return "Top 5 largest files:\n" + large.map(f =>
