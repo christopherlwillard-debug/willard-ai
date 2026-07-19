@@ -432,13 +432,13 @@ export function walkNas(
   }
 
   function processEntry(entry: fs.Dirent, currentDir: string): void {
-    // Use settings-aware isSystemDir so toggles are authoritative for dirs
-    if (isSystemDir(entry.name, settings)) {
-      onSkip?.(path.join(currentDir, entry.name), "systemDirectory");
-      return;
-    }
     const fullPath = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
+      // isSystemDir only applies to directories (prevents misclassifying hidden files)
+      if (isSystemDir(entry.name, settings)) {
+        onSkip?.(fullPath, "systemDirectory");
+        return;
+      }
       if (skipDirs.has(path.resolve(fullPath))) return;
       onDir?.(fullPath);
       recurse(fullPath);

@@ -6,7 +6,7 @@ import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getWillardAIDir } from "./nas-storage";
 import { getThumbnailDir, thumbnailFilename } from "./thumbnail-engine";
-import { isSystemDir, isSystemFile, DEFAULT_SCANNER_SETTINGS } from "./system-filter";
+import { isSystemDir, isSystemFile, DEFAULT_SCANNER_SETTINGS, type ScannerSettings } from "./system-filter";
 
 // ── Media type classification ─────────────────────────────────────────────────
 
@@ -290,6 +290,7 @@ function walkNas(
   dir: string,
   skipDirs: Set<string>,
   results: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }>,
+  settings: ScannerSettings = DEFAULT_SCANNER_SETTINGS,
 ): void {
   let entries: fs.Dirent[];
   try {
@@ -298,14 +299,15 @@ function walkNas(
     return;
   }
   for (const entry of entries) {
-    if (isSystemDir(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      // isSystemDir only for dirs (prevents hidden files being mis-typed)
+      if (isSystemDir(entry.name, settings)) continue;
       if (skipDirs.has(path.resolve(fullPath))) continue;
-      walkNas(fullPath, skipDirs, results);
+      walkNas(fullPath, skipDirs, results, settings);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
-      if (isSystemFile(entry.name, ext, DEFAULT_SCANNER_SETTINGS)) continue;
+      if (isSystemFile(entry.name, ext, settings)) continue;
       try {
         const stat = fs.statSync(fullPath);
         results.push({
@@ -349,9 +351,37 @@ export async function runMediaScan(nasPath: string): Promise<number> {
       const willardDir = path.resolve(getWillardAIDir(nasPath));
       const skipDirs = new Set([willardDir]);
 
+      // Load user scanner settings from DB (fall back to defaults if not set)
+      let scannerSettings: ScannerSettings = DEFAULT_SCANNER_SETTINGS;
+      try {
+        const { appSettingsTable } = await import("@workspace/db");
+        const [row] = await db.select({
+          ignoredFolders:    appSettingsTable.ignoredFolders,
+          ignoredExtensions: appSettingsTable.ignoredExtensions,
+          ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
+          ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
+          ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
+          ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
+          ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
+          followSymlinks:     appSettingsTable.followSymlinks,
+        }).from(appSettingsTable).limit(1);
+        if (row) {
+          scannerSettings = {
+            ignoredFolders:    row.ignoredFolders    ?? [],
+            ignoredExtensions: row.ignoredExtensions ?? [],
+            ignoreHiddenFiles:  row.ignoreHiddenFiles  ?? true,
+            ignoreSystemFiles:  row.ignoreSystemFiles  ?? true,
+            ignoreTempFiles:    row.ignoreTempFiles    ?? true,
+            ignoreSidecarFiles: row.ignoreSidecarFiles ?? true,
+            ignoreEmptyFolders: row.ignoreEmptyFolders ?? false,
+            followSymlinks:     row.followSymlinks     ?? false,
+          };
+        }
+      } catch { /* use defaults */ }
+
       // Collect all files
       const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
-      walkNas(path.resolve(nasPath), skipDirs, files);
+      walkNas(path.resolve(nasPath), skipDirs, files, scannerSettings);
 
       await db.update(mediaScanJobsTable)
         .set({ totalFiles: files.length })
