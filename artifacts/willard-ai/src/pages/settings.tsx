@@ -53,7 +53,14 @@ export default function Settings() {
     query: { queryKey: getGetScanHistoryQueryKey() }
   });
 
-  const { data: diagScans } = useQuery<{ scans: Array<{ status: string; diagnostics: { throughputFilesPerSec: number } | null }> }>({
+  const { data: diagScans } = useQuery<{
+    scans: Array<{
+      status: string;
+      startedAt:  string | null;
+      finishedAt: string | null;
+      diagnostics: { throughputFilesPerSec: number } | null;
+    }>;
+  }>({
     queryKey: ["diagnostics-scans-typical"],
     queryFn: async () => {
       const res = await fetch("/api/diagnostics/scans");
@@ -62,14 +69,30 @@ export default function Settings() {
     },
     staleTime: 60_000,
   });
-  const typicalFilesPerSec = (() => {
-    const vals = (diagScans?.scans ?? [])
+
+  const { typicalFilesPerSec, typicalScanDurationMs } = (() => {
+    const recent = (diagScans?.scans ?? [])
       .filter(s => s.status === "DONE" && (s.diagnostics?.throughputFilesPerSec ?? 0) > 0)
-      .slice(0, 5)
-      .map(s => s.diagnostics!.throughputFilesPerSec);
-    if (vals.length === 0) return null;
-    return vals.reduce((a, b) => a + b, 0) / vals.length;
+      .slice(0, 5);
+    if (recent.length === 0) return { typicalFilesPerSec: null, typicalScanDurationMs: null };
+
+    const fps = recent.reduce((a, s) => a + s.diagnostics!.throughputFilesPerSec, 0) / recent.length;
+
+    const durations = recent
+      .filter(s => s.startedAt && s.finishedAt)
+      .map(s => new Date(s.finishedAt!).getTime() - new Date(s.startedAt!).getTime());
+    const avgDur = durations.length > 0
+      ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+
+    return { typicalFilesPerSec: fps, typicalScanDurationMs: avgDur };
   })();
+
+  function fmtDuration(ms: number): string {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    return `${m}m ${s % 60}s`;
+  }
 
   const updateMutation = useUpdateSettings({
     mutation: {
@@ -272,7 +295,10 @@ export default function Settings() {
                   </p>
                   {typicalFilesPerSec !== null && (
                     <p className="text-xs text-muted-foreground/70 font-mono">
-                      Typical: {typicalFilesPerSec.toFixed(1)} files/sec
+                      Typical speed: {typicalFilesPerSec.toFixed(1)} files/sec
+                      {typicalScanDurationMs !== null && (
+                        <> · avg scan: {fmtDuration(typicalScanDurationMs)}</>
+                      )}
                     </p>
                   )}
                 </div>

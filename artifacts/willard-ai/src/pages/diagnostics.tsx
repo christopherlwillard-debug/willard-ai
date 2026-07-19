@@ -11,7 +11,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Activity, Play, RefreshCw, Cpu, Database, Clock, TrendingUp, AlertTriangle } from "lucide-react";
+import {
+  Activity, Play, RefreshCw, Cpu, Database, Clock, TrendingUp,
+  AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown,
+} from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +57,11 @@ interface BenchmarkResult {
   diagnostics: ScanDiagnostics;
 }
 
+// ── Sort types ────────────────────────────────────────────────────────────────
+
+type SortKey = "date" | "files" | "duration" | "filesPerSec" | "mbPerSec" | "peakWorkers" | "dirCache";
+type SortDir = "asc" | "desc";
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtMs(ms: number): string {
@@ -68,16 +76,51 @@ function fmtNum(n: number, decimals = 1): string {
   return n.toFixed(decimals);
 }
 
-function statusColor(status: string) {
-  if (status === "DONE") return "text-green-500";
-  if (status === "FAILED" || status === "CANCELLED") return "text-destructive";
-  return "text-muted-foreground";
+function scanDurationMs(scan: ScanRecord): number {
+  if (!scan.startedAt || !scan.finishedAt) {
+    const summary = scan.summary as any;
+    return summary?.elapsedMs ?? 0;
+  }
+  return new Date(scan.finishedAt).getTime() - new Date(scan.startedAt).getTime();
 }
 
-function cacheHitRate(d: ScanDiagnostics): string {
+function cacheHitRate(d: ScanDiagnostics): number {
   const total = d.dirCacheHits + d.dirCacheMisses;
-  if (total === 0) return "—";
-  return `${Math.round((d.dirCacheHits / total) * 100)}%`;
+  return total === 0 ? 0 : Math.round((d.dirCacheHits / total) * 100);
+}
+
+function sortScans(scans: ScanRecord[], key: SortKey, dir: SortDir): ScanRecord[] {
+  const multiplier = dir === "asc" ? 1 : -1;
+  return [...scans].sort((a, b) => {
+    let av = 0, bv = 0;
+    switch (key) {
+      case "date":
+        av = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+        bv = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+        break;
+      case "files":
+        av = a.processedFiles; bv = b.processedFiles; break;
+      case "duration":
+        av = scanDurationMs(a); bv = scanDurationMs(b); break;
+      case "filesPerSec":
+        av = a.diagnostics?.throughputFilesPerSec ?? 0;
+        bv = b.diagnostics?.throughputFilesPerSec ?? 0;
+        break;
+      case "mbPerSec":
+        av = a.diagnostics?.throughputMBPerSec ?? 0;
+        bv = b.diagnostics?.throughputMBPerSec ?? 0;
+        break;
+      case "peakWorkers":
+        av = a.diagnostics?.peakConcurrency ?? 0;
+        bv = b.diagnostics?.peakConcurrency ?? 0;
+        break;
+      case "dirCache":
+        av = a.diagnostics ? cacheHitRate(a.diagnostics) : 0;
+        bv = b.diagnostics ? cacheHitRate(b.diagnostics) : 0;
+        break;
+    }
+    return (av - bv) * multiplier;
+  });
 }
 
 // ── Diagnostics page ──────────────────────────────────────────────────────────
@@ -86,6 +129,8 @@ export default function Diagnostics() {
   const { toast } = useToast();
   const [benchmarkSize, setBenchmarkSize] = useState("1000");
   const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkResult | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { data, isLoading, refetch } = useQuery<{ scans: ScanRecord[] }>({
     queryKey: ["diagnostics-scans"],
@@ -109,14 +154,27 @@ export default function Diagnostics() {
     onSuccess: (result) => {
       setBenchmarkResult(result);
       refetch();
-      toast({ title: "Benchmark complete", description: `${result.sampleSize.toLocaleString()} files in ${fmtMs(result.elapsedMs)}` });
+      toast({
+        title: "Benchmark complete",
+        description: `${result.sampleSize.toLocaleString()} files in ${fmtMs(result.elapsedMs)}`,
+      });
     },
     onError: (err: any) => {
       toast({ title: "Benchmark failed", description: err.message, variant: "destructive" });
     },
   });
 
-  const scans = data?.scans ?? [];
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const rawScans = data?.scans ?? [];
+  const scans    = sortScans(rawScans, sortKey, sortDir);
 
   return (
     <div className="space-y-8 max-w-6xl">
@@ -134,7 +192,9 @@ export default function Diagnostics() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Walk a sample of your NAS files and measure raw I/O latency + metadata extraction speed without affecting your library.
+            Runs the full hash + metadata + DB-write pipeline on a sample of your NAS files —
+            identical to a real scan but without permanently modifying your library.
+            Results are directly comparable to actual scan diagnostics.
           </p>
           <div className="flex items-center gap-3">
             <Select value={benchmarkSize} onValueChange={setBenchmarkSize}>
@@ -163,14 +223,14 @@ export default function Diagnostics() {
 
           {benchmarkResult && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-              <MetricTile label="Walk time" value={fmtMs(benchmarkResult.diagnostics.walkTimeMs)} />
-              <MetricTile label="Avg NAS latency" value={`${benchmarkResult.diagnostics.avgNasLatencyMs}ms`} />
-              <MetricTile label="Max NAS latency" value={`${benchmarkResult.diagnostics.maxNasLatencyMs}ms`} />
+              <MetricTile label="Walk time"         value={fmtMs(benchmarkResult.diagnostics.walkTimeMs)} />
+              <MetricTile label="Files/sec"         value={fmtNum(benchmarkResult.diagnostics.throughputFilesPerSec)} />
+              <MetricTile label="MB/sec"            value={fmtNum(benchmarkResult.diagnostics.throughputMBPerSec, 2)} />
+              <MetricTile label="Peak workers"      value={String(benchmarkResult.diagnostics.peakConcurrency)} />
+              <MetricTile label="Hashes computed"   value={benchmarkResult.diagnostics.hashesGenerated.toLocaleString()} />
               <MetricTile label="Metadata extracted" value={benchmarkResult.diagnostics.metadataExtracted.toLocaleString()} />
-              <MetricTile label="Files walked" value={benchmarkResult.filesWalked.toLocaleString()} />
-              <MetricTile label="Sample size" value={benchmarkResult.sampleSize.toLocaleString()} />
-              <MetricTile label="Elapsed" value={fmtMs(benchmarkResult.elapsedMs)} />
-              <MetricTile label="Meta extraction" value={fmtMs(benchmarkResult.diagnostics.metadataExtractionTimeMs)} />
+              <MetricTile label="DB batches"        value={String(benchmarkResult.diagnostics.dbWriteBatches)} />
+              <MetricTile label="Total elapsed"     value={fmtMs(benchmarkResult.elapsedMs)} />
             </div>
           )}
         </CardContent>
@@ -190,65 +250,57 @@ export default function Diagnostics() {
           {isLoading ? (
             <Skeleton className="h-48 w-full" />
           ) : scans.length === 0 ? (
-            <p className="text-muted-foreground text-sm text-center py-8">No scan records found. Run a scan to collect diagnostics.</p>
+            <p className="text-muted-foreground text-sm text-center py-8">
+              No completed scan records found. Run a scan to collect diagnostics.
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="font-mono text-xs">
-                    <TableHead>Date</TableHead>
+                    <SortHead label="Date"         col="date"        active={sortKey} dir={sortDir} onSort={toggleSort} />
                     <TableHead>Profile</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Files</TableHead>
-                    <TableHead className="text-right">Duration</TableHead>
-                    <TableHead className="text-right">Files/sec</TableHead>
-                    <TableHead className="text-right">MB/sec</TableHead>
-                    <TableHead className="text-right">Peak Workers</TableHead>
+                    <SortHead label="Files"        col="files"       active={sortKey} dir={sortDir} onSort={toggleSort} right />
+                    <SortHead label="Duration"     col="duration"    active={sortKey} dir={sortDir} onSort={toggleSort} right />
+                    <SortHead label="Files/sec"    col="filesPerSec" active={sortKey} dir={sortDir} onSort={toggleSort} right />
+                    <SortHead label="MB/sec"       col="mbPerSec"    active={sortKey} dir={sortDir} onSort={toggleSort} right />
+                    <SortHead label="Peak Workers" col="peakWorkers" active={sortKey} dir={sortDir} onSort={toggleSort} right />
                     <TableHead className="text-right">Avg NAS</TableHead>
                     <TableHead className="text-right">Max NAS</TableHead>
                     <TableHead className="text-right">DB Batches</TableHead>
-                    <TableHead className="text-right">Dir Cache</TableHead>
+                    <SortHead label="Dir Cache"    col="dirCache"    active={sortKey} dir={sortDir} onSort={toggleSort} right />
                     <TableHead className="text-right">Peak Queue</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {scans.map(scan => {
-                    const d = scan.diagnostics;
-                    const summary = scan.summary as any;
-                    const elapsedMs = summary?.elapsedMs as number | undefined;
+                    const d        = scan.diagnostics;
+                    const durMs    = scanDurationMs(scan);
                     return (
                       <TableRow key={scan.id} className="font-mono text-xs">
                         <TableCell className="whitespace-nowrap">
-                          {scan.startedAt ? new Date(scan.startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
+                          {scan.startedAt
+                            ? new Date(scan.startedAt).toLocaleString(undefined, {
+                                month: "short", day: "numeric",
+                                hour: "2-digit", minute: "2-digit",
+                              })
+                            : "—"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="text-[10px] font-mono">{scan.profile ?? "—"}</Badge>
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            {scan.profile ?? "—"}
+                          </Badge>
                         </TableCell>
-                        <TableCell className={`font-bold ${statusColor(scan.status)}`}>{scan.status}</TableCell>
                         <TableCell className="text-right">{scan.processedFiles.toLocaleString()}</TableCell>
+                        <TableCell className="text-right">{durMs ? fmtMs(durMs) : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? fmtNum(d.throughputFilesPerSec) : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? fmtNum(d.throughputMBPerSec, 2) : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? d.peakConcurrency : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? `${d.avgNasLatencyMs}ms` : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? `${d.maxNasLatencyMs}ms` : "—"}</TableCell>
+                        <TableCell className="text-right">{d ? d.dbWriteBatches : "—"}</TableCell>
                         <TableCell className="text-right">
-                          {d ? fmtMs(d.walkTimeMs + (elapsedMs ?? 0)) : elapsedMs ? fmtMs(elapsedMs) : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? fmtNum(d.throughputFilesPerSec) : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? fmtNum(d.throughputMBPerSec, 2) : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? d.peakConcurrency : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? `${d.avgNasLatencyMs}ms` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? `${d.maxNasLatencyMs}ms` : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? d.dbWriteBatches : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {d ? cacheHitRate(d) : "—"}
+                          {d ? `${cacheHitRate(d)}%` : "—"}
                         </TableCell>
                         <TableCell className="text-right">
                           {d ? d.peakQueueDepth.toLocaleString() : "—"}
@@ -287,11 +339,38 @@ export default function Diagnostics() {
       {/* ── Legend ───────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <LegendItem icon={<TrendingUp className="w-4 h-4" />} label="Files/sec" desc="Processed files ÷ total elapsed" />
-        <LegendItem icon={<Database className="w-4 h-4" />} label="Dir Cache" desc="% of directories skipped via mtime cache" />
-        <LegendItem icon={<Clock className="w-4 h-4" />} label="Avg/Max NAS" desc="Rolling I/O latency per file operation" />
-        <LegendItem icon={<Cpu className="w-4 h-4" />} label="Peak Workers" desc="Max concurrent file processor goroutines" />
+        <LegendItem icon={<Database className="w-4 h-4" />}   label="Dir Cache"  desc="% of directories skipped via mtime cache" />
+        <LegendItem icon={<Clock className="w-4 h-4" />}      label="Avg/Max NAS" desc="Rolling I/O latency per file operation" />
+        <LegendItem icon={<Cpu className="w-4 h-4" />}        label="Peak Workers" desc="Max concurrent file processor goroutines" />
       </div>
     </div>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function SortHead({
+  label, col, active, dir, onSort, right,
+}: {
+  label: string; col: SortKey; active: SortKey; dir: SortDir;
+  onSort: (k: SortKey) => void; right?: boolean;
+}) {
+  const isActive = active === col;
+  return (
+    <TableHead className={right ? "text-right" : ""}>
+      <button
+        onClick={() => onSort(col)}
+        className="flex items-center gap-1 font-mono text-xs hover:text-foreground transition-colors group"
+        style={right ? { marginLeft: "auto" } : undefined}
+      >
+        {label}
+        {isActive
+          ? dir === "desc"
+            ? <ArrowDown className="w-3 h-3 text-primary" />
+            : <ArrowUp   className="w-3 h-3 text-primary" />
+          : <ArrowUpDown className="w-3 h-3 opacity-30 group-hover:opacity-60" />}
+      </button>
+    </TableHead>
   );
 }
 

@@ -15,7 +15,10 @@ async function getNasPath(): Promise<string | null> {
 router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
   const nasPath = await getNasPath();
 
-  const conditions = [eq(libraryJobsTable.jobType, "SCAN")];
+  const conditions = [
+    eq(libraryJobsTable.jobType, "SCAN"),
+    eq(libraryJobsTable.status, "DONE"),
+  ];
   if (nasPath) conditions.push(eq(libraryJobsTable.nasPath, nasPath));
 
   const jobs = await db.select({
@@ -31,7 +34,7 @@ router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
   }).from(libraryJobsTable)
     .where(and(...conditions))
     .orderBy(desc(libraryJobsTable.createdAt))
-    .limit(20);
+    .limit(50);
 
   res.json({ scans: jobs });
 });

@@ -528,10 +528,10 @@ router.patch("/library/thumbnails/quality", async (req: Request, res: Response) 
   res.json({ thumbnailQuality: quality.toUpperCase() });
 });
 
-// ── POST /api/library/scan/benchmark — synthetic NAS timing benchmark ─────────
-// Walks up to `size` files, measures raw I/O latency + metadata extraction
-// speed WITHOUT touching media_files. Records as a BENCHMARK job so it appears
-// in the diagnostics history table.
+// ── POST /api/library/scan/benchmark — real pipeline benchmark ────────────────
+// Runs the full hash + metadata + DB-write pipeline stages on up to `size` files
+// without permanently modifying media_files (DB writes are in a rolled-back
+// transaction). Results are directly comparable to real scan diagnostics.
 
 router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
@@ -543,11 +543,14 @@ router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
                       sizeParam === "5000"  ? 5000  : 1000;
 
   try {
-    const { walkNas, extractPhotoMeta, extractVideoMeta, PHOTO_EXTS, VIDEO_META_EXTS } = await import("../lib/library-engine/indexer");
+    const {
+      walkNas, extractPhotoMeta, extractVideoMeta, hashFile,
+      PHOTO_EXTS, VIDEO_META_EXTS,
+    } = await import("../lib/library-engine/indexer");
     const { getWillardAIDir: _wDir } = await import("../lib/nas-storage");
+    const { DEFAULT_SCANNER_SETTINGS } = await import("../lib/system-filter");
     const fs   = await import("fs");
     const path = await import("path");
-    const { DEFAULT_SCANNER_SETTINGS } = await import("../lib/system-filter");
 
     try { fs.statSync(nasPath); } catch {
       res.status(503).json({ error: "NAS is offline" });
@@ -568,43 +571,118 @@ router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
 
     const sampled = sampleLimit === Infinity ? allFiles : allFiles.slice(0, sampleLimit);
 
-    // Stat each file to measure raw NAS I/O latency
-    const latencies: number[] = [];
-    let totalSizeBytes = 0;
-    for (const f of sampled) {
-      const t0 = Date.now();
-      try { fs.statSync(f.fullPath); } catch { continue; }
-      latencies.push(Date.now() - t0);
-      totalSizeBytes += f.sizeBytes;
-    }
-    const avgNasLatencyMs = latencies.length > 0
-      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
-    const maxNasLatencyMs = latencies.length > 0 ? Math.round(Math.max(...latencies)) : 0;
+    // ── Stage 1 + 2: concurrent hash + metadata (mirrors real job-engine) ─────
+    const BENCH_CONCURRENCY = 8;
+    const BENCH_BATCH_SIZE  = 50;
 
-    // Run metadata extraction on up to 100 photo/video files
+    let hashesGenerated = 0;
     let metadataExtracted = 0;
     let metadataExtractionTimeMs = 0;
-    const metaSample = sampled.filter(f => PHOTO_EXTS.has(f.ext) || VIDEO_META_EXTS.has(f.ext)).slice(0, 100);
-    for (const f of metaSample) {
-      const t0 = Date.now();
+    let totalSizeBytes = 0;
+    let peakConcurrency = 0;
+    let peakQueueDepth  = 0;
+    const latencies: number[] = [];
+
+    type Processed = {
+      relativePath: string; name: string; extension: string;
+      sizeBytes: number; modifiedAt: Date; contentHash: string | null;
+    };
+    const processed: Processed[] = [];
+
+    // Promise pool — same concurrency model as real scan
+    let pendingIdx   = 0;
+    let activeNow    = 0;
+
+    const processOne = async (f: typeof sampled[0]): Promise<void> => {
+      const t0   = Date.now();
+      const hash = await hashFile(f.fullPath);
+      latencies.push(Date.now() - t0);
+      if (hash) hashesGenerated++;
+      totalSizeBytes += f.sizeBytes;
+
+      if (PHOTO_EXTS.has(f.ext) || VIDEO_META_EXTS.has(f.ext)) {
+        const tMeta = Date.now();
+        try {
+          if (PHOTO_EXTS.has(f.ext)) await extractPhotoMeta(f.fullPath, f.ext);
+          else extractVideoMeta(f.fullPath);
+          metadataExtractionTimeMs += Date.now() - tMeta;
+          metadataExtracted++;
+        } catch { /* unreadable — skip */ }
+      }
+
+      processed.push({
+        relativePath: path.relative(path.resolve(nasPath), f.fullPath),
+        name: f.name, extension: f.ext,
+        sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
+        contentHash: hash,
+      });
+    };
+
+    const workerFn = async (): Promise<void> => {
+      while (pendingIdx < sampled.length) {
+        const f = sampled[pendingIdx++];
+        activeNow++;
+        peakConcurrency  = Math.max(peakConcurrency, activeNow);
+        peakQueueDepth   = Math.max(peakQueueDepth,  sampled.length - pendingIdx);
+        await processOne(f);
+        activeNow--;
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(BENCH_CONCURRENCY, sampled.length) }, () => workerFn()),
+    );
+
+    // ── Stage 3: real DB batch writes (rolled-back transaction) ───────────────
+    let dbWriteBatches = 0;
+    let dbWriteTimeMs  = 0;
+
+    if (processed.length > 0) {
       try {
-        if (PHOTO_EXTS.has(f.ext)) await extractPhotoMeta(f.fullPath, f.ext);
-        else extractVideoMeta(f.fullPath);
-        metadataExtractionTimeMs += Date.now() - t0;
-        metadataExtracted++;
-      } catch { /* skip unreadable file */ }
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < processed.length; i += BENCH_BATCH_SIZE) {
+            const chunk = processed.slice(i, i + BENCH_BATCH_SIZE);
+            const t0 = Date.now();
+            await tx.insert(mediaFilesTable).values(
+              chunk.map(f => ({
+                nasPath,
+                relativePath: f.relativePath,
+                name:         f.name,
+                extension:    f.extension,
+                sizeBytes:    f.sizeBytes,
+                modifiedAt:   f.modifiedAt,
+                contentHash:  f.contentHash,
+                mediaType:    "other",
+              })),
+            ).onConflictDoNothing();
+            dbWriteTimeMs += Date.now() - t0;
+            dbWriteBatches++;
+          }
+          // Deliberate rollback — no permanent changes to media_files
+          throw new Error("benchmark-rollback");
+        });
+      } catch (e: any) {
+        if (e?.message !== "benchmark-rollback") throw e;
+      }
     }
 
-    const elapsedMs    = Date.now() - walkStart;
-    const elapsedSecs  = elapsedMs / 1000;
-    const diagnostics  = {
+    const elapsedMs   = Date.now() - walkStart;
+    const elapsedSecs = elapsedMs / 1000;
+    const avgNasLatencyMs = latencies.length > 0
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
+    const maxNasLatencyMs = latencies.length > 0
+      ? Math.round(Math.max(...latencies)) : 0;
+
+    const diagnostics = {
       walkTimeMs,
-      dirCacheHits:    0, dirCacheMisses:  0, skippedByReason: {},
-      metadataExtracted, hashesGenerated: 0, dbWriteBatches: 0,
-      avgNasLatencyMs, maxNasLatencyMs, peakConcurrency: 1,
-      throughputFilesPerSec: elapsedSecs > 0 ? Math.round((sampled.length / elapsedSecs) * 10) / 10 : 0,
-      throughputMBPerSec:    elapsedSecs > 0 ? Math.round((totalSizeBytes / (1024 * 1024) / elapsedSecs) * 100) / 100 : 0,
-      peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs, totalSizeBytes,
+      dirCacheHits: 0, dirCacheMisses: 0, skippedByReason: {},
+      metadataExtracted, hashesGenerated, dbWriteBatches,
+      avgNasLatencyMs, maxNasLatencyMs, peakConcurrency,
+      throughputFilesPerSec: elapsedSecs > 0
+        ? Math.round((sampled.length / elapsedSecs) * 10) / 10 : 0,
+      throughputMBPerSec: elapsedSecs > 0
+        ? Math.round((totalSizeBytes / (1024 * 1024) / elapsedSecs) * 100) / 100 : 0,
+      peakQueueDepth, dbWriteTimeMs, metadataExtractionTimeMs, totalSizeBytes,
     };
 
     const [benchJob] = await db.insert(libraryJobsTable).values({
