@@ -690,9 +690,6 @@ async function runScanJob(
       .set({ summary: { scanStartedAt: scanStartedAt.toISOString() } })
       .where(eq(libraryJobsTable.id, jobId));
 
-    // ── Phase: indexing ───────────────────────────────────────────────────
-    state.phase = "indexing";
-
     // Streaming pipeline always re-walks from scratch; reset any counters that
     // were restored from a paused run to avoid summary inflation across
     // pause/resume cycles.
