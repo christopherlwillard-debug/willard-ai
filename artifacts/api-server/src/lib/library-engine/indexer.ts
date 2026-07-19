@@ -341,6 +341,8 @@ export async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
 // ── System/NAS directory exclusion ────────────────────────────────────────────
 
 const SYSTEM_DIR_NAMES = new Set([
+  // App data — never scan the app's own working directory
+  "WillardAI",
   "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
   "@eaDir", "@Recycle", "@SynoEAStream", "@SynoThumbs",
   "#recycle", "#snapshot",

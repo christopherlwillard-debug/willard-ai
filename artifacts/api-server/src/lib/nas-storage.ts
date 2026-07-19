@@ -49,7 +49,11 @@ export function assertWithinRoot(targetPath: string, root: string): void {
   const canonicalRoot   = canonicalizePath(root);
   const canonicalTarget = canonicalizePath(targetPath);
 
-  if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(canonicalRoot + path.sep)) {
+  // Normalise root: ensure exactly one trailing separator so roots like "Z:\"
+  // don't become "Z:\\" when we append path.sep.
+  const rootPrefix = canonicalRoot.endsWith(path.sep) ? canonicalRoot : canonicalRoot + path.sep;
+
+  if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(rootPrefix)) {
     throw new Error("Path traversal rejected: path is outside the allowed root");
   }
 }

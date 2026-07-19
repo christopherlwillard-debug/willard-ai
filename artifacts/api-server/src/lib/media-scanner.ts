@@ -286,6 +286,8 @@ async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
 // ── System/NAS directories to skip ────────────────────────────────────────────
 
 const SYSTEM_DIR_NAMES = new Set([
+  // App data — never scan the app's own working directory
+  "WillardAI",
   // Windows
   "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
   // Synology
