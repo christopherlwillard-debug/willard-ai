@@ -2,6 +2,7 @@ export * from "./types";
 export * from "./indexer";
 export {
   getActiveJobId,
+  getActiveJobProfile,
   getJobProgress,
   getLastCompletedProgress,
   requestPause,

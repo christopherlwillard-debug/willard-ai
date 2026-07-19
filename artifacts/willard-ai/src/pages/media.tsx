@@ -860,7 +860,7 @@ function EmptyState({ onScan, isScanning }: { onScan: () => void; isScanning: bo
         {isScanning ? (
           <><Loader2 className="w-4 h-4 animate-spin" />Scanning…</>
         ) : (
-          <><ScanLine className="w-4 h-4" />Scan Your Library</>
+          <><ScanLine className="w-4 h-4" />Full Rescan</>
         )}
       </Button>
     </div>
@@ -1128,7 +1128,7 @@ export default function Media() {
           {isScanning && scanMutation.isPending ? (
             <><Loader2 className="w-3.5 h-3.5 animate-spin" />Scanning…</>
           ) : (
-            <><ScanLine className="w-3.5 h-3.5" />Scan Library</>
+            <><ScanLine className="w-3.5 h-3.5" />Full Rescan</>
           )}
         </Button>
 

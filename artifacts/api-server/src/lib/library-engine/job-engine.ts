@@ -110,6 +110,14 @@ export function getActiveJobId(): number | null {
   return null;
 }
 
+/** Returns the profile of the currently active (non-paused, non-cancelled) job, or null if idle. */
+export function getActiveJobProfile(): import("./types").JobProfile | null {
+  for (const [, state] of activeJobs) {
+    if (!state.pauseRequested && !state.cancelRequested) return state.profile;
+  }
+  return null;
+}
+
 export function getJobProgress(jobId: number): ProgressEvent | null {
   const state = activeJobs.get(jobId);
   if (!state) return null;

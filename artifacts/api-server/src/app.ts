@@ -217,6 +217,10 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE library_jobs
       ADD COLUMN IF NOT EXISTS diagnostics jsonb;
   `);
+  await pool.query(`
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS watcher_poll_interval_seconds integer NOT NULL DEFAULT 60;
+  `);
 }
 
 const PgStore = connectPgSimple(session);

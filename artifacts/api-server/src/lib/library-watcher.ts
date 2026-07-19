@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { db, appSettingsTable } from "@workspace/db";
 import { checkNasReachable } from "./nas-storage";
-import { getActiveJobId, startJob, waitForUiConnected } from "./library-engine";
+import { getActiveJobId, getActiveJobProfile, startJob, waitForUiConnected } from "./library-engine";
 import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
 
@@ -12,10 +12,17 @@ import { logger } from "./logger";
  * Hybrid architecture:
  *  - Native filesystem events (fs.watch, recursive) when the platform and the
  *    underlying filesystem support them → near real-time updates.
- *  - Automatic fallback to periodic verification sweeps when native watching
- *    is unavailable or unreliable (typical for SMB / network shares).
- *  - Even in events mode, a low-frequency safety sweep catches anything the
- *    event stream missed. The user sees one seamless "live library" either way.
+ *  - Automatic fallback to configurable periodic sweeps (default 60 s, min 10 s)
+ *    when native watching is unavailable or unreliable (typical for SMB / network
+ *    shares). Interval is set via Settings → watcher_poll_interval_seconds.
+ *  - Even in events mode a low-frequency safety sweep catches anything the event
+ *    stream missed. The user sees one seamless "live library" either way.
+ *
+ * Conflict guard (M7):
+ *  When a FULL rescan is active and watcher events arrive we don't race against
+ *  it — we mark needsCatchUp and let the heartbeat start a QUICK scan the moment
+ *  the full scan finishes. This avoids a second full walk and lets the deletion
+ *  sweep complete cleanly before applying incremental changes.
  *
  * All indexing goes through the existing scan engine (startJob QUICK), which
  * guarantees identity preservation on rename/move (fingerprint match updates
@@ -31,8 +38,9 @@ const HEARTBEAT_MS       = 10_000;      // watcher self-check / auto-recovery lo
 const DEBOUNCE_MS        = 2_000;       // quiet window after last event before indexing
 const MAX_WAIT_MS        = 15_000;      // never delay indexing longer than this during a sustained burst
 const BURST_THRESHOLD    = 200;         // pending changes that count as a "large import burst"
-const SWEEP_INTERVAL_MS  = 5 * 60_000;  // fallback sweep cadence (no native events)
-const SAFETY_SWEEP_MS    = 30 * 60_000; // safety sweep cadence while events are active
+const SAFETY_SWEEP_MS    = 30 * 60_000; // safety sweep cadence while events are active (events mode only)
+const DEFAULT_SWEEP_INTERVAL_S = 60;    // default SMB polling interval in seconds
+const MIN_SWEEP_INTERVAL_S     = 10;    // lower bound so users can't accidentally set < 10 s
 
 interface WatcherInternalState {
   watchedPath:      string | null;
@@ -49,7 +57,8 @@ interface WatcherInternalState {
   lastSweepAt:      number;
   restarts:         number;
   burstAnnounced:   boolean;
-  needsCatchUp:     boolean;         // set after watcher restart → scan for missed changes
+  needsCatchUp:     boolean;         // set after watcher restart or FULL scan completes
+  sweepIntervalMs:  number;          // configurable; updated each heartbeat from DB settings
 }
 
 const state: WatcherInternalState = {
@@ -68,10 +77,15 @@ const state: WatcherInternalState = {
   restarts: 0,
   burstAnnounced: false,
   needsCatchUp: false,
+  sweepIntervalMs: DEFAULT_SWEEP_INTERVAL_S * 1000,
 };
 
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
+
+// Track whether a FULL rescan was in-progress last heartbeat so we can detect
+// when it finishes and immediately trigger a catch-up QUICK scan.
+let _fullScanWasActive = false;
 
 // ── Public snapshot (for /api/library/health) ────────────────────────────────
 
@@ -82,6 +96,7 @@ export interface WatcherSnapshot {
   lastScanTriggerAt: string | null;
   pendingChanges:    number;
   restarts:          number;
+  sweepIntervalSeconds: number;
 }
 
 export function getWatcherSnapshot(): WatcherSnapshot {
@@ -97,6 +112,7 @@ export function getWatcherSnapshot(): WatcherSnapshot {
     lastScanTriggerAt: state.lastScanTriggerAt?.toISOString() ?? null,
     pendingChanges: state.pendingChanges,
     restarts: state.restarts,
+    sweepIntervalSeconds: Math.round(state.sweepIntervalMs / 1000),
   };
 }
 
@@ -121,6 +137,15 @@ function onFsEvent(nasPath: string, filename: string | Buffer | null): void {
       { pendingChanges: state.pendingChanges });
   }
 
+  // M7 conflict guard: if a FULL rescan is running, don't start another scan on
+  // top of it. Mark needsCatchUp so the heartbeat triggers a QUICK scan the
+  // moment the full scan finishes and the deletion sweep completes cleanly.
+  const activeProfile = getActiveJobProfile();
+  if (activeProfile === "FULL") {
+    state.needsCatchUp = true;
+    return;
+  }
+
   scheduleDebouncedScan(nasPath);
 }
 
@@ -142,9 +167,17 @@ function scheduleDebouncedScan(nasPath: string): void {
 
 async function triggerScan(nasPath: string, source: "events" | "sweep" | "recovery"): Promise<void> {
   if (state.paused || !state.online) return; // will retry when unpaused/online (heartbeat)
-  if (getActiveJobId() !== null) {
-    // A job is already running — the scan engine will pick up these changes;
-    // re-check shortly rather than queueing thousands of jobs.
+
+  const activeProfile = getActiveJobProfile();
+  if (activeProfile !== null) {
+    // A scan is already running.
+    if (activeProfile === "FULL") {
+      // FULL rescan in progress — buffer watcher events and replay as a QUICK
+      // scan once the full scan finishes (detected in the heartbeat loop).
+      state.needsCatchUp = true;
+      return;
+    }
+    // QUICK or other scan already running — re-check shortly; it will pick up changes.
     if (source === "events") {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
@@ -155,6 +188,7 @@ async function triggerScan(nasPath: string, source: "events" | "sweep" | "recove
     }
     return;
   }
+
   const hadPending = state.pendingChanges;
   state.pendingChanges = 0;
   state.firstPendingAt = null;
@@ -248,16 +282,25 @@ export async function runWatcherHeartbeat(): Promise<void> {
   try {
     let nasPath: string | null = null;
     let indexingPaused = false;
+    let watcherPollIntervalSeconds = DEFAULT_SWEEP_INTERVAL_S;
     try {
       const [row] = await db.select({
         nasPath: appSettingsTable.nasPath,
         indexingPaused: appSettingsTable.indexingPaused,
+        watcherPollIntervalSeconds: appSettingsTable.watcherPollIntervalSeconds,
       }).from(appSettingsTable).limit(1);
       nasPath = row?.nasPath ?? null;
       indexingPaused = row?.indexingPaused ?? false;
+      watcherPollIntervalSeconds = Math.max(
+        MIN_SWEEP_INTERVAL_S,
+        row?.watcherPollIntervalSeconds ?? DEFAULT_SWEEP_INTERVAL_S,
+      );
     } catch {
       return; // DB not ready yet
     }
+
+    // Update the configurable sweep interval from settings.
+    state.sweepIntervalMs = watcherPollIntervalSeconds * 1000;
 
     state.configured = !!nasPath && nasPath.trim() !== "";
     const wasPaused = state.paused;
@@ -302,6 +345,20 @@ export async function runWatcherHeartbeat(): Promise<void> {
       void triggerScan(reach.path, "recovery");
     }
 
+    // M7 conflict guard — detect when a FULL rescan just finished so we can
+    // immediately follow up with a QUICK scan to catch any changes that arrived
+    // while the full scan's deletion sweep was running.
+    const activeProfile = getActiveJobProfile();
+    const fullScanIsActive = activeProfile === "FULL";
+    if (_fullScanWasActive && !fullScanIsActive) {
+      // FULL rescan just completed this heartbeat cycle.
+      if (state.needsCatchUp || state.pendingChanges > 0) {
+        state.needsCatchUp = false;
+        void triggerScan(reach.path, "recovery");
+      }
+    }
+    _fullScanWasActive = fullScanIsActive;
+
     // Self-healing: reopen the native watcher if it died.
     if (!state.fsWatcher && !state.eventsUnsupported) {
       openWatcher(reach.path);
@@ -311,11 +368,11 @@ export async function runWatcherHeartbeat(): Promise<void> {
       }
     }
 
-    // Periodic sweeps: frequent in sweep mode, low-frequency safety net in
-    // events mode. A sweep is just a QUICK scan — unchanged files are cheap
-    // cache hits and produce no activity noise.
-    const sweepInterval = state.mechanism === "events" ? SAFETY_SWEEP_MS : SWEEP_INTERVAL_MS;
-    if (Date.now() - state.lastSweepAt >= sweepInterval) {
+    // Periodic sweeps: frequent in sweep mode (configurable, default 60 s),
+    // low-frequency safety net in events mode (30 min). A sweep is just a QUICK
+    // scan — unchanged files are cheap cache hits and produce no activity noise.
+    const sweepInterval = state.mechanism === "events" ? SAFETY_SWEEP_MS : state.sweepIntervalMs;
+    if (getActiveJobId() === null && Date.now() - state.lastSweepAt >= sweepInterval) {
       state.lastSweepAt = Date.now();
       void triggerScan(reach.path, "sweep");
     }

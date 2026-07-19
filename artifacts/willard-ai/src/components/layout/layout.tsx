@@ -92,13 +92,14 @@ function TopBar() {
           onClick={() => scanMutation.mutate()}
           disabled={isScanning || scanMutation.isPending}
           className="h-7 text-xs gap-1.5 shrink-0 ml-1"
+          title="Re-indexes all files from scratch. Normally not needed — the library updates automatically."
         >
           {isScanning ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
             <ScanLine className="w-3 h-3" />
           )}
-          {isScanning ? "Scanning…" : "Scan Now"}
+          {isScanning ? "Scanning…" : "Full Rescan"}
         </Button>
       </div>
     </div>

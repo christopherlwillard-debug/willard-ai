@@ -28,6 +28,7 @@ export const appSettingsTable = pgTable("app_settings", {
   ignoreEmptyFolders: boolean("ignore_empty_folders").notNull().default(false),
   followSymlinks:     boolean("follow_symlinks").notNull().default(false),
   indexOtherFiles:    boolean("index_other_files").notNull().default(true),
+  watcherPollIntervalSeconds: integer("watcher_poll_interval_seconds").notNull().default(60),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });
