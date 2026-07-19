@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation } from "wouter";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { Archive, Lock, Layers, Eye, File, Folder, Image, Video, FileText, Package, Filter, RefreshCw, PackageOpen } from "lucide-react";
@@ -171,7 +171,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
 }
 
 export default function Archives() {
-  const navigate = useNavigate();
+  const [, setLocation] = useLocation();
   const [page, setPage] = useState(0);
   const limit = 50;
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -347,7 +347,7 @@ export default function Archives() {
                       size="sm"
                       className="h-7 px-2 text-primary hover:text-primary"
                       title="Extract this archive via Operations Center"
-                      onClick={() => navigate(`/organize?extract=${encodeURIComponent(archive.path)}`)}
+                      onClick={() => setLocation(`/organize?extract=${encodeURIComponent(archive.path)}`)}
                     >
                       <PackageOpen className="w-3.5 h-3.5 mr-1" /> Extract
                     </Button>

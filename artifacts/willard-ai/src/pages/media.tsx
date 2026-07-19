@@ -1034,6 +1034,34 @@ export default function Media() {
   const isScanning     = activeStatus === "RUNNING" || activeStatus === "PAUSED" || scanMutation.isPending || thumbnailsMutation.isPending;
   const showBanner     = activeProgress !== null && !dismissedProgress;
 
+  // ── Library sequence polling (incremental live updates during scan) ──────────
+  // Polls GET /api/library/seq every 2 s while a scan is running.
+  // When the seq counter changes it means new rows have been flushed to the DB;
+  // we invalidate media-files so the grid re-fetches without a full page reload.
+  // React reconciles by key={file.id} so existing cards stay mounted in-place —
+  // scroll position is preserved and individual thumbnails are not unmounted.
+
+  const seqQuery = useQuery({
+    queryKey: ["library-seq"],
+    queryFn: async () => {
+      const r = await fetch("/api/library/seq");
+      if (!r.ok) throw new Error("Failed to fetch seq");
+      return r.json() as Promise<{ seq: number; total: number }>;
+    },
+    refetchInterval: isScanning ? 2000 : false,
+  });
+
+  const prevSeq = useRef<number | null>(null);
+  useEffect(() => {
+    const seq = seqQuery.data?.seq;
+    if (seq === undefined) return;
+    if (prevSeq.current !== null && seq !== prevSeq.current) {
+      queryClient.invalidateQueries({ queryKey: ["media-files"] });
+      queryClient.invalidateQueries({ queryKey: ["media-folders"] });
+    }
+    prevSeq.current = seq;
+  }, [seqQuery.data?.seq, queryClient]);
+
   const files      = filesQuery.data?.files ?? [];
   const total      = filesQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -1251,11 +1279,17 @@ export default function Media() {
           ) : (
             <div className="p-4 space-y-4">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground font-mono">
+                <span className="text-xs text-muted-foreground font-mono flex items-center gap-1.5">
                   {total.toLocaleString()} file{total !== 1 ? "s" : ""}
                   {debouncedSearch ? ` matching "${debouncedSearch}"` : ""}
                   {selectedFolder ? ` in /${selectedFolder}` : ""}
                 </span>
+                {isScanning && (
+                  <span className="flex items-center gap-1 text-[10px] font-mono text-blue-400 animate-pulse" title="A scan is running — new files will appear automatically">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Syncing…
+                  </span>
+                )}
                 {totalPages > 1 && (
                   <span className="text-xs text-muted-foreground font-mono ml-auto">
                     Page {page} of {totalPages}

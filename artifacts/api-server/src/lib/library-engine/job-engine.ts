@@ -48,6 +48,18 @@ export function clearThumbnailPriority(nasPath: string): void {
 // when a new job starts.
 let lastCompletedProgress: ProgressEvent | null = null;
 
+// ── Library sequence counter ──────────────────────────────────────────────────
+// Incremented after every successful DB batch flush so the UI can detect when
+// new files have been written and re-fetch only the delta rather than reloading
+// the entire library. Resets to 0 on server restart (intentional — the UI
+// initialises its "last seen" value on the first poll, so any pending work
+// from a previous session is picked up immediately).
+
+let _librarySeq = 0;
+
+export function bumpLibrarySeq(): void { _librarySeq++; }
+export function getLibrarySeq(): number { return _librarySeq; }
+
 // ── Startup gate ──────────────────────────────────────────────────────────────
 // Defers background scans until the first authenticated UI request arrives, or
 // until 30 seconds elapse — whichever is first.  This keeps the app instantly
@@ -757,6 +769,7 @@ async function runScanJob(
           });
           diagDbWriteTimeMs += Date.now() - _dbT0;
           diagDbWriteBatches++;
+          bumpLibrarySeq();
         }
         lastBatchFlushAt = Date.now();
       } finally { batchFlushing = false; }

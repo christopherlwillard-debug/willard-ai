@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearch, useLocation } from "wouter";
 import {
   useListOrganizeJobs, getListOrganizeJobsQueryKey,
   useCreateOrganizeJob,
@@ -1443,7 +1443,9 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Organize() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const search = useSearch();
+  const [, setLocation] = useLocation();
+  const searchParams = new URLSearchParams(search);
   const extractPath = searchParams.get("extract") ?? "";
 
   const [activeJobId, setActiveJobId]       = useState<number | null>(null);
@@ -1483,7 +1485,7 @@ export default function Organize() {
     },
   });
 
-  const closeSheet = () => { setActiveJobId(null); setShowNew(false); if (extractPath) setSearchParams({}); };
+  const closeSheet = () => { setActiveJobId(null); setShowNew(false); if (extractPath) setLocation("/organize"); };
 
   return (
     <div className="space-y-6">
@@ -1619,7 +1621,7 @@ export default function Organize() {
                 queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
                 setShowNew(false);
                 setActiveJobId(id);
-                if (extractPath) setSearchParams({});
+                if (extractPath) setLocation("/organize");
               }} />
             </div>
           </SheetContent>

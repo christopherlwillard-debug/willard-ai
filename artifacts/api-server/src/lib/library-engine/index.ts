@@ -13,4 +13,5 @@ export {
   clearThumbnailPriority,
   notifyUiConnected,
   waitForUiConnected,
+  getLibrarySeq,
 } from "./job-engine";

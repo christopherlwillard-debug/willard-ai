@@ -4,7 +4,7 @@ import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/
 import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
-  addThumbnailPriority,
+  addThumbnailPriority, getLibrarySeq,
 } from "../lib/library-engine";
 import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
@@ -18,6 +18,27 @@ async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
   return row?.nasPath ?? null;
 }
+
+// ── GET /api/library/seq — library sequence counter for incremental UI refresh ─
+// The seq counter increments on every successful DB batch flush during a scan.
+// The frontend polls this while a scan is running; when seq changes, it knows
+// new files have been written and re-fetches the media grid.
+
+router.get("/library/seq", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const seq = getLibrarySeq();
+  if (!nasPath) { res.json({ seq, total: 0 }); return; }
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+    ));
+
+  res.json({ seq, total: total ?? 0 });
+});
 
 // ── GET /api/library/health — smart library health snapshot ──────────────────
 
