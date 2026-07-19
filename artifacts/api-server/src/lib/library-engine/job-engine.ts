@@ -579,6 +579,14 @@ async function runScanJob(
     // ── Phase: indexing ───────────────────────────────────────────────────
     state.phase = "indexing";
 
+    // Streaming pipeline always re-walks from scratch; reset any counters that
+    // were restored from a paused run to avoid summary inflation across
+    // pause/resume cycles.
+    state.counters      = EMPTY_COUNTERS();
+    state.skippedList   = [];
+    state.filesProcessed = 0;
+    state.filesTotal     = 0;
+
     // Load all existing paths from DB for this NAS (for move detection)
     const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number }>();
     const dbRows = await db.select({
@@ -834,6 +842,19 @@ async function runScanJob(
     const ARCHIVE_EXTS_SET = new Set(["zip","rar","7z","tar","gz","bz2","xz","tgz","tbz2","txz","cab","iso"]);
     const discoveredArchives: FileEntry[] = [];
 
+    // stopSignal / requestStop ─────────────────────────────────────────────
+    // Workers call requestStop() when they detect pause/cancel.  This marks
+    // the signal, closes the queue (unblocking any waiting workers and causing
+    // walkDone.then to skip the post-walk heavy lifting), and lets the walker
+    // exit at its next directory-level check — so pause/cancel responds in
+    // seconds rather than waiting for the full NAS walk to finish.
+    const stopSignal = { stop: false };
+    let _queueClosed = false;
+    const requestStop = (): void => {
+      stopSignal.stop = true;
+      if (!_queueClosed) { _queueClosed = true; queue.close(); }
+    };
+
     // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
     const walkDone = walkNasAsync(
       path.resolve(scanRoot),
@@ -853,8 +874,13 @@ async function runScanJob(
       skippedDirs,
       path.resolve(state.nasPath),
       scannerSettings,
+      stopSignal,
     ).then(async () => {
-      // Walk finished — resolve dir-cache skipped dirs and inject their files
+      // If a worker called requestStop() the queue is already closed; skip all
+      // post-walk work so walkDone resolves immediately.
+      if (stopSignal.stop) return;
+
+      // Walk finished — resolve dir-cache skipped dirs and inject their files.
       // Resolve skipped-directory files: directory mtime only reflects structural
       // changes; in-place edits do NOT update parent mtime, so we still stat each
       // known file to detect content changes.
@@ -894,7 +920,7 @@ async function runScanJob(
       }
 
       // Close queue — workers drain remaining items and exit
-      queue.close();
+      if (!_queueClosed) { _queueClosed = true; queue.close(); }
     });
 
     // ── Worker loop ───────────────────────────────────────────────────────
@@ -904,13 +930,19 @@ async function runScanJob(
 
     const workerLoop = async (): Promise<void> => {
       for (;;) {
-        if (state.cancelRequested || state.pauseRequested) break;
+        // Check BEFORE blocking on queue.pop() — if already signalled, stop
+        // without waiting for another item (which might never arrive).
+        if (state.cancelRequested || state.pauseRequested) {
+          requestStop();
+          break;
+        }
 
         state.phase = "indexing";
         const f = await queue.pop(); // waits until item available OR queue closed
         if (f === null) break;       // queue closed + empty → done
-        if (state.cancelRequested || state.pauseRequested) break;
 
+        // We already hold this file — complete its processing (drain semantics).
+        // Do NOT discard it, even if pause/cancel was set while we were waiting.
         const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
         seenPaths.add(relativePath);
 
@@ -948,6 +980,13 @@ async function runScanJob(
             else state.counters.modified++;
             await maybeFlushBatch();
           }
+        }
+
+        // After completing this file, check if we should stop.
+        // requestStop() closes the queue so other waiting workers unblock too.
+        if (state.cancelRequested || state.pauseRequested) {
+          requestStop();
+          break;
         }
 
         // Periodic progress persist (time-gated to avoid DB noise)

@@ -574,6 +574,7 @@ export async function walkNasAsync(
   skippedDirs?: string[],
   nasRoot?: string,
   scannerSettings?: ScannerSettings,
+  stopSignal?: { stop: boolean },
 ): Promise<void> {
   let activeReaddirs = 0;
   const readdirWaiters: Array<() => void> = [];
@@ -601,6 +602,8 @@ export async function walkNasAsync(
   };
 
   async function recurse(currentDir: string): Promise<void> {
+    if (stopSignal?.stop) return;
+
     // User-configured ignored folder check
     if (nasRoot && settings.ignoredFolders.length > 0) {
       const relDir = path.relative(nasRoot, currentDir).replace(/\\/g, "/");
@@ -667,6 +670,8 @@ export async function walkNasAsync(
   }
 
   async function processEntry(entry: fs.Dirent, currentDir: string): Promise<void> {
+    if (stopSignal?.stop) return;
+
     const fullPath = path.join(currentDir, entry.name);
 
     if (entry.isDirectory()) {
@@ -689,6 +694,8 @@ export async function walkNasAsync(
       const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
       const skipReason = checkSystemFile(entry.name, ext, settings);
       if (skipReason !== null) { onSkip?.(fullPath, skipReason); return; }
+
+      if (stopSignal?.stop) return;
 
       try {
         const stat = await fs.promises.stat(fullPath);
