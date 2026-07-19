@@ -378,7 +378,7 @@ export function walkNas(
         for (const ignored of settings.ignoredFolders) {
           const norm = ignored.replace(/\\/g, "/").replace(/\/$/, "");
           if (relDir === norm || relDir.startsWith(norm + "/")) {
-            onSkip?.(currentDir, "user_ignored_folder");
+            onSkip?.(currentDir, "userIgnoredFolder");
             return;
           }
         }
@@ -443,6 +443,23 @@ export function walkNas(
       onDir?.(fullPath);
       recurse(fullPath);
     } else if (entry.isFile() || (settings.followSymlinks && entry.isSymbolicLink())) {
+      // For symlinks, resolve the target to determine whether it's a file or dir
+      if (settings.followSymlinks && entry.isSymbolicLink()) {
+        try {
+          const target = fs.statSync(fullPath); // follows the symlink
+          if (target.isDirectory()) {
+            if (!skipDirs.has(path.resolve(fullPath))) {
+              onDir?.(fullPath);
+              recurse(fullPath);
+            }
+            return;
+          }
+          if (!target.isFile()) return; // socket, device, fifo, etc.
+        } catch {
+          return; // broken symlink — skip silently
+        }
+      }
+
       const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
 
       // Apply system/user file filter BEFORE stat (saves NAS I/O)

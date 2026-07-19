@@ -135,14 +135,30 @@ router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
     const willardDir = path.resolve(getWillardAIDir(nasPath));
     const skipDirs   = new Set([willardDir]);
     const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
-    const skipped: Record<string, number> = {};
+
+    // Fixed-schema breakdown — only exclusion categories, no read-error strings
+    const skipped = {
+      systemFile:          0,
+      hiddenFile:          0,
+      tempFile:            0,
+      sidecarFile:         0,
+      userIgnoredFolder:   0,
+      userIgnoredExtension: 0,
+      systemDirectory:     0,
+      emptyFolder:         0,
+    };
 
     walkNas(
       path.resolve(nasPath),
       skipDirs,
       files,
       undefined,
-      (_skippedPath, reason) => { skipped[reason] = (skipped[reason] ?? 0) + 1; },
+      (_skippedPath, reason) => {
+        if (Object.prototype.hasOwnProperty.call(skipped, reason)) {
+          (skipped as Record<string, number>)[reason]++;
+        }
+        // read-error strings (e.g. "Could not read file …") are intentionally excluded
+      },
       undefined,
       undefined,
       undefined,
