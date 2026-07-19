@@ -19,6 +19,14 @@ export const appSettingsTable = pgTable("app_settings", {
   indexingPaused: boolean("indexing_paused").notNull().default(false),
   onboardingDismissedAt: timestamp("onboarding_dismissed_at"),
   celebrationShownAt: timestamp("celebration_shown_at"),
+  ignoredFolders:    text("ignored_folders").array().notNull().default([]),
+  ignoredExtensions: text("ignored_extensions").array().notNull().default([]),
+  ignoreHiddenFiles:  boolean("ignore_hidden_files").notNull().default(true),
+  ignoreSystemFiles:  boolean("ignore_system_files").notNull().default(true),
+  ignoreTempFiles:    boolean("ignore_temp_files").notNull().default(true),
+  ignoreSidecarFiles: boolean("ignore_sidecar_files").notNull().default(true),
+  ignoreEmptyFolders: boolean("ignore_empty_folders").notNull().default(false),
+  followSymlinks:     boolean("follow_symlinks").notNull().default(false),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

@@ -15,7 +15,9 @@ import {
   extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile,
   computeQuickFingerprint, sortFilesByPriority,
   PHOTO_EXTS, VIDEO_META_EXTS,
+  type DirCacheEntry,
 } from "./indexer";
+import { type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
 import { getWillardAIDir } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
@@ -207,24 +209,31 @@ function dirMtimeCachePath(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", "dir-scan-cache.json");
 }
 
-function loadDirMtimeCache(nasPath: string): Map<string, number> {
+function loadDirMtimeCache(nasPath: string): Map<string, DirCacheEntry> {
   try {
     const raw = fs.readFileSync(dirMtimeCachePath(nasPath), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed?.v === 1 && typeof parsed.dirs === "object") {
-      return new Map(Object.entries(parsed.dirs as Record<string, number>));
+    if (parsed?.v === 2 && typeof parsed.dirs === "object") {
+      return new Map(
+        Object.entries(parsed.dirs as Record<string, { m: number; c: number }>).map(
+          ([k, v]) => [k, { mtimeMs: v.m, entryCount: v.c }],
+        ),
+      );
     }
+    // v1 caches lack entry-count — discard; one extra full walk is acceptable.
   } catch { /* no cache yet — first scan */ }
   return new Map();
 }
 
-function saveDirMtimeCache(nasPath: string, cache: Map<string, number>): void {
+function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>): void {
   try {
     const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
     fs.mkdirSync(cacheDir, { recursive: true });
+    const dirs: Record<string, { m: number; c: number }> = {};
+    for (const [k, v] of cache) dirs[k] = { m: v.mtimeMs, c: v.entryCount };
     fs.writeFileSync(
       dirMtimeCachePath(nasPath),
-      JSON.stringify({ v: 1, dirs: Object.fromEntries(cache) }),
+      JSON.stringify({ v: 2, dirs }),
     );
   } catch { /* non-fatal */ }
 }
@@ -524,10 +533,35 @@ async function runScanJob(
     const skipDirs   = new Set([willardDir]);
     const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
 
+    // Load scanner settings (user-configured exclusion rules)
+    let scannerSettings: ScannerSettings = DEFAULT_SCANNER_SETTINGS;
+    try {
+      const [settingsRow] = await db.select({
+        ignoredFolders:    appSettingsTable.ignoredFolders,
+        ignoredExtensions: appSettingsTable.ignoredExtensions,
+        ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
+        ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
+        ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
+        ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
+        ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
+        followSymlinks:     appSettingsTable.followSymlinks,
+      }).from(appSettingsTable).limit(1);
+      if (settingsRow) scannerSettings = {
+        ignoredFolders:    settingsRow.ignoredFolders ?? [],
+        ignoredExtensions: settingsRow.ignoredExtensions ?? [],
+        ignoreHiddenFiles:  settingsRow.ignoreHiddenFiles ?? true,
+        ignoreSystemFiles:  settingsRow.ignoreSystemFiles ?? true,
+        ignoreTempFiles:    settingsRow.ignoreTempFiles ?? true,
+        ignoreSidecarFiles: settingsRow.ignoreSidecarFiles ?? true,
+        ignoreEmptyFolders: settingsRow.ignoreEmptyFolders ?? false,
+        followSymlinks:     settingsRow.followSymlinks ?? false,
+      };
+    } catch { /* use defaults if settings table not yet migrated */ }
+
     // Load the directory mtime cache from the previous scan so we can skip
     // entire unchanged directory trees without stat'ing every file inside them.
     const dirCacheIn  = loadDirMtimeCache(state.nasPath);
-    const dirCacheOut = new Map<string, number>();
+    const dirCacheOut = new Map<string, DirCacheEntry>();
     const skippedDirs: string[] = [];
 
     walkNas(
@@ -542,6 +576,7 @@ async function runScanJob(
       dirCacheOut,
       skippedDirs,
       path.resolve(state.nasPath),
+      scannerSettings,
     );
 
     // Prioritized ordering: photos → videos → documents → audio → other;

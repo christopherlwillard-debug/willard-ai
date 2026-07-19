@@ -2,6 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
+import { isSystemDir, checkSystemFile, type ScannerSettings } from "../system-filter";
+
+export { isSystemDir };
 
 // ── Media type classification ─────────────────────────────────────────────────
 
@@ -70,11 +73,7 @@ export async function hashFile(fullPath: string): Promise<string | null> {
   });
 }
 
-// ── Fast content fingerprint ─────────────────────────────────────────────────
-// Reads only the first and last 64 KB of the file plus its size — orders of
-// magnitude cheaper than a full SHA-256 over a network drive, yet strong enough
-// to detect moves/renames and to find duplicate candidates. Full SHA-256 is
-// reserved for confirming candidates (two-stage duplicate detection).
+// ── Fast content fingerprint ──────────────────────────────────────────────────
 
 const FINGERPRINT_CHUNK = 64 * 1024;
 
@@ -91,9 +90,6 @@ export async function computeQuickFingerprint(fullPath: string, sizeBytes: numbe
       hash.update(head);
     }
     if (sizeBytes > FINGERPRINT_CHUNK) {
-      // Always include the tail for anything larger than one chunk; for files
-      // between 64KB and 128KB the head+tail windows overlap, which is fine —
-      // the digest stays deterministic and covers the whole file.
       const tail = Buffer.alloc(FINGERPRINT_CHUNK);
       await fd.read(tail, 0, FINGERPRINT_CHUNK, sizeBytes - FINGERPRINT_CHUNK);
       hash.update(tail);
@@ -106,11 +102,7 @@ export async function computeQuickFingerprint(fullPath: string, sizeBytes: numbe
   }
 }
 
-// ── Index prioritization ─────────────────────────────────────────────────────
-// Useful results should appear as soon as possible: photos first, then videos,
-// then documents, then audio, then everything else. Within a category, most
-// recently modified files come first. The ordering is deterministic (final
-// tie-break on path) so a paused scan can resume from a stored cursor index.
+// ── Index prioritization ──────────────────────────────────────────────────────
 
 const TYPE_PRIORITY: Record<MediaType, number> = {
   photo: 0, video: 1, document: 2, audio: 3, other: 4,
@@ -122,7 +114,7 @@ export function sortFilesByPriority<T extends { ext: string; modifiedAt: Date; f
     const pb = TYPE_PRIORITY[classifyMediaType(b.ext)];
     if (pa !== pb) return pa - pb;
     const ta = a.modifiedAt.getTime(), tb = b.modifiedAt.getTime();
-    if (ta !== tb) return tb - ta; // newest first
+    if (ta !== tb) return tb - ta;
     return a.fullPath < b.fullPath ? -1 : a.fullPath > b.fullPath ? 1 : 0;
   });
 }
@@ -155,7 +147,6 @@ export interface PhotoMeta {
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   exifJson: Record<string, unknown> | null;
-  /** Plain-English reason the file could not be read as an image, or null. */
   error: string | null;
 }
 
@@ -220,8 +211,6 @@ export async function extractPhotoMeta(fullPath: string, ext: string): Promise<P
     } catch { /* non-fatal */ }
   }
 
-  // Only flag as a problem file when the image itself could not be decoded
-  // (EXIF being absent is normal for e.g. screenshots).
   if (sharpFailed && result.width === null && result.height === null) {
     result.error = `Corrupt or unreadable ${ext.toUpperCase()} image`;
   }
@@ -245,7 +234,6 @@ export interface VideoMeta {
   fps: number | null;
   audioCodec: string | null;
   dateCreated: Date | null;
-  /** Plain-English reason the video could not be read, or null. */
   error: string | null;
 }
 
@@ -261,7 +249,6 @@ export function extractVideoMeta(fullPath: string): VideoMeta {
   ], { encoding: "utf8", timeout: 15000 });
 
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    // ffprobe not installed — not the file's fault; don't flag the file
     return { ...EMPTY_VIDEO_META };
   }
   if (result.status !== 0 || !result.stdout) {
@@ -308,7 +295,6 @@ export interface PdfMeta {
   pdfTitle: string | null;
   pdfSubject: string | null;
   pdfKeywords: string | null;
-  /** Plain-English reason the PDF could not be read, or null. */
   error: string | null;
 }
 
@@ -338,22 +324,6 @@ export async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
   }
 }
 
-// ── System/NAS directory exclusion ────────────────────────────────────────────
-
-const SYSTEM_DIR_NAMES = new Set([
-  // App data — never scan the app's own working directory
-  "WillardAI",
-  "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
-  "@eaDir", "@Recycle", "@SynoEAStream", "@SynoThumbs",
-  "#recycle", "#snapshot",
-  ".Spotlight-V100", ".Trashes", ".fseventsd",
-  "lost+found", "__pycache__",
-]);
-
-export function isSystemDir(name: string): boolean {
-  return name.startsWith(".") || name.startsWith("@") || name.startsWith("#") || SYSTEM_DIR_NAMES.has(name);
-}
-
 // ── File entry (result of walking) ────────────────────────────────────────────
 
 export interface FileEntry {
@@ -364,14 +334,16 @@ export interface FileEntry {
   modifiedAt: Date;
 }
 
+// ── Directory cache entry (v2: mtime + entry count) ──────────────────────────
+
+export interface DirCacheEntry {
+  mtimeMs:    number;
+  entryCount: number;
+}
+
 // ── NAS walker ────────────────────────────────────────────────────────────────
-// Optional dir-mtime-cache params enable the directory short-circuit optimisation:
-//   dirCacheIn  — relPath→mtimeMs from the previous scan's saved cache
-//   dirCacheOut — relPath→mtimeMs being built for the current scan (saved at end)
-//   skippedDirs — populated with dirs that were skipped due to an mtime match
-//   nasRoot     — absolute root of the NAS (required when using the dir cache)
-//
-// Backward-compatible: callers that omit the cache params get the original behaviour.
+// Optional dir-mtime-cache params enable the directory short-circuit optimisation.
+// scannerSettings: user-configured exclusion rules applied before stat().
 
 export function walkNas(
   dir: string,
@@ -379,10 +351,11 @@ export function walkNas(
   results: FileEntry[],
   onDir?: (dir: string) => void,
   onSkip?: (fullPath: string, reason: string) => void,
-  dirCacheIn?: ReadonlyMap<string, number>,
-  dirCacheOut?: Map<string, number>,
+  dirCacheIn?: ReadonlyMap<string, DirCacheEntry>,
+  dirCacheOut?: Map<string, DirCacheEntry>,
   skippedDirs?: string[],
   nasRoot?: string,
+  scannerSettings?: ScannerSettings,
 ): void {
   const useDirCache =
     dirCacheIn !== undefined &&
@@ -390,27 +363,53 @@ export function walkNas(
     skippedDirs !== undefined &&
     nasRoot !== undefined;
 
+  const settings: ScannerSettings = scannerSettings ?? {
+    ignoredFolders: [], ignoredExtensions: [],
+    ignoreHiddenFiles: true, ignoreSystemFiles: true,
+    ignoreTempFiles: true, ignoreSidecarFiles: true,
+    ignoreEmptyFolders: false, followSymlinks: false,
+  };
+
   function recurse(currentDir: string): void {
-    // ── Directory mtime short-circuit ───────────────────────────────────
-    // If the directory's mtime matches the last-scan cache entry we can skip
-    // walking all its descendants entirely — nothing was added, removed, or
-    // renamed inside it.  File-content modifications don't change parent-dir
-    // mtime on most filesystems, but for a photo/video NAS that tradeoff is
-    // acceptable (content changes update the file's own mtime and are caught
-    // when the directory IS walked due to an add/remove event changing its mtime).
+    // ── User-configured ignored folder check ────────────────────────────
+    if (nasRoot && settings.ignoredFolders.length > 0) {
+      const relDir = path.relative(nasRoot, currentDir).replace(/\\/g, "/");
+      if (relDir && relDir !== ".") {
+        for (const ignored of settings.ignoredFolders) {
+          const norm = ignored.replace(/\\/g, "/").replace(/\/$/, "");
+          if (relDir === norm || relDir.startsWith(norm + "/")) {
+            onSkip?.(currentDir, "user_ignored_folder");
+            return;
+          }
+        }
+      }
+    }
+
+    // ── Directory mtime + entry-count short-circuit ─────────────────────
     if (useDirCache) {
       const relDir = path.relative(nasRoot!, currentDir).replace(/\\/g, "/");
       if (relDir && relDir !== ".") {
+        let entries: fs.Dirent[] | null = null;
         try {
           const dStat = fs.statSync(currentDir);
           const mtimeMs = dStat.mtimeMs;
-          dirCacheOut!.set(relDir, mtimeMs);
+          try { entries = fs.readdirSync(currentDir, { withFileTypes: true }); }
+          catch {
+            onSkip?.(currentDir, "Could not read folder (permission denied or unreadable)");
+            return;
+          }
+          const entryCount = entries.length;
+          dirCacheOut!.set(relDir, { mtimeMs, entryCount });
           const cached = dirCacheIn!.get(relDir);
-          if (cached !== undefined && mtimeMs === cached) {
+          if (cached !== undefined && mtimeMs === cached.mtimeMs && entryCount === cached.entryCount) {
             skippedDirs!.push(relDir);
             return;
           }
         } catch { /* fall through to normal walk */ }
+        if (entries !== null) {
+          for (const entry of entries) processEntry(entry, currentDir);
+          return;
+        }
       }
     }
 
@@ -422,20 +421,35 @@ export function walkNas(
     }
 
     for (const entry of entries) {
-      if (isSystemDir(entry.name)) continue;
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        if (skipDirs.has(path.resolve(fullPath))) continue;
-        onDir?.(fullPath);
-        recurse(fullPath);
-      } else if (entry.isFile()) {
-        try {
-          const stat = fs.statSync(fullPath);
-          const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
-          results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
-        } catch {
-          onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
-        }
+      processEntry(entry, currentDir);
+    }
+  }
+
+  function processEntry(entry: fs.Dirent, currentDir: string): void {
+    if (isSystemDir(entry.name)) {
+      onSkip?.(path.join(currentDir, entry.name), "system_directory");
+      return;
+    }
+    const fullPath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      if (skipDirs.has(path.resolve(fullPath))) return;
+      onDir?.(fullPath);
+      recurse(fullPath);
+    } else if (entry.isFile() || (settings.followSymlinks && entry.isSymbolicLink())) {
+      const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
+
+      // Apply system/user file filter BEFORE stat (saves NAS I/O)
+      const skipReason = checkSystemFile(entry.name, ext, settings);
+      if (skipReason !== null) {
+        onSkip?.(fullPath, skipReason);
+        return;
+      }
+
+      try {
+        const stat = fs.statSync(fullPath);
+        results.push({ fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime });
+      } catch {
+        onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
       }
     }
   }

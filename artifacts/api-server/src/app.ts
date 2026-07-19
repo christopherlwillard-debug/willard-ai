@@ -190,6 +190,28 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';
   `);
+  await pool.query(`
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS ignored_folders    text[]  NOT NULL DEFAULT '{}',
+      ADD COLUMN IF NOT EXISTS ignored_extensions text[]  NOT NULL DEFAULT '{}',
+      ADD COLUMN IF NOT EXISTS ignore_hidden_files  boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS ignore_system_files  boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS ignore_temp_files    boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS ignore_sidecar_files boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS ignore_empty_folders boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS follow_symlinks      boolean NOT NULL DEFAULT false;
+  `);
+  await pool.query(`
+    DELETE FROM media_files
+    WHERE
+      LOWER(name) IN (
+        'thumbs.db','thumbs.db:encryptable','ehthumbs.db','ehthumbs_vista.db',
+        'desktop.ini','autorun.inf','.ds_store','.localized','.appledouble','.appledesktop'
+      )
+      OR extension = 'thm'
+      OR name LIKE '._%'
+      OR name LIKE '~$%';
+  `);
 }
 
 const PgStore = connectPgSimple(session);

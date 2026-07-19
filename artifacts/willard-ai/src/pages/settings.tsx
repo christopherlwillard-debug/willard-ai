@@ -29,7 +29,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud, Layers, BarChart2, AlertTriangle } from "lucide-react";
+import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud, Layers, BarChart2, AlertTriangle, Filter, Plus, X as XIcon, Eye } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function Settings() {
@@ -206,6 +208,8 @@ export default function Settings() {
       <BrandingSection />
 
       <ThumbnailManagerSection />
+
+      <ScannerSettingsSection />
 
       <Card className="border-primary/50">
         <CardHeader>
@@ -433,6 +437,268 @@ function LibrarySection() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+interface ScannerSettings {
+  ignoredFolders:    string[];
+  ignoredExtensions: string[];
+  ignoreHiddenFiles:  boolean;
+  ignoreSystemFiles:  boolean;
+  ignoreTempFiles:    boolean;
+  ignoreSidecarFiles: boolean;
+  ignoreEmptyFolders: boolean;
+  followSymlinks:     boolean;
+}
+
+const SCANNER_DEFAULTS: ScannerSettings = {
+  ignoredFolders: [], ignoredExtensions: [],
+  ignoreHiddenFiles: true, ignoreSystemFiles: true,
+  ignoreTempFiles: true, ignoreSidecarFiles: true,
+  ignoreEmptyFolders: false, followSymlinks: false,
+};
+
+function ScannerSettingsSection() {
+  const { toast } = useToast();
+  const [settings, setSettings] = useState<ScannerSettings>(SCANNER_DEFAULTS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [folderInput, setFolderInput] = useState("");
+  const [extInput, setExtInput] = useState("");
+  const [dryRun, setDryRun] = useState<{ wouldScan: number; skipped: Record<string, number> } | null>(null);
+  const [dryRunLoading, setDryRunLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings/scanner")
+      .then(r => r.json())
+      .then(data => { setSettings(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const save = async (patch: Partial<ScannerSettings>) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings/scanner", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const updated = await res.json() as ScannerSettings;
+      setSettings(updated);
+      toast({ title: "Scanner settings saved" });
+    } catch {
+      toast({ title: "Failed to save scanner settings", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = (key: keyof ScannerSettings) => {
+    const next = { ...settings, [key]: !settings[key as keyof ScannerSettings] };
+    setSettings(next);
+    void save({ [key]: next[key as keyof ScannerSettings] });
+  };
+
+  const addFolder = () => {
+    const val = folderInput.trim();
+    if (!val || settings.ignoredFolders.includes(val)) { setFolderInput(""); return; }
+    const next = [...settings.ignoredFolders, val];
+    setFolderInput("");
+    void save({ ignoredFolders: next });
+  };
+
+  const removeFolder = (f: string) => {
+    void save({ ignoredFolders: settings.ignoredFolders.filter(x => x !== f) });
+  };
+
+  const addExt = () => {
+    const val = extInput.trim().toLowerCase().replace(/^\./, "");
+    if (!val || settings.ignoredExtensions.includes(val)) { setExtInput(""); return; }
+    const next = [...settings.ignoredExtensions, val];
+    setExtInput("");
+    void save({ ignoredExtensions: next });
+  };
+
+  const removeExt = (e: string) => {
+    void save({ ignoredExtensions: settings.ignoredExtensions.filter(x => x !== e) });
+  };
+
+  const runDryRun = async () => {
+    setDryRunLoading(true);
+    setDryRun(null);
+    try {
+      const res = await fetch("/api/library/scan/dry-run", { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Dry-run failed");
+      setDryRun(await res.json());
+    } catch (err: any) {
+      toast({ title: "Dry-run failed", description: err?.message, variant: "destructive" });
+    } finally {
+      setDryRunLoading(false);
+    }
+  };
+
+  const TOGGLES: { key: keyof ScannerSettings; label: string; description: string }[] = [
+    { key: "ignoreHiddenFiles",  label: "Skip hidden files",       description: "Files starting with a dot (e.g. .gitignore, .DS_Store)" },
+    { key: "ignoreSystemFiles",  label: "Skip system files",       description: "OS metadata files (Thumbs.db, desktop.ini, ._resource forks)" },
+    { key: "ignoreTempFiles",    label: "Skip temp files",         description: "Files with .tmp or .temp extensions" },
+    { key: "ignoreSidecarFiles", label: "Skip sidecar files",      description: "Camera sidecar thumbnails (.thm)" },
+    { key: "ignoreEmptyFolders", label: "Skip empty folders",      description: "Don't record folders with no indexable files" },
+    { key: "followSymlinks",     label: "Follow symbolic links",   description: "Index files reached via symlinks (use with care to avoid loops)" },
+  ];
+
+  if (loading) return (
+    <div className="space-y-4">
+      <Skeleton className="h-6 w-48" />
+      <Skeleton className="h-48 w-full" />
+    </div>
+  );
+
+  return (
+    <>
+      <div className="pt-4">
+        <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
+          <Filter className="w-5 h-5 text-primary" />
+          SCANNER_EXCLUSIONS
+        </h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Control which files and folders the scanner ignores. Changes take effect on the next scan.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Exclusion Toggles</CardTitle>
+          <CardDescription>Built-in filters — enable or disable each category.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {TOGGLES.map(({ key, label, description }) => (
+            <div key={key} className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{label}</p>
+                <p className="text-xs text-muted-foreground font-mono">{description}</p>
+              </div>
+              <Switch
+                checked={!!settings[key]}
+                onCheckedChange={() => toggle(key)}
+                disabled={saving}
+              />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ignored Folders</CardTitle>
+          <CardDescription>Relative paths from your NAS root that the scanner will skip entirely.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={folderInput}
+              onChange={e => setFolderInput(e.target.value)}
+              placeholder="e.g. Archive/OldProjects"
+              className="font-mono text-sm"
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addFolder(); } }}
+            />
+            <Button size="sm" variant="secondary" onClick={addFolder} disabled={saving || !folderInput.trim()}>
+              <Plus className="w-4 h-4" />
+            </Button>
+          </div>
+          {settings.ignoredFolders.length === 0 ? (
+            <p className="text-xs text-muted-foreground font-mono">No folders ignored.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {settings.ignoredFolders.map(f => (
+                <Badge key={f} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
+                  {f}
+                  <button onClick={() => removeFolder(f)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ignored Extensions</CardTitle>
+          <CardDescription>File extensions (without the dot) to skip during scanning.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={extInput}
+              onChange={e => setExtInput(e.target.value)}
+              placeholder="e.g. bak, log, zip"
+              className="font-mono text-sm"
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addExt(); } }}
+            />
+            <Button size="sm" variant="secondary" onClick={addExt} disabled={saving || !extInput.trim()}>
+              <Plus className="w-4 h-4" />
+            </Button>
+          </div>
+          {settings.ignoredExtensions.length === 0 ? (
+            <p className="text-xs text-muted-foreground font-mono">No extensions ignored.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {settings.ignoredExtensions.map(e => (
+                <Badge key={e} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
+                  .{e}
+                  <button onClick={() => removeExt(e)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Eye className="w-4 h-4" /> Dry Run</CardTitle>
+          <CardDescription>Preview how many files would be scanned with current exclusion settings — without changing anything.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="font-mono"
+            onClick={runDryRun}
+            disabled={dryRunLoading}
+          >
+            {dryRunLoading
+              ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Running…</>
+              : <><Play className="w-3.5 h-3.5 mr-1.5" /> Run Dry-Run Scan</>}
+          </Button>
+          {dryRun && (
+            <div className="rounded-lg border border-border bg-secondary/30 p-4 space-y-3 font-mono text-sm">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                <span className="font-bold">{dryRun.wouldScan.toLocaleString()} files would be scanned</span>
+              </div>
+              {Object.entries(dryRun.skipped).length > 0 && (
+                <div className="space-y-1 pl-6 text-xs text-muted-foreground">
+                  <p className="text-foreground font-semibold mb-1">Skipped:</p>
+                  {Object.entries(dryRun.skipped)
+                    .sort(([,a],[,b]) => b - a)
+                    .map(([reason, count]) => (
+                      <div key={reason} className="flex justify-between gap-4">
+                        <span>{reason.replace(/_/g, " ")}</span>
+                        <span>{count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </>
   );
 }
 

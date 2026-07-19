@@ -89,6 +89,73 @@ router.post("/library/indexing/resume", async (_req: Request, res: Response) => 
   res.json({ ok: true, indexingPaused: false, resumedJobId });
 });
 
+// ── POST /api/library/scan/dry-run — preview what a full scan would touch ────
+
+router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured" });
+    return;
+  }
+
+  try {
+    // Load current scanner settings
+    const [settingsRow] = await db.select({
+      ignoredFolders:    appSettingsTable.ignoredFolders,
+      ignoredExtensions: appSettingsTable.ignoredExtensions,
+      ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
+      ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
+      ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
+      ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
+      ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
+      followSymlinks:     appSettingsTable.followSymlinks,
+    }).from(appSettingsTable).limit(1);
+
+    const { walkNas } = await import("../lib/library-engine/indexer");
+    const { getWillardAIDir } = await import("../lib/nas-storage");
+    const fs = await import("fs");
+    const path = await import("path");
+
+    try { fs.statSync(nasPath); } catch {
+      res.status(503).json({ error: "NAS is offline" });
+      return;
+    }
+
+    const scannerSettings = {
+      ignoredFolders:    settingsRow?.ignoredFolders    ?? [],
+      ignoredExtensions: settingsRow?.ignoredExtensions ?? [],
+      ignoreHiddenFiles:  settingsRow?.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:  settingsRow?.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:    settingsRow?.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles: settingsRow?.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders: settingsRow?.ignoreEmptyFolders ?? false,
+      followSymlinks:     settingsRow?.followSymlinks     ?? false,
+    };
+
+    const willardDir = path.resolve(getWillardAIDir(nasPath));
+    const skipDirs   = new Set([willardDir]);
+    const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
+    const skipped: Record<string, number> = {};
+
+    walkNas(
+      path.resolve(nasPath),
+      skipDirs,
+      files,
+      undefined,
+      (_skippedPath, reason) => { skipped[reason] = (skipped[reason] ?? 0) + 1; },
+      undefined,
+      undefined,
+      undefined,
+      path.resolve(nasPath),
+      scannerSettings,
+    );
+
+    res.json({ wouldScan: files.length, skipped });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Dry-run failed" });
+  }
+});
+
 // ── POST /api/library/scan — start a scan job ────────────────────────────────
 
 router.post("/library/scan", async (req: Request, res: Response) => {

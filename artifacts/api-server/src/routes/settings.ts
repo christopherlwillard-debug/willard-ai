@@ -256,4 +256,75 @@ router.delete("/settings/logo", async (_req, res) => {
   }
 });
 
+// ── GET /api/settings/scanner — scanner-specific settings ────────────────────
+
+router.get("/settings/scanner", async (_req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    res.json({
+      ignoredFolders:    settings.ignoredFolders    ?? [],
+      ignoredExtensions: settings.ignoredExtensions ?? [],
+      ignoreHiddenFiles:  settings.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:  settings.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:    settings.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles: settings.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders: settings.ignoreEmptyFolders ?? false,
+      followSymlinks:     settings.followSymlinks     ?? false,
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to load scanner settings" });
+  }
+});
+
+// ── PUT /api/settings/scanner — update scanner-specific settings ──────────────
+
+const EXTENSION_RE = /^[a-z0-9]{1,16}$/;
+
+router.put("/settings/scanner", async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const settings = await getOrCreateSettings();
+
+    const ignoredFolders = Array.isArray(body["ignoredFolders"])
+      ? (body["ignoredFolders"] as unknown[]).filter((f): f is string => typeof f === "string").map(f => f.trim()).filter(Boolean)
+      : undefined;
+
+    const ignoredExtensions = Array.isArray(body["ignoredExtensions"])
+      ? (body["ignoredExtensions"] as unknown[]).filter((e): e is string => typeof e === "string" && EXTENSION_RE.test(e.trim().toLowerCase())).map(e => e.trim().toLowerCase())
+      : undefined;
+
+    const patch: Record<string, unknown> = {};
+    if (ignoredFolders    !== undefined) patch["ignoredFolders"]    = ignoredFolders;
+    if (ignoredExtensions !== undefined) patch["ignoredExtensions"] = ignoredExtensions;
+
+    for (const key of ["ignoreHiddenFiles","ignoreSystemFiles","ignoreTempFiles","ignoreSidecarFiles","ignoreEmptyFolders","followSymlinks"] as const) {
+      if (typeof body[key] === "boolean") patch[key] = body[key];
+    }
+
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "No valid fields provided" });
+      return;
+    }
+
+    const [updated] = await db
+      .update(appSettingsTable)
+      .set(patch as any)
+      .where(eq(appSettingsTable.id, settings.id))
+      .returning();
+
+    res.json({
+      ignoredFolders:    updated.ignoredFolders    ?? [],
+      ignoredExtensions: updated.ignoredExtensions ?? [],
+      ignoreHiddenFiles:  updated.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:  updated.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:    updated.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles: updated.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders: updated.ignoreEmptyFolders ?? false,
+      followSymlinks:     updated.followSymlinks     ?? false,
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to update scanner settings" });
+  }
+});
+
 export default router;
