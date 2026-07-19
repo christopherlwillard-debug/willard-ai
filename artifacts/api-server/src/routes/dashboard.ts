@@ -1,11 +1,13 @@
 import { Router, type IRouter } from "express";
 import { execFileSync } from "child_process";
 import { db } from "@workspace/db";
-import { indexedFilesTable, archivesTable, scanJobsTable, appSettingsTable, organizationJobsTable } from "@workspace/db";
-import { eq, sql, count } from "drizzle-orm";
+import { mediaFilesTable, archivesTable, scanJobsTable, appSettingsTable, organizationJobsTable } from "@workspace/db";
+import { eq, sql, count, and } from "drizzle-orm";
 import { checkNasReachable } from "../lib/nas-storage";
 
 const router: IRouter = Router();
+
+const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
 
 function getDiskStats(dirPath: string): { total: number; used: number; free: number } | null {
   if (!dirPath || dirPath.includes("\0") || dirPath.length > 4096) return null;
@@ -29,19 +31,19 @@ router.get("/dashboard", async (_req, res) => {
   try {
     const [totalRow] = await db.select({
       totalFiles: count(),
-      totalSizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
-    }).from(indexedFilesTable);
+      totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+    }).from(mediaFilesTable).where(NOT_DELETED);
 
     const [archiveCountRow] = await db.select({ count: count() }).from(archivesTable);
 
-    const [docCountRow] = await db.select({ count: count() }).from(indexedFilesTable)
-      .where(eq(indexedFilesTable.fileType, "document"));
+    const [docCountRow] = await db.select({ count: count() }).from(mediaFilesTable)
+      .where(and(NOT_DELETED, eq(mediaFilesTable.mediaType, "document")));
 
     const typeBreakdown = await db.select({
-      fileType: indexedFilesTable.fileType,
+      fileType: mediaFilesTable.mediaType,
       count: count(),
-      sizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
-    }).from(indexedFilesTable).groupBy(indexedFilesTable.fileType);
+      sizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+    }).from(mediaFilesTable).where(NOT_DELETED).groupBy(mediaFilesTable.mediaType);
 
     const total = Number(totalRow.totalSizeBytes) || 1;
     const breakdown = typeBreakdown.map(r => ({
@@ -52,12 +54,12 @@ router.get("/dashboard", async (_req, res) => {
     }));
 
     const dupQuery = await db.execute(
-      sql`SELECT COUNT(*) as cnt FROM (SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1) t`
+      sql`SELECT COUNT(*) as cnt FROM (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND (last_scan_action IS DISTINCT FROM 'DELETED') GROUP BY content_hash HAVING COUNT(*) > 1) t`
     );
     const duplicateCount = Number((dupQuery.rows[0] as any)?.cnt ?? 0);
 
     const dupSizeQuery = await db.execute(
-      sql`SELECT COALESCE(SUM(size_bytes), 0) as total_size FROM ${indexedFilesTable} WHERE content_hash IN (SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1)`
+      sql`SELECT COALESCE(SUM(size_bytes), 0) as total_size FROM ${mediaFilesTable} WHERE (last_scan_action IS DISTINCT FROM 'DELETED') AND content_hash IN (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND (last_scan_action IS DISTINCT FROM 'DELETED') GROUP BY content_hash HAVING COUNT(*) > 1)`
     );
     const duplicateSizeBytes = Number((dupSizeQuery.rows[0] as any)?.total_size ?? 0);
 

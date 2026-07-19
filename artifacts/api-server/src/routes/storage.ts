@@ -1,9 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { indexedFilesTable, appSettingsTable } from "@workspace/db";
-import { sql, count, desc } from "drizzle-orm";
+import { mediaFilesTable, appSettingsTable } from "@workspace/db";
+import { sql, count, desc, and } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
 
 router.get("/storage", async (_req, res) => {
   try {
@@ -11,15 +13,15 @@ router.get("/storage", async (_req, res) => {
     const nasPathConfigured = !!(settingsRows[0]?.nasPath);
 
     const [totals] = await db.select({
-      totalSizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
+      totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
       fileCount: count(),
-    }).from(indexedFilesTable);
+    }).from(mediaFilesTable).where(NOT_DELETED);
 
     const typeBreakdown = await db.select({
-      fileType: indexedFilesTable.fileType,
+      fileType: mediaFilesTable.mediaType,
       count: count(),
-      sizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
-    }).from(indexedFilesTable).groupBy(indexedFilesTable.fileType);
+      sizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+    }).from(mediaFilesTable).where(NOT_DELETED).groupBy(mediaFilesTable.mediaType);
 
     const total = Number(totals.totalSizeBytes) || 1;
     const breakdown = typeBreakdown.map(r => ({
@@ -38,11 +40,13 @@ router.get("/storage", async (_req, res) => {
 router.get("/storage/top-folders", async (_req, res) => {
   try {
     const folders = await db.select({
-      folder: indexedFilesTable.folder,
+      folder: sql<string>`CASE WHEN ${mediaFilesTable.relativePath} LIKE '%/%' THEN split_part(${mediaFilesTable.relativePath}, '/', 1) ELSE '/' END`,
       fileCount: count(),
-      totalSizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`,
-    }).from(indexedFilesTable).groupBy(indexedFilesTable.folder)
-      .orderBy(desc(sql`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)`))
+      totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+    }).from(mediaFilesTable)
+      .where(NOT_DELETED)
+      .groupBy(sql`CASE WHEN ${mediaFilesTable.relativePath} LIKE '%/%' THEN split_part(${mediaFilesTable.relativePath}, '/', 1) ELSE '/' END`)
+      .orderBy(desc(sql`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`))
       .limit(20);
 
     res.json(folders.map(f => ({ folder: f.folder, fileCount: f.fileCount, totalSizeBytes: Number(f.totalSizeBytes) })));
@@ -53,8 +57,16 @@ router.get("/storage/top-folders", async (_req, res) => {
 
 router.get("/storage/top-files", async (_req, res) => {
   try {
-    const files = await db.select().from(indexedFilesTable)
-      .orderBy(desc(indexedFilesTable.sizeBytes))
+    const files = await db.select({
+      id:        mediaFilesTable.id,
+      filename:  mediaFilesTable.name,
+      path:      mediaFilesTable.relativePath,
+      fileType:  mediaFilesTable.mediaType,
+      sizeBytes: mediaFilesTable.sizeBytes,
+      folder:    mediaFilesTable.relativePath,
+    }).from(mediaFilesTable)
+      .where(NOT_DELETED)
+      .orderBy(desc(mediaFilesTable.sizeBytes))
       .limit(20);
     res.json(files);
   } catch {
