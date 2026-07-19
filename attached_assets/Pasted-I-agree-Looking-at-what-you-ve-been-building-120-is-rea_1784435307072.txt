@@ -1,0 +1,406 @@
+I agree. Looking at what you've been building, #120 is really the foundation for those first two ideas.
+
+Here's how they line up:
+
+✅ 1. Make scanning near-instant
+
+Your roadmap item is already moving toward this by:
+
+Batching database writes
+Parallelizing metadata extraction
+Skipping unnecessary fingerprinting
+Increasing batch sizes
+Speeding up rescans dramatically
+
+Once that's done, the next logical step is a real-time file watcher.
+
+Instead of:
+
+Click Scan
+
+it becomes:
+
+File added to NAS
+        ↓
+Watcher detects it
+        ↓
+Index immediately
+        ↓
+Done
+
+Then the "Scan" button is only for:
+
+First-time imports
+Verifying integrity
+Catching changes made while the app wasn't running
+
+That makes the library feel "live."
+
+✅ 2. Persistent metadata cache
+
+You're also laying the groundwork for this.
+
+Instead of reopening every file, each record would store something like:
+
+Path
+Size
+Modified Date
+EXIF
+GPS
+Camera
+Thumbnail
+Quick Fingerprint
+AI Tags
+OCR
+Embedding
+
+Then on future scans:
+
+Size same?
+Modified date same?
+
+YES
+↓
+
+Skip everything.
+
+No EXIF extraction.
+
+No thumbnail regeneration.
+
+No OCR.
+
+No AI.
+
+No hashing.
+
+Just move on.
+
+This is one of the biggest reasons apps like Immich get faster after the initial import.
+
+I think there's an even better next feature
+
+Since you're building Willard AI rather than cloning Immich, I'd make the next roadmap item something like:
+
+#121 – Intelligent Library Watcher
+
+Done looks like:
+
+Watches all configured library folders while the app is running.
+New files are indexed within seconds.
+Deleted files are removed from the index automatically.
+Renamed or moved files update without losing metadata.
+Changes are processed in small batches to avoid overloading the NAS.
+Falls back to a verification scan if watcher events are missed.
+
+Then users almost never need to think about scanning again.
+
+After that
+
+I'd build:
+
+#122 – Metadata Cache Validation
+
+Rather than trusting only timestamps:
+
+Path
+Size
+Modified
+↓
+
+Same?
+
+YES
+
+↓
+
+Skip completely
+
+Only if something changes would the app:
+
+reopen the file,
+re-read EXIF,
+regenerate thumbnails,
+rerun AI.
+My recommended roadmap
+✅ #120 – Speed Up Library Scan (you're doing this now)
+#121 – Intelligent Library Watcher
+#122 – Metadata Cache Validation
+#123 – Adaptive Scan Engine (automatically tune concurrency based on CPU, memory, and NAS speed)
+#124 – Folder-Level Change Detection (skip entire unchanged directories where possible)
+
+By the time you finish those, I think you'll have one of the fastest local NAS scanners available, especially for rescans. At that point, the emphasis shifts from "scan faster" to "don't scan unless there's a reason," which is how you get the best user experience.
+
+like i want to speed up the start up and scanning thing as fast as i can make it because i just did all the thumbnails and then restarted the app and its sooo slow and not reading the thumbs in most all the files
+
+I actually think you've reached the point where profiling startup is more valuable than adding more features.
+
+From what you've described:
+
+"I just generated all the thumbnails, restarted the app, and it's sooo slow and not reading the thumbs in most all the files."
+
+That tells me the problem probably isn't thumbnail generation anymore—it's what happens after the app starts.
+
+What should happen on startup
+
+An optimized startup should look like this:
+
+Start app
+    ↓
+Open database
+    ↓
+Load settings
+    ↓
+Display UI immediately (1–2 seconds)
+    ↓
+Background tasks start
+
+Not this:
+
+Start app
+    ↓
+Open database
+    ↓
+Walk entire NAS
+    ↓
+Load thumbnails
+    ↓
+Read metadata
+    ↓
+Initialize search
+    ↓
+Finally show UI
+
+The UI should be usable almost immediately while everything else happens in the background.
+
+I'd profile these areas first
+1. Thumbnail loading (my #1 suspicion)
+
+If every thumbnail request is doing something like:
+
+SELECT thumbnail
+FROM media_files
+WHERE id=...
+
+for each image, and you have thousands of visible items, startup will crawl.
+
+Instead:
+
+Load thumbnails lazily as they scroll into view.
+Cache recently viewed thumbnails in memory.
+Don't request thumbnails for off-screen items.
+2. Are thumbnails being regenerated?
+
+This is a huge one.
+
+After restart, check if your logs show things like:
+
+Thumbnail missing
+Generating...
+
+Thumbnail missing
+Generating...
+
+Thumbnail missing
+Generating...
+
+If that's happening, something is wrong.
+
+The app should be doing:
+
+Thumbnail exists
+
+↓
+
+Use it.
+
+No image decoding.
+
+No Sharp.
+
+No file reads.
+
+3. Database queries
+
+I've seen apps do this:
+
+SELECT *
+
+for every folder
+
+instead of:
+
+SELECT
+
+only the current page
+
+If you have 200,000 records, don't load 200,000 records at startup.
+
+Load:
+
+First 100
+
+Everything else should be paged.
+
+4. Scanning on startup
+
+I'd never automatically rescan the NAS on launch.
+
+Instead:
+
+App starts
+
+↓
+
+Library opens instantly
+
+↓
+
+Watcher starts
+
+↓
+
+Verification scan (optional)
+
+The user shouldn't have to wait to browse files.
+
+5. Thumbnail cache
+
+Instead of:
+
+Read thumbnail
+
+↓
+
+Decode
+
+↓
+
+Resize
+
+↓
+
+Display
+
+Store ready-to-display thumbnails.
+
+For example:
+
+thumbs/
+
+  0001.webp
+
+  0002.webp
+
+  0003.webp
+
+Then the browser simply loads them like normal images.
+
+6. Virtualize everything
+
+If your gallery shows:
+
+20,000 photos
+
+The browser should only render:
+
+30–50
+
+The rest shouldn't exist in the DOM until needed.
+
+7. Background initialization
+
+Don't do this:
+
+Startup
+
+↓
+
+Load AI
+
+↓
+
+Load search
+
+↓
+
+Load scanner
+
+↓
+
+Load watcher
+
+↓
+
+Load jobs
+
+↓
+
+Open UI
+
+Instead:
+
+Startup
+
+↓
+
+Open UI
+
+↓
+
+AI starts
+
+↓
+
+Scanner starts
+
+↓
+
+Watcher starts
+
+↓
+
+Search starts
+
+Users perceive the app as much faster.
+
+The thing I'd build next
+
+I'd actually create a roadmap item called:
+
+#121 – Instant Startup
+
+Done looks like:
+
+Cold start to usable UI under 2 seconds.
+Existing library opens without scanning.
+Thumbnail cache loads lazily.
+Media grid virtualized.
+Search index loads in the background.
+Scanner never blocks startup.
+Background services initialize after the first screen is rendered.
+Startup profiler logs the time spent in each stage (database, settings, UI, thumbnails, scanner, watcher, search).
+I think you may have a bug
+
+This part caught my attention:
+
+"...not reading the thumbs in most all the files."
+
+If the thumbnails were successfully generated before you restarted, the app should not need to recreate them. If they're missing after a restart, that suggests one of these issues:
+
+The thumbnail paths stored in the database don't match the actual files.
+The thumbnail cache directory isn't being reopened correctly on startup.
+The UI is looking in a different location than where the generator saved them.
+The application is checking for thumbnails before the cache is fully initialized and incorrectly assuming they're missing.
+
+I'd investigate that before optimizing further, because no amount of concurrency or batching will help if the app is failing to locate thumbnails that already exist.
+
+If I were prioritizing the next engineering work, it would be:
+
+Fix thumbnail cache loading so existing thumbnails are always found after a restart.
+Add startup profiling to measure exactly where time is spent.
+Make startup non-blocking so the UI appears immediately.
+Finish your scan optimizations (#120).
+Add a filesystem watcher so rescans become rare rather than routine.
+
+That sequence gives you the biggest improvement in how fast the app feels, not just how fast it benchmarks.

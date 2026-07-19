@@ -206,6 +206,7 @@ function ThumbnailCard({
           <img
             src={`/api/media/thumbnail/${file.id}`}
             alt={file.name}
+            loading="lazy"
             className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
             onError={() => setThumbError(true)}
           />
@@ -557,6 +558,7 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
           <img
             src={`/api/media/thumbnail/${file.id}`}
             alt={file.name}
+            loading="lazy"
             className="w-full h-full object-contain"
           />
         ) : (

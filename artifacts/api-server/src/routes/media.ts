@@ -3,16 +3,54 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable } from "@workspace/db";
-import { eq, and, like, desc, asc, sql, count } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, count, isNotNull } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
 
 const router = Router();
 
-// ── Helper: get NAS path ──────────────────────────────────────────────────────
+// ── NAS path cache ────────────────────────────────────────────────────────────
+// The NAS path never changes during a session; cache it so every thumbnail
+// request does not hit the database just to read the same row.
+
+let _nasPathCached: string | null | undefined = undefined;
+let _nasPathCachedAt = 0;
+const NAS_PATH_TTL_MS = 60_000;
 
 async function getNasPath(): Promise<string | null> {
+  const now = Date.now();
+  if (_nasPathCached !== undefined && now - _nasPathCachedAt < NAS_PATH_TTL_MS) {
+    return _nasPathCached;
+  }
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  return row?.nasPath ?? null;
+  _nasPathCached = row?.nasPath ?? null;
+  _nasPathCachedAt = now;
+  return _nasPathCached;
+}
+
+export function invalidateNasPathCache(): void {
+  _nasPathCached = undefined;
+}
+
+// ── Thumbnail path in-memory cache ────────────────────────────────────────────
+// Maps file id → confirmed absolute path on disk.
+// Populated at startup via warmThumbnailCache() and on every successful serve.
+// Eliminates the DB query + NAS fs.existsSync() on every subsequent request.
+
+const _thumbCache = new Map<number, string>();
+
+export async function warmThumbnailCache(): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: mediaFilesTable.id, thumbnailPath: mediaFilesTable.thumbnailPath })
+      .from(mediaFilesTable)
+      .where(isNotNull(mediaFilesTable.thumbnailPath));
+    for (const row of rows) {
+      if (row.thumbnailPath) _thumbCache.set(row.id, row.thumbnailPath);
+    }
+    console.log(`[thumbnail-cache] Warmed with ${_thumbCache.size} entries`);
+  } catch (err) {
+    console.warn("[thumbnail-cache] Warm-up failed (non-fatal):", err);
+  }
 }
 
 // ── GET /api/media/files — paginated, filtered file listing ──────────────────
@@ -296,6 +334,18 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
 
 // ── GET /api/media/thumbnail/:id — serve or generate thumbnail ───────────────
 
+function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
+  res.setHeader("Content-Type", "image/webp");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  const stream = fs.createReadStream(thumbPath);
+  stream.on("error", () => {
+    _thumbCache.delete(id);
+    if (!res.headersSent) res.status(404).json({ error: "Thumbnail not found" });
+    else res.end();
+  });
+  stream.pipe(res);
+}
+
 router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) {
@@ -303,6 +353,14 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  // ── Fast path: in-memory cache hit — zero DB queries, zero NAS stat calls ──
+  const cached = _thumbCache.get(id);
+  if (cached) {
+    serveCachedThumb(res, cached, id);
+    return;
+  }
+
+  // ── Slow path: first time this id is requested ────────────────────────────
   const nasPath = await getNasPath();
   if (!nasPath) {
     res.status(404).json({ error: "NAS not configured" });
@@ -310,7 +368,12 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   }
 
   const [file] = await db
-    .select()
+    .select({
+      id:            mediaFilesTable.id,
+      thumbnailPath: mediaFilesTable.thumbnailPath,
+      relativePath:  mediaFilesTable.relativePath,
+      extension:     mediaFilesTable.extension,
+    })
     .from(mediaFilesTable)
     .where(eq(mediaFilesTable.id, id))
     .limit(1);
@@ -320,25 +383,23 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  // Check for existing thumbnail
+  // Check DB-stored path
   if (file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
-    res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    fs.createReadStream(file.thumbnailPath).pipe(res);
+    _thumbCache.set(id, file.thumbnailPath);
+    serveCachedThumb(res, file.thumbnailPath, id);
     return;
   }
 
-  // Check by id-based filename in thumbdir (fast path without DB query)
+  // Fallback: check by id-based filename in thumbdir (heals stale DB paths)
   const thumbDir = getThumbnailDir(nasPath);
   const thumbFile = path.join(thumbDir, thumbnailFilename(id));
   if (fs.existsSync(thumbFile)) {
-    // Update DB record with this path
-    await db.update(mediaFilesTable)
+    _thumbCache.set(id, thumbFile);
+    db.update(mediaFilesTable)
       .set({ thumbnailPath: thumbFile, thumbnailGeneratedAt: new Date() })
-      .where(eq(mediaFilesTable.id, id));
-    res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    fs.createReadStream(thumbFile).pipe(res);
+      .where(eq(mediaFilesTable.id, id))
+      .catch(() => {});
+    serveCachedThumb(res, thumbFile, id);
     return;
   }
 
@@ -355,14 +416,13 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  // Persist thumbnail path to DB
-  await db.update(mediaFilesTable)
+  _thumbCache.set(id, result.destPath);
+  db.update(mediaFilesTable)
     .set({ thumbnailPath: result.destPath, thumbnailGeneratedAt: new Date() })
-    .where(eq(mediaFilesTable.id, id));
+    .where(eq(mediaFilesTable.id, id))
+    .catch(() => {});
 
-  res.setHeader("Content-Type", "image/webp");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  fs.createReadStream(result.destPath).pipe(res);
+  serveCachedThumb(res, result.destPath, id);
 });
 
 // ── GET /api/media/file/:id/stream — stream original file ────────────────────

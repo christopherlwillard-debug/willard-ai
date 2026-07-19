@@ -13,6 +13,7 @@ import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs } from "./lib/library-engine";
+import { warmThumbnailCache } from "./routes/media";
 import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
@@ -314,6 +315,9 @@ checkMediaToolsOnStartup();
 
 // Recover library jobs interrupted mid-run
 recoverInterruptedJobs().catch(() => {});
+
+// Pre-populate thumbnail cache so the first page-load hits zero NAS stat calls
+warmThumbnailCache().catch(() => {});
 
 // Smart Library Health: watch reachability, auto-pause on offline,
 // auto-rescan (incremental) on reconnect
