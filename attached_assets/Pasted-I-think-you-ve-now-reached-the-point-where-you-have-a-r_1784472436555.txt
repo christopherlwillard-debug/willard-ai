@@ -1,0 +1,222 @@
+I think you've now reached the point where you have a real roadmap rather than a collection of optimization ideas. The milestones build on one another in a logical order.
+
+The only thing I'd change is what gets implemented first, because your biggest pain point right now isn't scan speed—it's startup responsiveness.
+
+I'd reorder them like this
+✅ Phase 1 — #123 Intelligent Scanner Exclusions
+
+Priority: 10/10
+
+This reduces unnecessary work before anything else.
+
+Every file skipped means:
+
+no SMB lookup,
+no stat(),
+no metadata extraction,
+no database write.
+
+That's free performance.
+
+✅ Phase 2 — #124 Streaming Async Pipeline
+
+Priority: 10/10
+
+This is the biggest architectural improvement.
+
+Right now your engine is basically:
+
+Walk
+↓
+
+Wait
+
+↓
+
+Process
+
+After this:
+
+Walk
+ │
+ ├──────────────┐
+ ▼              ▼
+Priority Queue  Workers
+        │
+        ▼
+DB Writer
+
+Users start seeing media almost immediately.
+
+✅ Phase 3 — Startup Responsiveness
+
+This is actually where I'd make a change.
+
+I wouldn't wait until M4.
+
+I'd move Startup Responsiveness ahead of Diagnostics.
+
+Because this is what you're experiencing today:
+
+Restart app
+
+Wait...
+
+Wait...
+
+Wait...
+
+That hurts the user experience more than anything else.
+
+I'd make this:
+
+M3
+
+instead of
+
+M4
+Then
+M4 Adaptive Concurrency
+
+By now:
+
+async pipeline exists
+startup is instant
+
+Now optimize throughput.
+
+M5 Diagnostics
+
+Only after everything else.
+
+Because diagnostics won't make Willard AI faster.
+
+They'll tell you why it isn't fast.
+
+I'd also add one milestone
+
+This is the one thing I think is missing.
+
+M6 — Instant Library Open
+
+When Willard AI starts:
+
+Database
+
+↓
+
+Library opens immediately
+
+↓
+
+User can browse
+
+↓
+
+Background scan starts later
+
+Even if the scan takes 20 minutes...
+
+The user can still browse 100,000 indexed photos instantly.
+
+That changes how the application feels.
+
+I'd make one architectural change
+
+Currently you're thinking:
+
+Scanner
+
+↓
+
+Database
+
+↓
+
+UI
+
+I'd reverse it.
+
+Database
+
+↓
+
+UI
+
+↓
+
+Scanner
+
+↓
+
+Database updates
+
+↓
+
+Live UI updates
+
+The database should become the source of truth.
+
+The scanner is just a background synchronizer.
+
+This is exactly how applications like Lightroom, Immich, Plex, and Jellyfin feel so responsive. They don't rebuild the library before showing it—they show what they already know and update incrementally.
+
+I would also add a final milestone
+M7 — Watcher First
+
+Instead of relying on rescans:
+
+NAS changes
+
+↓
+
+Watcher
+
+↓
+
+Update DB
+
+↓
+
+Done
+
+Then rescans become rare maintenance operations rather than the normal workflow.
+
+One more thing
+
+I would remove this from #123:
+
+Estimated scan time
+
+I don't think you can estimate it accurately enough to be useful because scan speed depends on:
+
+NAS latency
+network congestion
+file sizes
+metadata complexity
+CPU
+concurrent activity
+
+Users will lose trust if estimates swing wildly.
+
+Instead, I'd show after the first completed scan:
+
+Typical scan speed
+
+315 files/sec
+
+Average scan
+
+3m 42s
+
+Those are based on real measurements and become more accurate over time.
+
+Overall
+
+I'd rate the entire roadmap 10/10. The biggest shift is that you're no longer just "making scans faster." You're redesigning the scanner into a streaming, self-tuning synchronization engine.
+
+The one philosophy I'd keep front and center is:
+
+The app should never make the user wait for background work.
+
+If the library opens immediately, thumbnails appear progressively, scans run in the background, and updates stream into the UI, users will perceive the application as fast even when the NAS itself is relatively slow. That perception of responsiveness is often more valuable than shaving another 10–15% off the raw scan time.

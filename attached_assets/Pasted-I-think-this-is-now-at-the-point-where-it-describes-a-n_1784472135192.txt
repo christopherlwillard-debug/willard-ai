@@ -1,0 +1,220 @@
+I think this is now at the point where it describes a new scan engine architecture, not just an optimization task. I'd rate it 10/10. It focuses on the things that actually matter for a NAS: reducing latency, keeping the UI responsive, and making better use of available bandwidth.
+
+There are only a few refinements I'd make.
+
+1. Make the scanner event-driven instead of stage-driven ⭐⭐⭐⭐⭐
+
+The biggest improvement I'd add is to formalize the pipeline.
+
+Instead of:
+
+Walk
+↓
+
+Queue
+
+↓
+
+Process
+
+↓
+
+Database
+
+I'd define it as:
+
+Walker
+     │
+     ▼
+Priority Queue
+     │
+     ▼
+Metadata Workers
+     │
+     ▼
+DB Batch Writer
+     │
+     ▼
+UI Updates
+
+Each stage works independently, so if the database is briefly busy, the walker doesn't have to stop discovering files.
+
+2. Smarter prioritization ⭐⭐⭐⭐⭐
+
+I wouldn't sort only by file size.
+
+I'd use a weighted priority score:
+
+Images        Highest
+
+PDFs
+
+Documents
+
+Audio
+
+Videos
+
+Other
+
+Within each category, process smaller files first.
+
+That means users see their photo library populate almost immediately instead of waiting behind a few 50 GB videos.
+
+3. Persistent directory cache ⭐⭐⭐⭐⭐
+
+Your directory mtime cache is excellent, but I would make it survive restarts.
+
+Instead of rebuilding it every launch:
+
+directory_cache
+
+Path
+
+Modified
+
+File Count
+
+Last Scan
+
+Children Hash
+
+On startup:
+
+Load cache
+
+↓
+
+Reuse immediately
+
+No need to rediscover everything from scratch.
+
+4. Adaptive startup delay ⭐⭐⭐⭐☆
+
+Instead of a fixed 15 seconds:
+
+UI connected?
+
+↓
+
+Yes
+
+↓
+
+Start verification scan
+
+OR
+
+Timeout after 30 seconds
+
+If the user launches the app and immediately starts browsing, the background scan can wait until they're actually interacting with the UI.
+
+5. Smarter adaptive concurrency ⭐⭐⭐⭐⭐
+
+Latency is a good signal, but I'd also watch the work queue.
+
+For example:
+
+Workers idle
+
+↓
+
+Increase concurrency
+
+----------
+
+Queue exploding
+
+↓
+
+Increase DB batch size
+
+----------
+
+Latency spikes
+
+↓
+
+Reduce workers
+
+The engine reacts to both the NAS and the current workload.
+
+6. Diagnostics are excellent ⭐⭐⭐⭐⭐
+
+I'd extend them slightly.
+
+Include:
+
+Average SMB latency
+
+Longest SMB call
+
+Files/sec
+
+MB/sec
+
+Database time
+
+Metadata time
+
+Thumbnail time
+
+Queue wait time
+
+CPU %
+
+RAM
+
+Peak queue depth
+
+That gives you a complete picture of where time is being spent.
+
+7. Add a benchmark mode ⭐⭐⭐⭐⭐
+
+This would be incredibly useful during development.
+
+Something like:
+
+Scan Benchmark
+
+1,000 files
+
+5,000 files
+
+10,000 files
+
+Entire library
+
+Then compare runs after each optimization.
+
+One thing I think is missing
+Local in-memory index
+
+Even if the database stays on the NAS, during an active scan I'd keep a lightweight in-memory map of the current session:
+
+Path
+
+Size
+
+Modified
+
+ID
+
+That avoids repeated database lookups while the scan is running. At the end of the scan, the in-memory state is discarded because the database has been updated.
+
+My only caution
+
+I would not implement everything in this task at once.
+
+It's become large enough that debugging could be difficult if something goes wrong.
+
+I'd split it into four implementation milestones:
+
+Streaming async pipeline (the biggest architectural change)
+Adaptive concurrency + dynamic batching
+Diagnostics and benchmarking
+Startup responsiveness + settings additions
+
+That way, if performance regresses, you'll know exactly which change introduced it.
+
+Overall, though, I think this roadmap is heading in the right direction. You're no longer trying to make a slow scanner slightly faster—you’re redesigning it into a high-performance scan engine that's much better suited to large NAS libraries. That architectural shift is likely to have a much bigger impact than isolated micro-optimizations.

@@ -1,0 +1,140 @@
+I think this is a good cleanup task, but I wouldn't prioritize it over the performance work.
+
+It's mostly about keeping junk out of the library, not making the app noticeably faster.
+
+I'd expand it slightly
+
+Instead of only filtering:
+
+Thumbs.db
+ehthumbs.db
+desktop.ini
+autorun.inf
+.thm
+
+I'd make it a centralized filter that also excludes common operating system and temporary files, for example:
+
+Thumbs.db
+ehthumbs.db
+desktop.ini
+autorun.inf
+
+.DS_Store
+.Trashes
+.Spotlight-V100
+.fseventsd
+
+~$*
+*.tmp
+*.temp
+
+AppleDouble (._*)
+
+Then every scanner and watcher uses the same function.
+
+The performance improvement I'd add
+
+Don't wait until after indexing to throw these away.
+
+Do this:
+
+Read directory
+
+↓
+
+System file?
+
+↓
+
+YES
+
+↓
+
+Skip immediately
+
+Never call:
+
+stat()
+metadata extraction
+thumbnail generation
+hashing
+database insert
+
+Even though each file is tiny, on a NAS every unnecessary file still costs a network round-trip.
+
+I would actually combine this with another task
+
+Since you're trying to make the scanner as fast as possible, I'd make a broader task:
+
+#124 – Intelligent Scanner Exclusions
+
+Instead of only excluding system files, allow the scanner to ignore whole categories of content.
+
+Examples:
+
+Skip Recycle Bin
+
+Skip System Volume Information
+
+Skip @eaDir (Synology)
+
+Skip .AppleDouble
+
+Skip hidden folders
+
+Skip temp folders
+
+Skip cache folders
+
+Even better, let users define their own exclusions:
+
+Z:\Movies\Trailers
+
+Z:\Photos\Exports
+
+Z:\Camera\RAW Cache
+
+Z:\Willard AI\Thumbnails
+
+The scanner won't even enter those folders.
+
+One feature I think would help you even more
+
+Since you're using a NAS, I'd add directory blacklisting.
+
+Imagine someone has:
+
+Photos
+Videos
+Backups
+Old Backups
+Windows Backup
+Node Modules
+Downloads
+
+The scanner shouldn't waste time walking folders that the user never intends to browse in Willard AI.
+
+A setting like:
+
+Ignored folders
+
+☑ @Recycle
+☑ System Volume Information
+☑ node_modules
+☑ cache
+☑ temp
+☑ Thumbnails
+☑ $RECYCLE.BIN
+☑ .git
+☑ .Trash
+
+could save thousands of unnecessary directory entries and file checks on every scan.
+
+My priority order would be:
+#120 – Speed Up Library Scan ⭐⭐⭐⭐⭐
+Startup performance profiling ⭐⭐⭐⭐⭐
+Fix thumbnail cache loading on restart ⭐⭐⭐⭐⭐
+#123 – Filter System Files ⭐⭐⭐⭐☆
+Configurable folder exclusions ⭐⭐⭐⭐☆
+
+The first three will make the app feel dramatically faster. #123 is still worth doing because it keeps the library clean and avoids wasting time on files that have no value, but it's unlikely to be the main reason your startup or scans feel slow.

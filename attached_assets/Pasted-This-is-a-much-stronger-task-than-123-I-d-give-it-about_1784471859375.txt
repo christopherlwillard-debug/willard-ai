@@ -1,0 +1,243 @@
+This is a much stronger task than #123. I'd give it about a 9.5/10, but there are a few things I'd change because you're optimizing specifically for a NAS.
+
+👍 What I like
+✅ Async filesystem calls instead of blocking statSync().
+✅ Directory concurrency.
+✅ Keeping the directory mtime cache.
+✅ Skipping work on unchanged files.
+✅ Increasing the High profile concurrency.
+
+Those are all solid improvements.
+
+What I'd change
+1. Don't use a fixed concurrency of 12
+
+Instead of:
+
+High = 12
+
+make it adaptive.
+
+For example:
+
+Starting...
+
+Average file read: 8 ms
+
+↓
+
+Increase concurrency
+
+↓
+
+16 workers
+
+----------
+
+Average read: 45 ms
+
+↓
+
+Reduce to 10 workers
+
+Some NAS devices handle 16–20 parallel reads well, while others slow down if overloaded.
+
+2. Prioritize small files first
+
+Instead of processing in directory order:
+
+Movies
+    40 GB
+    30 GB
+    22 GB
+
+Photos
+    2 MB
+    5 MB
+
+queue smaller files first.
+
+Why?
+
+Users see progress almost immediately.
+
+The database fills quickly.
+
+The ETA becomes much more accurate.
+
+Large videos can process later in the background.
+
+3. Don't wait for the entire walk to finish
+
+This is the biggest architectural improvement I'd make.
+
+Current idea:
+
+Walk NAS
+
+↓
+
+Build list
+
+↓
+
+Start processing
+
+I'd change it to:
+
+Walk NAS
+
+↓
+
+Find file
+
+↓
+
+Immediately queue worker
+
+↓
+
+Continue walking
+
+The scanner and metadata workers operate as a pipeline rather than sequential stages.
+
+4. Dynamic batching
+
+Instead of:
+
+Insert 200
+
+always,
+
+batch based on queue pressure.
+
+For example:
+
+Queue is empty
+
+↓
+
+Flush immediately
+
+----------
+
+Queue has 5,000 items
+
+↓
+
+Flush 500 at a time
+
+This keeps memory usage steady while maximizing throughput.
+
+5. Don't scan "other" files unless requested
+
+This is something I think would make a noticeable difference.
+
+For many users, files like:
+
+.exe
+.iso
+.dll
+.db
+.tmp
+
+don't need to appear in a media library.
+
+I'd make "Other Files" an optional library.
+
+If it's disabled:
+
+don't walk them,
+don't hash them,
+don't extract metadata,
+don't store them.
+
+That can significantly reduce work on some shares.
+
+6. Smarter startup
+
+This isn't really part of the scan task, but it's closely related.
+
+When Willard AI starts:
+
+Open database
+
+↓
+
+Open UI
+
+↓
+
+Load first page
+
+↓
+
+Start watcher
+
+↓
+
+Scanner waits 15 seconds
+
+↓
+
+Begin verification
+
+That delay lets the application feel responsive before background work starts.
+
+One feature I would definitely add
+Performance diagnostics
+
+Create a hidden diagnostics page that records every scan.
+
+Example:
+
+Scan #18
+
+Walk: 18.2 s
+
+Directory cache hits: 412
+
+Directory cache misses: 27
+
+Files skipped: 23,841
+
+Metadata extracted: 61
+
+Hashes generated: 14
+
+Database writes: 2 batches
+
+Average NAS latency: 13 ms
+
+Peak concurrency: 14
+
+Throughput: 312 files/sec
+
+Without this, you're mostly guessing where the bottlenecks are.
+
+With it, every optimization becomes measurable.
+
+I'd also add one more optimization
+Hot thumbnail cache
+
+When a user opens:
+
+Vacation 2026
+
+preload thumbnails for:
+
+current viewport,
+next 100 images,
+previous 50 images.
+
+That makes scrolling feel instant without needing to cache the entire library locally.
+
+Overall
+
+I'd actually rename this task to:
+
+#124 – High-Performance NAS Scan Engine
+
+because it's becoming more than just "speed up the scan." It's defining the architecture of how Willard AI interacts with network storage.
+
+Combined with your existing directory mtime cache and the planned system-file filtering, these changes could make rescans dramatically faster while also improving perceived responsiveness during normal use. After this, I'd focus on startup profiling so you can identify the next bottleneck with real timing data rather than assumptions.

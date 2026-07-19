@@ -1,0 +1,143 @@
+I like this version much more. I'd rate it 9.8/10 because it's no longer just a bug fix—it's defining a clean scanning architecture.
+
+Here are the only changes I'd make.
+
+1. Separate built-in exclusions from user exclusions
+
+Don't mix them into one list.
+
+Have:
+
+Built-in (cannot disable)
+
+✓ Thumbs.db
+✓ desktop.ini
+✓ .DS_Store
+✓ .Spotlight-V100
+✓ AppleDouble
+✓ .Trashes
+✓ .fseventsd
+✓ .tmp
+✓ .temp
+✓ .thm
+
+Then separately:
+
+User Ignored Folders
+
+Camera/RAW Cache
+
+Windows Backup
+
+node_modules
+
+Willard AI/Cache
+
+The built-in list protects users from indexing junk, while the user list is for intentionally ignored content.
+
+2. Add ignored file extensions
+
+Folders are great, but sometimes users want to ignore entire file types.
+
+For example:
+
+Ignored Extensions
+
+.iso
+.zip
+.rar
+.exe
+.dll
+.log
+
+That gives much more flexibility without requiring complicated folder structures.
+
+3. Add a "Why was this skipped?" reason
+
+For diagnostics, have the scanner record a reason such as:
+
+System file
+Hidden file
+User ignored folder
+User ignored extension
+System directory
+
+When debugging, you'll know exactly why something didn't appear.
+
+4. Add a "Dry Run" mode
+
+This would be invaluable for testing.
+
+It could report:
+
+Would scan:
+24,812 files
+
+Skipped:
+312 system files
+1,842 ignored folders
+93 ignored extensions
+
+Estimated scan time:
+4 min 18 sec
+
+No database writes—just a preview.
+
+5. Make ignored folders path-independent
+
+Instead of storing absolute paths like:
+
+Z:\Photos\RAW Cache
+
+store them relative to the library root:
+
+Photos/RAW Cache
+
+That way users can move the library or map the NAS to a different drive letter without breaking their exclusions.
+
+One thing I'd add because you're optimizing for NAS performance
+Folder fingerprint cache
+
+Right now you have directory mtime caching, which is excellent.
+
+I'd extend it slightly.
+
+Store, per directory:
+
+Path
+Modified Time
+File Count
+Total Size
+
+If all four values match the previous scan:
+
+Skip entire subtree
+
+This avoids even looking at individual files in directories that clearly haven't changed.
+
+I'd also add one option in Settings
+Scanner
+
+☑ Ignore hidden files
+
+☑ Ignore system files
+
+☑ Ignore temporary files
+
+☑ Ignore sidecar files
+
+☑ Ignore empty folders
+
+☑ Follow symbolic links
+
+Most users will never touch these, but power users appreciate having the control.
+
+Overall
+
+I think your recent roadmap is becoming very cohesive:
+
+#120 — Make scanning fundamentally faster (batching, concurrency, reduced I/O).
+#123 — Eliminate junk and unnecessary filesystem work with centralized exclusions.
+#124 — Optimize the scanner for NAS latency and parallelism.
+
+Those three tasks complement each other well. They reduce the amount of work, make the remaining work faster, and avoid doing unnecessary network I/O. Once they're complete, I'd shift focus to startup profiling and thumbnail cache loading, because those are likely to have the biggest impact on how responsive the application feels after launch.
