@@ -1141,9 +1141,11 @@ async function runScanJob(
     // Walk and workers run concurrently; walk closes the queue when done
     await walkDone;
 
-    // Queue is now closed; shut down the controller and drain all workers
-    clearInterval(ctrlInterval);
+    // Queue is now closed; drain all remaining work.  Keep the controller
+    // alive through the drain so concurrency still adapts while a large
+    // post-walk queue empties, then shut it down once all workers finish.
     await Promise.all(allWorkerPromises);
+    clearInterval(ctrlInterval);
 
     // ── Handle pause / cancel ─────────────────────────────────────────────
     if (state.cancelRequested) {
