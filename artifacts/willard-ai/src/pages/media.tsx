@@ -443,7 +443,7 @@ function ScanBanner({
     );
   }
 
-  const pct  = Math.round(progress.progress * 100);
+  const pct  = progress.progress;
   const isPaused = progress.status === "PAUSED";
 
   return (
