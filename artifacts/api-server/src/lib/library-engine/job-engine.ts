@@ -221,6 +221,70 @@ const MEDIA_FILE_UPSERT_SET = {
   indexedAt:            sql`excluded.indexed_at`,
 } as const;
 
+// ── Adaptive concurrency controller ──────────────────────────────────────────
+// Tracks a rolling average of per-file I/O latency (last 50 samples) and the
+// current queue depth.  Every CTRL_INTERVAL_MS it adjusts the active worker
+// count by ±2, clamped to [MIN_WORKERS, profileCeiling].
+//
+// Logic:
+//   avg latency > LATENCY_BACKOFF_MS  → back off (NAS is overwhelmed)
+//   queue depth  === 0                → back off (workers are idle)
+//   avg latency < LATENCY_CLIMB_MS
+//   AND queue depth > 0               → climb (NAS has headroom)
+
+const INITIAL_WORKERS    = 4;
+const MIN_WORKERS        = 2;
+const LATENCY_CLIMB_MS   = 20;
+const LATENCY_BACKOFF_MS = 60;
+const CTRL_INTERVAL_MS   = 5_000;
+const LATENCY_WINDOW_MAX = 50;
+
+class ConcurrencyController {
+  private readonly samples: number[] = [];
+  private _count: number;
+  private readonly ceiling: number;
+
+  constructor(initial: number, ceiling: number) {
+    this._count  = Math.max(MIN_WORKERS, Math.min(initial, ceiling));
+    this.ceiling = Math.max(MIN_WORKERS, ceiling);
+  }
+
+  get count(): number { return this._count; }
+
+  recordLatency(ms: number): void {
+    this.samples.push(ms);
+    if (this.samples.length > LATENCY_WINDOW_MAX) this.samples.shift();
+  }
+
+  /**
+   * Called every CTRL_INTERVAL_MS.
+   * Returns the new target count and whether it changed.
+   */
+  adjust(queueDepth: number): { newCount: number; changed: boolean; reason: string } {
+    const n = this.samples.length;
+    if (n === 0) return { newCount: this._count, changed: false, reason: "no latency samples yet" };
+
+    const avg  = this.samples.reduce((a, b) => a + b, 0) / n;
+    const prev = this._count;
+    let reason = "";
+
+    if (avg > LATENCY_BACKOFF_MS) {
+      this._count = Math.max(MIN_WORKERS, this._count - 2);
+      reason = `avg latency ${avg.toFixed(0)} ms > ${LATENCY_BACKOFF_MS} ms — backing off`;
+    } else if (queueDepth === 0) {
+      this._count = Math.max(MIN_WORKERS, this._count - 2);
+      reason = `queue empty — backing off`;
+    } else if (avg < LATENCY_CLIMB_MS) {
+      this._count = Math.min(this.ceiling, this._count + 2);
+      reason = `avg latency ${avg.toFixed(0)} ms < ${LATENCY_CLIMB_MS} ms, queue depth ${queueDepth} — climbing`;
+    } else {
+      reason = `avg latency ${avg.toFixed(0)} ms, queue depth ${queueDepth} — holding at ${this._count}`;
+    }
+
+    return { newCount: this._count, changed: this._count !== prev, reason };
+  }
+}
+
 // ── Directory mtime cache (rescan short-circuit) ──────────────────────────────
 // Saved as JSON after each successful scan so the next rescan can skip entire
 // directory trees that haven't changed.  Stored in the WillardAI cache folder
@@ -687,8 +751,15 @@ async function runScanJob(
       } finally { batchFlushing = false; }
     };
     const maybeFlushBatch = async (): Promise<void> => {
-      if (upsertBuf.length >= BATCH_FLUSH_SIZE ||
-          (upsertBuf.length > 0 && Date.now() - lastBatchFlushAt >= BATCH_FLUSH_MS)) {
+      const qDepth = queue.size;
+      // Near-empty queue: flush immediately so results appear in the library sooner
+      if (qDepth < 50 && upsertBuf.length > 0) {
+        await flushBatch();
+      } else if (qDepth > 2000) {
+        // High queue pressure: hold until 500 rows accumulate (fewer DB round-trips)
+        if (upsertBuf.length >= 500) await flushBatch();
+      } else if (upsertBuf.length >= BATCH_FLUSH_SIZE ||
+                 (upsertBuf.length > 0 && Date.now() - lastBatchFlushAt >= BATCH_FLUSH_MS)) {
         await flushBatch();
       }
     };
@@ -945,86 +1016,125 @@ async function runScanJob(
       if (!_queueClosed) { _queueClosed = true; queue.close(); }
     });
 
-    // ── Worker loop ───────────────────────────────────────────────────────
-    // Each worker pulls from the priority queue, classifies the file, and
-    // either marks it unchanged or calls processOneFile and writes the result.
-    const CONCURRENCY = state.throttle.concurrency;
+    // ── Adaptive worker pool ──────────────────────────────────────────────
+    // Workers start at INITIAL_WORKERS. ConcurrencyController adjusts the
+    // target count every CTRL_INTERVAL_MS based on rolling I/O latency and
+    // queue depth, staying within [MIN_WORKERS, profile ceiling].
+    //
+    // Scale-down: workers with myId >= targetWorkerCount exit at the top of
+    // their next loop iteration (graceful — they finish the current file first).
+    // Scale-up:   spawnWorker() is called to add new workers immediately.
 
-    const workerLoop = async (): Promise<void> => {
-      for (;;) {
-        // Check BEFORE blocking on queue.pop() — if already signalled, stop
-        // without waiting for another item (which might never arrive).
-        if (state.cancelRequested || state.pauseRequested) {
-          requestStop();
-          break;
-        }
+    const concCtrl = new ConcurrencyController(INITIAL_WORKERS, state.throttle.concurrencyCeiling);
+    let targetWorkerCount = concCtrl.count;
+    let nextWorkerId      = 0;
+    const allWorkerPromises: Promise<void>[] = [];
 
-        state.phase = "indexing";
-        const f = await queue.pop(); // waits until item available OR queue closed
-        if (f === null) break;       // queue closed + empty → done
+    const spawnWorker = (): void => {
+      const myId = nextWorkerId++;
+      allWorkerPromises.push((async (): Promise<void> => {
+        for (;;) {
+          // Check BEFORE blocking on queue.pop() — if already signalled, stop
+          // without waiting for another item (which might never arrive).
+          if (state.cancelRequested || state.pauseRequested) {
+            requestStop();
+            break;
+          }
 
-        // We already hold this file — complete its processing (drain semantics).
-        // Do NOT discard it, even if pause/cancel was set while we were waiting.
-        const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
-        seenPaths.add(relativePath);
+          // Graceful scale-down: step aside so a new worker with a lower id
+          // can take over — avoids queue.pop() contention when over-provisioned.
+          if (myId >= targetWorkerCount) break;
 
-        const existing = existingByPath.get(relativePath);
-        const isUnchanged = existing &&
-          existing.sizeBytes === f.sizeBytes &&
-          existing.modifiedAt?.getTime() === f.modifiedAt.getTime() &&
-          state.profile !== "FULL";
+          state.phase = "indexing";
+          const f = await queue.pop(); // waits until item available OR queue closed
+          if (f === null) break;       // queue closed + empty → done
 
-        if (isUnchanged) {
-          unchangedBuf.push(existing!.id);
-          state.counters.unchanged++;
-          state.filesProcessed++;
-          tickSpeed(state);
-          if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
-        } else {
-          const result = await processOneFile(f);
+          // We already hold this file — complete its processing (drain semantics).
+          // Do NOT discard it, even if pause/cancel was set while we were waiting.
+          const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
+          seenPaths.add(relativePath);
 
-          if (result.action === "SKIP") {
-            recordSkip(state, result.relativePath, result.skipReason!);
-          } else if (result.action === "MOVED" && result.targetId !== undefined) {
-            await db.update(mediaFilesTable).set({
-              relativePath:     result.relativePath,
-              name:             result.name,
-              sizeBytes:        result.sizeBytes ?? 0,
-              modifiedAt:       result.modifiedAt ?? new Date(),
-              quickFingerprint: result.quickFingerprint ?? null,
-              lastScanAction:   "MOVED" as ScanAction,
-              lastScannedAt:    scanStartedAt,
-              indexedAt:        new Date(),
-            }).where(eq(mediaFilesTable.id, result.targetId));
-          } else if (result.values) {
-            upsertBuf.push(result.values);
-            if (result.action === "NEW") state.counters.new++;
-            else state.counters.modified++;
-            await maybeFlushBatch();
+          const existing = existingByPath.get(relativePath);
+          const isUnchanged = existing &&
+            existing.sizeBytes === f.sizeBytes &&
+            existing.modifiedAt?.getTime() === f.modifiedAt.getTime() &&
+            state.profile !== "FULL";
+
+          if (isUnchanged) {
+            unchangedBuf.push(existing!.id);
+            state.counters.unchanged++;
+            state.filesProcessed++;
+            tickSpeed(state);
+            if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
+          } else {
+            const t0     = Date.now();
+            const result = await processOneFile(f);
+            concCtrl.recordLatency(Date.now() - t0);
+
+            if (result.action === "SKIP") {
+              recordSkip(state, result.relativePath, result.skipReason!);
+            } else if (result.action === "MOVED" && result.targetId !== undefined) {
+              await db.update(mediaFilesTable).set({
+                relativePath:     result.relativePath,
+                name:             result.name,
+                sizeBytes:        result.sizeBytes ?? 0,
+                modifiedAt:       result.modifiedAt ?? new Date(),
+                quickFingerprint: result.quickFingerprint ?? null,
+                lastScanAction:   "MOVED" as ScanAction,
+                lastScannedAt:    scanStartedAt,
+                indexedAt:        new Date(),
+              }).where(eq(mediaFilesTable.id, result.targetId));
+            } else if (result.values) {
+              upsertBuf.push(result.values);
+              if (result.action === "NEW") state.counters.new++;
+              else state.counters.modified++;
+              await maybeFlushBatch();
+            }
+          }
+
+          // After completing this file, check if we should stop.
+          // requestStop() closes the queue so other waiting workers unblock too.
+          if (state.cancelRequested || state.pauseRequested) {
+            requestStop();
+            break;
+          }
+
+          // Periodic progress persist (time-gated to avoid DB noise)
+          const now = Date.now();
+          if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
+            await flushUnchanged();
+            await db.update(libraryJobsTable)
+              .set({ processedFiles: state.filesProcessed })
+              .where(eq(libraryJobsTable.id, jobId));
+            lastPersistAt = now;
           }
         }
-
-        // After completing this file, check if we should stop.
-        // requestStop() closes the queue so other waiting workers unblock too.
-        if (state.cancelRequested || state.pauseRequested) {
-          requestStop();
-          break;
-        }
-
-        // Periodic progress persist (time-gated to avoid DB noise)
-        const now = Date.now();
-        if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
-          await flushUnchanged();
-          await db.update(libraryJobsTable)
-            .set({ processedFiles: state.filesProcessed })
-            .where(eq(libraryJobsTable.id, jobId));
-          lastPersistAt = now;
-        }
-      }
+      })());
     };
 
-    // Run walk and N workers concurrently
-    await Promise.all([walkDone, ...Array.from({ length: CONCURRENCY }, () => workerLoop())]);
+    // Spawn initial workers
+    for (let i = 0; i < targetWorkerCount; i++) spawnWorker();
+
+    // Concurrency controller — runs every 5 s until the walk completes
+    const ctrlInterval = setInterval(() => {
+      const { newCount, changed, reason } = concCtrl.adjust(queue.size);
+      if (changed) {
+        const prev    = targetWorkerCount;
+        targetWorkerCount = newCount;
+        console.info(`[scan #${jobId}] concurrency ${prev} → ${newCount}: ${reason}`);
+        if (newCount > prev) {
+          for (let i = 0; i < newCount - prev; i++) spawnWorker();
+        }
+        // Scale-down is handled by the myId >= targetWorkerCount guard in each worker
+      }
+    }, CTRL_INTERVAL_MS);
+
+    // Walk and workers run concurrently; walk closes the queue when done
+    await walkDone;
+
+    // Queue is now closed; shut down the controller and drain all workers
+    clearInterval(ctrlInterval);
+    await Promise.all(allWorkerPromises);
 
     // ── Handle pause / cancel ─────────────────────────────────────────────
     if (state.cancelRequested) {

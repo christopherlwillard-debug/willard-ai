@@ -20,15 +20,15 @@ export type ScanPhase   = "walking" | "indexing" | "hashing" | "metadata" | "det
 export type ScanPerformance = "HIGH" | "BALANCED" | "LOW";
 
 export interface ThrottleProfile {
-  batchSize:    number;
-  batchDelayMs: number;
-  concurrency:  number;
+  batchSize:          number;
+  batchDelayMs:       number;
+  concurrencyCeiling: number;
 }
 
 export const THROTTLE_PROFILES: Record<ScanPerformance, ThrottleProfile> = {
-  HIGH:     { batchSize: 200, batchDelayMs: 0,   concurrency: 8 },
-  BALANCED: { batchSize: 100, batchDelayMs: 0,   concurrency: 6 },
-  LOW:      { batchSize: 20,  batchDelayMs: 200, concurrency: 2 },
+  HIGH:     { batchSize: 200, batchDelayMs: 0,   concurrencyCeiling: 20 },
+  BALANCED: { batchSize: 100, batchDelayMs: 0,   concurrencyCeiling: 10 },
+  LOW:      { batchSize: 20,  batchDelayMs: 200, concurrencyCeiling: 2  },
 };
 
 // ── Skipped files ──────────────────────────────────────────────────────────────
