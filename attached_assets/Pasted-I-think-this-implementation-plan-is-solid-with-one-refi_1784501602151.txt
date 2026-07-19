@@ -1,0 +1,125 @@
+I think this implementation plan is solid, with one refinement to avoid introducing a new subtle bug.
+
+I'd make one small change to Fix #1
+
+Right now you're using:
+
+const contentChanged =
+  existing.sizeBytes !== f.sizeBytes ||
+  existing.modifiedAt?.getTime() !== f.modifiedAt.getTime();
+
+I'd separate content changes from metadata changes.
+
+For example:
+
+const binaryChanged =
+    existing.sizeBytes !== f.sizeBytes ||
+    existing.modifiedAt?.getTime() !== f.modifiedAt.getTime();
+
+Then:
+
+if (binaryChanged) {
+    action = "MODIFIED";
+    invalidateThumbnail = true;
+} else {
+    action = "UNCHANGED";
+}
+
+The reason is that later you may choose to refresh metadata during a FULL scan even when the binary hasn't changed. You don't want "metadata refresh" to accidentally imply "thumbnail invalidation."
+
+I'd rename contentChanged
+
+I actually like:
+
+binaryChanged
+
+better than contentChanged.
+
+"Content" can become ambiguous later (EXIF, AI tags, OCR, etc.).
+
+"Binary changed" clearly means:
+
+The underlying file bytes may have changed, so derived assets may be invalid.
+
+Fix #2
+
+Completely agree.
+
+Only delete the thumbnail when:
+
+if (binaryChanged)
+
+Never because it's a FULL scan.
+
+Fix #3
+
+Exactly right.
+
+I would also add a comment explaining why COALESCE is being used, because someone maintaining the code later might think it's unnecessary and remove it.
+
+Something like:
+
+// Preserve previously generated thumbnails unless this scan
+// explicitly provides a replacement or the thumbnail was
+// intentionally invalidated elsewhere.
+
+That kind of comment prevents regressions months from now.
+
+Fix #4
+
+I like the dedicated invalidation buffer.
+
+It's much cleaner than relying on UPSERT side effects.
+
+One suggestion:
+
+Instead of naming it:
+
+thumbResetBuf
+
+I'd call it something like:
+
+thumbnailInvalidationQueue
+
+or
+
+pendingThumbnailInvalidations
+
+Those names communicate intent immediately.
+
+One thing I'd add
+
+After the UPSERT finishes, verify the thumbnail actually exists before keeping the DB pointer.
+
+Very occasionally you can get:
+
+DB:
+thumbnail_path = xxx.webp
+
+↓
+
+NAS file deleted manually
+
+During a scan, if the pointer exists but the file doesn't:
+
+don't regenerate immediately,
+just enqueue it once for thumbnail generation.
+
+That keeps the database and filesystem in sync without relying on users to notice missing thumbnails.
+
+Overall
+
+I think this sequence is exactly the right one:
+
+Correct change detection (stop treating unchanged files as modified).
+Conditional thumbnail deletion (only invalidate when the source changes).
+COALESCE protection (make UPSERT resilient to nulls).
+Explicit invalidation queue (invalidate by intent, not by side effect).
+
+That's a clean architecture because each layer has a single responsibility:
+
+Change detection decides whether anything changed.
+Invalidation decides what must be regenerated.
+UPSERT preserves existing derived data unless told otherwise.
+
+That separation of concerns will make the scan engine much easier to maintain and greatly reduce the chance of this class of bug reappearing when you add future generated assets like previews, OCR, or AI-derived metadata.

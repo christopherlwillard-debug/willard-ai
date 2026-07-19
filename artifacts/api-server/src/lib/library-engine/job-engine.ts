@@ -236,8 +236,14 @@ const MEDIA_FILE_UPSERT_SET = {
   scannerVersion:       sql`excluded.scanner_version`,
   lastScanAction:       sql`excluded.last_scan_action`,
   lastScannedAt:        sql`excluded.last_scanned_at`,
-  thumbnailPath:        sql`excluded.thumbnail_path`,
-  thumbnailGeneratedAt: sql`excluded.thumbnail_generated_at`,
+  // Preserve previously generated thumbnails unless this scan explicitly
+  // provides a replacement (non-null) or the thumbnail was intentionally
+  // invalidated elsewhere (pendingAssetInvalidations explicit UPDATE).
+  // Using COALESCE means a null in the incoming row never silently erases
+  // a pointer that cost time to generate — e.g. a FULL rescan that
+  // re-extracts EXIF for unchanged files must not wipe their thumbnails.
+  thumbnailPath:        sql`COALESCE(excluded.thumbnail_path, ${mediaFilesTable.thumbnailPath})`,
+  thumbnailGeneratedAt: sql`COALESCE(excluded.thumbnail_generated_at, ${mediaFilesTable.thumbnailGeneratedAt})`,
   indexedAt:            sql`excluded.indexed_at`,
 } as const;
 
@@ -699,7 +705,7 @@ async function runScanJob(
     state.filesTotal     = 0;
 
     // Load all existing paths from DB for this NAS (for move detection)
-    const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number }>();
+    const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null }>();
     const dbRows = await db.select({
       id: mediaFilesTable.id,
       relativePath: mediaFilesTable.relativePath,
@@ -708,6 +714,7 @@ async function runScanJob(
       contentHash: mediaFilesTable.contentHash,
       quickFingerprint: mediaFilesTable.quickFingerprint,
       scannerVersion: mediaFilesTable.scannerVersion,
+      thumbnailPath: mediaFilesTable.thumbnailPath,
     }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
 
     for (const row of dbRows) {
@@ -751,6 +758,29 @@ async function runScanJob(
           .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
           .where(inArray(mediaFilesTable.id, ids));
       } finally { unchangedFlushing = false; }
+    };
+
+    // ── Asset invalidation queue ──────────────────────────────────────────
+    // Collects IDs of files whose generated assets must be explicitly nulled
+    // in the DB. The UPSERT uses COALESCE so it never clears generated metadata
+    // on its own — invalidation must be intentional and flow through here.
+    // Two cases enqueue a file:
+    //   1. binaryChanged — source file changed, stale thumbnail was deleted.
+    //   2. orphanedThumbnail — DB pointer exists but .webp is missing from disk.
+    // Extensible: add more asset types (preview, AI cache) to the UPDATE below.
+    const pendingAssetInvalidations: number[] = [];
+    let assetInvalidationFlushing = false;
+    const flushAssetInvalidations = async (): Promise<void> => {
+      if (assetInvalidationFlushing || pendingAssetInvalidations.length === 0) return;
+      assetInvalidationFlushing = true;
+      const ids = pendingAssetInvalidations.splice(0);
+      try {
+        for (let i = 0; i < ids.length; i += 500) {
+          await db.update(mediaFilesTable)
+            .set({ thumbnailPath: null, thumbnailGeneratedAt: null })
+            .where(inArray(mediaFilesTable.id, ids.slice(i, i + 500)));
+        }
+      } finally { assetInvalidationFlushing = false; }
     };
 
     // ── DB batch writer ────────────────────────────────────────────────────
@@ -814,15 +844,23 @@ async function runScanJob(
     // Returns a result describing what to write; all DB writes are batched by
     // the caller so Promise.all can run multiple of these concurrently.
     interface FileResult {
-      action:            "NEW" | "MODIFIED" | "MOVED" | "SKIP";
-      relativePath:      string;
-      name:              string;
-      targetId?:         number;
-      quickFingerprint?: string | null;
-      sizeBytes?:        number;
-      modifiedAt?:       Date;
-      values?:           typeof mediaFilesTable.$inferInsert;
-      skipReason?:       string;
+      action:               "NEW" | "MODIFIED" | "MOVED" | "SKIP";
+      relativePath:         string;
+      name:                 string;
+      targetId?:            number;
+      quickFingerprint?:    string | null;
+      sizeBytes?:           number;
+      modifiedAt?:          Date;
+      values?:              typeof mediaFilesTable.$inferInsert;
+      skipReason?:          string;
+      /** DB id of the pre-existing row (undefined for NEW files). Used by the
+       *  caller to enqueue pendingAssetInvalidations without re-querying. */
+      existingId?:          number;
+      /** True when the source file's binary content changed and the thumbnail
+       *  was deleted from disk. Caller must explicitly null out thumbnail_path
+       *  in the DB via pendingAssetInvalidations rather than relying on the
+       *  UPSERT (which uses COALESCE to protect existing generated metadata). */
+      invalidateThumbnail?: boolean;
     }
 
     const processOneFile = async (f: { fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }): Promise<FileResult> => {
@@ -836,6 +874,11 @@ async function runScanJob(
       let contentHash: string | null = null;
       let currentSize  = f.sizeBytes;
       let currentMtime = f.modifiedAt;
+      // Set to true when this file's thumbnail must be invalidated: either the
+      // source binary changed (so the existing thumbnail is stale) or the .webp
+      // file is missing from disk (orphan). The caller flushes these IDs via
+      // pendingAssetInvalidations rather than relying on the UPSERT.
+      let invalidateThumbnail = false;
 
       if (!existing) {
         if (!isFirstScan) {
@@ -875,10 +918,32 @@ async function runScanJob(
         action = "NEW";
         // On first scan quickFingerprint stays null — move detection is impossible anyway
       } else {
-        // MODIFIED — delete stale thumbnail file so it gets regenerated
+        // Determine whether the underlying binary changed.
+        // "Binary changed" = size or mtime differs from what's in the DB.
+        // A FULL scan re-extracts metadata for every file, but that does NOT
+        // mean every file's binary changed — derived assets (thumbnails,
+        // previews, embeddings) must only be invalidated when this is true.
+        const binaryChanged =
+          existing.sizeBytes !== f.sizeBytes ||
+          existing.modifiedAt?.getTime() !== f.modifiedAt.getTime();
+
         const thumbDir = getThumbnailDir(state.nasPath);
         const oldThumb = path.join(thumbDir, thumbnailFilename(existing.id));
-        try { fs.unlinkSync(oldThumb); } catch { /* gone */ }
+
+        if (binaryChanged) {
+          // Source file changed — delete the stale thumbnail so the thumbnail
+          // worker regenerates it from the new file content.
+          try { fs.unlinkSync(oldThumb); } catch { /* already gone */ }
+        }
+
+        // Orphan check: DB pointer exists but the .webp was manually removed
+        // from the NAS. Detected opportunistically here (we're already
+        // processing this record) so we don't need a separate filesystem pass.
+        // Don't regenerate inline; enqueue for the thumbnail worker instead.
+        const orphanedThumbnail =
+          !binaryChanged &&
+          existing.thumbnailPath != null &&
+          !fs.existsSync(oldThumb);
 
         state.phase = "hashing";
         quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
@@ -888,6 +953,10 @@ async function runScanJob(
           return { action: "SKIP", relativePath, name: f.name, skipReason: "Could not read file (permission denied or unreadable)" };
         }
         action = "MODIFIED";
+        // Propagate invalidation intent to the caller via the result object.
+        // The UPSERT uses COALESCE so it won't clear thumbnail_path on its own;
+        // the caller must issue an explicit UPDATE for any invalidated file.
+        invalidateThumbnail = binaryChanged || orphanedThumbnail;
       }
 
       // ── Extract metadata ──────────────────────────────────────────────
@@ -971,7 +1040,7 @@ async function runScanJob(
 
       state.filesProcessed++;
       tickSpeed(state);
-      return { action, relativePath, name: f.name, values };
+      return { action, relativePath, name: f.name, values, invalidateThumbnail, existingId: existing?.id };
     };
 
     // ── Priority queue + streaming worker pool ────────────────────────────
@@ -1147,6 +1216,12 @@ async function runScanJob(
                 upsertBuf.push(result.values);
                 if (result.action === "NEW") state.counters.new++;
                 else state.counters.modified++;
+                // Enqueue explicit thumbnail invalidation for files whose
+                // binary changed (or whose .webp was orphaned). Must come
+                // AFTER the upsert so the row exists in the DB.
+                if (result.invalidateThumbnail && result.existingId !== undefined) {
+                  pendingAssetInvalidations.push(result.existingId);
+                }
                 await maybeFlushBatch();
               }
             }
@@ -1162,6 +1237,7 @@ async function runScanJob(
             const now = Date.now();
             if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
               await flushUnchanged();
+              await flushAssetInvalidations();
               await db.update(libraryJobsTable)
                 .set({ processedFiles: state.filesProcessed })
                 .where(eq(libraryJobsTable.id, jobId));
@@ -1207,6 +1283,7 @@ async function runScanJob(
     if (state.cancelRequested) {
       await flushBatch();
       await flushUnchanged();
+      await flushAssetInvalidations();
       await db.update(libraryJobsTable).set({
         status: "CANCELLED",
         cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
@@ -1221,6 +1298,7 @@ async function runScanJob(
     if (state.pauseRequested) {
       await flushBatch();
       await flushUnchanged();
+      await flushAssetInvalidations();
       await db.update(libraryJobsTable).set({
         status:         "PAUSED",
         pausedAt:       new Date(),
@@ -1234,6 +1312,7 @@ async function runScanJob(
     // Final flush of all remaining buffered rows
     await flushBatch();
     await flushUnchanged();
+    await flushAssetInvalidations();
     await db.update(libraryJobsTable)
       .set({ processedFiles: state.filesProcessed, totalFiles: state.filesTotal })
       .where(eq(libraryJobsTable.id, jobId));

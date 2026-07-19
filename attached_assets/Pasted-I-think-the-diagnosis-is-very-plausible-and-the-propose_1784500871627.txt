@@ -1,0 +1,115 @@
+I think the diagnosis is very plausible, and the proposed fix is the right direction—but I'd verify one thing before changing the code.
+
+The key claim is:
+
+Every FULL scan writes thumbnailPath: null, and the UPSERT overwrites the existing database value with NULL.
+
+If that's true, then yes, every restart would make the thumbnail job think nothing has thumbnails, even though the .webp files are still sitting on the NAS.
+
+The flow would look like this:
+
+Existing thumbnail.webp
+        │
+        ▼
+FULL scan
+        │
+        ▼
+UPSERT thumbnailPath = NULL
+        │
+        ▼
+Database forgets thumbnail exists
+        │
+        ▼
+Thumbnail worker:
+WHERE thumbnailPath IS NULL
+        │
+        ▼
+Queue 24,489 files
+        │
+        ▼
+Find existing .webp
+        │
+        ▼
+Update DB
+
+That exactly matches what you're seeing:
+
+✔ Thumbnails still display (because the files exist).
+✔ Thumbnail job wants to process nearly everything again.
+✔ It isn't necessarily regenerating images—it may just be restoring the database pointers.
+I would make the fix slightly stronger
+
+Using COALESCE is good:
+
+thumbnail_path = COALESCE(excluded.thumbnail_path, thumbnail_path)
+
+But I'd apply the same pattern to all derived metadata that shouldn't disappear during a normal rescan.
+
+For example:
+
+thumbnailPath
+thumbnailGeneratedAt
+previewPath
+faceEmbedding
+ocrText
+aiCaption
+vectorEmbedding
+
+A scanner shouldn't erase expensive-to-generate data unless it has a reason to.
+
+Even better architecture
+
+I'd distinguish between:
+
+Source metadata
+
+Things read from the file:
+
+filename
+size
+modified time
+EXIF
+duration
+
+These can always be overwritten from the current file.
+
+Generated metadata
+
+Things your app created:
+
+thumbnails
+previews
+OCR
+AI tags
+embeddings
+face recognition
+
+These should remain until:
+
+the file changes,
+the generated asset is deleted,
+or the user requests regeneration.
+One thing to verify
+
+I would check whether this only happens on FULL scans.
+
+If incremental scans leave thumbnailPath alone but FULL scans clear it, then you've found a specific bug in that code path.
+
+If both scan types clear it, then the bug is more general.
+
+My recommendation
+
+I would not let the scan engine ever write:
+
+thumbnailPath = null
+
+unless one of these is true:
+
+The original file changed and the thumbnail is now invalid.
+The thumbnail file was deleted.
+The user clicked "Regenerate thumbnails."
+The user explicitly cleared the thumbnail cache.
+
+Outside of those situations, the scanner should preserve the existing thumbnail information.
+
+From the behavior you described, this looks much more like a logic bug than a performance problem. Fixing it should eliminate a huge amount of unnecessary thumbnail work after every restart, which will also make startup and background processing feel much faster.

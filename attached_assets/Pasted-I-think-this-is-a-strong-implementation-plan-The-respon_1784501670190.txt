@@ -1,0 +1,34 @@
+I think this is a strong implementation plan. The responsibilities are clearly separated, and each change addresses a specific failure mode without overlapping.
+
+The only refinement I'd suggest is to make the orphan detection a little more conservative so it doesn't create unnecessary network traffic on a NAS.
+
+Instead of checking for every thumbnail during every scan, tie the orphan check to the cases where you're already touching the record:
+
+The file is being processed during a FULL or incremental scan.
+thumbnailPath is non-null.
+Perform one fs.exists() check on the thumbnail path.
+If the thumbnail is missing, add the file to pendingThumbnailInvalidations.
+Don't attempt to regenerate the thumbnail during the scan; let the thumbnail worker handle it afterward.
+
+That way, you avoid introducing a separate filesystem pass whose only purpose is validating thumbnails.
+
+I'd also slightly tweak the invalidation queue's responsibility. Rather than being thumbnail-specific, think of it as an asset invalidation queue from the start. Today it only contains thumbnail resets, but its API can be generic:
+
+pendingAssetInvalidations
+
+- Thumbnail
+- Preview (future)
+- Contact Sheet (future)
+- AI Cache (future)
+
+Internally, it can still only process thumbnail invalidations for now. This gives you room to expand without redesigning the mechanism later.
+
+Final architecture
+Layer	Responsibility
+binaryChanged	Determines whether the source file changed.
+Conditional delete	Removes the thumbnail file only when binaryChanged is true.
+COALESCE UPSERT	Prevents accidental loss of generated metadata.
+pendingThumbnailInvalidations	Explicitly clears database pointers for thumbnails that are intentionally invalidated.
+Orphan detection	Detects missing thumbnail files and queues them for regeneration without interrupting the scan.
+
+With this design, the scanner no longer conflates verification, change detection, asset invalidation, and thumbnail generation. Each concern is handled independently, which should eliminate the restart loop you're seeing where a FULL scan causes thousands of thumbnails to be needlessly invalidated.

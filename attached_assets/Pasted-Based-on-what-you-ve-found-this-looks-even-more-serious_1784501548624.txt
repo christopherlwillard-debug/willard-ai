@@ -1,0 +1,111 @@
+Based on what you've found, this looks even more serious than just the COALESCE issue.
+
+The root bug appears to be here:
+
+A FULL scan treats every existing file as MODIFIED, regardless of whether the file actually changed.
+
+That creates a cascade:
+
+FULL scan
+      │
+      ▼
+Every existing file → MODIFIED
+      │
+      ▼
+Delete thumbnail.webp
+      │
+      ▼
+thumbnailPath = NULL
+      │
+      ▼
+Thumbnail queue = 24,489 files
+      │
+      ▼
+Regenerate or re-register everything
+
+In other words, the COALESCE fix protects the database, but it doesn't address the more fundamental issue if the thumbnail files are actually being deleted.
+
+I would change the order of the fixes
+1. Fix change detection first (highest priority)
+
+This is the real bug.
+
+A file should only become "MODIFIED" if something that affects derived artifacts has actually changed, such as:
+
+size
+modified timestamp
+content hash (when applicable)
+
+If those values are unchanged, the file should remain "UNCHANGED" even during a FULL scan.
+
+A FULL scan should mean "verify everything", not "pretend everything changed."
+
+2. Stop deleting thumbnails unconditionally
+
+Instead of:
+
+if (existing) {
+    deleteThumbnail();
+}
+
+It should be more like:
+
+if (existing && fileActuallyChanged) {
+    deleteThumbnail();
+}
+
+That preserves expensive derived assets unless they're genuinely invalid.
+
+3. Add COALESCE as a safety net
+
+I still think this is important.
+
+Even if some future bug accidentally passes null for a generated field, the UPSERT shouldn't erase it.
+
+That makes the database resilient to mistakes elsewhere in the pipeline.
+
+4. Explicitly invalidate only when intended
+
+Your proposed thumbnailDeleted flag is a clean approach.
+
+The flow becomes:
+
+File changed?
+        │
+   No ──┴──► Preserve thumbnail
+        │
+       Yes
+        ▼
+Delete thumbnail
+        ▼
+Queue regeneration
+        ▼
+Explicit UPDATE thumbnail_path = NULL
+
+That keeps invalidation intentional instead of being a side effect.
+
+One additional improvement I'd make
+
+Instead of a boolean thumbnailDeleted, I'd use a more general invalidation model.
+
+For example:
+
+enum InvalidationReason {
+    None,
+    Thumbnail,
+    Preview,
+    Metadata,
+    AI,
+}
+
+Then future features (OCR, embeddings, face recognition, previews) can reuse the same mechanism rather than adding more boolean flags.
+
+Overall
+
+I think the fixes naturally fall into three layers:
+
+Correctness – Don't classify unchanged files as modified during a FULL scan.
+Invalidation – Only delete thumbnails (or other generated artifacts) when the source file truly changes.
+Protection – Use COALESCE in UPSERTs so generated metadata isn't accidentally wiped by null values.
+
+If your analysis is correct, fix #1 alone should eliminate the vast majority of unnecessary thumbnail work, because unchanged files would never trigger deletion or regeneration in the first place. The COALESCE changes then become a defensive safeguard rather than the primary fix.
