@@ -83,9 +83,6 @@ const state: WatcherInternalState = {
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
 
-// Track whether a FULL rescan was in-progress last heartbeat so we can detect
-// when it finishes and immediately trigger a catch-up QUICK scan.
-let _fullScanWasActive = false;
 
 // ── Public snapshot (for /api/library/health) ────────────────────────────────
 
@@ -345,19 +342,15 @@ export async function runWatcherHeartbeat(): Promise<void> {
       void triggerScan(reach.path, "recovery");
     }
 
-    // M7 conflict guard — detect when a FULL rescan just finished so we can
-    // immediately follow up with a QUICK scan to catch any changes that arrived
-    // while the full scan's deletion sweep was running.
+    // M7 conflict guard — on every heartbeat, if needsCatchUp is set and no
+    // FULL scan is currently active, fire an immediate QUICK catch-up scan.
+    // This is unconditional (not transition-based) so we never miss the replay
+    // even when a FULL scan starts and finishes between two heartbeat ticks.
     const activeProfile = getActiveJobProfile();
-    const fullScanIsActive = activeProfile === "FULL";
-    if (_fullScanWasActive && !fullScanIsActive) {
-      // FULL rescan just completed this heartbeat cycle.
-      if (state.needsCatchUp || state.pendingChanges > 0) {
-        state.needsCatchUp = false;
-        void triggerScan(reach.path, "recovery");
-      }
+    if (state.needsCatchUp && activeProfile !== "FULL") {
+      state.needsCatchUp = false;
+      void triggerScan(reach.path, "recovery");
     }
-    _fullScanWasActive = fullScanIsActive;
 
     // Self-healing: reopen the native watcher if it died.
     if (!state.fsWatcher && !state.eventsUnsupported) {

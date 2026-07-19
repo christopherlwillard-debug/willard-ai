@@ -637,7 +637,7 @@ export default function Dashboard() {
               Settings
             </Link>
             , set your NAS library path, then click{" "}
-            <strong>Scan Now</strong> in the top bar.
+            <strong>Full Rescan</strong> in the top bar.
           </p>
         </div>
       )}

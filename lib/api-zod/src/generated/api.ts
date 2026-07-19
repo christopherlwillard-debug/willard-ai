@@ -149,7 +149,8 @@ export const GetSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "watcherPollIntervalSeconds": zod.number().optional()
 })
 
 
@@ -164,7 +165,8 @@ export const UpdateSettingsBody = zod.object({
   "otherFilesDestination": zod.string().optional(),
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "onboardingDismissed": zod.boolean().optional(),
-  "celebrationShown": zod.boolean().optional()
+  "celebrationShown": zod.boolean().optional(),
+  "watcherPollIntervalSeconds": zod.number().int().min(10).max(3600).optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -179,7 +181,8 @@ export const UpdateSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "watcherPollIntervalSeconds": zod.number().optional()
 })
 
 
