@@ -481,6 +481,229 @@ export function walkNas(
   recurse(dir);
 }
 
+// ── Priority scoring for streaming scan queue ──────────────────────────────────
+// photo=0, document=1, audio=2, video=3, other=4; within each type, smaller
+// files first so thumbnails appear quickly and large videos are last.
+
+const QUEUE_TYPE_PRIORITY: Record<MediaType, number> = {
+  photo: 0, document: 1, audio: 2, video: 3, other: 4,
+};
+
+function queueScore(entry: FileEntry): number {
+  const t = QUEUE_TYPE_PRIORITY[classifyMediaType(entry.ext)] ?? 4;
+  // type dominates; size breaks ties (cap at ~1 TB to stay in float64 precision)
+  return t * 1e12 + Math.min(entry.sizeBytes, 999_999_999_999);
+}
+
+// ── ScanPriorityQueue ─────────────────────────────────────────────────────────
+// Async min-heap.  push() inserts immediately; pop() awaits if empty+open.
+// close() causes all pending pop() calls to return null.
+
+export class ScanPriorityQueue {
+  private heap: Array<{ entry: FileEntry; score: number }> = [];
+  private waiters: Array<() => void> = [];
+  private _closed = false;
+
+  get size(): number { return this.heap.length; }
+  get isClosed(): boolean { return this._closed; }
+
+  push(entry: FileEntry): void {
+    const score = queueScore(entry);
+    this.heap.push({ entry, score });
+    let i = this.heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.heap[p]!.score <= score) break;
+      [this.heap[p], this.heap[i]] = [this.heap[i]!, this.heap[p]!];
+      i = p;
+    }
+    if (this.waiters.length > 0) this.waiters.shift()!();
+  }
+
+  /** Returns the highest-priority entry. Waits if empty+open; returns null if closed+empty. */
+  async pop(): Promise<FileEntry | null> {
+    for (;;) {
+      if (this.heap.length > 0) {
+        const top = this.heap[0]!.entry;
+        const last = this.heap.pop()!;
+        if (this.heap.length > 0) {
+          this.heap[0] = last;
+          let i = 0;
+          for (;;) {
+            const l = 2 * i + 1, r = 2 * i + 2;
+            let s = i;
+            if (l < this.heap.length && this.heap[l]!.score < this.heap[s]!.score) s = l;
+            if (r < this.heap.length && this.heap[r]!.score < this.heap[s]!.score) s = r;
+            if (s === i) break;
+            [this.heap[i], this.heap[s]] = [this.heap[s]!, this.heap[i]!];
+            i = s;
+          }
+        }
+        return top;
+      }
+      if (this._closed) return null;
+      await new Promise<void>(resolve => this.waiters.push(resolve));
+    }
+  }
+
+  close(): void {
+    this._closed = true;
+    const ws = this.waiters.splice(0);
+    for (const w of ws) w();
+  }
+}
+
+// ── Async NAS walker ──────────────────────────────────────────────────────────
+// Like walkNas but fully async: uses fs.promises.readdir with up to
+// MAX_CONCURRENT_READDIR simultaneous directory reads.  Files are pushed to
+// the ScanPriorityQueue as they are discovered so workers can start
+// processing immediately — before the walk finishes.
+// The caller closes the queue after resolveSkippedDirs finishes.
+
+const MAX_CONCURRENT_READDIR = 8;
+
+export async function walkNasAsync(
+  dir: string,
+  skipDirs: Set<string>,
+  queue: ScanPriorityQueue,
+  onFile?: (entry: FileEntry) => void,
+  onDir?: (dir: string) => void,
+  onSkip?: (fullPath: string, reason: string) => void,
+  dirCacheIn?: ReadonlyMap<string, DirCacheEntry>,
+  dirCacheOut?: Map<string, DirCacheEntry>,
+  skippedDirs?: string[],
+  nasRoot?: string,
+  scannerSettings?: ScannerSettings,
+): Promise<void> {
+  let activeReaddirs = 0;
+  const readdirWaiters: Array<() => void> = [];
+
+  const acquireReaddir = (): Promise<void> => {
+    if (activeReaddirs < MAX_CONCURRENT_READDIR) { activeReaddirs++; return Promise.resolve(); }
+    return new Promise(resolve => readdirWaiters.push(() => { activeReaddirs++; resolve(); }));
+  };
+  const releaseReaddir = (): void => {
+    activeReaddirs--;
+    if (readdirWaiters.length > 0) readdirWaiters.shift()!();
+  };
+
+  const useDirCache =
+    dirCacheIn  !== undefined &&
+    dirCacheOut !== undefined &&
+    skippedDirs !== undefined &&
+    nasRoot     !== undefined;
+
+  const settings: ScannerSettings = scannerSettings ?? {
+    ignoredFolders: [], ignoredExtensions: [],
+    ignoreHiddenFiles: true, ignoreSystemFiles: true,
+    ignoreTempFiles: true, ignoreSidecarFiles: true,
+    ignoreEmptyFolders: false, followSymlinks: false,
+  };
+
+  async function recurse(currentDir: string): Promise<void> {
+    // User-configured ignored folder check
+    if (nasRoot && settings.ignoredFolders.length > 0) {
+      const relDir = path.relative(nasRoot, currentDir).replace(/\\/g, "/");
+      if (relDir && relDir !== ".") {
+        for (const ignored of settings.ignoredFolders) {
+          const norm = ignored.replace(/\\/g, "/").replace(/\/$/, "");
+          if (relDir === norm || relDir.startsWith(norm + "/")) {
+            onSkip?.(currentDir, "user_ignored_folder");
+            return;
+          }
+        }
+      }
+    }
+
+    // Dir-mtime cache short-circuit (preserve exact behaviour from sync walkNas)
+    if (useDirCache) {
+      const relDir = path.relative(nasRoot!, currentDir).replace(/\\/g, "/");
+      if (relDir && relDir !== ".") {
+        let entries: fs.Dirent[] | null = null;
+        try {
+          const dStat  = await fs.promises.stat(currentDir);
+          const mtimeMs = dStat.mtimeMs;
+          await acquireReaddir();
+          try { entries = await fs.promises.readdir(currentDir, { withFileTypes: true }); }
+          finally { releaseReaddir(); }
+          const entryCount = entries.length;
+          dirCacheOut!.set(relDir, { mtimeMs, entryCount });
+          const cached = dirCacheIn!.get(relDir);
+          if (cached !== undefined && mtimeMs === cached.mtimeMs && entryCount === cached.entryCount) {
+            skippedDirs!.push(relDir);
+            return;
+          }
+        } catch {
+          if (entries === null) {
+            onSkip?.(currentDir, "Could not read folder (permission denied or unreadable)");
+            return;
+          }
+        }
+        if (entries !== null) {
+          await Promise.all(entries.map(e => processEntry(e, currentDir)));
+          return;
+        }
+      }
+    }
+
+    // Normal async readdir
+    await acquireReaddir();
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      releaseReaddir();
+      onSkip?.(currentDir, "Could not read folder (permission denied or unreadable)");
+      return;
+    }
+    releaseReaddir();
+
+    if (settings.ignoreEmptyFolders && entries.length === 0) {
+      onSkip?.(currentDir, "system_directory");
+      return;
+    }
+
+    await Promise.all(entries.map(e => processEntry(e, currentDir)));
+  }
+
+  async function processEntry(entry: fs.Dirent, currentDir: string): Promise<void> {
+    const fullPath = path.join(currentDir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (isSystemDir(entry.name, settings)) { onSkip?.(fullPath, "system_directory"); return; }
+      if (skipDirs.has(path.resolve(fullPath))) return;
+      onDir?.(fullPath);
+      await recurse(fullPath);
+    } else if (entry.isFile() || (settings.followSymlinks && entry.isSymbolicLink())) {
+      if (settings.followSymlinks && entry.isSymbolicLink()) {
+        try {
+          const target = fs.statSync(fullPath);
+          if (target.isDirectory()) {
+            if (!skipDirs.has(path.resolve(fullPath))) { onDir?.(fullPath); await recurse(fullPath); }
+            return;
+          }
+          if (!target.isFile()) return;
+        } catch { return; }
+      }
+
+      const ext = path.extname(entry.name).replace(/^\./, "").toLowerCase();
+      const skipReason = checkSystemFile(entry.name, ext, settings);
+      if (skipReason !== null) { onSkip?.(fullPath, skipReason); return; }
+
+      try {
+        const stat = await fs.promises.stat(fullPath);
+        const fileEntry: FileEntry = { fullPath, name: entry.name, ext, sizeBytes: stat.size, modifiedAt: stat.mtime };
+        queue.push(fileEntry);
+        onFile?.(fileEntry);
+      } catch {
+        onSkip?.(fullPath, "Could not read file (permission denied or unreadable)");
+      }
+    }
+  }
+
+  await recurse(dir);
+}
+
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 export function strOrNull(v: unknown): string | null {

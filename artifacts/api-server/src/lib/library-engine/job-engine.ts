@@ -11,11 +11,12 @@ import {
   EMPTY_COUNTERS, PRIORITY_RANK, THROTTLE_PROFILES, SCANNER_VERSION, MAX_SKIPPED_LISTED,
 } from "./types";
 import {
-  walkNas, classifyMediaType, guessMimeType,
+  walkNas, walkNasAsync, classifyMediaType, guessMimeType,
   extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile,
   computeQuickFingerprint, sortFilesByPriority,
   PHOTO_EXTS, VIDEO_META_EXTS,
-  type DirCacheEntry,
+  ScanPriorityQueue,
+  type DirCacheEntry, type FileEntry,
 } from "./indexer";
 import { type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
 import { getWillardAIDir } from "../nas-storage";
@@ -527,11 +528,13 @@ async function runScanJob(
       return;
     }
 
-    // ── Phase: walking ────────────────────────────────────────────────────
+    // ── Streaming pipeline setup ──────────────────────────────────────────
+    // Walk and indexing run concurrently: the async walker pushes files into
+    // a priority queue as they are discovered; a worker pool consumes them
+    // immediately so photos appear in the library before the walk finishes.
     state.phase = "walking";
     const willardDir = path.resolve(getWillardAIDir(state.nasPath));
     const skipDirs   = new Set([willardDir]);
-    const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
 
     // Load scanner settings (user-configured exclusion rules)
     let scannerSettings: ScannerSettings = DEFAULT_SCANNER_SETTINGS;
@@ -563,65 +566,6 @@ async function runScanJob(
     const dirCacheIn  = loadDirMtimeCache(state.nasPath);
     const dirCacheOut = new Map<string, DirCacheEntry>();
     const skippedDirs: string[] = [];
-
-    walkNas(
-      path.resolve(scanRoot),
-      skipDirs,
-      files,
-      undefined,
-      (skippedPath, reason) => {
-        recordSkip(state, path.relative(state.nasPath, skippedPath).replace(/\\/g, "/"), reason);
-      },
-      dirCacheIn,
-      dirCacheOut,
-      skippedDirs,
-      path.resolve(state.nasPath),
-      scannerSettings,
-    );
-
-    // Prioritized ordering: photos → videos → documents → audio → other;
-    // newest-modified first within each category. Deterministic, so a stored
-    // cursor index remains meaningful across pause/resume.
-    sortFilesByPriority(files);
-
-    // ── Archive indexing ─────────────────────────────────────────────────
-    // Upsert discovered archives into archivesTable so the Archive Index page
-    // and the Operations Center "pick from indexed" dropdown stay populated.
-    // On conflict we only refresh size/folder/timestamp; peekStatus and
-    // peekEntries are intentionally left untouched so already-peeked archives
-    // keep their content metadata.
-    {
-      const ARCHIVE_EXTS_SET = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "txz", "cab", "iso"]);
-      const archiveRows = files
-        .filter(f => ARCHIVE_EXTS_SET.has(f.ext.toLowerCase()))
-        .map(f => ({
-          path: f.fullPath,
-          filename: f.name,
-          sizeBytes: f.sizeBytes,
-          modifiedAt: f.modifiedAt,
-          folder: path.dirname(f.fullPath),
-          category: "General",
-          peekStatus: "pending",
-        }));
-      for (let ai = 0; ai < archiveRows.length; ai += 100) {
-        const chunk = archiveRows.slice(ai, ai + 100);
-        await db.insert(archivesTable).values(chunk).onConflictDoUpdate({
-          target: archivesTable.path,
-          set: {
-            sizeBytes: sql`excluded.size_bytes`,
-            modifiedAt: sql`excluded.modified_at`,
-            folder:     sql`excluded.folder`,
-            indexedAt:  sql`NOW()`,
-          },
-        });
-      }
-    }
-
-    state.filesTotal = files.length;
-    state.filesProcessed = Math.min(startCursor, files.length);
-    await db.update(libraryJobsTable)
-      .set({ totalFiles: files.length })
-      .where(eq(libraryJobsTable.id, jobId));
 
     // Reuse the original scan anchor on resume so files indexed before the
     // pause are not misdetected as deleted at the end of this run.
@@ -673,55 +617,53 @@ async function runScanJob(
     // 128 KB per-file read that computeQuickFingerprint requires entirely.
     const isFirstScan = existingByPath.size === 0;
 
-    // ── Optimization 3: batch unchanged stamps ───────────────────────────
-    // Buffer IDs and flush with a single WHERE id = ANY(...) instead of one
-    // UPDATE per unchanged file.  Declared before Optimization 2 so the
-    // resolveSkippedDirs path can feed IDs into the same buffer.
+    // ── Unchanged buffer ──────────────────────────────────────────────────
+    // Batch-updates unchanged file timestamps instead of one UPDATE per file.
+    // Guard prevents concurrent flush from two workers.
     const unchangedBuf: number[] = [];
     const UNCHANGED_FLUSH = 500;
-
-    // ── Optimization 2: resolve skipped-directory files ──────────────────
-    // walkNas skipped readdirSync for unchanged directories (saving readdir
-    // overhead), but directory mtime only reflects structural changes
-    // (add/remove/rename entries).  In-place file edits do NOT update parent
-    // directory mtime on most filesystems, so we MUST still stat every known
-    // file individually to detect modifications.
-    //
-    // resolveSkippedDirs:
-    //   • queries the DB for all known files in those dirs
-    //   • stats each file on disk
-    //   • unchanged (size+mtime match) → added to unchangedBuf for batch stamp
-    //   • modified → appended to files[] for full indexing in the main loop
-    //   • gone → stays out of seenPaths → caught by deletion detection
-    if (skippedDirs.length > 0 && !isFirstScan) {
-      const { unchangedIds, filesToProcess } = await resolveSkippedDirs(
-        skippedDirs, state.nasPath, seenPaths, state.profile,
-      );
-
-      unchangedBuf.push(...unchangedIds);
-      state.counters.unchanged += unchangedIds.length;
-      state.filesProcessed    += unchangedIds.length;
-
-      if (filesToProcess.length > 0) files.push(...filesToProcess);
-
-      state.filesTotal = files.length + unchangedIds.length;
-      await db.update(libraryJobsTable)
-        .set({ totalFiles: state.filesTotal })
-        .where(eq(libraryJobsTable.id, jobId));
-    }
-
+    let unchangedFlushing = false;
     const flushUnchanged = async (): Promise<void> => {
-      if (unchangedBuf.length === 0) return;
+      if (unchangedFlushing || unchangedBuf.length === 0) return;
+      unchangedFlushing = true;
       const ids = unchangedBuf.splice(0);
-      await db.update(mediaFilesTable)
-        .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
-        .where(inArray(mediaFilesTable.id, ids));
+      try {
+        await db.update(mediaFilesTable)
+          .set({ lastScanAction: "UNCHANGED" as ScanAction, lastScannedAt: scanStartedAt })
+          .where(inArray(mediaFilesTable.id, ids));
+      } finally { unchangedFlushing = false; }
     };
 
-    // ── Optimization 4: concurrency semaphore for parallel metadata I/O ──
-    const sem = createSemaphore(state.throttle.concurrency);
+    // ── DB batch writer ────────────────────────────────────────────────────
+    // Flush when: 500 rows queued OR > 500 ms since last flush.
+    // Guard prevents concurrent flushes from two workers.
+    const BATCH_FLUSH_SIZE = 500;
+    const BATCH_FLUSH_MS  = 500;
+    const upsertBuf: (typeof mediaFilesTable.$inferInsert)[] = [];
+    let lastBatchFlushAt = Date.now();
+    let batchFlushing = false;
+    const flushBatch = async (): Promise<void> => {
+      if (batchFlushing || upsertBuf.length === 0) return;
+      batchFlushing = true;
+      const rows = upsertBuf.splice(0);
+      try {
+        for (let j = 0; j < rows.length; j += BATCH_FLUSH_SIZE) {
+          await db.insert(mediaFilesTable).values(rows.slice(j, j + BATCH_FLUSH_SIZE)).onConflictDoUpdate({
+            target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
+            set: MEDIA_FILE_UPSERT_SET,
+          });
+        }
+        lastBatchFlushAt = Date.now();
+      } finally { batchFlushing = false; }
+    };
+    const maybeFlushBatch = async (): Promise<void> => {
+      if (upsertBuf.length >= BATCH_FLUSH_SIZE ||
+          (upsertBuf.length > 0 && Date.now() - lastBatchFlushAt >= BATCH_FLUSH_MS)) {
+        await flushBatch();
+      }
+    };
 
-    // Persist cursor on a 10-second time-gate instead of every batch
+    // Persist cursor on a 10-second time-gate instead of every file
     const PERSIST_INTERVAL_MS = 10_000;
     let lastPersistAt = Date.now();
 
@@ -885,46 +827,94 @@ async function runScanJob(
       return { action, relativePath, name: f.name, values };
     };
 
-    // ── Main scan loop ────────────────────────────────────────────────────
-    const BATCH = state.throttle.batchSize;
+    // ── Priority queue + streaming worker pool ────────────────────────────
+    // Walker pushes files into the queue as they're discovered; workers pull
+    // from it immediately so metadata extraction starts before walk finishes.
+    const queue = new ScanPriorityQueue();
+    const ARCHIVE_EXTS_SET = new Set(["zip","rar","7z","tar","gz","bz2","xz","tgz","tbz2","txz","cab","iso"]);
+    const discoveredArchives: FileEntry[] = [];
 
-    for (let i = startCursor; i < files.length; i += BATCH) {
-      // Pause / cancel — flush pending writes before stopping
-      if (state.cancelRequested) {
-        await flushUnchanged();
-        await db.update(libraryJobsTable).set({
-          status: "CANCELLED",
-          cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
-          cursor: String(i),
-          summary: buildPartialSummary(state, scanStartedAt),
-          finishedAt: new Date(),
-        }).where(eq(libraryJobsTable.id, jobId));
-        activeJobs.delete(jobId);
-        return;
+    // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
+    const walkDone = walkNasAsync(
+      path.resolve(scanRoot),
+      skipDirs,
+      queue,
+      (fileEntry) => {
+        // Called for each discovered file — update running total and collect archives
+        state.filesTotal++;
+        if (ARCHIVE_EXTS_SET.has(fileEntry.ext.toLowerCase())) discoveredArchives.push(fileEntry);
+      },
+      undefined, // onDir
+      (skippedPath, reason) => {
+        recordSkip(state, path.relative(state.nasPath, skippedPath).replace(/\\/g, "/"), reason);
+      },
+      dirCacheIn,
+      dirCacheOut,
+      skippedDirs,
+      path.resolve(state.nasPath),
+      scannerSettings,
+    ).then(async () => {
+      // Walk finished — resolve dir-cache skipped dirs and inject their files
+      // Resolve skipped-directory files: directory mtime only reflects structural
+      // changes; in-place edits do NOT update parent mtime, so we still stat each
+      // known file to detect content changes.
+      if (!isFirstScan && skippedDirs.length > 0) {
+        const { unchangedIds, filesToProcess } = await resolveSkippedDirs(
+          skippedDirs, state.nasPath, seenPaths, state.profile,
+        );
+        unchangedBuf.push(...unchangedIds);
+        state.counters.unchanged += unchangedIds.length;
+        state.filesProcessed    += unchangedIds.length;
+        state.filesTotal        += unchangedIds.length + filesToProcess.length;
+        for (const f of filesToProcess) queue.push(f);
+        await db.update(libraryJobsTable)
+          .set({ totalFiles: state.filesTotal })
+          .where(eq(libraryJobsTable.id, jobId));
       }
 
-      if (state.pauseRequested) {
-        await flushUnchanged();
-        await db.update(libraryJobsTable).set({
-          status:         "PAUSED",
-          cursor:         String(i),
-          pausedAt:       new Date(),
-          processedFiles: state.filesProcessed,
-          summary:        buildPartialSummary(state, scanStartedAt),
-        }).where(eq(libraryJobsTable.id, jobId));
-        activeJobs.delete(jobId);
-        return;
+      // Archive upsert — on conflict only refresh size/folder/timestamp so
+      // already-peeked archives keep their content metadata.
+      if (discoveredArchives.length > 0) {
+        for (let ai = 0; ai < discoveredArchives.length; ai += 100) {
+          const chunk = discoveredArchives.slice(ai, ai + 100).map(f => ({
+            path: f.fullPath, filename: f.name,
+            sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
+            folder: path.dirname(f.fullPath), category: "General", peekStatus: "pending",
+          }));
+          await db.insert(archivesTable).values(chunk).onConflictDoUpdate({
+            target: archivesTable.path,
+            set: {
+              sizeBytes: sql`excluded.size_bytes`,
+              modifiedAt: sql`excluded.modified_at`,
+              folder:     sql`excluded.folder`,
+              indexedAt:  sql`NOW()`,
+            },
+          });
+        }
       }
 
-      const batchFiles = files.slice(i, i + BATCH);
-      const toProcess: typeof batchFiles = [];
+      // Close queue — workers drain remaining items and exit
+      queue.close();
+    });
 
-      // Classify synchronously: unchanged files need zero I/O
-      for (const f of batchFiles) {
+    // ── Worker loop ───────────────────────────────────────────────────────
+    // Each worker pulls from the priority queue, classifies the file, and
+    // either marks it unchanged or calls processOneFile and writes the result.
+    const CONCURRENCY = state.throttle.concurrency;
+
+    const workerLoop = async (): Promise<void> => {
+      for (;;) {
+        if (state.cancelRequested || state.pauseRequested) break;
+
+        state.phase = "indexing";
+        const f = await queue.pop(); // waits until item available OR queue closed
+        if (f === null) break;       // queue closed + empty → done
+        if (state.cancelRequested || state.pauseRequested) break;
+
         const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
         seenPaths.add(relativePath);
 
-        const existing   = existingByPath.get(relativePath);
+        const existing = existingByPath.get(relativePath);
         const isUnchanged = existing &&
           existing.sizeBytes === f.sizeBytes &&
           existing.modifiedAt?.getTime() === f.modifiedAt.getTime() &&
@@ -935,70 +925,79 @@ async function runScanJob(
           state.counters.unchanged++;
           state.filesProcessed++;
           tickSpeed(state);
+          if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
         } else {
-          toProcess.push(f);
+          const result = await processOneFile(f);
+
+          if (result.action === "SKIP") {
+            recordSkip(state, result.relativePath, result.skipReason!);
+          } else if (result.action === "MOVED" && result.targetId !== undefined) {
+            await db.update(mediaFilesTable).set({
+              relativePath:     result.relativePath,
+              name:             result.name,
+              sizeBytes:        result.sizeBytes ?? 0,
+              modifiedAt:       result.modifiedAt ?? new Date(),
+              quickFingerprint: result.quickFingerprint ?? null,
+              lastScanAction:   "MOVED" as ScanAction,
+              lastScannedAt:    scanStartedAt,
+              indexedAt:        new Date(),
+            }).where(eq(mediaFilesTable.id, result.targetId));
+          } else if (result.values) {
+            upsertBuf.push(result.values);
+            if (result.action === "NEW") state.counters.new++;
+            else state.counters.modified++;
+            await maybeFlushBatch();
+          }
+        }
+
+        // Periodic progress persist (time-gated to avoid DB noise)
+        const now = Date.now();
+        if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
+          await flushUnchanged();
+          await db.update(libraryJobsTable)
+            .set({ processedFiles: state.filesProcessed })
+            .where(eq(libraryJobsTable.id, jobId));
+          lastPersistAt = now;
         }
       }
+    };
 
-      if (unchangedBuf.length >= UNCHANGED_FLUSH) await flushUnchanged();
+    // Run walk and N workers concurrently
+    await Promise.all([walkDone, ...Array.from({ length: CONCURRENCY }, () => workerLoop())]);
 
-      // Process changed files concurrently — the semaphore limits parallel NAS I/O
-      const results = await Promise.all(toProcess.map(f => sem(() => processOneFile(f))));
-
-      // Apply results: batch-insert NEW/MODIFIED, individual-update MOVED
-      const upsertRows: (typeof mediaFilesTable.$inferInsert)[] = [];
-      for (const result of results) {
-        if (result.action === "SKIP") {
-          recordSkip(state, result.relativePath, result.skipReason!);
-        } else if (result.action === "MOVED" && result.targetId !== undefined) {
-          // Rename/move — update the existing record's path in place
-          await db.update(mediaFilesTable).set({
-            relativePath:     result.relativePath,
-            name:             result.name,
-            sizeBytes:        result.sizeBytes ?? 0,
-            modifiedAt:       result.modifiedAt ?? new Date(),
-            quickFingerprint: result.quickFingerprint ?? null,
-            lastScanAction:   "MOVED" as ScanAction,
-            lastScannedAt:    scanStartedAt,
-            indexedAt:        new Date(),
-          }).where(eq(mediaFilesTable.id, result.targetId));
-        } else if (result.values) {
-          upsertRows.push(result.values);
-        }
-      }
-
-      // Batch-upsert NEW + MODIFIED rows 200 at a time using excluded.* refs
-      for (let j = 0; j < upsertRows.length; j += 200) {
-        const chunk = upsertRows.slice(j, j + 200);
-        await db.insert(mediaFilesTable).values(chunk).onConflictDoUpdate({
-          target: [mediaFilesTable.nasPath, mediaFilesTable.relativePath],
-          set: MEDIA_FILE_UPSERT_SET,
-        });
-      }
-      for (const row of upsertRows) {
-        if (row.lastScanAction === "NEW") state.counters.new++;
-        else state.counters.modified++;
-      }
-
-      state.phase = "indexing";
-
-      // Persist cursor on a 10-second time-gate (not every batch)
-      const now = Date.now();
-      if (now - lastPersistAt >= PERSIST_INTERVAL_MS) {
-        await flushUnchanged();
-        await db.update(libraryJobsTable)
-          .set({ processedFiles: state.filesProcessed, cursor: String(Math.min(i + BATCH, files.length)) })
-          .where(eq(libraryJobsTable.id, jobId));
-        lastPersistAt = now;
-      } else if (state.throttle.batchDelayMs > 0) {
-        await new Promise(r => setTimeout(r, state.throttle.batchDelayMs));
-      }
+    // ── Handle pause / cancel ─────────────────────────────────────────────
+    if (state.cancelRequested) {
+      await flushBatch();
+      await flushUnchanged();
+      await db.update(libraryJobsTable).set({
+        status: "CANCELLED",
+        cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
+        cursor: null,
+        summary: buildPartialSummary(state, scanStartedAt),
+        finishedAt: new Date(),
+      }).where(eq(libraryJobsTable.id, jobId));
+      activeJobs.delete(jobId);
+      return;
     }
 
-    // Final flush of buffered unchanged IDs + cursor persist
+    if (state.pauseRequested) {
+      await flushBatch();
+      await flushUnchanged();
+      await db.update(libraryJobsTable).set({
+        status:         "PAUSED",
+        pausedAt:       new Date(),
+        processedFiles: state.filesProcessed,
+        summary:        buildPartialSummary(state, scanStartedAt),
+      }).where(eq(libraryJobsTable.id, jobId));
+      activeJobs.delete(jobId);
+      return;
+    }
+
+    // Final flush of all remaining buffered rows
+    await flushBatch();
     await flushUnchanged();
     await db.update(libraryJobsTable)
-      .set({ processedFiles: state.filesProcessed, cursor: String(files.length) })
+      .set({ processedFiles: state.filesProcessed, totalFiles: state.filesTotal })
       .where(eq(libraryJobsTable.id, jobId));
 
     // Save the current directory mtime cache for the next rescan
