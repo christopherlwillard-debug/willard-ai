@@ -443,8 +443,9 @@ function ScanBanner({
     );
   }
 
-  const pct  = progress.progress;
+  const pct      = progress.progress;
   const isPaused = progress.status === "PAUSED";
+  const isWalking = progress.phase === "walking" && !isPaused;
 
   return (
     <div className="rounded-lg border border-blue-700/40 bg-blue-900/20 px-4 py-3 space-y-2 font-mono text-sm">
@@ -455,29 +456,43 @@ function ScanBanner({
           : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
         }
         <span className="truncate flex-1 text-xs text-blue-400" title={progress.currentPath}>
-          {progress.phase}{progress.currentPath ? ` — ${progress.currentPath.split("/").pop()}` : ""}
+          {isWalking
+            ? `Discovering files\u2026${progress.filesTotal > 0 ? ` ${progress.filesTotal.toLocaleString()} found so far` : ""}`
+            : `${progress.phase}${progress.currentPath ? ` \u2014 ${progress.currentPath.split("/").pop()}` : ""}`
+          }
         </span>
-        <span className="text-xs text-blue-500 shrink-0">
-          {progress.filesProcessed.toLocaleString()}
-          {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} files
-        </span>
+        {!isWalking && (
+          <span className="text-xs text-blue-500 shrink-0">
+            {progress.filesProcessed.toLocaleString()}
+            {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} files
+          </span>
+        )}
       </div>
 
-      {/* Progress bar */}
-      <div className="w-full bg-blue-900/50 rounded-full h-1.5">
-        <div
-          className="bg-blue-400 h-1.5 rounded-full transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      {/* Progress bar — indeterminate pulse during walk, determinate otherwise */}
+      {isWalking ? (
+        <div className="w-full bg-blue-900/50 rounded-full h-1.5 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-blue-400 animate-pulse w-full opacity-60" />
+        </div>
+      ) : (
+        <div className="w-full bg-blue-900/50 rounded-full h-1.5">
+          <div
+            className="bg-blue-400 h-1.5 rounded-full transition-all duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="flex items-center gap-3 text-xs text-blue-400">
-        <span>{pct}%</span>
-        {progress.etaSeconds !== null && progress.etaSeconds > 0 && (
+        {isWalking
+          ? <span className="text-blue-500">Scanning folders\u2026</span>
+          : <span>{pct}%</span>
+        }
+        {!isWalking && progress.etaSeconds !== null && progress.etaSeconds > 0 && (
           <span>ETA {formatEta(progress.etaSeconds)}</span>
         )}
-        {progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
+        {!isWalking && progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
         <div className="flex gap-2 ml-auto">
           {progress.counters.new       > 0 && <span className="text-green-400">+{progress.counters.new}</span>}
           {progress.counters.modified  > 0 && <span className="text-yellow-400">~{progress.counters.modified}</span>}

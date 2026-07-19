@@ -998,6 +998,7 @@ async function runScanJob(
     };
 
     // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
+    state.phase = "walking";
     const diagWalkStart = Date.now();
     const walkDone = walkNasAsync(
       path.resolve(scanRoot),
@@ -1023,6 +1024,9 @@ async function runScanJob(
       // If a worker called requestStop() the queue is already closed; skip all
       // post-walk work so walkDone resolves immediately.
       if (stopSignal.stop) return;
+
+      // Walk finished — switch phase so the UI knows we're now processing.
+      state.phase = "indexing";
 
       // Walk finished — resolve dir-cache skipped dirs and inject their files.
       // Resolve skipped-directory files: directory mtime only reflects structural
