@@ -25,7 +25,7 @@ router.get("/storage", async (_req, res) => {
 
     const total = Number(totals.totalSizeBytes) || 1;
     const breakdown = typeBreakdown.map(r => ({
-      fileType: r.fileType,
+      fileType: r.fileType === "photo" ? "image" : r.fileType,
       count: r.count,
       sizeBytes: Number(r.sizeBytes),
       percentage: Math.round((Number(r.sizeBytes) / total) * 100 * 10) / 10,
