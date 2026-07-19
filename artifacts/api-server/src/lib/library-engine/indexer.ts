@@ -420,14 +420,21 @@ export function walkNas(
       return;
     }
 
+    // Ignore empty directories when the toggle is enabled
+    if (settings.ignoreEmptyFolders && entries.length === 0) {
+      onSkip?.(currentDir, "emptyFolder");
+      return;
+    }
+
     for (const entry of entries) {
       processEntry(entry, currentDir);
     }
   }
 
   function processEntry(entry: fs.Dirent, currentDir: string): void {
-    if (isSystemDir(entry.name)) {
-      onSkip?.(path.join(currentDir, entry.name), "system_directory");
+    // Use settings-aware isSystemDir so toggles are authoritative for dirs
+    if (isSystemDir(entry.name, settings)) {
+      onSkip?.(path.join(currentDir, entry.name), "systemDirectory");
       return;
     }
     const fullPath = path.join(currentDir, entry.name);

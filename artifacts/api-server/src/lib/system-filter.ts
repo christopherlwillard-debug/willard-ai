@@ -22,18 +22,44 @@ export const DEFAULT_SCANNER_SETTINGS: ScannerSettings = {
   followSymlinks:     false,
 };
 
-const BUILT_IN_SKIP_NAMES = new Set([
+// ── Skip reason (camelCase — used as dry-run API response keys) ───────────────
+
+export type SkipReason =
+  | "systemFile"
+  | "hiddenFile"
+  | "tempFile"
+  | "sidecarFile"
+  | "userIgnoredFolder"
+  | "userIgnoredExtension"
+  | "systemDirectory"
+  | "emptyFolder";
+
+// ── File-name / extension sets ────────────────────────────────────────────────
+
+// System metadata files — skipped when ignoreSystemFiles is enabled
+const SYSTEM_FILE_NAMES = new Set([
   "thumbs.db", "thumbs.db:encryptable", "ehthumbs.db", "ehthumbs_vista.db",
   "desktop.ini", "autorun.inf",
   ".ds_store", ".localized", ".appledouble", ".appledesktop",
 ]);
 
-const BUILT_IN_SKIP_EXTS = new Set([
-  "thm",
+// Sidecar extensions — skipped when ignoreSidecarFiles is enabled
+const SIDECAR_EXTS = new Set([
+  "thm",  // Canon video thumbnail sidecar
+  "xmp",  // Adobe metadata sidecar
+  "aae",  // Apple photo edit sidecar
 ]);
 
+// ── Directory filter ──────────────────────────────────────────────────────────
+//
+// "WillardAI" is always excluded (the app's own data directory).
+// All other categories are gated on their respective toggles when settings
+// are provided.  When settings are omitted (legacy callers) the original
+// default behaviour is preserved.
+
+const ALWAYS_SKIP_DIR_NAMES = new Set(["WillardAI"]);
+
 const SYSTEM_DIR_NAMES = new Set([
-  "WillardAI",
   "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
   "@eaDir", "@Recycle", "@SynoEAStream", "@SynoThumbs",
   "#recycle", "#snapshot",
@@ -41,7 +67,18 @@ const SYSTEM_DIR_NAMES = new Set([
   "lost+found", "__pycache__",
 ]);
 
-export function isSystemDir(name: string): boolean {
+export function isSystemDir(name: string, settings?: ScannerSettings): boolean {
+  if (ALWAYS_SKIP_DIR_NAMES.has(name)) return true;
+
+  if (settings) {
+    if (settings.ignoreHiddenFiles && name.startsWith(".")) return true;
+    if (settings.ignoreSystemFiles && (
+      name.startsWith("@") || name.startsWith("#") || SYSTEM_DIR_NAMES.has(name)
+    )) return true;
+    return false;
+  }
+
+  // No settings — preserve original default behaviour (all hidden / @/#/system)
   return (
     name.startsWith(".") ||
     name.startsWith("@") ||
@@ -50,14 +87,10 @@ export function isSystemDir(name: string): boolean {
   );
 }
 
-export type SkipReason =
-  | "system_file"
-  | "hidden_file"
-  | "temp_file"
-  | "sidecar_file"
-  | "user_ignored_folder"
-  | "user_ignored_extension"
-  | "system_directory";
+// ── File filter ───────────────────────────────────────────────────────────────
+//
+// Each category is gated on its corresponding settings toggle.
+// Returns the skip reason if the file should be excluded, or null to include it.
 
 export function checkSystemFile(
   name: string,
@@ -66,20 +99,42 @@ export function checkSystemFile(
 ): SkipReason | null {
   const nameLower = name.toLowerCase();
 
-  if (BUILT_IN_SKIP_NAMES.has(nameLower)) return "system_file";
+  // Apple resource-fork sidecars (._filename) — ignoreSidecarFiles
+  if (name.startsWith("._")) {
+    return settings.ignoreSidecarFiles ? "sidecarFile" : null;
+  }
 
-  if (name.startsWith("._")) return "system_file";
+  // Sidecar extensions (.thm, .xmp, .aae) — ignoreSidecarFiles
+  if (SIDECAR_EXTS.has(ext)) {
+    return settings.ignoreSidecarFiles ? "sidecarFile" : null;
+  }
 
-  if (BUILT_IN_SKIP_EXTS.has(ext)) return "sidecar_file";
+  // Known system metadata file names — ignoreSystemFiles
+  if (SYSTEM_FILE_NAMES.has(nameLower)) {
+    return settings.ignoreSystemFiles ? "systemFile" : null;
+  }
 
-  if (settings.ignoreHiddenFiles && name.startsWith(".")) return "hidden_file";
+  // Hidden files (dot-prefix, e.g. .gitkeep) — ignoreHiddenFiles
+  if (name.startsWith(".")) {
+    return settings.ignoreHiddenFiles ? "hiddenFile" : null;
+  }
 
-  if (settings.ignoreSystemFiles && name.startsWith("~$")) return "system_file";
+  // Office temp files (~$document.docx) — ignoreTempFiles
+  if (name.startsWith("~$")) {
+    return settings.ignoreTempFiles ? "tempFile" : null;
+  }
 
-  if (settings.ignoreTempFiles && (ext === "tmp" || ext === "temp")) return "temp_file";
+  // Temp extensions (.tmp, .temp) — ignoreTempFiles
+  if (ext === "tmp" || ext === "temp") {
+    return settings.ignoreTempFiles ? "tempFile" : null;
+  }
 
-  if (settings.ignoredExtensions.length > 0 && settings.ignoredExtensions.includes(ext)) {
-    return "user_ignored_extension";
+  // User-configured ignored extensions
+  if (settings.ignoredExtensions.length > 0) {
+    const extNorm = ext.toLowerCase().replace(/^\./, "");
+    if (settings.ignoredExtensions.map((e) => e.toLowerCase().replace(/^\./, "")).includes(extNorm)) {
+      return "userIgnoredExtension";
+    }
   }
 
   return null;
@@ -88,6 +143,8 @@ export function checkSystemFile(
 export function isSystemFile(name: string, ext: string, settings: ScannerSettings): boolean {
   return checkSystemFile(name, ext, settings) !== null;
 }
+
+// ── Relative-path folder check ────────────────────────────────────────────────
 
 export function isInIgnoredFolder(
   relPath: string,
