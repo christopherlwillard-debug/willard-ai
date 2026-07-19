@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, libraryJobsTable, appSettingsTable } from "@workspace/db";
-import { eq, and, lt, sql, isNull, or, gt, inArray } from "drizzle-orm";
+import { eq, and, lt, ne, sql, isNull, or, gt, inArray } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
   type CancellationReason, type ScanPhase, type ScanAction,
@@ -940,11 +940,13 @@ async function runScanJob(
     state.phase = "detecting_deletions";
 
     // Any DB record for this nasPath not seen in this scan → DELETED
+    // Exclude already-DELETED records so they aren't re-counted on every subsequent scan.
     const deletedRows = await db.update(mediaFilesTable)
       .set({ lastScanAction: "DELETED", lastScannedAt: scanStartedAt })
       .where(and(
         eq(mediaFilesTable.nasPath, state.nasPath),
         lt(mediaFilesTable.lastScannedAt, scanStartedAt),
+        ne(mediaFilesTable.lastScanAction, "DELETED"),
       ))
       .returning({ id: mediaFilesTable.id });
 
