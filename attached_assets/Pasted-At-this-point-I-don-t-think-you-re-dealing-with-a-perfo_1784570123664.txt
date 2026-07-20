@@ -1,0 +1,188 @@
+At this point, I don't think you're dealing with a performance problem anymore. I think you're dealing with a scan engine state problem.
+
+From your screenshots, several things don't line up.
+
+1. The indexer says "20 / 20 files" but never completes
+
+That is the biggest clue.
+
+A healthy scan should go something like:
+
+Loading database...
+Walking...
+Processing...
+Writing DB...
+Completed
+
+Instead yours is stuck at:
+
+Indexing
+20 / 20 files
+100%
+
+…and it never exits.
+
+That usually means one of these:
+
+a worker thread never signaled completion
+the DB batch writer never flushed
+a Promise never resolved
+the job state machine never transitioned to COMPLETE
+a queue thinks work is still pending even though there isn't any
+
+This is not an SMB speed problem.
+
+2. Dashboard says scanning forever
+
+Your dashboard and header are both still showing scanning.
+
+That means the server still believes:
+
+activeJob != null
+
+or
+
+status == RUNNING
+
+even though the scan appears finished.
+
+So something is holding the scan open.
+
+3. People page returns HTTP 500
+
+That is unrelated to SMB.
+
+A 500 means the backend crashed handling the request.
+
+Possibilities include:
+
+media_ai table issue
+face table missing
+migration incomplete
+query timeout
+null reference
+connection already locked
+
+This needs its own fix.
+
+4. Optimize immediately fails
+
+Again, not an SMB issue.
+
+If Optimize fails instantly, then either:
+
+it can't create a job
+the job engine is locked
+another job never released its lock
+the job scheduler thinks something is still running
+
+That lines up with the scan never completing.
+
+What I suspect is actually happening
+
+Everything points back to the Job Engine.
+
+Imagine this:
+
+Scan starts
+
+↓
+
+loads DB
+
+↓
+
+walks 20 directories
+
+↓
+
+workers finish
+
+↓
+
+DB writes finish
+
+↓
+
+activeWorkers = 0
+
+↓
+
+queue empty
+
+↓
+
+completion callback never fires
+
+↓
+
+job stays RUNNING forever
+
+Now every other subsystem waits forever.
+
+That explains:
+
+scanning forever
+optimize failing
+dashboard hanging
+resume/discard weirdness
+thumbnails not progressing
+I would stop adding roadmap items right now.
+
+Instead I'd have Replit perform a full health audit of the job engine.
+
+I'd ask something like:
+
+I no longer want new optimization features until the scan engine is stable. Please perform a complete health audit of the existing job engine.
+
+I need you to trace the lifecycle of every job from creation to completion.
+
+Specifically verify:
+
+Every code path that creates a job.
+Every place a job transitions:
+QUEUED
+RUNNING
+PAUSED
+FAILED
+COMPLETED
+Every worker pool shutdown path.
+Every Promise that must resolve before a job completes.
+Every queue that can prevent completion.
+Every mutex/lock that can remain held.
+Every timer or interval that survives after completion.
+Every event listener that waits indefinitely.
+Every condition required for completeJob() to execute.
+Every place completeJob() can be skipped.
+
+Then produce a dependency graph showing:
+
+Scan
+  ↓
+Walker
+  ↓
+Queue
+  ↓
+Workers
+  ↓
+DB Writer
+  ↓
+Thumbnail trigger
+  ↓
+CompleteJob
+
+For each stage, identify what conditions can leave the job permanently in RUNNING even though all visible work has finished.
+
+Do not propose new features. I want a stability audit and a list of root-cause bugs only.
+
+I would also have them answer these specific questions:
+
+Why did this scan stop at 20/20 instead of 24,564?
+Why didn't it transition to Completed?
+Why is the scan banner still visible?
+Why does Optimize fail immediately?
+Why does the People endpoint return HTTP 500?
+Is there a stuck job lock preventing new jobs?
+Are there unfinished Promises preventing completeJob() from executing?
+
+Those answers will likely uncover one or two core bugs that are causing the cascade of failures you're seeing. Once those are fixed, many of the symptoms—stuck scans, blocked jobs, and failing pages—may disappear without needing additional optimization work.
