@@ -1,0 +1,77 @@
+Things I think are well-founded
+
+The observation that the scan reaches 20/20 files but never transitions to completed is consistent with your screenshots. That means the problem is no longer "can it find files?"—it's "why doesn't the job lifecycle finish?"
+
+Adding a Force Discard mechanism is also a good idea. Every long-running job system should have a recovery path if a job gets wedged. Even if it doesn't fix the root cause, it gives you a way to recover without restarting the server.
+
+Likewise, cleaning up any timeout with a .finally() instead of only a .then() is a solid defensive change.
+
+Things I'd want proven before merging
+
+I would not accept this statement without evidence:
+
+"People 500 — caused by pool exhaustion from the stuck scan."
+
+A 500 error can come from dozens of causes:
+
+missing table
+failed migration
+SQL syntax error
+null reference
+bad query
+connection pool exhaustion
+timeout
+
+Unless they've shown logs indicating the database pool is exhausted (for example, waiting on available connections), that's still a hypothesis.
+
+I'd ask them to include the actual exception stack trace for the People endpoint before considering that fixed.
+
+Similarly, I'd be cautious with:
+
+"fs.statSync blocks the event loop, queue never closes."
+
+Using statSync on an SMB share is definitely something I'd replace with async I/O, but it's a leap to say that alone explains why the queue never closes. It may contribute to poor responsiveness, but I'd still want instrumentation showing exactly where execution stops.
+
+What I would ask Replit before merging
+
+I'd reply with something like:
+
+These changes look directionally correct, but before merging I'd like proof of the root causes rather than assumptions.
+
+Please add temporary instrumentation around the scan completion path and show me the logs from one complete run.
+
+Specifically log:
+
+walkDone entered
+resolveSkippedDirs started
+resolveSkippedDirs completed
+queue.close() called
+last worker exited
+DB batch flush finished
+completeJob() entered
+completeJob() exited
+active job lock released
+
+For the People 500, include the actual exception stack trace rather than assuming it's pool exhaustion.
+
+After these changes, demonstrate:
+
+a scan completes and transitions to COMPLETED,
+the "Scanning..." banner disappears,
+Optimize jobs can start immediately afterward,
+the People page returns 200,
+and no active job remains in the database.
+I think you're finally working on the right problem
+
+Earlier roadmap items (#123–#151) were almost entirely about making the scanner faster.
+
+The symptoms you're seeing now indicate the scanner isn't finishing reliably. Until that's fixed, concurrency, caching, adaptive workers, and NAS optimizations won't provide much benefit.
+
+My recommendation would be:
+
+Stabilize the job engine first.
+Verify scans complete consistently.
+Verify job locks are always released.
+Only then return to the NAS performance roadmap.
+
+Once you have a scan that always goes from Queued → Running → Completed, you'll be in a much better position to measure and improve performance without chasing cascading failures.

@@ -1,0 +1,156 @@
+I think this is the strongest task in your roadmap so far. It's exactly the kind of work that should happen before adding more performance features. I would make only a few refinements to make it even more rigorous.
+
+What I would change
+1. Add timing to every checkpoint
+
+Don't just log that a stage was entered—log how long it took.
+
+For example:
+
+[scan 42] DB load complete
+rows=24,564
+elapsed=2,314 ms
+
+[scan 42] Walker complete
+dirs=812
+files=24,564
+elapsed=18,902 ms
+
+[scan 42] resolveSkippedDirs complete
+elapsed=143 ms
+
+That immediately identifies which stage is slow as well as which stage hangs.
+
+2. Give every scan a correlation ID
+
+Instead of only:
+
+[scan #12]
+
+Use a unique execution ID that appears in every log line.
+
+Example:
+
+scanId=4b72fd
+
+Then every subsystem logs:
+
+scanId=4b72fd
+phase=walking
+
+scanId=4b72fd
+phase=indexing
+
+scanId=4b72fd
+phase=finalizing
+
+This makes the logs much easier to follow when multiple jobs overlap.
+
+3. Log active resource counts
+
+This is the biggest thing I'd add.
+
+At each checkpoint log:
+
+workers=4
+queueDepth=0
+pendingWrites=0
+activeTimers=1
+activeJobs=1
+
+Especially before completion:
+
+workersRemaining=0
+queueClosed=true
+batchPending=0
+
+If completion never happens you'll immediately see which counter never reaches zero.
+
+4. Verify cleanup, not just completion
+
+Instead of only proving:
+
+DONE written
+
+Also prove:
+
+activeJobs.delete()
+
+worker pool empty
+
+queue destroyed
+
+timers cleared
+
+listeners removed
+
+Otherwise you can still "complete" while leaking state.
+
+5. Strengthen the People diagnostics
+
+Instead of only:
+
+log stack trace
+
+Log:
+
+request URL
+SQLSTATE / database error code
+SQL query name (not necessarily the full SQL)
+execution time
+stack trace
+
+That will distinguish:
+
+migration issue
+timeout
+connection exhaustion
+bad query
+application bug
+6. Strengthen the end-to-end verification
+
+I would add one more requirement.
+
+Current:
+
+no active job
+optimize starts
+People returns 200
+
+Add:
+
+Start a second FULL scan immediately after the first one completes. It must enter RUNNING normally and complete without requiring a server restart.
+
+That proves there isn't hidden state left over.
+
+I would also add one final success criterion
+
+A scan should leave the system in a measurable "clean" state.
+
+Example:
+
+Final Job State
+
+queueDepth = 0
+
+workersRunning = 0
+
+pendingBatchWrites = 0
+
+pendingTimers = 0
+
+activeJobs = 0
+
+activeConnections = stable
+
+scanStatus = COMPLETED
+
+If every one of those is true, you have much stronger evidence that the engine actually shut down correctly.
+
+Overall assessment
+
+I'd rate this task 9.8/10.
+
+The only thing it was missing was proving that resources are released—not just that the scan says "Completed."
+
+Once #156 passes, you'll have a reliable baseline. At that point you can return to the NAS optimization roadmap (#123–#151) with confidence that you're improving a stable system rather than tuning one that's silently hanging.

@@ -1,0 +1,140 @@
+I think this version is excellent. At this point it's no longer just a task—it's effectively a verification protocol. If #156 passes exactly as written, you'll have objective evidence that the scan engine is behaving correctly.
+
+I have only a handful of refinements that would make it even stronger.
+
+1. Add an explicit Release Gate
+
+Right now the task proves correctness, but it doesn't say what happens if any requirement fails.
+
+I'd add:
+
+Release Gate
+
+This task is considered FAILED if:
+
+Any lifecycle checkpoint is missing.
+Any terminal resource counter is non-zero.
+Any scan fails to reach a terminal state.
+The second FULL scan behaves differently from the first.
+Any end-to-end verification check fails.
+
+No new scan-engine performance work (#123–#151) may proceed until #156 passes.
+
+That makes it clear this is the foundation for future work.
+
+2. Add expected maximum stage durations (optional warnings)
+
+This isn't for pass/fail—just for spotting regressions.
+
+For example:
+
+{
+  "scanId": "4b72fd",
+  "phase": "walker_complete",
+  "elapsedMs": 18902,
+  "warning": false
+}
+
+If a stage exceeds a configurable threshold:
+
+{
+  "phase": "walker_complete",
+  "elapsedMs": 74218,
+  "warning": "slow_stage"
+}
+
+That gives you historical performance data without failing the scan.
+
+3. Include scan configuration in scan_started
+
+I'd extend:
+
+{
+  "phase": "scan_started"
+}
+
+to include enough context to reproduce results:
+
+{
+  "scanId": "...",
+  "profile": "FULL",
+  "workerCount": 8,
+  "batchSize": 500,
+  "nasPath": "...",
+  "thumbnailMode": "...",
+  "duplicateDetection": true,
+  "watcherEnabled": true
+}
+
+Six months from now you'll know exactly how the scan was configured.
+
+4. Add a monotonic phase sequence
+
+Instead of relying solely on timestamps, include a phase index:
+
+{
+  "phaseIndex": 7,
+  "phase": "batch_flush_complete"
+}
+
+If the logs ever appear out of order, you'll immediately know whether it's log ordering or execution ordering.
+
+5. Verify database consistency after completion
+
+You already verify there are no active jobs.
+
+I'd also verify the persisted state.
+
+For example:
+
+job status is terminal
+finished_at populated
+no duplicate RUNNING jobs
+active job table empty
+scan history row complete
+
+That proves memory and database agree.
+
+6. Add a resilience scenario
+
+You currently test:
+
+FULL
+QUICK
+CANCEL
+FULL
+FULL
+
+I'd add one more (it can remain optional if time is limited):
+
+Interrupt a FULL scan by restarting the server.
+
+Expected result:
+
+job marked INTERRUPTED_BY_RESTART
+resources released
+next FULL scan starts immediately
+no orphaned RUNNING jobs remain
+
+Since restart recovery has been an issue in the past, it's worth verifying.
+
+7. Preserve the summaries permanently
+
+I agree with removing the detailed debug logging after the proof run.
+
+However, I'd always keep these six INFO events:
+
+scan_started
+db_load_complete
+walker_complete
+terminal
+scan_summary
+scan_finished
+
+They're low-noise and invaluable when diagnosing issues later.
+
+Final assessment
+
+This task has evolved from "add some logging" into a formal validation framework for the scan engine, which is exactly what your project needs at this stage.
+
+If I were reviewing this for a production release, I'd consider #156 the required stabilization gate before approving any additional optimization or feature work in the scan engine. Once it passes consistently, you'll have a trustworthy baseline for every future performance improvement.

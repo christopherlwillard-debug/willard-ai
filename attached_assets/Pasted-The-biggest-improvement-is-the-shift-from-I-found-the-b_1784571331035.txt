@@ -1,0 +1,186 @@
+The biggest improvement is the shift from "I found the bug" to "I have a hypothesis that needs to be verified." That's how I would approach a production system.
+
+Here's how I'd tighten it even further.
+
+I would create one stabilization task instead of immediately implementing fixes
+
+Something like:
+
+#152 – Scan Engine Instrumentation & Root Cause Analysis
+
+What & Why
+
+The scan engine occasionally becomes permanently stuck in the RUNNING state. Several plausible causes have been identified (blocking filesystem calls, unresolved promises, worker shutdown, DB flushes, duplicate detection, etc.), but none have been conclusively proven.
+
+Before changing behavior, instrument the scan lifecycle so the exact stage where execution stops can be identified.
+
+Done looks like
+
+Every scan produces a structured lifecycle log similar to:
+
+[SCAN 184]
+
+START
+↓
+
+Loading DB
+2,341 ms
+24,564 rows
+
+↓
+
+Walker started
+
+↓
+
+First file discovered
+412 ms
+
+↓
+
+Walker completed
+
+↓
+
+resolveSkippedDirs started
+
+↓
+
+resolveSkippedDirs completed
+
+↓
+
+Queue closed
+
+↓
+
+Workers exited
+8/8
+
+↓
+
+DB flush complete
+
+↓
+
+Duplicate detection complete
+
+↓
+
+Thumbnail enqueue complete
+
+↓
+
+completeJob()
+
+↓
+
+Job lock released
+
+↓
+
+COMPLETED
+
+If any stage never completes, the logs clearly show where execution stopped.
+
+Instrument
+job creation
+DB load
+walker start
+first file discovered
+walker finished
+skipped-dir resolution
+queue close
+worker shutdown
+DB batch flush
+duplicate detection
+thumbnail enqueue
+completion callback
+lock release
+status transition
+Error logging
+
+Every async stage should log:
+
+START
+
+SUCCESS (duration)
+
+FAIL (exception)
+
+No swallowed exceptions.
+
+Success criteria
+
+Demonstrate one successful FULL scan showing every stage.
+
+Demonstrate one QUICK scan showing every stage.
+
+Demonstrate one cancelled scan showing cleanup.
+
+Then create #153
+
+Only after #152 proves the bottleneck.
+
+For example:
+
+Replace blocking fs.statSync() in resolveSkippedDirs() with async filesystem operations.
+
+Now you're fixing something you've actually observed.
+
+Same for the People page
+
+Instead of:
+
+"People 500 is connection pool exhaustion."
+
+I'd write:
+
+#154 – Diagnose People API 500
+
+Done looks like:
+
+exception captured
+stack trace logged
+SQL logged
+HTTP response logged
+root cause identified
+regression test added
+
+Only after the logs prove it's pool exhaustion would I change the connection logic.
+
+Same idea for Force Discard
+
+I like the feature.
+
+But I'd slightly change the acceptance criteria.
+
+Instead of only:
+
+Force discard clears stuck jobs.
+
+I'd require it to verify cleanup:
+
+active job removed
+queue closed
+worker pool drained
+timers cancelled
+event listeners removed
+DB lock released
+next scan starts successfully
+
+Otherwise it risks becoming a "clear the symptom" button while leaving resources orphaned.
+
+Overall
+
+I actually think this is the point where your project should pivot from feature development to a short stabilization milestone.
+
+If I were managing this roadmap, I'd temporarily freeze #123–#151 and create a dedicated milestone:
+
+S1 — Instrumentation
+S2 — Scan lifecycle stability
+S3 — Job recovery
+S4 — Error reporting
+S5 — Performance optimization (resume roadmap)
+
+That order is likely to save a lot of time because you'll stop guessing where the failures occur and start fixing verified causes.

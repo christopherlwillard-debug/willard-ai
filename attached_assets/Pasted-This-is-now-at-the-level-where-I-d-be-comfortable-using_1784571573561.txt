@@ -1,0 +1,121 @@
+This is now at the level where I'd be comfortable using it as a release gate. I'd rate it 10/10 with just a few refinements.
+
+1. Make the instrumentation structured, not free-form
+
+Instead of relying on formatted strings, log structured objects so they can be filtered and analyzed consistently.
+
+For example:
+
+{
+  scanId: "4b72fd",
+  phase: "walker_complete",
+  elapsedMs: 18902,
+  dirs: 812,
+  files: 24564
+}
+
+You'll still get readable logs, but they're much easier to search and aggregate.
+
+2. Add a final "completion reason"
+
+Don't end with just:
+
+COMPLETED
+
+Also include:
+
+completionReason:
+- completed
+- cancelled
+- failed
+- timeout
+- interrupted_by_restart
+
+That gives every terminal state a clear explanation.
+
+3. Record resource counts on failure too
+
+Right now you're requiring them on COMPLETED.
+
+I'd also require them for:
+
+FAILED
+CANCELLED
+INTERRUPTED_BY_RESTART
+
+For example:
+
+FAILED
+
+workersRunning=1
+queueDepth=0
+pendingWrites=3
+activeJobs=1
+
+That immediately shows what leaked.
+
+4. Log stage durations in the final summary
+
+At the end of every scan, emit one compact summary:
+
+Scan Summary
+
+DB Load ............ 2.3 s
+Walk .............. 18.9 s
+Resolve Skipped .... 143 ms
+Batch Flush ........ 88 ms
+Duplicate Detect ... 210 ms
+Finalize ........... 31 ms
+
+Total .............. 21.7 s
+
+That becomes your performance baseline going forward.
+
+5. Verify cleanup after cancellation
+
+For the cancelled-scan scenario, don't just check that it writes CANCELLED.
+
+Verify that:
+
+a second scan starts immediately,
+the active job list is empty,
+no worker threads remain,
+no timers remain,
+no queue remains.
+
+That proves cancellation is actually cleaning up.
+
+6. Keep a small amount of permanent instrumentation
+
+I agree with removing noisy logs afterward, but I'd permanently keep these INFO-level events:
+
+Scan started
+DB load complete
+Walker complete
+Scan completed (or failed)
+Final resource summary
+
+Everything else can be behind a debug flag.
+
+One additional success criterion I'd add
+
+Because your application uses a NAS, I'd explicitly require:
+
+Run two FULL scans against an unchanged library. The second scan should complete successfully and demonstrate that the scanner reaches completion without accumulating additional leaked resources or leaving stale active jobs.
+
+That's slightly different from simply running two scans back-to-back—it verifies stability across repeated executions.
+
+Overall
+
+I think #156 is exactly the right place to pause feature work.
+
+Until this task passes, every subsequent optimization task (#123–#151) risks optimizing around an unstable foundation.
+
+Once #156 succeeds, you'll have:
+
+A reproducible lifecycle trace.
+Evidence of where scans spend their time.
+Proof that resources are released correctly.
+A reliable baseline for measuring future performance improvements.
+
+From there, you can confidently resume the NAS optimization roadmap knowing you're improving a scan engine that has been proven to complete cleanly rather than one that's silently hanging.
