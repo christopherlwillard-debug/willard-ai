@@ -791,7 +791,7 @@ async function runScanJob(
           console.info(
             `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=true` +
             ` dirCacheHits=${preCheck.dirCacheOut.size} dirCacheMisses=0` +
-            ` dirStatMs=${preCheck.dirStatMs} dbLoadMs=0 dbWriteMs=0 totalMs=${elapsedMs}` +
+            ` dirStatMs=${preCheck.dirStatMs} dbLoadMs=0 fileProcessMs=0 dbWriteMs=0 totalMs=${elapsedMs}` +
             ` streak=${fastPathStreak}/${MAX_FAST_PATH_STREAK}`,
           );
           const summary: JobSummary = {
@@ -808,8 +808,8 @@ async function runScanJob(
             peakConcurrency: 0, throughputFilesPerSec: 0, throughputMBPerSec: 0,
             peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs: 0,
             totalSizeBytes: 0,
-            dirStatMs: preCheck.dirStatMs, skippedByDirCache: true,
-            scanProfile: state.profile,
+            dirStatMs: preCheck.dirStatMs, fileProcessMs: 0,
+            skippedByDirCache: true, scanProfile: state.profile,
           };
           await db.update(libraryJobsTable).set({
             status:         "DONE",
@@ -853,7 +853,7 @@ async function runScanJob(
     state.filesTotal     = 0;
 
     // Load all existing paths from DB for this NAS (for move detection)
-    const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null }>();
+    const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null; lastScanAction: string | null }>();
     const _t0DbLoad = Date.now();
     const dbRows = await db.select({
       id: mediaFilesTable.id,
@@ -864,6 +864,7 @@ async function runScanJob(
       quickFingerprint: mediaFilesTable.quickFingerprint,
       scannerVersion: mediaFilesTable.scannerVersion,
       thumbnailPath: mediaFilesTable.thumbnailPath,
+      lastScanAction: mediaFilesTable.lastScanAction,
     }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
     const diagDbLoadMs = Date.now() - _t0DbLoad;
 
@@ -1334,7 +1335,11 @@ async function runScanJob(
             seenPaths.add(relativePath);
 
             const existing = existingByPath.get(relativePath);
+            // Exclude previously-DELETED rows from the unchanged short-circuit:
+            // a file that was marked DELETED but has reappeared must flow through
+            // the full upsert path so its lastScanAction is revived to a live state.
             const isUnchanged = existing &&
+              existing.lastScanAction !== "DELETED" &&
               existing.sizeBytes === f.sizeBytes &&
               existing.modifiedAt?.getTime() === f.modifiedAt.getTime() &&
               state.profile !== "FULL";
@@ -1559,6 +1564,7 @@ async function runScanJob(
       totalSizeBytes:           diagTotalSizeBytes,
       dbLoadMs:                 diagDbLoadMs,
       dirStatMs:                diagDirStatMs,
+      fileProcessMs:            diagWalkTimeMs,
       skippedByDirCache:        false,
       scanProfile:              state.profile,
     };
@@ -1579,8 +1585,8 @@ async function runScanJob(
     console.info(
       `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=false` +
       ` dirCacheHits=${diagnostics.dirCacheHits} dirCacheMisses=${diagnostics.dirCacheMisses}` +
-      ` dirStatMs=${diagDirStatMs} dbLoadMs=${diagDbLoadMs} dbWriteMs=${diagDbWriteTimeMs}` +
-      ` totalMs=${elapsedMs}` +
+      ` dirStatMs=${diagDirStatMs} dbLoadMs=${diagDbLoadMs} fileProcessMs=${diagWalkTimeMs}` +
+      ` dbWriteMs=${diagDbWriteTimeMs} totalMs=${elapsedMs}` +
       ` new=${state.counters.new} modified=${state.counters.modified}` +
       ` moved=${state.counters.moved} deleted=${state.counters.deleted}` +
       ` unchanged=${state.counters.unchanged}`,

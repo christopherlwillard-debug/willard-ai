@@ -144,4 +144,6 @@ export interface ScanDiagnostics {
   skippedByDirCache?:       boolean;
   /** Profile that was used for this scan */
   scanProfile?:             string;
+  /** Milliseconds spent in the file-processing walk loop (hashing, metadata, worker pool) */
+  fileProcessMs?:           number;
 }
