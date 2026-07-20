@@ -27,6 +27,14 @@ import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } 
 
 const activeJobs = new Map<number, ActiveJobState>();
 
+// ── Fast-path streak guard ────────────────────────────────────────────────────
+// After this many consecutive dir-cache-only exits, force a normal QUICK scan
+// so in-place file content edits (which don't change parent directory mtime on
+// POSIX/SMB) are eventually detected.  At the default 5-minute sweep interval
+// this bounds the worst-case detection latency to MAX_FAST_PATH_STREAK × 5 min.
+const MAX_FAST_PATH_STREAK = 12; // ~1 hour at 5-min default interval
+let fastPathStreak = 0;
+
 // ── Thumbnail priority queue (folder-aware boosting) ──────────────────────────
 // Maps nasPath → Set of file IDs that should be processed ASAP before the
 // normal cursor-based sweep continues. Populated via addThumbnailPriority().
@@ -766,46 +774,66 @@ async function runScanJob(
     // Only applies to non-resumed QUICK sweeps with a valid pre-existing cache.
     // If every directory matches its cached mtime+entryCount, no files could
     // have been structurally added, removed, or renamed → nothing to do.
+    //
+    // Streak guard: after MAX_FAST_PATH_STREAK consecutive fast-path exits we
+    // fall through to a normal scan so in-place file modifications (which do
+    // not update parent directory mtime on POSIX/SMB) are eventually detected.
     let diagDirStatMs = 0;
     if (dirCacheIn.size > 0 && state.profile !== "FULL" && !resumedScanStartedAt) {
       const preCheck = dirCachePreCheck(state.nasPath, dirCacheIn, skipDirs, scannerSettings);
       diagDirStatMs = preCheck.dirStatMs;
       if (preCheck.allHit) {
-        saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut);
-        const nowMs = Date.now();
-        const elapsedMs = preCheck.dirStatMs;
+        if (fastPathStreak < MAX_FAST_PATH_STREAK) {
+          fastPathStreak++;
+          saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut);
+          const elapsedMs = preCheck.dirStatMs;
+          const nowTs = new Date().toISOString();
+          console.info(
+            `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=true` +
+            ` dirCacheHits=${preCheck.dirCacheOut.size} dirCacheMisses=0` +
+            ` dirStatMs=${preCheck.dirStatMs} dbLoadMs=0 dbWriteMs=0 totalMs=${elapsedMs}` +
+            ` streak=${fastPathStreak}/${MAX_FAST_PATH_STREAK}`,
+          );
+          const summary: JobSummary = {
+            newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0,
+            unchangedFiles: 0, hashedFiles: 0, thumbnailsGenerated: 0,
+            elapsedMs, previousElapsedMs: null,
+            skippedFiles: 0, skippedList: [], duplicateGroups: 0,
+            scanStartedAt: nowTs, categories: {},
+          };
+          const diagnostics: ScanDiagnostics = {
+            walkTimeMs: 0, dirCacheHits: preCheck.dirCacheOut.size, dirCacheMisses: 0,
+            skippedByReason: {}, metadataExtracted: 0, hashesGenerated: 0,
+            dbWriteBatches: 0, avgNasLatencyMs: 0, maxNasLatencyMs: 0,
+            peakConcurrency: 0, throughputFilesPerSec: 0, throughputMBPerSec: 0,
+            peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs: 0,
+            totalSizeBytes: 0,
+            dirStatMs: preCheck.dirStatMs, skippedByDirCache: true,
+            scanProfile: state.profile,
+          };
+          await db.update(libraryJobsTable).set({
+            status:         "DONE",
+            finishedAt:     new Date(),
+            processedFiles: 0,
+            totalFiles:     0,
+            summary,
+            diagnostics:    diagnostics as unknown as Record<string, unknown>,
+          }).where(eq(libraryJobsTable.id, jobId));
+          activeJobs.delete(jobId);
+          return;
+        }
+        // Streak limit reached — reset counter and fall through to a normal scan
+        // so any in-place edits are detected.
         console.info(
-          `[scan #${jobId}] dir-cache 100% hit (${dirCacheIn.size} dirs, ${elapsedMs}ms) — library unchanged, skipping sweep`,
+          `[scan #${jobId}] dir-cache 100% hit but streak limit reached (${MAX_FAST_PATH_STREAK}), forcing normal scan`,
         );
-        const summary: JobSummary = {
-          newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0,
-          unchangedFiles: 0, hashedFiles: 0, thumbnailsGenerated: 0,
-          elapsedMs, previousElapsedMs: null,
-          skippedFiles: 0, skippedList: [], duplicateGroups: 0,
-          scanStartedAt: new Date(nowMs).toISOString(), categories: {},
-        };
-        const diagnostics: ScanDiagnostics = {
-          walkTimeMs: 0, dirCacheHits: preCheck.dirCacheOut.size, dirCacheMisses: 0,
-          skippedByReason: {}, metadataExtracted: 0, hashesGenerated: 0,
-          dbWriteBatches: 0, avgNasLatencyMs: 0, maxNasLatencyMs: 0,
-          peakConcurrency: 0, throughputFilesPerSec: 0, throughputMBPerSec: 0,
-          peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs: 0,
-          totalSizeBytes: 0,
-          dirStatMs: preCheck.dirStatMs, skippedByDirCache: true,
-          scanProfile: state.profile,
-        };
-        await db.update(libraryJobsTable).set({
-          status:         "DONE",
-          finishedAt:     new Date(),
-          processedFiles: 0,
-          totalFiles:     0,
-          summary,
-          diagnostics:    diagnostics as unknown as Record<string, unknown>,
-        }).where(eq(libraryJobsTable.id, jobId));
-        activeJobs.delete(jobId);
-        return;
+        fastPathStreak = 0;
       }
     }
+
+    // Normal scan path — reset the fast-path streak counter so any prior
+    // consecutive cache-only exits don't carry over to the next cycle.
+    fastPathStreak = 0;
 
     // Reuse the original scan anchor on resume so files indexed before the
     // pause are not misdetected as deleted at the end of this run.
@@ -1546,6 +1574,17 @@ async function runScanJob(
 
     recordCompletion(state, summary);
     activeJobs.delete(jobId);
+
+    // Structured sweep completion log (consistent contract across both paths)
+    console.info(
+      `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=false` +
+      ` dirCacheHits=${diagnostics.dirCacheHits} dirCacheMisses=${diagnostics.dirCacheMisses}` +
+      ` dirStatMs=${diagDirStatMs} dbLoadMs=${diagDbLoadMs} dbWriteMs=${diagDbWriteTimeMs}` +
+      ` totalMs=${elapsedMs}` +
+      ` new=${state.counters.new} modified=${state.counters.modified}` +
+      ` moved=${state.counters.moved} deleted=${state.counters.deleted}` +
+      ` unchanged=${state.counters.unchanged}`,
+    );
 
     // ── Auto-start thumbnail backfill after scan ───────────────────────────
     try {

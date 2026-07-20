@@ -262,15 +262,16 @@ router.get("/settings/scanner", async (_req, res) => {
   try {
     const settings = await getOrCreateSettings();
     res.json({
-      ignoredFolders:    settings.ignoredFolders    ?? [],
-      ignoredExtensions: settings.ignoredExtensions ?? [],
-      ignoreHiddenFiles:  settings.ignoreHiddenFiles  ?? true,
-      ignoreSystemFiles:  settings.ignoreSystemFiles  ?? true,
-      ignoreTempFiles:    settings.ignoreTempFiles    ?? true,
-      ignoreSidecarFiles: settings.ignoreSidecarFiles ?? true,
-      ignoreEmptyFolders: settings.ignoreEmptyFolders ?? false,
-      followSymlinks:     settings.followSymlinks     ?? false,
-      indexOtherFiles:    settings.indexOtherFiles    ?? true,
+      ignoredFolders:             settings.ignoredFolders    ?? [],
+      ignoredExtensions:          settings.ignoredExtensions ?? [],
+      ignoreHiddenFiles:           settings.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:           settings.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:             settings.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles:          settings.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders:          settings.ignoreEmptyFolders ?? false,
+      followSymlinks:              settings.followSymlinks     ?? false,
+      indexOtherFiles:             settings.indexOtherFiles    ?? true,
+      watcherPollIntervalSeconds:  settings.watcherPollIntervalSeconds ?? 300,
     });
   } catch {
     res.status(500).json({ error: "Failed to load scanner settings" });
@@ -302,6 +303,11 @@ router.put("/settings/scanner", async (req, res) => {
       if (typeof body[key] === "boolean") patch[key] = body[key];
     }
 
+    if (typeof body["watcherPollIntervalSeconds"] === "number") {
+      const interval = Math.round(body["watcherPollIntervalSeconds"] as number);
+      if (interval >= 10 && interval <= 3600) patch["watcherPollIntervalSeconds"] = interval;
+    }
+
     if (Object.keys(patch).length === 0) {
       res.status(400).json({ error: "No valid fields provided" });
       return;
@@ -314,15 +320,16 @@ router.put("/settings/scanner", async (req, res) => {
       .returning();
 
     res.json({
-      ignoredFolders:    updated.ignoredFolders    ?? [],
-      ignoredExtensions: updated.ignoredExtensions ?? [],
-      ignoreHiddenFiles:  updated.ignoreHiddenFiles  ?? true,
-      ignoreSystemFiles:  updated.ignoreSystemFiles  ?? true,
-      ignoreTempFiles:    updated.ignoreTempFiles    ?? true,
-      ignoreSidecarFiles: updated.ignoreSidecarFiles ?? true,
-      ignoreEmptyFolders: updated.ignoreEmptyFolders ?? false,
-      followSymlinks:     updated.followSymlinks     ?? false,
-      indexOtherFiles:    updated.indexOtherFiles    ?? true,
+      ignoredFolders:             updated.ignoredFolders    ?? [],
+      ignoredExtensions:          updated.ignoredExtensions ?? [],
+      ignoreHiddenFiles:           updated.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:           updated.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:             updated.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles:          updated.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders:          updated.ignoreEmptyFolders ?? false,
+      followSymlinks:              updated.followSymlinks     ?? false,
+      indexOtherFiles:             updated.indexOtherFiles    ?? true,
+      watcherPollIntervalSeconds:  updated.watcherPollIntervalSeconds ?? 300,
     });
   } catch {
     res.status(500).json({ error: "Failed to update scanner settings" });

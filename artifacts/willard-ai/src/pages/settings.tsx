@@ -492,15 +492,16 @@ function LibrarySection() {
 }
 
 interface ScannerSettings {
-  ignoredFolders:    string[];
-  ignoredExtensions: string[];
-  ignoreHiddenFiles:  boolean;
-  ignoreSystemFiles:  boolean;
-  ignoreTempFiles:    boolean;
-  ignoreSidecarFiles: boolean;
-  ignoreEmptyFolders: boolean;
-  followSymlinks:     boolean;
-  indexOtherFiles:    boolean;
+  ignoredFolders:             string[];
+  ignoredExtensions:          string[];
+  ignoreHiddenFiles:           boolean;
+  ignoreSystemFiles:           boolean;
+  ignoreTempFiles:             boolean;
+  ignoreSidecarFiles:          boolean;
+  ignoreEmptyFolders:          boolean;
+  followSymlinks:              boolean;
+  indexOtherFiles:             boolean;
+  watcherPollIntervalSeconds:  number;
 }
 
 const SCANNER_DEFAULTS: ScannerSettings = {
@@ -508,7 +509,7 @@ const SCANNER_DEFAULTS: ScannerSettings = {
   ignoreHiddenFiles: true, ignoreSystemFiles: true,
   ignoreTempFiles: true, ignoreSidecarFiles: true,
   ignoreEmptyFolders: false, followSymlinks: false,
-  indexOtherFiles: true,
+  indexOtherFiles: true, watcherPollIntervalSeconds: 300,
 };
 
 function ScannerSettingsSection() {
@@ -518,13 +519,18 @@ function ScannerSettingsSection() {
   const [saving, setSaving] = useState(false);
   const [folderInput, setFolderInput] = useState("");
   const [extInput, setExtInput] = useState("");
+  const [pollInput, setPollInput] = useState<string>("");
   const [dryRun, setDryRun] = useState<{ wouldScan: number; skipped: Record<string, number> } | null>(null);
   const [dryRunLoading, setDryRunLoading] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/scanner")
       .then(r => r.json())
-      .then(data => { setSettings(data); setLoading(false); })
+      .then(data => {
+        setSettings(data);
+        setPollInput(String(data.watcherPollIntervalSeconds ?? 300));
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
@@ -577,6 +583,16 @@ function ScannerSettingsSection() {
     void save({ ignoredExtensions: settings.ignoredExtensions.filter(x => x !== e) });
   };
 
+  const savePollInterval = () => {
+    const seconds = parseInt(pollInput, 10);
+    if (isNaN(seconds) || seconds < 10 || seconds > 3600) {
+      toast({ title: "Interval must be between 10 and 3600 seconds", variant: "destructive" });
+      setPollInput(String(settings.watcherPollIntervalSeconds));
+      return;
+    }
+    void save({ watcherPollIntervalSeconds: seconds });
+  };
+
   const runDryRun = async () => {
     setDryRunLoading(true);
     setDryRun(null);
@@ -610,6 +626,46 @@ function ScannerSettingsSection() {
 
   return (
     <>
+      <div className="pt-4">
+        <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
+          <Eye className="w-5 h-5 text-primary" />
+          WATCHER_SETTINGS
+        </h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Controls how often the library watcher polls for changes on SMB/NAS shares.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">SMB/NAS Polling Interval</CardTitle>
+          <CardDescription>
+            How often to sweep the NAS for file changes when filesystem events are unavailable (e.g. SMB, network shares).
+            Recommended range: 1–30 minutes. Minimum: 10 s, maximum: 3600 s (1 hour).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <Input
+              type="number"
+              min={10}
+              max={3600}
+              step={30}
+              value={pollInput}
+              onChange={e => setPollInput(e.target.value)}
+              onBlur={savePollInterval}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); savePollInterval(); } }}
+              className="w-32 font-mono text-sm"
+              disabled={saving}
+            />
+            <span className="text-sm text-muted-foreground">seconds</span>
+            <span className="text-xs text-muted-foreground font-mono">
+              ({Math.round(settings.watcherPollIntervalSeconds / 60 * 10) / 10} min)
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="pt-4">
         <h2 className="text-xl font-bold font-mono tracking-tight flex items-center gap-2">
           <Filter className="w-5 h-5 text-primary" />
