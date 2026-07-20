@@ -22,6 +22,7 @@ import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../
 import { getWillardAIDir } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
+import { logger } from "../logger";
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -751,6 +752,34 @@ async function runScanJob(
 ): Promise<void> {
   const jobId = state.id;
 
+  // ── Scan lifecycle instrumentation ──────────────────────────────────────
+  // Every lifecycle log carries scanId + phaseIndex so logs from concurrent
+  // scans can be filtered and execution order can be verified.
+  const scanId = String(jobId);
+  let _pi = 0;
+  const _dbg = process.env['LOG_SCAN_DEBUG'] === 'true';
+  const SLOW_STAGE_MS = parseInt(process.env['SLOW_STAGE_MS'] ?? '60000', 10);
+  const _slow = (ms: number) => ms > SLOW_STAGE_MS ? { warning: 'slow_stage' as const } : {};
+
+  // slog: always-on INFO (the 6 permanent events + terminal states)
+  const slog = (phase: string, fields?: Record<string, unknown>) =>
+    logger.info({ scanId, phaseIndex: _pi++, phase, ...fields }, phase);
+
+  // sdbg: gated behind LOG_SCAN_DEBUG=true; phaseIndex always increments
+  const sdbg = (phase: string, fields?: Record<string, unknown>) => {
+    const phaseIndex = _pi++;
+    if (_dbg) logger.info({ scanId, phaseIndex, phase, ...fields }, phase);
+  };
+
+  // Stage timing accumulator for scan_summary
+  const stageTiming: Record<string, number> = {};
+
+  // Safe resource snapshot — overridden once all variables are initialised
+  let getResources: () => Record<string, unknown> = () => ({
+    queueDepth: 0, workersRunning: 0, pendingWrites: 0, activeTimers: 0,
+    activeJobs: activeJobs.size,
+  });
+
   try {
     const scanRoot = rootPath ?? state.nasPath;
 
@@ -797,6 +826,24 @@ async function runScanJob(
       };
     } catch { /* use defaults if settings table not yet migrated */ }
 
+    // Emit scan_started now that we have all config — the 6 permanent events start here.
+    slog('scan_started', {
+      profile:                state.profile,
+      nasPath:                state.nasPath,
+      workerCount:            INITIAL_WORKERS,
+      concurrencyCeiling:     state.throttle.concurrencyCeiling,
+      batchSize:              500,
+      ignoreHiddenFiles:      scannerSettings.ignoreHiddenFiles,
+      ignoreSystemFiles:      scannerSettings.ignoreSystemFiles,
+      ignoreTempFiles:        scannerSettings.ignoreTempFiles,
+      ignoreSidecarFiles:     scannerSettings.ignoreSidecarFiles,
+      ignoreEmptyFolders:     scannerSettings.ignoreEmptyFolders,
+      followSymlinks:         scannerSettings.followSymlinks,
+      indexOtherFiles:        scannerSettings.indexOtherFiles,
+      ignoredFolderCount:     scannerSettings.ignoredFolders.length,
+      ignoredExtensionCount:  scannerSettings.ignoredExtensions.length,
+    });
+
     // Load the directory mtime cache from the previous scan so we can skip
     // entire unchanged directory trees without stat'ing every file inside them.
     const dirCacheIn  = loadDirMtimeCache(state.nasPath);
@@ -821,12 +868,6 @@ async function runScanJob(
           saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut);
           const elapsedMs = preCheck.dirStatMs;
           const nowTs = new Date().toISOString();
-          console.info(
-            `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=true` +
-            ` dirCacheHits=${preCheck.dirCacheOut.size} dirCacheMisses=0` +
-            ` dirStatMs=${preCheck.dirStatMs} dbLoadMs=0 fileProcessMs=0 dbWriteMs=0 totalMs=${elapsedMs}` +
-            ` streak=${fastPathStreak}/${MAX_FAST_PATH_STREAK}`,
-          );
           const summary: JobSummary = {
             newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0,
             unchangedFiles: 0, hashedFiles: 0, thumbnailsGenerated: 0,
@@ -853,13 +894,14 @@ async function runScanJob(
             diagnostics:    diagnostics as unknown as Record<string, unknown>,
           }).where(eq(libraryJobsTable.id, jobId));
           activeJobs.delete(jobId);
+          slog('terminal', { completionReason: 'completed', queueDepth: 0, workersRunning: 0, pendingWrites: 0, activeTimers: 0, activeJobs: activeJobs.size });
+          slog('scan_summary', { completionReason: 'completed', stages: { dir_check: preCheck.dirStatMs }, totalMs: elapsedMs, skippedByDirCache: true, streak: fastPathStreak });
+          slog('scan_finished', { completionReason: 'completed' });
           return;
         }
         // Streak limit reached — reset counter and fall through to a normal scan
         // so any in-place edits are detected.
-        console.info(
-          `[scan #${jobId}] dir-cache 100% hit but streak limit reached (${MAX_FAST_PATH_STREAK}), forcing normal scan`,
-        );
+        logger.info({ scanId, phase: 'dir_cache_streak_limit', streak: MAX_FAST_PATH_STREAK }, 'dir-cache streak limit reached, forcing normal scan');
         fastPathStreak = 0;
       }
     }
@@ -903,7 +945,7 @@ async function runScanJob(
 
     // Load all existing paths from DB for this NAS (for move detection)
     const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null; lastScanAction: string | null }>();
-    console.info(`[scan #${jobId}] phase=loading DB load start nasPath=${state.nasPath}`);
+    sdbg('db_load_start', { nasPath: state.nasPath });
     const _t0DbLoad = Date.now();
     const dbRows = await db.select({
       id: mediaFilesTable.id,
@@ -917,7 +959,8 @@ async function runScanJob(
       lastScanAction: mediaFilesTable.lastScanAction,
     }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
     const diagDbLoadMs = Date.now() - _t0DbLoad;
-    console.info(`[scan #${jobId}] phase=loading DB load done rows=${dbRows.length} elapsed=${diagDbLoadMs}ms`);
+    stageTiming.db_load = diagDbLoadMs;
+    slog('db_load_complete', { rows: dbRows.length, elapsedMs: diagDbLoadMs, ..._slow(diagDbLoadMs) });
 
     for (const row of dbRows) {
       existingByPath.set(row.relativePath, row);
@@ -1270,8 +1313,8 @@ async function runScanJob(
 
     // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
     state.phase = "walking";
-    console.info(`[scan #${jobId}] phase=walking walk start existingRows=${dbRows.length} dirCacheSize=${dirCacheIn.size}`);
     const diagWalkStart = Date.now();
+    sdbg('walker_started', { existingRows: dbRows.length, dirCacheSize: dirCacheIn.size });
     const walkDone = walkNasAsync(
       path.resolve(scanRoot),
       skipDirs,
@@ -1281,7 +1324,7 @@ async function runScanJob(
         const prevTotal = state.filesTotal;
         state.filesTotal++;
         if (prevTotal === 0) {
-          console.info(`[scan #${jobId}] phase=walking first file found elapsed=${Date.now() - diagWalkStart}ms name=${fileEntry.name}`);
+          sdbg('first_file_found', { name: fileEntry.name, elapsedMs: Date.now() - diagWalkStart });
         }
         if (ARCHIVE_EXTS_SET.has(fileEntry.ext.toLowerCase())) discoveredArchives.push(fileEntry);
       },
@@ -1309,9 +1352,13 @@ async function runScanJob(
       // changes; in-place edits do NOT update parent mtime, so we still stat each
       // known file to detect content changes.
       if (!isFirstScan && skippedDirs.length > 0) {
+        sdbg('skipped_dirs_start', { skippedDirs: skippedDirs.length });
+        const _t0SkipDirs = Date.now();
         const { unchangedIds, filesToProcess } = await resolveSkippedDirs(
           skippedDirs, state.nasPath, seenPaths, state.profile,
         );
+        stageTiming.skipped_dirs = Date.now() - _t0SkipDirs;
+        sdbg('skipped_dirs_complete', { unchanged: unchangedIds.length, toProcess: filesToProcess.length, elapsedMs: stageTiming.skipped_dirs, ..._slow(stageTiming.skipped_dirs) });
         unchangedBuf.push(...unchangedIds);
         state.counters.unchanged += unchangedIds.length;
         state.filesProcessed    += unchangedIds.length;
@@ -1345,6 +1392,7 @@ async function runScanJob(
 
       // Close queue — workers drain remaining items and exit
       if (!_queueClosed) { _queueClosed = true; queue.close(); }
+      sdbg('queue_closed', { queueDepth: 0 });
     });
 
     // ── Walk-start timeout (FULL scans only) ──────────────────────────────
@@ -1492,6 +1540,7 @@ async function runScanJob(
         } finally {
           // Always decrement so scale-up after scale-down spawns eligible workers
           activeWorkerCount--;
+          sdbg('worker_exited', { workersRemaining: activeWorkerCount });
         }
       })());
     };
@@ -1517,12 +1566,24 @@ async function runScanJob(
     // Walk and workers run concurrently; walk closes the queue when done
     await walkDone;
     diagWalkTimeMs = Date.now() - diagWalkStart;
+    stageTiming.walk = diagWalkTimeMs;
+    slog('walker_complete', { files: state.filesTotal, dirCacheHits: skippedDirs.length, elapsedMs: diagWalkTimeMs, ..._slow(diagWalkTimeMs) });
 
     // Queue is now closed; drain all remaining work.  Keep the controller
     // alive through the drain so concurrency still adapts while a large
     // post-walk queue empties, then shut it down once all workers finish.
     await Promise.all(allWorkerPromises);
     clearInterval(ctrlInterval);
+    sdbg('all_workers_done', { workers: 0 });
+
+    // Live resource snapshot — used by all terminal-state log lines below
+    getResources = () => ({
+      queueDepth:     _queueClosed ? 0 : queue.size,
+      workersRunning: activeWorkerCount,
+      pendingWrites:  upsertBuf.length + unchangedBuf.length,
+      activeTimers:   (_walkTimeoutTimer !== null ? 1 : 0) + (_dirCacheSaveTimer !== null ? 1 : 0),
+      activeJobs:     activeJobs.size,
+    });
 
     // ── Guard: walk-timeout-triggered termination ─────────────────────────
     // failJob() was already called in the timeout callback (void — fire and
@@ -1531,6 +1592,9 @@ async function runScanJob(
     // incomplete seenPaths set, which would incorrectly mark existing rows DELETED.
     if (walkTimedOut) {
       stopIncrementalDirCacheSave();
+      slog('terminal', { completionReason: 'timeout', ...getResources() });
+      slog('scan_summary', { completionReason: 'timeout', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'timeout' });
       return;
     }
 
@@ -1548,6 +1612,9 @@ async function runScanJob(
         finishedAt: new Date(),
       }).where(eq(libraryJobsTable.id, jobId));
       activeJobs.delete(jobId);
+      slog('terminal', { completionReason: 'cancelled', ...getResources() });
+      slog('scan_summary', { completionReason: 'cancelled', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'cancelled' });
       return;
     }
 
@@ -1565,13 +1632,18 @@ async function runScanJob(
         summary:        buildPartialSummary(state, scanStartedAt),
       }).where(eq(libraryJobsTable.id, jobId));
       activeJobs.delete(jobId);
+      slog('terminal', { completionReason: 'paused', ...getResources() });
+      slog('scan_finished', { completionReason: 'paused' });
       return;
     }
 
     // Final flush of all remaining buffered rows
+    const _t0Flush = Date.now();
     await flushBatch();
     await flushUnchanged();
     await flushAssetInvalidations();
+    stageTiming.batch_flush = Date.now() - _t0Flush;
+    sdbg('batch_flush_complete', { elapsedMs: stageTiming.batch_flush, ..._slow(stageTiming.batch_flush) });
     await db.update(libraryJobsTable)
       .set({ processedFiles: state.filesProcessed, totalFiles: state.filesTotal })
       .where(eq(libraryJobsTable.id, jobId));
@@ -1579,13 +1651,11 @@ async function runScanJob(
     // Save the current directory mtime cache for the next rescan
     stopIncrementalDirCacheSave();
     saveDirMtimeCache(state.nasPath, dirCacheOut);
-    console.info(
-      `[library] Dir cache saved: ${dirCacheOut.size} entries — ` +
-      new Date().toLocaleTimeString("en-US", { hour12: false }),
-    );
+    sdbg('dir_cache_saved', { entries: dirCacheOut.size });
 
     // ── Phase: detecting deletions ─────────────────────────────────────────
     state.phase = "detecting_deletions";
+    sdbg('detecting_deletions', { existingRows: existingByPath.size, seenPaths: seenPaths.size });
 
     // Deletion detection: any DB path not seen in this scan was removed from disk.
     // Uses the seenPaths set (populated during walk + resolveSkippedDirs) instead
@@ -1596,6 +1666,7 @@ async function runScanJob(
       if (!seenPaths.has(relPath)) deletedPaths.push(relPath);
     }
     state.counters.deleted = 0;
+    const _t0Deletions = Date.now();
     for (let i = 0; i < deletedPaths.length; i += 500) {
       const result = await db.update(mediaFilesTable)
         .set({ lastScanAction: "DELETED" as ScanAction, lastScannedAt: scanStartedAt })
@@ -1607,16 +1678,22 @@ async function runScanJob(
         .returning({ id: mediaFilesTable.id });
       state.counters.deleted += result.length;
     }
+    stageTiming.detecting_deletions = Date.now() - _t0Deletions;
+    sdbg('deletion_detection_complete', { deleted: state.counters.deleted, candidates: deletedPaths.length, elapsedMs: stageTiming.detecting_deletions });
 
     // ── Duplicate detection (two-stage: size+fingerprint groups → confirm with
     //    full SHA-256 only for candidates) ──────────────────────────────────
     let duplicateGroups = 0;
+    const _t0Dupes = Date.now();
     try {
       duplicateGroups = await detectDuplicates(state);
     } catch { /* non-fatal — duplicates are informational */ }
+    stageTiming.duplicate_detection = Date.now() - _t0Dupes;
+    sdbg('duplicate_detection_complete', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection });
 
     // ── Phase: finalizing ─────────────────────────────────────────────────
     state.phase = "finalizing";
+    sdbg('finalizing', { filesProcessed: state.filesProcessed, filesTotal: state.filesTotal });
     const elapsedMs = Date.now() - state.startedAt.getTime();
     const previousElapsedMs = await getPreviousElapsedMs(state.nasPath, state.profile);
 
@@ -1685,18 +1762,30 @@ async function runScanJob(
     }).where(eq(libraryJobsTable.id, jobId));
 
     recordCompletion(state, summary);
+    sdbg('done_written', { status: 'DONE', filesProcessed: state.filesProcessed });
     activeJobs.delete(jobId);
+    sdbg('active_jobs_deleted', { activeJobs: activeJobs.size });
 
-    // Structured sweep completion log (consistent contract across both paths)
-    console.info(
-      `[scan #${jobId}] sweep DONE profile=${state.profile} skippedByDirCache=false` +
-      ` dirCacheHits=${diagnostics.dirCacheHits} dirCacheMisses=${diagnostics.dirCacheMisses}` +
-      ` dirStatMs=${diagDirStatMs} dbLoadMs=${diagDbLoadMs} fileProcessMs=${diagWalkTimeMs}` +
-      ` dbWriteMs=${diagDbWriteTimeMs} totalMs=${elapsedMs}` +
-      ` new=${state.counters.new} modified=${state.counters.modified}` +
-      ` moved=${state.counters.moved} deleted=${state.counters.deleted}` +
-      ` unchanged=${state.counters.unchanged}`,
-    );
+    slog('terminal', {
+      completionReason: 'completed',
+      ...getResources(),
+      new: state.counters.new,
+      modified: state.counters.modified,
+      moved: state.counters.moved,
+      deleted: state.counters.deleted,
+      unchanged: state.counters.unchanged,
+    });
+    stageTiming.finalizing = Date.now() - state.startedAt.getTime() - Object.values(stageTiming).reduce((a, b) => a + b, 0);
+    slog('scan_summary', {
+      completionReason: 'completed',
+      stages: stageTiming,
+      totalMs: elapsedMs,
+      dirCacheHits: diagnostics.dirCacheHits,
+      dirCacheMisses: diagnostics.dirCacheMisses,
+      throughputFilesPerSec: diagnostics.throughputFilesPerSec,
+      peakQueueDepth: diagnostics.peakQueueDepth,
+    });
+    slog('scan_finished', { completionReason: 'completed' });
 
     // ── Auto-start thumbnail backfill after scan ───────────────────────────
     try {
@@ -1752,6 +1841,9 @@ async function runScanJob(
 
   } catch (err: any) {
     stopIncrementalDirCacheSave();
+    slog('terminal', { completionReason: 'failed', ...getResources(), errorMessage: err?.message });
+    slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+    slog('scan_finished', { completionReason: 'failed', errorMessage: err?.message });
     await failJob(jobId, "ERROR", err?.message ?? "Unknown error");
   }
 }
@@ -2180,6 +2272,7 @@ async function failJob(jobId: number, reason: CancellationReason, message: strin
     finishedAt:         new Date(),
   }).where(eq(libraryJobsTable.id, jobId)).catch(() => {});
   activeJobs.delete(jobId);
+  logger.error({ jobId, reason, errorMessage: message, phase: 'fail_job', activeJobs: activeJobs.size }, 'scan job FAILED');
 }
 
 // ── Thumbnail DB/disk reconciliation ─────────────────────────────────────────

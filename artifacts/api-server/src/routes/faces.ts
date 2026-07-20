@@ -22,6 +22,7 @@ function personOut(r: any) {
 // ── People (clusters) ─────────────────────────────────────────────────────────
 
 router.get("/faces/people", async (req: Request, res: Response) => {
+  const _t0 = Date.now();
   try {
     const namedOnly = String(req.query.namedOnly ?? "") === "true";
     const { rows } = await pool.query(
@@ -37,8 +38,14 @@ router.get("/faces/people", async (req: Request, res: Response) => {
     );
     const status = getFaceStatus();
     return res.json({ people: rows.map(personOut), status });
-  } catch (err) {
-    logger.error({ err }, "list people failed");
+  } catch (err: any) {
+    logger.error({
+      err,
+      errCode: err?.code,
+      queryContext: "people/list",
+      elapsedMs: Date.now() - _t0,
+      requestUrl: req.originalUrl,
+    }, "list people failed");
     return res.status(500).json({ error: "Failed to load people" });
   }
 });
