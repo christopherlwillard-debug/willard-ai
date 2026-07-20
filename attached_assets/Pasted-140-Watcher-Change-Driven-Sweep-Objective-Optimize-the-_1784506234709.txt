@@ -1,0 +1,161 @@
+140 – Watcher Change-Driven Sweep
+
+Objective
+
+Optimize the periodic library watcher so that it uses the persisted directory cache as the first decision point before touching the media database.
+
+The application already persists:
+
+* Media records
+* File fingerprints
+* Thumbnail paths
+* Directory cache
+* Scan history
+
+The problem is not persistence. The problem is that every periodic QUICK sweep still behaves like a verification scan of the entire library.
+
+When the library has not changed, the watcher should recognize that immediately and exit without loading the media database or writing unnecessary updates.
+
+⸻
+
+Background
+
+On SMB/NAS filesystems, native filesystem events are generally unavailable, so the watcher relies on periodic polling.
+
+Today, every QUICK sweep:
+
+1. Loads every media record into memory.
+2. Walks every directory over SMB.
+3. Updates thousands of unchanged database rows.
+4. Performs thumbnail verification.
+
+For a stable library, almost all of this work is unnecessary.
+
+The directory cache already contains enough information to determine whether anything has changed.
+
+⸻
+
+Requirements
+
+1. Directory Cache Fast Path (Highest Priority)
+
+Before loading any media records:
+
+* Perform the existing directory cache verification.
+* Compare cached directory metadata (mtime + entry count).
+* If every directory is unchanged:
+    * Do not load media records.
+    * Do not build the media map.
+    * Do not process unchanged files.
+    * Do not perform unchanged-row database updates.
+    * Exit immediately.
+    * Log:
+        “Library unchanged — no sweep needed.”
+
+This optimization must only occur when 100% of directories match the persisted cache.
+
+If any directory has changed, immediately fall back to the existing scan path.
+
+⸻
+
+2. Remove Unnecessary Unchanged Writes
+
+Routine QUICK sweeps should no longer execute batch updates that only refresh lastScannedAt for unchanged files.
+
+Database writes should occur only when:
+
+* A file is new.
+* A file changed.
+* A file moved.
+* Metadata changed.
+* A FULL verification explicitly requires it.
+
+Internal counters and diagnostics may continue tracking unchanged files without writing database rows.
+
+⸻
+
+3. Increase Default Sweep Interval
+
+Change the default polling interval from 60 seconds to 300 seconds (5 minutes).
+
+Update the Settings UI to describe this as:
+
+SMB/NAS polling interval. Recommended range: 1–30 minutes.
+
+Users should still be able to configure the interval.
+
+⸻
+
+4. Timing Instrumentation
+
+Every completed sweep should log structured timing information, including:
+
+* dbLoadMs
+* dirStatMs
+* fileProcessMs
+* dbWriteMs
+* totalMs
+* dirCacheHits
+* dirCacheMisses
+* scanProfile (QUICK/FULL)
+* skippedByDirCache (true/false)
+
+This data will make future optimization work measurable instead of estimated.
+
+⸻
+
+Preserve Existing Behavior
+
+This task must not change or regress:
+
+* binaryChanged thumbnail invalidation
+* COALESCE thumbnail preservation
+* Move detection
+* Fingerprint matching
+* FULL scan behavior
+* Scanner version handling
+* Thumbnail generation logic
+* Existing recovery behavior after interrupted scans
+
+⸻
+
+Acceptance Criteria
+
+A stable NAS library should behave as follows:
+
+* Startup does not trigger unnecessary media processing.
+* Periodic QUICK sweeps perform only directory verification when nothing has changed.
+* The media database is not loaded if every directory matches the cache.
+* No unchanged-row batch updates are written.
+* Server logs report:
+    * “Library unchanged — no sweep needed.”
+* The dashboard no longer appears to be continuously scanning when the library is stable.
+* Timing metrics are emitted for every sweep.
+* Existing scan correctness remains unchanged whenever any directory cache miss occurs.
+
+⸻
+
+Out of Scope
+
+The following are intentionally not part of this task:
+
+* Watcher idle/sleep mode
+* Loading database rows by changed subtree
+* Native filesystem events for SMB shares
+* Thumbnail pipeline changes
+* Scanner algorithm changes
+
+⸻
+
+Relevant Files
+
+* artifacts/api-server/src/lib/library-watcher.ts
+* artifacts/api-server/src/lib/library-engine/job-engine.ts
+* artifacts/api-server/src/lib/library-engine/indexer.ts
+* artifacts/willard-ai/src/pages/settings.tsx
+
+⸻
+
+Implementation Goal
+
+A stable 24,000-item NAS library should complete routine verification by checking directory metadata first. If nothing has changed, the watcher should exit immediately without loading the media database or generating unnecessary database writes, while preserving all existing scan correctness whenever changes are detected.

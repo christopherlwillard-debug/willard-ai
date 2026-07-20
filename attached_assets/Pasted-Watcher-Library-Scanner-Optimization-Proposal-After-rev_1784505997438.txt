@@ -1,0 +1,175 @@
+Watcher & Library Scanner Optimization Proposal
+
+After reviewing the current architecture, I don’t believe the application is losing its library state between restarts. The persistence layer appears to be working correctly:
+
+* Media records are persisted in the database.
+* Directory cache is persisted on disk.
+* File fingerprints are persisted.
+* Thumbnail paths are persisted.
+* Scan history is persisted.
+
+The issue is not that the application is rebuilding the library from scratch. The issue is that every periodic “quick” sweep still performs work that scales with the entire library, even when nothing has changed.
+
+Primary Recommendation
+
+The watcher should become change-driven, not verification-driven.
+
+Instead of loading the full media database and processing every known file on every sweep, the directory cache should become the first decision point.
+
+Desired flow:
+
+Heartbeat
+    ↓
+Read directory cache
+    ↓
+Did any directory change?
+    ↓
+No -------------------------------> Log "Library unchanged" and exit immediately.
+    ↓
+Yes
+    ↓
+Determine which directories changed
+    ↓
+Load database records ONLY for those directories
+    ↓
+Process only affected files
+    ↓
+Update metadata only where necessary
+
+If every cached directory matches its stored metadata, the application already knows the library has not changed. There is no benefit to loading all media records or updating unchanged database rows.
+
+⸻
+
+Recommended Engineering Priorities
+
+1. Add a true “no changes” fast path (Highest Priority)
+
+If the directory cache reports a 100% cache hit with no modified directories:
+
+* Do not load all media records.
+* Do not build the in-memory media map.
+* Do not process unchanged files.
+* Do not perform batch “UNCHANGED” database updates.
+* Exit immediately.
+
+Expected result:
+
+* Eliminates the majority of periodic scan overhead on a stable library.
+* Greatly reduces startup activity.
+* Makes the application feel nearly instantaneous when nothing has changed.
+
+⸻
+
+2. Stop updating lastScannedAt for unchanged files
+
+Currently, every quick sweep updates thousands of rows simply to record that they were checked.
+
+Instead:
+
+Update timestamps only when:
+
+* a file is new
+* a file changed
+* a file moved
+* metadata was refreshed
+* a FULL validation scan was explicitly requested
+
+There is very little value in rewriting every unchanged row during every verification pass.
+
+Benefits:
+
+* Dramatically reduces database writes.
+* Less lock contention.
+* Lower database traffic.
+* Less unnecessary work during every sweep.
+
+⸻
+
+3. Instrument the scanner with timing metrics
+
+Before making further architectural changes, add timing logs for every scan phase.
+
+Suggested metrics:
+
+* Database load time
+* Directory cache load time
+* Directory stat time
+* Directory readdir time
+* Metadata extraction time
+* Thumbnail queue time
+* Unchanged row update time
+* Total scan duration
+
+This allows future optimization work to be based on measured bottlenecks instead of estimates.
+
+⸻
+
+4. Load only changed subtrees
+
+Instead of:
+
+SELECT *
+FROM media_files
+WHERE nasPath = ?
+
+on every sweep,
+
+determine which directories actually changed first, then load only the database rows that belong to those directories.
+
+For example:
+
+Directory changed:
+Photos/2024/
+↓
+Only load rows underneath:
+Photos/2024/*
+
+Benefits:
+
+* Scales significantly better for large libraries.
+* Avoids loading tens of thousands of unnecessary records.
+
+⸻
+
+5. Add watcher idle mode
+
+When the application has been idle for a configurable period (for example, 15 minutes):
+
+* Suspend periodic verification scans.
+* Continue only lightweight NAS availability checks.
+* Resume verification immediately when the UI becomes active again.
+
+This prevents unnecessary NAS traffic while the application is not being used.
+
+⸻
+
+Default Watcher Interval
+
+Changing the default scan interval from 60 seconds to 5–10 minutes is a reasonable temporary improvement for SMB-based NAS systems.
+
+However, this should be considered a temporary mitigation rather than the primary solution.
+
+The long-term goal should be that a verification pass with no changes completes almost immediately, regardless of the configured interval.
+
+⸻
+
+Overall Goal
+
+The application already maintains a persistent, authoritative library database. The watcher should leverage that persistence rather than repeatedly re-verifying the entire library.
+
+The ideal behavior is:
+
+* Start application.
+* Verify directory metadata.
+* If nothing changed:
+    * Skip database loading.
+    * Skip media processing.
+    * Skip unchanged-row updates.
+    * Log “Library unchanged.”
+    * Return immediately.
+* If changes are detected:
+    * Load only the affected portion of the library.
+    * Process only changed files.
+    * Update only records that actually changed.
+
+This architecture minimizes SMB traffic, reduces database activity, scales much better as the library grows, and provides a significantly more responsive user experience while preserving the application’s single-source-of-truth design.

@@ -1,0 +1,170 @@
+I want you to do a deep architectural review of the library scanning, startup, watcher, caching, and thumbnail systems. I'm not looking for a quick bug fix—I want to understand why the application appears to rescan the entire NAS every time it starts.
+
+What I'm seeing
+
+Every time I restart the application:
+
+The scanner appears to walk the entire NAS again.
+The thumbnail job thinks thousands of thumbnails need processing.
+Startup is slow while background scanning runs.
+It feels like the app has no memory of what was already indexed.
+
+I want you to verify whether that's actually true.
+
+Please investigate these areas
+1. Startup flow
+
+Trace exactly what happens from server startup until the first scan begins.
+
+Answer questions like:
+
+What triggers the scan?
+Is it always a FULL scan?
+Is the watcher forcing it?
+Could the scan be delayed until after the UI loads?
+Is there a reason the previous scan state isn't being reused?
+2. Scan persistence
+
+Determine exactly what persistent state exists between restarts.
+
+Specifically check whether we persist:
+
+directory cache
+scan checkpoints
+scan history
+file fingerprints
+thumbnail paths
+processed metadata
+last successful scan time
+watcher state
+
+If any of those are rebuilt from scratch every launch, explain why.
+
+3. Directory cache
+
+Look for every place the directory mtime cache is created and used.
+
+Answer:
+
+Is it memory-only?
+Is it saved to disk?
+Is it loaded on startup?
+If not, why not?
+
+If it is rebuilt every restart, explain how to persist it safely.
+
+4. Existing database usage
+
+Determine whether the scanner actually trusts the database.
+
+For every file discovered:
+
+Does it:
+
+check the DB first,
+compare timestamps,
+skip unchanged files,
+
+or
+
+does it effectively process every file again?
+
+Explain the exact decision tree.
+
+5. Thumbnail system
+
+Determine why thumbnails appear to be regenerated or revalidated after startup.
+
+Specifically check:
+
+whether thumbnailPath survives scans
+whether FULL scans invalidate thumbnails
+whether thumbnails are deleted unnecessarily
+whether the thumbnail queue uses existing DB state correctly
+6. Watcher architecture
+
+Determine whether the watcher can become the primary synchronization mechanism.
+
+Instead of:
+
+Startup
+→ Full scan
+→ Watcher
+
+could the architecture become:
+
+Startup
+→ Load database immediately
+→ Start watcher
+→ Only verify directories incrementally in the background
+
+Explain whether anything prevents that.
+
+7. Scan pipeline
+
+Map the complete flow.
+
+For example:
+
+NAS
+↓
+
+Walker
+↓
+
+Queue
+↓
+
+Metadata
+↓
+
+Database
+↓
+
+Thumbnail Queue
+↓
+
+UI
+
+Show exactly where work is repeated unnecessarily.
+
+8. Performance bottlenecks
+
+Identify every place where startup performs unnecessary work.
+
+Examples:
+
+rebuilding caches
+rereading directories
+repeated stat() calls
+unnecessary hashing
+metadata extraction
+database lookups
+thumbnail invalidation
+duplicate filesystem traversal
+
+Rank the top ten bottlenecks by expected performance impact.
+
+9. Missing persistence
+
+Tell me what information the application should persist but currently does not.
+
+Examples:
+
+directory cache
+fingerprint cache
+startup checkpoint
+watcher state
+thumbnail cache index
+scan session state
+10. Recommendations
+
+After reviewing the codebase, provide:
+
+A diagram of the current startup architecture.
+A diagram of the recommended architecture.
+A prioritized list of improvements ranked by impact.
+Identify any logic bugs that cause unnecessary rescans or invalidation.
+Recommend the minimum set of changes needed so the application remembers what it already knows across restarts instead of behaving like a fresh install every time.
+
+Important: Please analyze the existing code first. Don't assume the problem is missing caching—show me exactly where the current architecture is doing unnecessary work and back each recommendation with references to the relevant files and functions.
