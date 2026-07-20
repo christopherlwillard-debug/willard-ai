@@ -1,0 +1,227 @@
+I actually think this latest analysis is substantially better because it's based on evidence you gathered, not just theory. The two discoveries from your screenshot are especially valuable.
+
+✅ #144 — Incremental cache saves
+
+Priority: Highest (10/10)
+
+This is the biggest finding in your latest investigation.
+
+The key issue isn't that the cache is on the NAS—it's that it's never becoming useful because it's only written at the end of a successful scan.
+
+If a scan never completes:
+
+Restart
+↓
+
+Begin scan
+
+↓
+
+Walk 18,000 files
+
+↓
+
+Restart
+
+↓
+
+Cache never saved
+
+The next startup begins almost from scratch again.
+
+I'd make one additional improvement
+
+Don't only save at the end.
+
+Save periodically.
+
+For example:
+
+every 100 directories
+every 30 seconds
+when the scanner pauses
+when it shuts down gracefully
+
+That way the cache is always improving, even if a scan is interrupted.
+
+✅ #146 — DB/Disk reconciliation
+
+This is a huge find.
+
+This explains why you have:
+
+Database:
+
+24,489 thumbnail paths
+
+Disk:
+
+2,602 .webp files
+
+Those should never diverge permanently.
+
+I actually wouldn't make this a one-time repair.
+
+I'd make it a permanent maintenance step.
+
+For example:
+
+Verify 250 thumbnail paths
+
+↓
+
+Broken?
+
+↓
+
+NULL thumbnailPath
+
+↓
+
+Queue regeneration
+
+Run it in small batches in the background.
+
+That way if someone deletes the thumbnail folder next year, the application automatically heals itself.
+
+Cursor resume
+
+I like this addition a lot.
+
+Instead of:
+
+Restart
+
+↓
+
+Start thumbnail job from 0
+
+Do:
+
+Restart
+
+↓
+
+Resume at 18,421
+
+That is a massive quality-of-life improvement.
+
+Advisory lock
+
+Definitely keep that.
+
+I'd use the database as the single source of truth:
+
+Thumbnail Worker
+
+↓
+
+Acquire lock
+
+↓
+
+Run
+
+↓
+
+Release
+
+No second worker should ever start.
+
+#145
+
+I actually like the new status much better:
+
+INTERRUPTED_BY_RESTART
+
+That tells the truth.
+
+#147
+
+I think this task is improving, but I'd narrow its scope.
+
+Right now it mixes:
+
+UX
+API profiling
+startup performance
+
+Those are three different things.
+
+I'd make #147 purely about perceived responsiveness.
+
+Example:
+
+Library data should render immediately from the existing database while synchronization continues in the background.
+
+Keep API profiling as a diagnostics task.
+
+One thing I'd still ask Replit
+
+There is still one unanswered question.
+
+The cache file is only 1 KB.
+
+I'd want them to answer:
+
+Exactly how many directory entries are stored inside that JSON?
+
+Not just its file size.
+
+I want something like:
+
+Directory Cache
+
+Entries: 17
+
+Expected: ~800
+
+Coverage: 2%
+
+Reason:
+Scan interrupted before flush.
+
+or
+
+Entries: 712
+
+Coverage: 98%
+
+The file size alone isn't enough to tell whether it's empty, compressed, or simply storing a handful of top-level directories.
+
+One final feature I'd add (future)
+Startup Health
+
+Every startup should log something like:
+
+Database
+✓ Connected
+
+Directory Cache
+✓ 734 entries loaded
+
+Watcher
+✓ Connected
+
+Thumbnail Cache
+✓ 2,602 verified
+✗ 21,887 missing (queued for repair)
+
+Library
+✓ Ready
+
+Background Sync
+Running
+
+Then you'll know in five seconds whether the app is healthy instead of having to infer it from UI behavior.
+
+Overall
+
+I think your roadmap has become much more focused:
+
+#144 — Make the directory cache actually persist useful state by saving incrementally, not just at the end of a scan.
+#146 — Repair the divergence between the database and thumbnail files, ensure only one thumbnail job runs, and resume thumbnail generation after restarts.
+#145 — Handle interrupted scans cleanly with an explicit restart state.
+#147 — Improve the perception of responsiveness by making it clear the library is already available while background synchronization continues.
+
+The one thing I'd ask Replit before implementing #144 is to prove the cache issue with actual numbers. Have it report how many directory entries are in dir-scan-cache.json versus how many it should contain for your library. That verification will confirm you're fixing the right bottleneck rather than relying on the file's size alone.

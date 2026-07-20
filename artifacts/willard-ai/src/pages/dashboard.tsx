@@ -443,7 +443,9 @@ export default function Dashboard() {
                 <CloudOff className="w-5 h-5 text-red-500" />
               </div>
             ) : isScanning ? (
-              <Loader2 className="w-8 h-8 text-amber-400 animate-spin shrink-0" />
+              <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
+                <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+              </div>
             ) : allHealthy ? (
               <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center shrink-0">
                 <CheckCircle2 className="w-5 h-5 text-green-500" />
@@ -454,13 +456,13 @@ export default function Dashboard() {
               </div>
             )}
             <div>
-              <p className={cn("text-sm font-semibold", !libraryOnline ? "text-red-400" : isScanning ? "text-amber-400" : allHealthy ? "text-green-400" : "text-amber-400")}>
-                {!libraryOnline ? "Library Offline" : isScanning ? "Scanning Library…" : allHealthy ? "All Systems Healthy" : "Issues Detected"}
+              <p className={cn("text-sm font-semibold", !libraryOnline ? "text-red-400" : isScanning ? "text-blue-400" : allHealthy ? "text-green-400" : "text-amber-400")}>
+                {!libraryOnline ? "Library Offline" : isScanning ? "Syncing in Background" : allHealthy ? "✓ Library Ready" : "Issues Detected"}
               </p>
               <p className="text-xs text-muted-foreground max-w-xs truncate" title={!libraryOnline ? `${libraryMessage}${libraryPath ? ` (${libraryPath})` : ""}` : undefined}>
                 {!libraryOnline
                   ? (libraryMessage || `Cannot reach ${libraryPath || "the library location"}`)
-                  : isScanning ? "Scan in progress" : "Last scan completed successfully."}
+                  : isScanning ? "Background sync running — your library is fully usable." : "All media indexed and up to date."}
               </p>
             </div>
           </div>

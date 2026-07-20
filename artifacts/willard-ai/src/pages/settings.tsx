@@ -401,6 +401,32 @@ function LibrarySection() {
   const paused = health?.indexingPaused ?? false;
   const lastSync = health?.lastCheckAt ? formatDate(health.lastCheckAt) : "—";
 
+  // Interrupted scan detection — polls for INTERRUPTED_BY_RESTART jobs every 30s
+  const { data: interruptedJobs, refetch: refetchInterrupted } = useQuery({
+    queryKey: ["library-jobs-interrupted"],
+    queryFn: async () => {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/library/jobs?status=INTERRUPTED_BY_RESTART&limit=5`);
+      if (!res.ok) return { jobs: [] };
+      return res.json() as Promise<{ jobs: Array<{ id: number; jobType: string; createdAt: string; processedFiles: number; totalFiles: number | null }> }>;
+    },
+    refetchInterval: 30_000,
+    staleTime: 0,
+  });
+  const interruptedList = interruptedJobs?.jobs ?? [];
+
+  const resumeInterrupted = useMutation({
+    mutationFn: async (jobId: number) => {
+      await fetch(`${import.meta.env.BASE_URL}api/library/jobs/${jobId}/resume`, { method: "POST" });
+    },
+    onSuccess: () => { toast({ title: "Scan resuming" }); refetchInterrupted(); queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() }); },
+  });
+  const discardInterrupted = useMutation({
+    mutationFn: async (jobId: number) => {
+      await fetch(`${import.meta.env.BASE_URL}api/library/jobs/${jobId}/cancel`, { method: "POST" });
+    },
+    onSuccess: () => { toast({ title: "Scan discarded" }); refetchInterrupted(); },
+  });
+
   const statusRows = [
     { label: "Connected", ok: online, detail: offline ? (health?.message || "Library unreachable") : null },
     { label: "Watching for changes", ok: Boolean(health?.watching) && !paused, detail: paused ? "Indexing paused" : null },
@@ -460,6 +486,42 @@ function LibrarySection() {
                 </p>
               )}
             </div>
+
+            {interruptedList.length > 0 && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  {interruptedList.length === 1 ? "A scan was interrupted by a restart" : `${interruptedList.length} scans were interrupted by a restart`}
+                </div>
+                {interruptedList.map(job => (
+                  <div key={job.id} className="flex items-center justify-between gap-3 ml-6 text-xs text-muted-foreground">
+                    <span className="font-mono">
+                      {job.jobType} · {job.processedFiles.toLocaleString()}{job.totalFiles ? `/${job.totalFiles.toLocaleString()}` : ""} files processed · started {formatDate(job.createdAt)}
+                    </span>
+                    <div className="flex gap-1.5 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        disabled={resumeInterrupted.isPending || discardInterrupted.isPending}
+                        onClick={() => resumeInterrupted.mutate(job.id)}
+                      >
+                        <Play className="w-3 h-3 mr-1" /> Resume
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs text-muted-foreground"
+                        disabled={resumeInterrupted.isPending || discardInterrupted.isPending}
+                        onClick={() => discardInterrupted.mutate(job.id)}
+                      >
+                        Discard
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-2">
               <Button

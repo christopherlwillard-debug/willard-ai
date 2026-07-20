@@ -1,0 +1,217 @@
+I think this is the strongest version of the roadmap so far. It separates correctness, performance, and user experience into distinct tasks instead of mixing them together.
+
+Here's how I'd rate each one.
+
+#144 — Stop the full 24K-file walk on every restart
+
+⭐⭐⭐⭐⭐ (10/10)
+
+This is absolutely the first task I'd do.
+
+The addition of proving the cache with real numbers is exactly what was missing.
+
+Instead of guessing:
+
+Cache looks small...
+
+you'll now get something measurable like:
+
+Directory Cache
+
+Loaded: 18 entries
+
+Expected: 812 directories
+
+Coverage: 2.2%
+
+Reason:
+Previous scan never completed.
+
+That turns a theory into a fact.
+
+One thing I'd add
+
+After every scan finishes:
+
+Directory Cache
+
+Entries: 812
+
+Coverage: 100%
+
+Saved: 10:42:31 AM
+
+That makes it obvious whether the cache is actually improving over time.
+
+#146 — Thumbnail reconciliation
+
+⭐⭐⭐⭐⭐ (10/10)
+
+I actually like the permanent maintenance idea better than a repair task.
+
+Every application eventually ends up with drift.
+
+Examples:
+
+NAS disconnects
+user deletes cache folder
+partial backup restore
+failed copy
+power outage
+
+Instead of requiring another "Repair Thumbnails" feature...
+
+The application simply heals itself.
+
+Running
+
+250 rows
+↓
+
+verify
+
+↓
+
+repair
+
+in the background is a very good design.
+
+Cursor resume
+
+Huge improvement.
+
+Instead of:
+
+Restart
+
+↓
+
+Start 24,000 thumbnails over
+
+it becomes:
+
+Restart
+
+↓
+
+Resume at 18,241
+Advisory lock
+
+Definitely keep it.
+
+I would actually expose it in diagnostics:
+
+Thumbnail Worker
+
+Running
+
+Lock Owner
+
+Worker 1
+
+Started
+
+09:31
+
+Makes debugging much easier.
+
+#145
+
+⭐⭐⭐⭐⭐
+
+I still think
+
+INTERRUPTED_BY_RESTART
+
+is the right status.
+
+Users understand exactly what happened.
+
+#147
+
+⭐⭐⭐⭐⭐
+
+Now this task is much cleaner.
+
+It's focused on one thing:
+
+Make the application feel ready immediately.
+
+I especially like changing
+
+Scanning...
+
+to
+
+Syncing in background
+
+because those communicate very different things.
+
+One says:
+
+Wait.
+
+The other says:
+
+You can use the app while I work.
+
+That's a subtle UX change with a surprisingly large impact on how responsive the app feels.
+
+I would add one tiny thing to #147
+
+When the library is usable, show a clear ready state.
+
+Something like:
+
+✓ Library Ready
+
+24,551 files indexed
+
+Background sync running...
+
+That removes any ambiguity.
+
+The user immediately knows:
+
+my data is here
+I can browse
+background work is optional
+Startup Health
+
+I think this should become one of Willard AI's signature features.
+
+Something like:
+
+Startup Health
+
+✓ Database Connected
+
+✓ Library Loaded
+24,551 files
+
+✓ Directory Cache
+812 / 812 directories
+
+✓ Watcher Connected
+
+⚠ Thumbnail Repair
+21,887 missing
+Repair queued
+
+✓ UI Ready
+
+Background Sync
+Running
+
+That single screen would answer 90% of future troubleshooting questions.
+
+Overall
+
+I think your implementation order is exactly right:
+
+#144 — Fix the directory cache lifecycle so scans can actually benefit from previous work.
+#146 — Keep the thumbnail database and disk in sync permanently, prevent duplicate workers, and support resume.
+#145 — Handle interrupted scans cleanly instead of silently resuming them.
+#147 — Polish the user experience so the app always feels ready, even while background synchronization is active.
+
+The only thing I'd encourage is to keep the startup health log after development. It may start as a debugging aid, but for a desktop application managing tens of thousands of files on a NAS, it's valuable operational feedback. It gives you immediate visibility into the health of the scanner, cache, thumbnails, and watcher without digging through logs, and it'll make diagnosing future issues much faster.

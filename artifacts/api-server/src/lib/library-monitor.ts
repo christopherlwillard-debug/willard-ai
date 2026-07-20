@@ -162,8 +162,10 @@ export function acknowledgeReconnect(): void {
 
 export function startLibraryMonitor(): void {
   if (timer) return;
-  // First check shortly after boot (give the DB bootstrap a moment).
-  setTimeout(() => { runLibraryCheck().catch(() => {}); }, 3_000);
+  // First check after a 15-second grace period. This prevents a false
+  // offline→online trigger during the brief SMB mount delay that occurs on
+  // nearly every restart, which would otherwise queue an immediate QUICK scan.
+  setTimeout(() => { runLibraryCheck().catch(() => {}); }, 15_000);
   timer = setInterval(() => { runLibraryCheck().catch(() => {}); }, MONITOR_INTERVAL_MS);
   timer.unref?.();
 }

@@ -340,7 +340,12 @@ function loadDirMtimeCache(nasPath: string): Map<string, DirCacheEntry> {
   try {
     const raw = fs.readFileSync(dirMtimeCachePath(nasPath), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed?.v === 2 && typeof parsed.dirs === "object") {
+    if ((parsed?.v === 2 || parsed?.v === 3) && typeof parsed.dirs === "object") {
+      // v3 adds root — validate it matches to prevent stale caches from a different library path
+      if (parsed.v === 3 && parsed.root && parsed.root !== nasPath) {
+        console.warn(`[library] Dir cache root mismatch — expected "${nasPath}" got "${parsed.root}" — discarding stale cache`);
+        return new Map();
+      }
       return new Map(
         Object.entries(parsed.dirs as Record<string, { m: number; c: number }>).map(
           ([k, v]) => [k, { mtimeMs: v.m, entryCount: v.c }],
@@ -360,7 +365,7 @@ function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>): 
     for (const [k, v] of cache) dirs[k] = { m: v.mtimeMs, c: v.entryCount };
     fs.writeFileSync(
       dirMtimeCachePath(nasPath),
-      JSON.stringify({ v: 2, dirs }),
+      JSON.stringify({ v: 3, root: nasPath, dirs, updatedAt: new Date().toISOString() }),
     );
   } catch { /* non-fatal */ }
 }
@@ -632,7 +637,7 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   // Fetch job from DB
   const [job] = await db.select().from(libraryJobsTable)
     .where(eq(libraryJobsTable.id, jobId)).limit(1);
-  if (!job || job.status !== "PAUSED") return false;
+  if (!job || (job.status !== "PAUSED" && job.status !== "INTERRUPTED_BY_RESTART")) return false;
 
   // Re-create in-memory state and restart
   const priority = (job.priority as JobPriority) ?? "NORMAL";
@@ -834,6 +839,22 @@ async function runScanJob(
     // Normal scan path — reset the fast-path streak counter so any prior
     // consecutive cache-only exits don't carry over to the next cycle.
     fastPathStreak = 0;
+
+    // ── Incremental dir-cache saves ───────────────────────────────────────
+    // Save the growing dirCacheOut map every 30 seconds so an interrupted scan
+    // leaves a useful partial cache rather than the old empty one.
+    let _dirCacheSaveTimer: ReturnType<typeof setInterval> | null = null;
+    const startIncrementalDirCacheSave = () => {
+      if (_dirCacheSaveTimer) return;
+      _dirCacheSaveTimer = setInterval(() => {
+        if (dirCacheOut.size > 0) saveDirMtimeCache(state.nasPath, dirCacheOut);
+      }, 30_000);
+      (_dirCacheSaveTimer as any).unref?.();
+    };
+    const stopIncrementalDirCacheSave = () => {
+      if (_dirCacheSaveTimer) { clearInterval(_dirCacheSaveTimer); _dirCacheSaveTimer = null; }
+    };
+    startIncrementalDirCacheSave();
 
     // Reuse the original scan anchor on resume so files indexed before the
     // pause are not misdetected as deleted at the end of this run.
@@ -1439,6 +1460,7 @@ async function runScanJob(
 
     // ── Handle pause / cancel ─────────────────────────────────────────────
     if (state.cancelRequested) {
+      stopIncrementalDirCacheSave();
       await flushBatch();
       await flushUnchanged();
       await flushAssetInvalidations();
@@ -1454,6 +1476,9 @@ async function runScanJob(
     }
 
     if (state.pauseRequested) {
+      stopIncrementalDirCacheSave();
+      // Persist partial dir-cache so the next scan can use whatever we walked so far
+      if (dirCacheOut.size > 0) saveDirMtimeCache(state.nasPath, dirCacheOut);
       await flushBatch();
       await flushUnchanged();
       await flushAssetInvalidations();
@@ -1476,7 +1501,12 @@ async function runScanJob(
       .where(eq(libraryJobsTable.id, jobId));
 
     // Save the current directory mtime cache for the next rescan
+    stopIncrementalDirCacheSave();
     saveDirMtimeCache(state.nasPath, dirCacheOut);
+    console.info(
+      `[library] Dir cache saved: ${dirCacheOut.size} entries — ` +
+      new Date().toLocaleTimeString("en-US", { hour12: false }),
+    );
 
     // ── Phase: detecting deletions ─────────────────────────────────────────
     state.phase = "detecting_deletions";
@@ -1611,7 +1641,17 @@ async function runScanJob(
       const isThumbRunning = [...activeJobs.values()].some(
         j => j.jobType === "THUMBNAILS" && j.nasPath === state.nasPath,
       );
-      if ((missing ?? 0) > 0 && !isThumbRunning && !settingsRow?.paused) {
+      // Also check the DB — catches a THUMBNAILS job that survived a server restart
+      // (still RUNNING in the DB) but is no longer in activeJobs (in-memory cleared).
+      const [dbThumbRunning] = isThumbRunning ? [] : await db
+        .select({ id: libraryJobsTable.id })
+        .from(libraryJobsTable)
+        .where(and(
+          eq(libraryJobsTable.nasPath, state.nasPath),
+          eq(libraryJobsTable.jobType, "THUMBNAILS"),
+          eq(libraryJobsTable.status, "RUNNING"),
+        )).limit(1);
+      if ((missing ?? 0) > 0 && !isThumbRunning && !dbThumbRunning && !settingsRow?.paused) {
         void startJob({ jobType: "THUMBNAILS", profile: "FULL", nasPath: state.nasPath });
       }
     } catch { /* non-fatal */ }
@@ -1635,6 +1675,7 @@ async function runScanJob(
     }
 
   } catch (err: any) {
+    stopIncrementalDirCacheSave();
     await failJob(jobId, "ERROR", err?.message ?? "Unknown error");
   }
 }
@@ -1886,8 +1927,28 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       .set({ totalFiles: state.filesTotal, startedAt: state.startedAt })
       .where(eq(libraryJobsTable.id, jobId));
 
-    // Cursor-based batch processing
+    // Cursor-based batch processing — resume from the most recently persisted
+    // cursor so a restart doesn't reprocess from the beginning every time.
     let cursor = 0;
+    try {
+      const [prevJob] = await db.select({ cursor: libraryJobsTable.cursor })
+        .from(libraryJobsTable)
+        .where(and(
+          eq(libraryJobsTable.nasPath, nasPath),
+          eq(libraryJobsTable.jobType, "THUMBNAILS"),
+          ne(libraryJobsTable.id, jobId),
+          sql`${libraryJobsTable.cursor} IS NOT NULL`,
+        ))
+        .orderBy(sql`${libraryJobsTable.id} DESC`)
+        .limit(1);
+      if (prevJob?.cursor) {
+        const parsed = parseInt(prevJob.cursor, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          cursor = parsed;
+          console.info(`[thumbnail-job] Resuming from cursor=${cursor} (persisted by previous job)`);
+        }
+      }
+    } catch { /* non-fatal — start from 0 */ }
 
     // Helper: pause/cancel handling
     const handlePauseCancel = async (): Promise<boolean> => {
@@ -2045,17 +2106,164 @@ async function failJob(jobId: number, reason: CancellationReason, message: strin
   activeJobs.delete(jobId);
 }
 
+// ── Thumbnail DB/disk reconciliation ─────────────────────────────────────────
+// Permanent background maintenance: verifies 250-row batches of rows where
+// thumbnailPath IS NOT NULL against the filesystem, resets NULL for any whose
+// .webp is missing on disk, and lets the normal thumbnail sweep pick them up.
+// Self-heals after thumbnail folder deletion, NAS path changes, or failed moves.
+
+let _reconcileTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startThumbnailReconciliation(nasPath: string): void {
+  if (_reconcileTimer) return;
+
+  const BATCH = 250;
+  let cursor = 0;
+  let passResets = 0;
+
+  const runPass = async (): Promise<void> => {
+    try {
+      if (!isNasAvailable(nasPath)) return;
+
+      const rows = await db.select({
+        id: mediaFilesTable.id,
+        thumbnailPath: mediaFilesTable.thumbnailPath,
+      }).from(mediaFilesTable)
+        .where(and(
+          eq(mediaFilesTable.nasPath, nasPath),
+          sql`${mediaFilesTable.thumbnailPath} IS NOT NULL`,
+          gt(mediaFilesTable.id, cursor),
+        ))
+        .orderBy(mediaFilesTable.id)
+        .limit(BATCH);
+
+      if (rows.length === 0) {
+        // End of pass — reset cursor to start next pass from the beginning
+        if (cursor > 0 && passResets > 0) {
+          console.info(`[thumbnail-reconcile] Pass complete — cleared ${passResets} orphaned thumbnailPath(s)`);
+        }
+        cursor = 0;
+        passResets = 0;
+        return;
+      }
+
+      cursor = rows[rows.length - 1]!.id;
+      const missing = rows.filter(r => r.thumbnailPath && !fs.existsSync(r.thumbnailPath));
+      if (missing.length > 0) {
+        await db.update(mediaFilesTable)
+          .set({ thumbnailPath: null, thumbnailGeneratedAt: null })
+          .where(inArray(mediaFilesTable.id, missing.map(r => r.id)));
+        passResets += missing.length;
+        console.info(
+          `[thumbnail-reconcile] Reset ${missing.length} orphaned path(s) ` +
+          `— cursor=${cursor}, pass total=${passResets}`,
+        );
+      }
+    } catch { /* non-fatal — runs again on next tick */ }
+  };
+
+  // First pass starts 10 s after boot, then continues every 30 s until the full
+  // table is verified. Subsequent passes run every 5 min (low-priority background).
+  let fastMode = true;
+  setTimeout(async () => {
+    await runPass();
+    _reconcileTimer = setInterval(async () => {
+      await runPass();
+      // After the first complete pass (cursor resets to 0), switch to slow cadence
+      if (fastMode && cursor === 0) {
+        fastMode = false;
+        clearInterval(_reconcileTimer!);
+        _reconcileTimer = setInterval(runPass, 5 * 60_000);
+        _reconcileTimer.unref?.();
+      }
+    }, 30_000);
+    _reconcileTimer.unref?.();
+  }, 10_000);
+}
+
 // ── Interrupt recovery (call on server start) ─────────────────────────────────
 
 export async function recoverInterruptedJobs(): Promise<void> {
-  const { rowCount } = await db.update(libraryJobsTable).set({
+  // Jobs that were actively RUNNING when the server stopped → FAILED (crashed)
+  const { rowCount: failedCount } = await db.update(libraryJobsTable).set({
     status:             "FAILED",
     cancellationReason: "ERROR",
     error:              "Interrupted by server restart",
     finishedAt:         new Date(),
   }).where(eq(libraryJobsTable.status, "RUNNING"));
 
-  if (rowCount && rowCount > 0) {
-    console.warn(`[library-engine] Marked ${rowCount} interrupted job(s) as failed`);
+  if (failedCount && failedCount > 0) {
+    console.warn(`[library-engine] Marked ${failedCount} RUNNING job(s) as FAILED (interrupted by restart)`);
   }
+
+  // Jobs that were PAUSED when the server stopped → INTERRUPTED_BY_RESTART.
+  // This prevents old paused scans from silently resuming after a restart.
+  // The user must explicitly choose to resume or discard each one from the UI.
+  const { rowCount: interruptedCount } = await db.update(libraryJobsTable).set({
+    status:     "INTERRUPTED_BY_RESTART",
+    finishedAt: new Date(),
+  }).where(eq(libraryJobsTable.status, "PAUSED"));
+
+  if (interruptedCount && interruptedCount > 0) {
+    console.warn(`[library-engine] Marked ${interruptedCount} PAUSED job(s) as INTERRUPTED_BY_RESTART`);
+  }
+}
+
+// ── Startup health report ─────────────────────────────────────────────────────
+// Emits a glanceable health block to the console at boot and appends a compact
+// record to WillardAI/cache/startup-history.jsonl (max 20 entries) so startup
+// health can be compared across restarts.
+
+export async function emitStartupHealth(nasPath: string): Promise<void> {
+  try {
+    // Dir cache
+    const dirCache = loadDirMtimeCache(nasPath);
+    const cacheEntries = dirCache.size;
+
+    // DB counts
+    const [counts] = await db.select({
+      total:     sql<number>`count(*)::int`,
+      withThumb: sql<number>`count(*) filter (where ${mediaFilesTable.thumbnailPath} is not null)::int`,
+    }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, nasPath));
+
+    const totalFiles     = counts?.total     ?? 0;
+    const thumbPathsInDb = counts?.withThumb ?? 0;
+
+    // Thumbnail files on disk (fast directory listing — no per-file stat)
+    let thumbsOnDisk = 0;
+    try {
+      const thumbDir = getThumbnailDir(nasPath);
+      if (fs.existsSync(thumbDir)) {
+        thumbsOnDisk = fs.readdirSync(thumbDir).filter(f => f.endsWith(".webp")).length;
+      }
+    } catch { /* non-fatal */ }
+
+    const missingThumbs = Math.max(0, thumbPathsInDb - thumbsOnDisk);
+
+    const lines = [
+      `[startup] ══════════ Willard AI Health ══════════`,
+      `[startup] ✓ Database      connected`,
+      `[startup] ${cacheEntries > 10 ? "✓" : "⚠"} Dir cache     ${cacheEntries} entries loaded${cacheEntries <= 10 ? " — nearly empty (next scan will be slow)" : ""}`,
+      `[startup] ✓ Library       ${totalFiles.toLocaleString()} files indexed`,
+      `[startup]   Integrity     ${thumbPathsInDb.toLocaleString()} thumbnail paths in DB`,
+      `[startup] ${missingThumbs > 0 ? "⚠" : "✓"} Thumbnails    ${thumbsOnDisk.toLocaleString()} files on disk${missingThumbs > 0 ? ` / ${missingThumbs.toLocaleString()} missing — repair queued` : " — all present"}`,
+      `[startup] ════════════════════════════════════════`,
+    ];
+    console.info("\n" + lines.join("\n"));
+
+    // Append to rolling startup-history.jsonl (keep last 20 entries)
+    try {
+      const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const historyPath = path.join(cacheDir, "startup-history.jsonl");
+      let entries: string[] = [];
+      try { entries = fs.readFileSync(historyPath, "utf8").split("\n").filter(Boolean); } catch { /* first run */ }
+      entries = [...entries.slice(-19), JSON.stringify({
+        ts: new Date().toISOString(),
+        cacheEntries, totalFiles, thumbPathsInDb, thumbsOnDisk, missingThumbs,
+      })];
+      fs.writeFileSync(historyPath, entries.join("\n") + "\n");
+    } catch { /* non-fatal */ }
+
+  } catch { /* non-fatal — startup health is informational */ }
 }

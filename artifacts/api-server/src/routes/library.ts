@@ -95,7 +95,9 @@ router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
 
 router.post("/library/indexing/resume", async (_req: Request, res: Response) => {
   await db.update(appSettingsTable).set({ indexingPaused: false });
-  // Resume the most recent paused job, if any.
+  // Resume the most recent genuinely-PAUSED job (not INTERRUPTED_BY_RESTART).
+  // INTERRUPTED_BY_RESTART jobs must be explicitly resumed by the user via
+  // POST /api/library/jobs/:id/resume, not auto-resumed on indexing enable.
   const [paused] = await db.select().from(libraryJobsTable)
     .where(eq(libraryJobsTable.status, "PAUSED"))
     .orderBy(desc(libraryJobsTable.createdAt))
@@ -236,9 +238,12 @@ router.get("/library/jobs", async (req: Request, res: Response) => {
   const type    = req.query["type"] as string | undefined;
   const limit   = Math.min(100, parseInt(req.query["limit"] as string) || 20);
 
+  const status = req.query["status"] as string | undefined;
+
   const conditions = [];
   if (nasPath) conditions.push(eq(libraryJobsTable.nasPath, nasPath));
   if (type)    conditions.push(eq(libraryJobsTable.jobType, type));
+  if (status)  conditions.push(eq(libraryJobsTable.status, status));
 
   const jobs = await db.select().from(libraryJobsTable)
     .where(conditions.length === 1 ? conditions[0] : conditions.length > 1 ? and(...conditions) : undefined)

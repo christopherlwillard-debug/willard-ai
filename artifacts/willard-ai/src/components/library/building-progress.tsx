@@ -43,22 +43,22 @@ export function BuildingLibraryProgress() {
   ];
 
   return (
-    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 px-5 py-4 space-y-3">
+    <div className="rounded-lg border border-border bg-card/60 px-5 py-4 space-y-3">
       <div className="flex items-center gap-3">
-        <Loader2 className="w-5 h-5 text-blue-400 animate-spin shrink-0" />
+        <Loader2 className="w-4 h-4 text-muted-foreground animate-spin shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-blue-300">Building your media library…</p>
+          <p className="text-sm font-medium text-foreground">Syncing library in background</p>
           <p className="text-xs text-muted-foreground">
             {total
-              ? `${scanned.toLocaleString()} of ${total.toLocaleString()} files indexed`
-              : `${scanned.toLocaleString()} files indexed so far`}
+              ? `${scanned.toLocaleString()} of ${total.toLocaleString()} files checked`
+              : `${scanned.toLocaleString()} files checked so far`}
             {job.stage ? ` • ${job.stage}` : ""}
-            {" — you can start using Willard AI now."}
+            {" — your library is fully usable while this runs."}
           </p>
         </div>
-        {pct != null && <span className="text-sm font-bold tabular-nums text-blue-300 shrink-0">{pct}%</span>}
+        {pct != null && <span className="text-xs font-medium tabular-nums text-muted-foreground shrink-0">{pct}%</span>}
       </div>
-      {pct != null && <Progress value={pct} className="h-1.5" />}
+      {pct != null && <Progress value={pct} className="h-1" />}
       <div className="flex flex-wrap gap-x-6 gap-y-1">
         {categories.map(({ label, value, icon: Icon, color }) => (
           <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground">

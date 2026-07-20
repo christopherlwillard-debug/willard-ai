@@ -10,6 +10,8 @@ export {
   startJob,
   resumeJob,
   recoverInterruptedJobs,
+  emitStartupHealth,
+  startThumbnailReconciliation,
   addThumbnailPriority,
   clearThumbnailPriority,
   notifyUiConnected,

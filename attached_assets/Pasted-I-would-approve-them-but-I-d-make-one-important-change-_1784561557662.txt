@@ -1,0 +1,136 @@
+I would approve them, but I'd make one important change to the implementation order.
+
+Phase 1 (Highest Priority)
+✅ #144 – Stop the full 24K-file walk on every restart
+
+This is the foundation for everything else.
+
+I especially like the startup health log and the post-scan confirmation:
+
+✓ Directory Cache
+
+812 / 812 entries
+
+100% coverage
+
+Saved: 10:42:31
+
+That gives you proof the cache is actually becoming useful instead of assuming it is.
+
+Phase 2
+✅ #146 – Thumbnail reconciliation
+
+I actually think this should be split into two commits even if it stays one roadmap item.
+
+Commit A
+
+Advisory lock
+Prevent duplicate thumbnail jobs
+Cursor resume
+
+These eliminate the endless thumbnail backlog.
+
+Commit B
+
+Background reconciliation
+250-row verification
+Self-healing
+
+That way if something goes wrong, you immediately know whether it was the queue management or the reconciliation logic.
+
+Phase 3
+✅ #145 – Interrupted scans
+
+No changes.
+
+INTERRUPTED_BY_RESTART is much clearer than marking the scan as failed.
+
+Phase 4
+✅ #147 – Library Ready
+
+This is exactly how I'd finish.
+
+Instead of:
+
+Scanning...
+
+I'd rather see something like:
+
+✓ Library Ready
+
+24,551 indexed files
+
+Background Sync
+
+Scanning for changes...
+
+That tells the user:
+
+your library is loaded,
+your data is available,
+the scanner is just keeping things up to date.
+One thing I'd add before building
+
+I'd add a new diagnostic called Library Integrity to the startup health log.
+
+Right now you'll have:
+
+✓ DB
+
+✓ Cache
+
+✓ Watcher
+
+⚠ Thumbnails
+
+✓ Ready
+
+I'd also log consistency checks like:
+
+Library Integrity
+
+Media Files: 24,551
+
+Thumbnail Paths in DB: 24,489
+
+Thumbnail Files on Disk: 2,602
+
+Missing Thumbnails: 21,887
+
+Orphan Thumbnails: 14
+
+Duplicate Records: 0
+
+That immediately highlights mismatches between the database and the filesystem.
+
+One more suggestion
+
+Since Willard AI is becoming a long-lived desktop application, I'd save the last 20 startup health reports.
+
+That gives you a history like:
+
+Startup History
+
+Jul 20
+Cache 100%
+Thumbnail Gap 21,887
+
+Jul 21
+Cache 100%
+Thumbnail Gap 8,312
+
+Jul 22
+Cache 100%
+Thumbnail Gap 0
+
+If something regresses after a future update, you'll see exactly when it happened.
+
+My final recommendation to Replit
+
+I would tell them:
+
+Implement these tasks in order, but after completing each task, stop and verify it with the startup health report before moving to the next one.
+
+Do not implement all four in one pass. After #144, prove the directory cache is achieving high coverage on restart. After #146, prove the thumbnail gap decreases over successive runs and only one thumbnail job exists. After #145, verify interrupted scans no longer resume automatically. After #147, confirm the Media page and dashboard remain fully usable while background synchronization runs.
+
+That staged verification will make it much easier to catch regressions and ensure each change delivers the improvement you're expecting.

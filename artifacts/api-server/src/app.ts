@@ -12,7 +12,7 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
-import { recoverInterruptedJobs, notifyUiConnected } from "./lib/library-engine";
+import { recoverInterruptedJobs, notifyUiConnected, emitStartupHealth, startThumbnailReconciliation } from "./lib/library-engine";
 import { warmThumbnailCache } from "./routes/media";
 import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
@@ -343,6 +343,11 @@ db.select().from(appSettingsTable).limit(1).then((rows) => {
       } catch { /* NAS may not be mounted yet — non-fatal */ }
       nasLogStream.setNasPath(nasPath).catch(() => {});
       logger.info({ nasPath }, "NAS storage initialized from persisted settings");
+      // Emit startup health after a brief delay so DB queries complete cleanly
+      setTimeout(() => emitStartupHealth(nasPath).catch(() => {}), 2_000);
+      // Background reconciliation: verifies thumbnailPath rows against disk,
+      // resets NULL for any whose .webp is missing so the thumb job picks them up.
+      startThumbnailReconciliation(nasPath);
     } else {
       logger.warn({ nasPath, reason: reach.message }, "Library Offline — NAS storage not initialized (location unreachable)");
     }

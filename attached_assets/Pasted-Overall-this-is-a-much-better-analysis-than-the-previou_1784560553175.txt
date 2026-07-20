@@ -1,0 +1,132 @@
+Overall, this is a much better analysis than the previous one because it's based on tracing the code instead of assumptions. I do have one concern, though: I'd be careful not to conclude that these three issues are the only root causes until they're verified with runtime data.
+
+Here's how I'd evaluate each proposal.
+
+#144 — Move the directory cache off the NAS
+
+Rating: 10/10
+
+This is the one I'd implement first.
+
+If your directory cache lives on the same SMB share it's meant to optimize, then every restart depends on the NAS being fully available before the cache can even be read. That's a circular dependency.
+
+A local cache is a much better design:
+
+Local SSD
+    ├── dir-cache
+    ├── scan state
+    ├── watcher state
+    └── diagnostics
+
+The NAS should store the media, not the scanner's working memory.
+
+One addition I'd make is to version the cache:
+
+Cache Version
+Library Root
+Library UUID
+Created
+Last Updated
+
+That makes migrations and corruption handling much safer.
+
+#145 — Paused scans
+
+Rating: 9/10
+
+I agree with the diagnosis but would tweak the behavior.
+
+Instead of always marking paused scans as failed, I'd introduce a new terminal state:
+
+INTERRUPTED_BY_RESTART
+
+That preserves the fact that the user intentionally paused it without implying it failed because of an error.
+
+Then let the user choose whether to resume or discard it.
+
+#146 — Thumbnail deduplication
+
+Rating: 10/10
+
+This is exactly the kind of queue bug that causes systems to appear stuck.
+
+One thing I'd add is a singleton lock.
+
+Rather than just checking the jobs table:
+
+Running?
+
+Queued?
+
+Have a dedicated lock such as:
+
+thumbnail_backfill.lock
+
+or a database advisory lock.
+
+That guarantees only one thumbnail backfill is ever active, even if two code paths try to enqueue it simultaneously.
+
+One thing I still think is missing
+
+I noticed something in your screenshots.
+
+Your Media page sits loading while the dashboard already knows there are:
+
+21,682 photos
+2,625 videos
+24,551 files
+
+That still bothers me.
+
+Even if the scan is slow, the Media page shouldn't be empty if the database already has those records.
+
+I'd specifically ask Replit to answer:
+
+Why does the Media page not immediately render the first page of results from media_files while background scanning continues?
+
+That's independent of the scanner.
+
+I'd add one more task
+#147 – Instant Library Load
+
+What & Why
+
+The library database already contains indexed media. Startup should display existing results immediately and treat background scanning as synchronization only.
+
+Done looks like
+
+Dashboard loads from the database only.
+Media page renders the first 200 records immediately.
+Background scan never blocks browsing.
+Search works before the scan completes.
+Collections, People, and Cleanup use persisted data until refreshed.
+
+That would make the application feel dramatically faster, even if a background scan still takes several minutes.
+
+My implementation order
+#144 – Local directory cache & startup grace period.
+#146 – Prevent thumbnail job pile-ups.
+#145 – Stop silently resuming paused scans.
+#147 – Instant library load from the database.
+
+Then I'd run another startup trace to see what's left.
+
+One thing I'd ask Replit before approving #144
+
+I'd want one concrete measurement added.
+
+Have it log something like:
+
+Startup Timeline
+
+0.0s  Server started
+0.4s  Database connected
+0.7s  Loaded local dir cache (24,551 entries)
+1.1s  UI connected
+1.2s  Media API serving existing library
+15.0s Watcher verification started
+16.3s QUICK sweep complete (99.7% dir-cache hit)
+
+That single timeline will tell you whether these changes actually solved the startup problem or whether another bottleneck remains.
+
+So my takeaway is: I agree with the direction of these three fixes, especially moving the cache off the NAS and preventing thumbnail job duplication. I still think there's one remaining architectural question to answer: why the UI doesn't immediately render the library that's already in the database. If that isn't addressed, the app may still feel slow even after the scan engine is fixed.
