@@ -1252,7 +1252,11 @@ async function runScanJob(
       queue,
       (fileEntry) => {
         // Called for each discovered file — update running total and collect archives
+        const prevTotal = state.filesTotal;
         state.filesTotal++;
+        if (prevTotal === 0) {
+          console.info(`[scan #${jobId}] phase=walking first file found elapsed=${Date.now() - diagWalkStart}ms name=${fileEntry.name}`);
+        }
         if (ARCHIVE_EXTS_SET.has(fileEntry.ext.toLowerCase())) discoveredArchives.push(fileEntry);
       },
       undefined, // onDir
@@ -1322,7 +1326,14 @@ async function runScanJob(
     // reachable, the first readdir is almost certainly hung. Fail the job with
     // a descriptive error so the user gets actionable feedback instead of an
     // indefinite 0-files spinner.
+    //
+    // walkTimedOut is set synchronously in the timeout callback before
+    // requestStop() and failJob() are called. The guard after
+    // `await Promise.all(allWorkerPromises)` checks this flag and returns early,
+    // preventing finalization from overwriting the FAILED DB status and stopping
+    // deletion detection from running against an empty seenPaths set.
     const WALK_TIMEOUT_MS = 90_000;
+    let walkTimedOut = false;
     let _walkTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
     if (state.profile === "FULL") {
       _walkTimeoutTimer = setTimeout(() => {
@@ -1330,6 +1341,7 @@ async function runScanJob(
         if (state.filesTotal === 0 && isNasAvailable(scanRoot)) {
           const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
           console.error(`[scan #${jobId}] ${msg}`);
+          walkTimedOut = true;
           requestStop();
           void failJob(jobId, "ERROR", msg);
         }
@@ -1485,6 +1497,16 @@ async function runScanJob(
     // post-walk queue empties, then shut it down once all workers finish.
     await Promise.all(allWorkerPromises);
     clearInterval(ctrlInterval);
+
+    // ── Guard: walk-timeout-triggered termination ─────────────────────────
+    // failJob() was already called in the timeout callback (void — fire and
+    // forget). Returning here prevents finalization from overwriting the FAILED
+    // DB status and prevents deletion detection from running against an
+    // incomplete seenPaths set, which would incorrectly mark existing rows DELETED.
+    if (walkTimedOut) {
+      stopIncrementalDirCacheSave();
+      return;
+    }
 
     // ── Handle pause / cancel ─────────────────────────────────────────────
     if (state.cancelRequested) {
