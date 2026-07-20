@@ -18,7 +18,7 @@ import {
   ScanPriorityQueue,
   type DirCacheEntry, type FileEntry,
 } from "./indexer";
-import { type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
+import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
 import { getWillardAIDir } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
