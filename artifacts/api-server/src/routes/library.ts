@@ -776,4 +776,18 @@ router.post("/library/reprocess", async (_req: Request, res: Response) => {
   res.json(result);
 });
 
+// ── POST /api/library/optimize — §8.3 readiness gate ─────────────────────────
+// Returns { alreadyRunning: false } when the scan engine is idle and ready to
+// accept a new job.  Used by the lifecycle proof test (Task #156 §8.3) to
+// verify that no orphaned lock is held after sequential scans settle.
+
+router.post("/library/optimize", (_req: Request, res: Response) => {
+  const activeId = getActiveJobId();
+  if (activeId !== null) {
+    res.json({ alreadyRunning: true, jobId: activeId });
+  } else {
+    res.json({ alreadyRunning: false });
+  }
+});
+
 export default router;

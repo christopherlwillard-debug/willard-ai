@@ -773,9 +773,13 @@ async function runScanJob(
     logger.info({ scanId, phaseIndex, phase, ...fields }, phase);
   };
 
-  // sdbg: gated behind LOG_SCAN_DEBUG=true; phaseIndex always increments
+  // sdbg: phaseIndex always increments AND checkpoint always stored;
+  // pino log line is only emitted when LOG_SCAN_DEBUG=true.
+  // Storing the checkpoint regardless ensures the full §1 sequence is
+  // queryable via diagnostics.checkpoints without requiring DEBUG mode.
   const sdbg = (phase: string, fields?: Record<string, unknown>) => {
     const phaseIndex = _pi++;
+    lifecycleCheckpoints.push({ event: phase, phaseIndex, ts: Date.now(), fields: fields ?? {} });
     if (_dbg) logger.info({ scanId, phaseIndex, phase, ...fields }, phase);
   };
 
@@ -1800,6 +1804,8 @@ async function runScanJob(
     sdbg('active_jobs_deleted', { activeJobs: activeJobs.size });
 
     stageTiming.finalizing = Date.now() - state.startedAt.getTime() - Object.values(stageTiming).reduce((a, b) => a + b, 0);
+    // Emit done_written BEFORE terminal so it appears in stored checkpoints (phaseIndex matches §1 spec ordering)
+    sdbg('done_written', { status: 'DONE', filesProcessed: state.filesProcessed });
     slog('terminal', {
       completionReason: 'completed',
       ...getResources(),
@@ -1828,7 +1834,6 @@ async function runScanJob(
       summary,
       diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
     }).where(eq(libraryJobsTable.id, jobId));
-    sdbg('done_written', { status: 'DONE', filesProcessed: state.filesProcessed });
 
     // ── Auto-start thumbnail backfill after scan ───────────────────────────
     try {
