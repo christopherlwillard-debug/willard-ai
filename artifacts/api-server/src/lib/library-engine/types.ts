@@ -136,4 +136,12 @@ export interface ScanDiagnostics {
   dbWriteTimeMs:            number;
   metadataExtractionTimeMs: number;
   totalSizeBytes:           number;
+  /** Milliseconds spent loading all DB media rows at scan start */
+  dbLoadMs?:                number;
+  /** Milliseconds spent on the dir-only pre-check stat pass */
+  dirStatMs?:               number;
+  /** True when the dir-cache pre-check found 100% cache hits and the sweep exited immediately */
+  skippedByDirCache?:       boolean;
+  /** Profile that was used for this scan */
+  scanProfile?:             string;
 }

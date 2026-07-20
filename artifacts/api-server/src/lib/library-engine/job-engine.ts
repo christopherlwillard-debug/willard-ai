@@ -357,6 +357,81 @@ function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>): 
   } catch { /* non-fatal */ }
 }
 
+// ── Directory-only pre-check (fast path, no DB load) ─────────────────────────
+// Walks the NAS directory tree without emitting file entries — only stats each
+// directory and compares mtime + entry count against the previous-scan cache.
+//
+// Returns allHit = true when every directory matched its cached values AND the
+// total number of directories is unchanged (i.e. none were added or removed).
+// If allHit is true, no files could have been structurally added, removed, or
+// renamed since the last scan, so the sweep may exit immediately.
+//
+// In-place content modifications that leave parent directory mtime unchanged
+// (standard POSIX / SMB behaviour) are NOT detected by this check.  They are
+// caught by resolveSkippedDirs during a normal QUICK scan or by a FULL scan.
+function dirCachePreCheck(
+  nasPath:  string,
+  cacheIn:  Map<string, DirCacheEntry>,
+  skipDirs: Set<string>,
+  settings: ScannerSettings,
+): { allHit: boolean; dirCacheOut: Map<string, DirCacheEntry>; dirStatMs: number } {
+  const dirCacheOut = new Map<string, DirCacheEntry>();
+  let allHit = true;
+  const t0 = Date.now();
+
+  function recurse(currentDir: string): void {
+    if (!allHit) return; // abort on first miss — rest of tree is irrelevant
+
+    let entries: fs.Dirent[];
+    let dStat: fs.Stats;
+    try {
+      dStat   = fs.statSync(currentDir);
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      allHit = false;
+      return;
+    }
+
+    const relDir = path.relative(nasPath, currentDir).replace(/\\/g, "/");
+    if (relDir && relDir !== ".") {
+      // Apply same user-configured folder exclusions as the main walk
+      if (settings.ignoredFolders.length > 0) {
+        for (const ignored of settings.ignoredFolders) {
+          const norm = ignored.replace(/\\/g, "/").replace(/\/$/, "");
+          if (relDir === norm || relDir.startsWith(norm + "/")) return;
+        }
+      }
+
+      const mtimeMs    = dStat.mtimeMs;
+      const entryCount = entries.length;
+      dirCacheOut.set(relDir, { mtimeMs, entryCount });
+
+      const cached = cacheIn.get(relDir);
+      if (cached === undefined || cached.mtimeMs !== mtimeMs || cached.entryCount !== entryCount) {
+        allHit = false;
+        return;
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (settings.ignoreHiddenFiles && entry.name.startsWith(".")) continue;
+      if (isSystemDir(entry.name, settings)) continue;
+      const fullPath = path.join(currentDir, entry.name);
+      if (skipDirs.has(path.resolve(fullPath))) continue;
+      recurse(fullPath);
+    }
+  }
+
+  recurse(nasPath);
+
+  // If any cached directory was not encountered (a subtree was deleted), the
+  // dirCacheOut will be smaller than cacheIn — flag as a miss.
+  if (allHit && dirCacheOut.size !== cacheIn.size) allHit = false;
+
+  return { allHit, dirCacheOut, dirStatMs: Date.now() - t0 };
+}
+
 // Resolve files in directories that were short-circuited by the dir-mtime cache.
 //
 // The dir-mtime cache tells us no entries were added, removed, or renamed inside
@@ -687,6 +762,51 @@ async function runScanJob(
     const dirCacheOut = new Map<string, DirCacheEntry>();
     const skippedDirs: string[] = [];
 
+    // ── Fast path: dir-cache pre-check (skips DB load entirely) ──────────
+    // Only applies to non-resumed QUICK sweeps with a valid pre-existing cache.
+    // If every directory matches its cached mtime+entryCount, no files could
+    // have been structurally added, removed, or renamed → nothing to do.
+    let diagDirStatMs = 0;
+    if (dirCacheIn.size > 0 && state.profile !== "FULL" && !resumedScanStartedAt) {
+      const preCheck = dirCachePreCheck(state.nasPath, dirCacheIn, skipDirs, scannerSettings);
+      diagDirStatMs = preCheck.dirStatMs;
+      if (preCheck.allHit) {
+        saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut);
+        const nowMs = Date.now();
+        const elapsedMs = preCheck.dirStatMs;
+        console.info(
+          `[scan #${jobId}] dir-cache 100% hit (${dirCacheIn.size} dirs, ${elapsedMs}ms) — library unchanged, skipping sweep`,
+        );
+        const summary: JobSummary = {
+          newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0,
+          unchangedFiles: 0, hashedFiles: 0, thumbnailsGenerated: 0,
+          elapsedMs, previousElapsedMs: null,
+          skippedFiles: 0, skippedList: [], duplicateGroups: 0,
+          scanStartedAt: new Date(nowMs).toISOString(), categories: {},
+        };
+        const diagnostics: ScanDiagnostics = {
+          walkTimeMs: 0, dirCacheHits: preCheck.dirCacheOut.size, dirCacheMisses: 0,
+          skippedByReason: {}, metadataExtracted: 0, hashesGenerated: 0,
+          dbWriteBatches: 0, avgNasLatencyMs: 0, maxNasLatencyMs: 0,
+          peakConcurrency: 0, throughputFilesPerSec: 0, throughputMBPerSec: 0,
+          peakQueueDepth: 0, dbWriteTimeMs: 0, metadataExtractionTimeMs: 0,
+          totalSizeBytes: 0,
+          dirStatMs: preCheck.dirStatMs, skippedByDirCache: true,
+          scanProfile: state.profile,
+        };
+        await db.update(libraryJobsTable).set({
+          status:         "DONE",
+          finishedAt:     new Date(),
+          processedFiles: 0,
+          totalFiles:     0,
+          summary,
+          diagnostics:    diagnostics as unknown as Record<string, unknown>,
+        }).where(eq(libraryJobsTable.id, jobId));
+        activeJobs.delete(jobId);
+        return;
+      }
+    }
+
     // Reuse the original scan anchor on resume so files indexed before the
     // pause are not misdetected as deleted at the end of this run.
     const scanStartedAt = resumedScanStartedAt ?? new Date();
@@ -706,6 +826,7 @@ async function runScanJob(
 
     // Load all existing paths from DB for this NAS (for move detection)
     const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null }>();
+    const _t0DbLoad = Date.now();
     const dbRows = await db.select({
       id: mediaFilesTable.id,
       relativePath: mediaFilesTable.relativePath,
@@ -716,6 +837,7 @@ async function runScanJob(
       scannerVersion: mediaFilesTable.scannerVersion,
       thumbnailPath: mediaFilesTable.thumbnailPath,
     }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
+    const diagDbLoadMs = Date.now() - _t0DbLoad;
 
     for (const row of dbRows) {
       existingByPath.set(row.relativePath, row);
@@ -751,6 +873,9 @@ async function runScanJob(
     let unchangedFlushing = false;
     const flushUnchanged = async (): Promise<void> => {
       if (unchangedFlushing || unchangedBuf.length === 0) return;
+      // QUICK sweeps omit the per-file timestamp update for unchanged rows.
+      // Deletion detection uses seenPaths (not lastScannedAt), so this is safe.
+      if (state.profile !== "FULL") { unchangedBuf.length = 0; return; }
       unchangedFlushing = true;
       const ids = unchangedBuf.splice(0);
       try {
@@ -1323,18 +1448,26 @@ async function runScanJob(
     // ── Phase: detecting deletions ─────────────────────────────────────────
     state.phase = "detecting_deletions";
 
-    // Any DB record for this nasPath not seen in this scan → DELETED
-    // Exclude already-DELETED records so they aren't re-counted on every subsequent scan.
-    const deletedRows = await db.update(mediaFilesTable)
-      .set({ lastScanAction: "DELETED", lastScannedAt: scanStartedAt })
-      .where(and(
-        eq(mediaFilesTable.nasPath, state.nasPath),
-        lt(mediaFilesTable.lastScannedAt, scanStartedAt),
-        ne(mediaFilesTable.lastScanAction, "DELETED"),
-      ))
-      .returning({ id: mediaFilesTable.id });
-
-    state.counters.deleted = deletedRows.length;
+    // Deletion detection: any DB path not seen in this scan was removed from disk.
+    // Uses the seenPaths set (populated during walk + resolveSkippedDirs) instead
+    // of lastScannedAt timestamps, so unchanged files no longer need a DB write
+    // on every QUICK sweep.
+    const deletedPaths: string[] = [];
+    for (const [relPath] of existingByPath) {
+      if (!seenPaths.has(relPath)) deletedPaths.push(relPath);
+    }
+    state.counters.deleted = 0;
+    for (let i = 0; i < deletedPaths.length; i += 500) {
+      const result = await db.update(mediaFilesTable)
+        .set({ lastScanAction: "DELETED" as ScanAction, lastScannedAt: scanStartedAt })
+        .where(and(
+          eq(mediaFilesTable.nasPath, state.nasPath),
+          inArray(mediaFilesTable.relativePath, deletedPaths.slice(i, i + 500)),
+          ne(mediaFilesTable.lastScanAction, "DELETED" as ScanAction),
+        ))
+        .returning({ id: mediaFilesTable.id });
+      state.counters.deleted += result.length;
+    }
 
     // ── Duplicate detection (two-stage: size+fingerprint groups → confirm with
     //    full SHA-256 only for candidates) ──────────────────────────────────
@@ -1396,6 +1529,10 @@ async function runScanJob(
       dbWriteTimeMs:            diagDbWriteTimeMs,
       metadataExtractionTimeMs: diagMetaExtractionMs,
       totalSizeBytes:           diagTotalSizeBytes,
+      dbLoadMs:                 diagDbLoadMs,
+      dirStatMs:                diagDirStatMs,
+      skippedByDirCache:        false,
+      scanProfile:              state.profile,
     };
 
     await db.update(libraryJobsTable).set({

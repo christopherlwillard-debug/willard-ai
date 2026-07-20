@@ -39,7 +39,7 @@ const DEBOUNCE_MS        = 2_000;       // quiet window after last event before 
 const MAX_WAIT_MS        = 15_000;      // never delay indexing longer than this during a sustained burst
 const BURST_THRESHOLD    = 200;         // pending changes that count as a "large import burst"
 const SAFETY_SWEEP_MS    = 30 * 60_000; // safety sweep cadence while events are active (events mode only)
-const DEFAULT_SWEEP_INTERVAL_S = 60;    // default SMB polling interval in seconds
+const DEFAULT_SWEEP_INTERVAL_S = 300;   // default SMB polling interval in seconds (5 min)
 const MIN_SWEEP_INTERVAL_S     = 10;    // lower bound so users can't accidentally set < 10 s
 
 interface WatcherInternalState {
