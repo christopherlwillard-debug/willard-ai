@@ -730,15 +730,17 @@ async function runScanJob(
 
     // ── NAS availability check ─────────────────────────────────────────────
     if (!isNasAvailable(scanRoot)) {
+      console.info(`[scan #${jobId}] NAS check FAILED path=${scanRoot}`);
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
+    console.info(`[scan #${jobId}] NAS check OK path=${scanRoot} profile=${state.profile}`);
 
     // ── Streaming pipeline setup ──────────────────────────────────────────
     // Walk and indexing run concurrently: the async walker pushes files into
     // a priority queue as they are discovered; a worker pool consumes them
     // immediately so photos appear in the library before the walk finishes.
-    state.phase = "walking";
+    state.phase = "loading";
     const willardDir = path.resolve(getWillardAIDir(state.nasPath));
     const skipDirs   = new Set([willardDir]);
 
@@ -875,6 +877,7 @@ async function runScanJob(
 
     // Load all existing paths from DB for this NAS (for move detection)
     const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null; lastScanAction: string | null }>();
+    console.info(`[scan #${jobId}] phase=loading DB load start nasPath=${state.nasPath}`);
     const _t0DbLoad = Date.now();
     const dbRows = await db.select({
       id: mediaFilesTable.id,
@@ -888,6 +891,7 @@ async function runScanJob(
       lastScanAction: mediaFilesTable.lastScanAction,
     }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
     const diagDbLoadMs = Date.now() - _t0DbLoad;
+    console.info(`[scan #${jobId}] phase=loading DB load done rows=${dbRows.length} elapsed=${diagDbLoadMs}ms`);
 
     for (const row of dbRows) {
       existingByPath.set(row.relativePath, row);
@@ -1240,6 +1244,7 @@ async function runScanJob(
 
     // walkDone: async walk → resolveSkippedDirs → archive upsert → close queue
     state.phase = "walking";
+    console.info(`[scan #${jobId}] phase=walking walk start existingRows=${dbRows.length} dirCacheSize=${dirCacheIn.size}`);
     const diagWalkStart = Date.now();
     const walkDone = walkNasAsync(
       path.resolve(scanRoot),
@@ -1311,6 +1316,29 @@ async function runScanJob(
       // Close queue — workers drain remaining items and exit
       if (!_queueClosed) { _queueClosed = true; queue.close(); }
     });
+
+    // ── Walk-start timeout (FULL scans only) ──────────────────────────────
+    // If the NAS walk yields zero files within 90 seconds and the NAS is still
+    // reachable, the first readdir is almost certainly hung. Fail the job with
+    // a descriptive error so the user gets actionable feedback instead of an
+    // indefinite 0-files spinner.
+    const WALK_TIMEOUT_MS = 90_000;
+    let _walkTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    if (state.profile === "FULL") {
+      _walkTimeoutTimer = setTimeout(() => {
+        _walkTimeoutTimer = null;
+        if (state.filesTotal === 0 && isNasAvailable(scanRoot)) {
+          const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
+          console.error(`[scan #${jobId}] ${msg}`);
+          requestStop();
+          void failJob(jobId, "ERROR", msg);
+        }
+      }, WALK_TIMEOUT_MS);
+      (_walkTimeoutTimer as any).unref?.();
+    }
+    walkDone.then(() => {
+      if (_walkTimeoutTimer) { clearTimeout(_walkTimeoutTimer); _walkTimeoutTimer = null; }
+    }).catch(() => {});
 
     // ── Adaptive worker pool ──────────────────────────────────────────────
     // Workers start at INITIAL_WORKERS. ConcurrencyController adjusts the
