@@ -783,14 +783,6 @@ async function runScanJob(
   try {
     const scanRoot = rootPath ?? state.nasPath;
 
-    // ── NAS availability check ─────────────────────────────────────────────
-    if (!isNasAvailable(scanRoot)) {
-      logger.warn({ scanId: String(jobId), phase: 'nas_check_failed', scanRoot }, 'NAS check FAILED');
-      await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
-      return;
-    }
-    logger.info({ scanId: String(jobId), phase: 'nas_check_ok', scanRoot, profile: state.profile }, 'NAS check OK');
-
     // ── Streaming pipeline setup ──────────────────────────────────────────
     // Walk and indexing run concurrently: the async walker pushes files into
     // a priority queue as they are discovered; a worker pool consumes them
@@ -827,6 +819,9 @@ async function runScanJob(
     } catch { /* use defaults if settings table not yet migrated */ }
 
     // Emit scan_started now that we have all config — the 6 permanent events start here.
+    // scan_started always fires first so that every subsequent terminal outcome (including
+    // early NAS failures below) carries the full scan_started → terminal → scan_summary
+    // → scan_finished lifecycle sequence observable in the log.
     slog('scan_started', {
       profile:                state.profile,
       nasPath:                state.nasPath,
@@ -846,6 +841,18 @@ async function runScanJob(
       ignoredFolderCount:     scannerSettings.ignoredFolders.length,
       ignoredExtensionCount:  scannerSettings.ignoredExtensions.length,
     });
+
+    // ── NAS availability check (after scan_started so all terminal exits emit
+    //    the full scan_started → terminal → scan_summary → scan_finished triplet)
+    sdbg('nas_check_start', { scanRoot });
+    if (!isNasAvailable(scanRoot)) {
+      slog('terminal', { completionReason: 'failed', ...getResources(), nasOffline: true });
+      slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: 0 });
+      slog('scan_finished', { completionReason: 'failed' });
+      await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
+      return;
+    }
+    sdbg('nas_check_ok', { scanRoot, profile: state.profile });
 
     // Load the directory mtime cache from the previous scan so we can skip
     // entire unchanged directory trees without stat'ing every file inside them.
@@ -1417,7 +1424,7 @@ async function runScanJob(
         _walkTimeoutTimer = null;
         if (state.filesTotal === 0 && isNasAvailable(scanRoot)) {
           const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
-          logger.error({ scanId, phase: 'walk_timeout', scanRoot }, msg);
+          sdbg('walk_timeout', { scanRoot, msg });
           walkTimedOut = true;
           requestStop();
           void failJob(jobId, "ERROR", msg);
@@ -1558,7 +1565,7 @@ async function runScanJob(
       if (changed) {
         const prev    = targetWorkerCount;
         targetWorkerCount = newCount;
-        logger.info({ scanId, phase: 'concurrency_adjust', prev, newCount, reason }, `concurrency ${prev} → ${newCount}`);
+        sdbg('concurrency_adjust', { prev, newCount, reason });
         if (newCount > prev) {
           for (let i = 0; i < newCount - prev; i++) spawnWorker();
         }
@@ -1848,9 +1855,9 @@ async function runScanJob(
   } catch (err: any) {
     stopIncrementalDirCacheSave();
     const _failedErr = err instanceof Error ? err : new Error(String(err ?? 'Unknown error'));
-    slog('terminal', { completionReason: 'failed', ...getResources(), err: _failedErr });
-    slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
-    slog('scan_finished', { completionReason: 'failed', err: _failedErr });
+    slog('terminal', { completionReason: 'failed', failedAtPhase: state.phase, ...getResources(), err: _failedErr });
+    slog('scan_summary', { completionReason: 'failed', failedAtPhase: state.phase, stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+    slog('scan_finished', { completionReason: 'failed', failedAtPhase: state.phase, err: _failedErr });
     await failJob(jobId, "ERROR", _failedErr.message);
   }
 }
