@@ -761,9 +761,17 @@ async function runScanJob(
   const SLOW_STAGE_MS = parseInt(process.env['SLOW_STAGE_MS'] ?? '60000', 10);
   const _slow = (ms: number) => ms > SLOW_STAGE_MS ? { warning: 'slow_stage' as const } : {};
 
+  // Lifecycle checkpoint ring — written into diagnostics.checkpoints for test verifiability.
+  // Each slog call appends an entry so tests can assert event order, phaseIndex monotonicity,
+  // and terminal resource counts without parsing free-form log text.
+  const lifecycleCheckpoints: Array<{ event: string; phaseIndex: number; ts: number; fields: Record<string, unknown> }> = [];
+
   // slog: always-on INFO (the 6 permanent events + terminal states)
-  const slog = (phase: string, fields?: Record<string, unknown>) =>
-    logger.info({ scanId, phaseIndex: _pi++, phase, ...fields }, phase);
+  const slog = (phase: string, fields?: Record<string, unknown>) => {
+    const phaseIndex = _pi++;
+    lifecycleCheckpoints.push({ event: phase, phaseIndex, ts: Date.now(), fields: fields ?? {} });
+    logger.info({ scanId, phaseIndex, phase, ...fields }, phase);
+  };
 
   // sdbg: gated behind LOG_SCAN_DEBUG=true; phaseIndex always increments
   const sdbg = (phase: string, fields?: Record<string, unknown>) => {
@@ -895,20 +903,20 @@ async function runScanJob(
             dirStatMs: preCheck.dirStatMs, fileProcessMs: 0,
             skippedByDirCache: true, scanProfile: state.profile,
           };
-          await db.update(libraryJobsTable).set({
-            status:         "DONE",
-            finishedAt:     new Date(),
-            processedFiles: 0,
-            totalFiles:     0,
-            summary,
-            diagnostics:    diagnostics as unknown as Record<string, unknown>,
-          }).where(eq(libraryJobsTable.id, jobId));
           activeJobs.delete(jobId);
           slog('db_load_complete',  { rows: 0, elapsedMs: 0, skipped: true });
           slog('walker_complete',   { files: 0, elapsedMs: 0, skipped: true });
           slog('terminal', { completionReason: 'completed', queueDepth: 0, workersRunning: 0, pendingWrites: 0, activeTimers: 0, activeJobs: activeJobs.size });
           slog('scan_summary', { completionReason: 'completed', stages: { dir_check: preCheck.dirStatMs }, totalMs: elapsedMs, skippedByDirCache: true, streak: fastPathStreak });
           slog('scan_finished', { completionReason: 'completed' });
+          await db.update(libraryJobsTable).set({
+            status:         "DONE",
+            finishedAt:     new Date(),
+            processedFiles: 0,
+            totalFiles:     0,
+            summary,
+            diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
+          }).where(eq(libraryJobsTable.id, jobId));
           return;
         }
         // Streak limit reached — reset counter and fall through to a normal scan
@@ -1653,9 +1661,9 @@ async function runScanJob(
         summary:        buildPartialSummary(state, scanStartedAt),
       }).where(eq(libraryJobsTable.id, jobId));
       activeJobs.delete(jobId);
-      slog('terminal', { completionReason: 'cancelled', ...getResources() });
-      slog('scan_summary', { completionReason: 'cancelled', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
-      slog('scan_finished', { completionReason: 'cancelled' });
+      slog('terminal', { completionReason: 'interrupted_by_restart', ...getResources() });
+      slog('scan_summary', { completionReason: 'interrupted_by_restart', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'interrupted_by_restart' });
       return;
     }
 
@@ -1783,20 +1791,11 @@ async function runScanJob(
       scanProfile:              state.profile,
     };
 
-    await db.update(libraryJobsTable).set({
-      status:         "DONE",
-      finishedAt:     new Date(),
-      processedFiles: state.filesProcessed,
-      totalFiles:     state.filesTotal,
-      summary,
-      diagnostics:    diagnostics as unknown as Record<string, unknown>,
-    }).where(eq(libraryJobsTable.id, jobId));
-
     recordCompletion(state, summary);
-    sdbg('done_written', { status: 'DONE', filesProcessed: state.filesProcessed });
     activeJobs.delete(jobId);
     sdbg('active_jobs_deleted', { activeJobs: activeJobs.size });
 
+    stageTiming.finalizing = Date.now() - state.startedAt.getTime() - Object.values(stageTiming).reduce((a, b) => a + b, 0);
     slog('terminal', {
       completionReason: 'completed',
       ...getResources(),
@@ -1806,7 +1805,6 @@ async function runScanJob(
       deleted: state.counters.deleted,
       unchanged: state.counters.unchanged,
     });
-    stageTiming.finalizing = Date.now() - state.startedAt.getTime() - Object.values(stageTiming).reduce((a, b) => a + b, 0);
     slog('scan_summary', {
       completionReason: 'completed',
       stages: stageTiming,
@@ -1817,6 +1815,16 @@ async function runScanJob(
       peakQueueDepth: diagnostics.peakQueueDepth,
     });
     slog('scan_finished', { completionReason: 'completed' });
+
+    await db.update(libraryJobsTable).set({
+      status:         "DONE",
+      finishedAt:     new Date(),
+      processedFiles: state.filesProcessed,
+      totalFiles:     state.filesTotal,
+      summary,
+      diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
+    }).where(eq(libraryJobsTable.id, jobId));
+    sdbg('done_written', { status: 'DONE', filesProcessed: state.filesProcessed });
 
     // ── Auto-start thumbnail backfill after scan ───────────────────────────
     try {
