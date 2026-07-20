@@ -1633,17 +1633,20 @@ async function runScanJob(
       await flushBatch();
       await flushUnchanged();
       await flushAssetInvalidations();
+      // Delete from activeJobs before terminal so activeJobs count reflects clean state
+      activeJobs.delete(jobId);
+      slog('terminal', { completionReason: 'cancelled', ...getResources() });
+      slog('scan_summary', { completionReason: 'cancelled', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'cancelled' });
+      // Write DB after slog so diagnostics.checkpoints includes the terminal triplet
       await db.update(libraryJobsTable).set({
         status: "CANCELLED",
         cancellationReason: state.cancellationReason ?? "USER_CANCELLED",
         cursor: null,
         summary: buildPartialSummary(state, scanStartedAt),
         finishedAt: new Date(),
+        diagnostics: { checkpoints: lifecycleCheckpoints } as unknown as Record<string, unknown>,
       }).where(eq(libraryJobsTable.id, jobId));
-      activeJobs.delete(jobId);
-      slog('terminal', { completionReason: 'cancelled', ...getResources() });
-      slog('scan_summary', { completionReason: 'cancelled', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
-      slog('scan_finished', { completionReason: 'cancelled' });
       return;
     }
 
@@ -1654,16 +1657,17 @@ async function runScanJob(
       await flushBatch();
       await flushUnchanged();
       await flushAssetInvalidations();
+      activeJobs.delete(jobId);
+      slog('terminal', { completionReason: 'interrupted_by_restart', ...getResources() });
+      slog('scan_summary', { completionReason: 'interrupted_by_restart', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'interrupted_by_restart' });
       await db.update(libraryJobsTable).set({
         status:         "PAUSED",
         pausedAt:       new Date(),
         processedFiles: state.filesProcessed,
         summary:        buildPartialSummary(state, scanStartedAt),
+        diagnostics:    { checkpoints: lifecycleCheckpoints } as unknown as Record<string, unknown>,
       }).where(eq(libraryJobsTable.id, jobId));
-      activeJobs.delete(jobId);
-      slog('terminal', { completionReason: 'interrupted_by_restart', ...getResources() });
-      slog('scan_summary', { completionReason: 'interrupted_by_restart', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
-      slog('scan_finished', { completionReason: 'interrupted_by_restart' });
       return;
     }
 
@@ -1728,7 +1732,7 @@ async function runScanJob(
       slog('duplicate_detection_failed', { err: _de, elapsedMs: Date.now() - _t0Dupes });
     }
     stageTiming.duplicate_detection = Date.now() - _t0Dupes;
-    sdbg('duplicate_detection_complete', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection, ..._slow(stageTiming.duplicate_detection) });
+    sdbg('duplicate_detection', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection, ..._slow(stageTiming.duplicate_detection) });
 
     // ── Phase: finalizing ─────────────────────────────────────────────────
     state.phase = "finalizing";
