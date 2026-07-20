@@ -957,17 +957,24 @@ async function runScanJob(
     const existingByPath = new Map<string, { id: number; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null; lastScanAction: string | null }>();
     sdbg('db_load_start', { nasPath: state.nasPath });
     const _t0DbLoad = Date.now();
-    const dbRows = await db.select({
-      id: mediaFilesTable.id,
-      relativePath: mediaFilesTable.relativePath,
-      sizeBytes: mediaFilesTable.sizeBytes,
-      modifiedAt: mediaFilesTable.modifiedAt,
-      contentHash: mediaFilesTable.contentHash,
-      quickFingerprint: mediaFilesTable.quickFingerprint,
-      scannerVersion: mediaFilesTable.scannerVersion,
-      thumbnailPath: mediaFilesTable.thumbnailPath,
-      lastScanAction: mediaFilesTable.lastScanAction,
-    }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
+    let dbRows: Array<{ id: number; relativePath: string; sizeBytes: number; modifiedAt: Date | null; contentHash: string | null; quickFingerprint: string | null; scannerVersion: number; thumbnailPath: string | null; lastScanAction: string | null }>;
+    try {
+      dbRows = await db.select({
+        id: mediaFilesTable.id,
+        relativePath: mediaFilesTable.relativePath,
+        sizeBytes: mediaFilesTable.sizeBytes,
+        modifiedAt: mediaFilesTable.modifiedAt,
+        contentHash: mediaFilesTable.contentHash,
+        quickFingerprint: mediaFilesTable.quickFingerprint,
+        scannerVersion: mediaFilesTable.scannerVersion,
+        thumbnailPath: mediaFilesTable.thumbnailPath,
+        lastScanAction: mediaFilesTable.lastScanAction,
+      }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
+    } catch (dbLoadErr: any) {
+      const _e = dbLoadErr instanceof Error ? dbLoadErr : new Error(String(dbLoadErr));
+      slog('db_load_failed', { err: _e, elapsedMs: Date.now() - _t0DbLoad });
+      throw _e;
+    }
     const diagDbLoadMs = Date.now() - _t0DbLoad;
     stageTiming.db_load = diagDbLoadMs;
     slog('db_load_complete', { rows: dbRows.length, elapsedMs: diagDbLoadMs, ..._slow(diagDbLoadMs) });
@@ -1650,9 +1657,15 @@ async function runScanJob(
 
     // Final flush of all remaining buffered rows
     const _t0Flush = Date.now();
-    await flushBatch();
-    await flushUnchanged();
-    await flushAssetInvalidations();
+    try {
+      await flushBatch();
+      await flushUnchanged();
+      await flushAssetInvalidations();
+    } catch (flushErr: any) {
+      const _e = flushErr instanceof Error ? flushErr : new Error(String(flushErr));
+      slog('batch_flush_failed', { err: _e, elapsedMs: Date.now() - _t0Flush });
+      throw _e;
+    }
     stageTiming.batch_flush = Date.now() - _t0Flush;
     sdbg('batch_flush_complete', { elapsedMs: stageTiming.batch_flush, ..._slow(stageTiming.batch_flush) });
     await db.update(libraryJobsTable)
@@ -1699,10 +1712,11 @@ async function runScanJob(
     try {
       duplicateGroups = await detectDuplicates(state);
     } catch (dupeErr: any) {
-      sdbg('duplicate_detection_failed', { err: dupeErr, elapsedMs: Date.now() - _t0Dupes });
+      const _de = dupeErr instanceof Error ? dupeErr : new Error(String(dupeErr));
+      slog('duplicate_detection_failed', { err: _de, elapsedMs: Date.now() - _t0Dupes });
     }
     stageTiming.duplicate_detection = Date.now() - _t0Dupes;
-    sdbg('duplicate_detection_complete', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection });
+    sdbg('duplicate_detection_complete', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection, ..._slow(stageTiming.duplicate_detection) });
 
     // ── Phase: finalizing ─────────────────────────────────────────────────
     state.phase = "finalizing";
