@@ -4,7 +4,7 @@ import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/
 import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
-  addThumbnailPriority, getLibrarySeq,
+  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq,
 } from "../lib/library-engine";
 import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
@@ -296,6 +296,20 @@ router.post("/library/jobs/:id/cancel", async (req: Request, res: Response) => {
   const reason = req.body?.reason ?? "USER_CANCELLED";
   const ok = requestCancel(id, reason);
   res.json({ ok, jobId: id });
+});
+
+// ── DELETE /api/library/active-job — force-discard a stuck job ────────────────
+// Bypasses the normal cancel flag (which requires the job loop to be responsive)
+// and immediately removes the job from the in-memory engine. Use this when a
+// scan is visibly stuck and Cancel has no effect.
+
+router.delete("/library/active-job", async (_req: Request, res: Response) => {
+  try {
+    const result = await forceDiscardActiveJob();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Force-discard failed" });
+  }
 });
 
 // ── POST /api/library/thumbnails — start a thumbnail backfill job ─────────────

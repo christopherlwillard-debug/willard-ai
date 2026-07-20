@@ -500,7 +500,7 @@ async function resolveSkippedDirs(
     for (const row of rows) {
       const fullPath = path.join(nasPath, row.relativePath.replace(/\//g, path.sep));
       try {
-        const stat = fs.statSync(fullPath);
+        const stat = await fs.promises.stat(fullPath);
         seenPaths.add(row.relativePath);
 
         const sizeMatch  = stat.size === row.sizeBytes;
@@ -538,6 +538,32 @@ export function requestCancel(jobId: number, reason: CancellationReason = "USER_
   state.cancelRequested = true;
   state.cancellationReason = reason;
   return true;
+}
+
+// ── Force-discard a stuck job ─────────────────────────────────────────────────
+// Immediately removes the job from the in-memory activeJobs map and marks it
+// FAILED in the DB. Use this when a job is stuck and requestCancel() can't
+// reach it (e.g. the event loop is blocked and the cancel flag is never read).
+// Safe to call at any time — it is idempotent if no job is active.
+export async function forceDiscardActiveJob(): Promise<{ discarded: boolean; jobId: number | null }> {
+  const id = getActiveJobId();
+  if (id === null) return { discarded: false, jobId: null };
+
+  // Remove from in-memory map immediately — new jobs can start right away.
+  activeJobs.delete(id);
+
+  // Persist the failure so the UI and history show a definitive terminal state.
+  try {
+    await db.update(libraryJobsTable).set({
+      status:             "FAILED",
+      cancellationReason: "ERROR" as CancellationReason,
+      error:              "Force-discarded by user",
+      finishedAt:         new Date(),
+    }).where(eq(libraryJobsTable.id, id));
+  } catch { /* best effort — don't let a DB error block the in-memory clear */ }
+
+  console.warn(`[library-engine] Job #${id} force-discarded by user`);
+  return { discarded: true, jobId: id };
 }
 
 // ── Performance throttle (High / Balanced / Low from Settings) ───────────────
@@ -1348,9 +1374,9 @@ async function runScanJob(
       }, WALK_TIMEOUT_MS);
       (_walkTimeoutTimer as any).unref?.();
     }
-    walkDone.then(() => {
+    walkDone.finally(() => {
       if (_walkTimeoutTimer) { clearTimeout(_walkTimeoutTimer); _walkTimeoutTimer = null; }
-    }).catch(() => {});
+    });
 
     // ── Adaptive worker pool ──────────────────────────────────────────────
     // Workers start at INITIAL_WORKERS. ConcurrencyController adjusts the

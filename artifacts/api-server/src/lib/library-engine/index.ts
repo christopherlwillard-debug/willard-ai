@@ -7,6 +7,7 @@ export {
   getLastCompletedProgress,
   requestPause,
   requestCancel,
+  forceDiscardActiveJob,
   startJob,
   resumeJob,
   recoverInterruptedJobs,

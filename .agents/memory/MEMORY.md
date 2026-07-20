@@ -15,3 +15,4 @@
 - [Local embeddings via transformers.js](local-embeddings.md) — AI proxies have no /embeddings; use local MiniLM 384-dim + pgvector; also normalize "photo" vs "image" media types
 - [PowerShell Windows encoding](powershell-windows-encoding.md) — em-dash and box-drawing chars in .ps1 files break Windows CP1252 parsing; use ASCII-only in all launcher scripts
 - [wouter not react-router-dom](wouter-router.md) — project uses wouter; replace useSearchParams→useSearch+URLSearchParams, useNavigate→useLocation from wouter
+- [Job engine stuck-scan root cause](job-engine-stuck-scan.md) — fs.statSync in resolveSkippedDirs blocks event loop inside walkDone.then(); queue never closes, workers stuck at queue.pop() forever

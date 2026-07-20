@@ -405,12 +405,14 @@ function ScanBanner({
   onPause,
   onResume,
   onCancel,
+  onForceDiscard,
 }: {
   progress: ProgressEvent | null;
   onDismiss: () => void;
   onPause: () => void;
   onResume: () => void;
   onCancel: () => void;
+  onForceDiscard: () => void;
 }) {
   if (!progress) return null;
 
@@ -520,6 +522,13 @@ function ScanBanner({
         )}
         <button onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 flex items-center gap-1 ml-2">
           <X className="w-3 h-3" /> Cancel
+        </button>
+        <button
+          onClick={onForceDiscard}
+          className="text-xs text-orange-500 hover:text-orange-300 flex items-center gap-1 ml-auto opacity-60 hover:opacity-100"
+          title="Immediately clear this job from the engine. Use if Cancel has no effect."
+        >
+          Force Discard
         </button>
       </div>
     </div>
@@ -1012,6 +1021,21 @@ export default function Media() {
     },
   });
 
+  const forceDiscardMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/library/active-job", { method: "DELETE" });
+      if (!r.ok) throw new Error("Force discard failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
+      queryClient.invalidateQueries({ queryKey: ["library-jobs"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Force discard failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const favoriteMutation = useMutation({
     mutationFn: async ({ id, favorite }: { id: number; favorite: boolean }) => {
       const r = await fetch(`/api/media/files/${id}/favorite`, {
@@ -1216,6 +1240,7 @@ export default function Media() {
             onPause={() => activeProgress && pauseMutation.mutate(activeProgress.jobId)}
             onResume={() => activeProgress && resumeMutation.mutate(activeProgress.jobId)}
             onCancel={() => activeProgress && cancelMutation.mutate(activeProgress.jobId)}
+            onForceDiscard={() => forceDiscardMutation.mutate()}
           />
         </div>
       )}
