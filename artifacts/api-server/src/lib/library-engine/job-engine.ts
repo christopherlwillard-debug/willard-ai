@@ -785,11 +785,11 @@ async function runScanJob(
 
     // ── NAS availability check ─────────────────────────────────────────────
     if (!isNasAvailable(scanRoot)) {
-      console.info(`[scan #${jobId}] NAS check FAILED path=${scanRoot}`);
+      logger.warn({ scanId: String(jobId), phase: 'nas_check_failed', scanRoot }, 'NAS check FAILED');
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
-    console.info(`[scan #${jobId}] NAS check OK path=${scanRoot} profile=${state.profile}`);
+    logger.info({ scanId: String(jobId), phase: 'nas_check_ok', scanRoot, profile: state.profile }, 'NAS check OK');
 
     // ── Streaming pipeline setup ──────────────────────────────────────────
     // Walk and indexing run concurrently: the async walker pushes files into
@@ -833,6 +833,9 @@ async function runScanJob(
       workerCount:            INITIAL_WORKERS,
       concurrencyCeiling:     state.throttle.concurrencyCeiling,
       batchSize:              500,
+      thumbnailMode:          'deferred',
+      duplicateDetection:     state.profile === 'FULL',
+      watcherEnabled:         true,
       ignoreHiddenFiles:      scannerSettings.ignoreHiddenFiles,
       ignoreSystemFiles:      scannerSettings.ignoreSystemFiles,
       ignoreTempFiles:        scannerSettings.ignoreTempFiles,
@@ -1414,7 +1417,7 @@ async function runScanJob(
         _walkTimeoutTimer = null;
         if (state.filesTotal === 0 && isNasAvailable(scanRoot)) {
           const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
-          console.error(`[scan #${jobId}] ${msg}`);
+          logger.error({ scanId, phase: 'walk_timeout', scanRoot }, msg);
           walkTimedOut = true;
           requestStop();
           void failJob(jobId, "ERROR", msg);
@@ -1555,7 +1558,7 @@ async function runScanJob(
       if (changed) {
         const prev    = targetWorkerCount;
         targetWorkerCount = newCount;
-        console.info(`[scan #${jobId}] concurrency ${prev} → ${newCount}: ${reason}`);
+        logger.info({ scanId, phase: 'concurrency_adjust', prev, newCount, reason }, `concurrency ${prev} → ${newCount}`);
         if (newCount > prev) {
           for (let i = 0; i < newCount - prev; i++) spawnWorker();
         }
@@ -1632,8 +1635,9 @@ async function runScanJob(
         summary:        buildPartialSummary(state, scanStartedAt),
       }).where(eq(libraryJobsTable.id, jobId));
       activeJobs.delete(jobId);
-      slog('terminal', { completionReason: 'paused', ...getResources() });
-      slog('scan_finished', { completionReason: 'paused' });
+      slog('terminal', { completionReason: 'cancelled', ...getResources() });
+      slog('scan_summary', { completionReason: 'cancelled', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
+      slog('scan_finished', { completionReason: 'cancelled' });
       return;
     }
 
@@ -1687,7 +1691,9 @@ async function runScanJob(
     const _t0Dupes = Date.now();
     try {
       duplicateGroups = await detectDuplicates(state);
-    } catch { /* non-fatal — duplicates are informational */ }
+    } catch (dupeErr: any) {
+      sdbg('duplicate_detection_failed', { err: dupeErr, elapsedMs: Date.now() - _t0Dupes });
+    }
     stageTiming.duplicate_detection = Date.now() - _t0Dupes;
     sdbg('duplicate_detection_complete', { duplicateGroups, elapsedMs: stageTiming.duplicate_detection });
 
@@ -1841,10 +1847,11 @@ async function runScanJob(
 
   } catch (err: any) {
     stopIncrementalDirCacheSave();
-    slog('terminal', { completionReason: 'failed', ...getResources(), errorMessage: err?.message });
+    const _failedErr = err instanceof Error ? err : new Error(String(err ?? 'Unknown error'));
+    slog('terminal', { completionReason: 'failed', ...getResources(), err: _failedErr });
     slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: Date.now() - state.startedAt.getTime() });
-    slog('scan_finished', { completionReason: 'failed', errorMessage: err?.message });
-    await failJob(jobId, "ERROR", err?.message ?? "Unknown error");
+    slog('scan_finished', { completionReason: 'failed', err: _failedErr });
+    await failJob(jobId, "ERROR", _failedErr.message);
   }
 }
 
