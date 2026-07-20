@@ -904,6 +904,8 @@ async function runScanJob(
             diagnostics:    diagnostics as unknown as Record<string, unknown>,
           }).where(eq(libraryJobsTable.id, jobId));
           activeJobs.delete(jobId);
+          slog('db_load_complete',  { rows: 0, elapsedMs: 0, skipped: true });
+          slog('walker_complete',   { files: 0, elapsedMs: 0, skipped: true });
           slog('terminal', { completionReason: 'completed', queueDepth: 0, workersRunning: 0, pendingWrites: 0, activeTimers: 0, activeJobs: activeJobs.size });
           slog('scan_summary', { completionReason: 'completed', stages: { dir_check: preCheck.dirStatMs }, totalMs: elapsedMs, skippedByDirCache: true, streak: fastPathStreak });
           slog('scan_finished', { completionReason: 'completed' });
@@ -911,7 +913,7 @@ async function runScanJob(
         }
         // Streak limit reached — reset counter and fall through to a normal scan
         // so any in-place edits are detected.
-        logger.info({ scanId, phase: 'dir_cache_streak_limit', streak: MAX_FAST_PATH_STREAK }, 'dir-cache streak limit reached, forcing normal scan');
+        sdbg('dir_cache_streak_limit', { streak: MAX_FAST_PATH_STREAK });
         fastPathStreak = 0;
       }
     }
@@ -1565,6 +1567,17 @@ async function runScanJob(
     // Spawn initial workers
     for (let i = 0; i < targetWorkerCount; i++) spawnWorker();
 
+    // Wire live resource snapshot NOW so any mid-scan error (thrown during
+    // walk or worker execution) reports accurate in-flight counts rather than
+    // the zero-filled fallback that was set at function entry.
+    getResources = () => ({
+      queueDepth:     _queueClosed ? 0 : queue.size,
+      workersRunning: activeWorkerCount,
+      pendingWrites:  upsertBuf.length + unchangedBuf.length,
+      activeTimers:   (_walkTimeoutTimer !== null ? 1 : 0) + (_dirCacheSaveTimer !== null ? 1 : 0),
+      activeJobs:     activeJobs.size,
+    });
+
     // Concurrency controller — runs every 5 s until the walk completes
     const ctrlInterval = setInterval(() => {
       if (queue.size > diagPeakQueueDepth) diagPeakQueueDepth = queue.size;
@@ -1591,16 +1604,7 @@ async function runScanJob(
     // post-walk queue empties, then shut it down once all workers finish.
     await Promise.all(allWorkerPromises);
     clearInterval(ctrlInterval);
-    sdbg('all_workers_done', { workers: 0 });
-
-    // Live resource snapshot — used by all terminal-state log lines below
-    getResources = () => ({
-      queueDepth:     _queueClosed ? 0 : queue.size,
-      workersRunning: activeWorkerCount,
-      pendingWrites:  upsertBuf.length + unchangedBuf.length,
-      activeTimers:   (_walkTimeoutTimer !== null ? 1 : 0) + (_dirCacheSaveTimer !== null ? 1 : 0),
-      activeJobs:     activeJobs.size,
-    });
+    slog('all_workers_done', { workers: 0, pendingWrites: upsertBuf.length + unchangedBuf.length });
 
     // ── Guard: walk-timeout-triggered termination ─────────────────────────
     // failJob() was already called in the timeout callback (void — fire and
