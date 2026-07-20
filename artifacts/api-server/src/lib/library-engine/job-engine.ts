@@ -792,6 +792,14 @@ async function runScanJob(
     activeJobs: activeJobs.size,
   });
 
+  // Incremental dir-cache save timer — declared outside the try block so
+  // stopIncrementalDirCacheSave() is accessible in the catch / finally path
+  // without a ReferenceError (const inside a try block is scoped to that block).
+  let _dirCacheSaveTimer: ReturnType<typeof setInterval> | null = null;
+  const stopIncrementalDirCacheSave = () => {
+    if (_dirCacheSaveTimer) { clearInterval(_dirCacheSaveTimer); _dirCacheSaveTimer = null; }
+  };
+
   try {
     const scanRoot = rootPath ?? state.nasPath;
 
@@ -937,16 +945,14 @@ async function runScanJob(
     // ── Incremental dir-cache saves ───────────────────────────────────────
     // Save the growing dirCacheOut map every 30 seconds so an interrupted scan
     // leaves a useful partial cache rather than the old empty one.
-    let _dirCacheSaveTimer: ReturnType<typeof setInterval> | null = null;
+    // _dirCacheSaveTimer and stopIncrementalDirCacheSave are declared OUTSIDE
+    // the try block so stopIncrementalDirCacheSave() is in scope in the catch.
     const startIncrementalDirCacheSave = () => {
       if (_dirCacheSaveTimer) return;
       _dirCacheSaveTimer = setInterval(() => {
         if (dirCacheOut.size > 0) saveDirMtimeCache(state.nasPath, dirCacheOut);
       }, 30_000);
       (_dirCacheSaveTimer as any).unref?.();
-    };
-    const stopIncrementalDirCacheSave = () => {
-      if (_dirCacheSaveTimer) { clearInterval(_dirCacheSaveTimer); _dirCacheSaveTimer = null; }
     };
     startIncrementalDirCacheSave();
 
