@@ -1,0 +1,126 @@
+now when a conversion happens does it just make a copy or does the original get changed or deleted
+
+This is actually one of the biggest design decisions you'll make for Willard AI, and I would never have it automatically overwrite or delete the original.
+
+I'd build it as a staged workflow.
+
+Stage 1: Analyze
+
+The app scans your library and tells you:
+
+Current file
+Recommended conversion
+Estimated savings
+Quality impact
+Whether the conversion is lossless or visually lossless
+
+Nothing changes yet.
+
+Stage 2: Convert
+
+When you approve, Willard AI creates a new file in a temporary conversion folder.
+
+Example:
+
+Original:
+IMG_1234.CR2
+
+Temporary:
+IMG_1234.jpg
+
+The original RAW is untouched.
+
+Stage 3: Verify
+
+Before anything is deleted, the app verifies:
+
+✅ Conversion completed successfully
+✅ File isn't corrupted
+✅ Resolution matches
+✅ Metadata (date, GPS, camera, lens, etc.) is preserved
+✅ The new file opens correctly
+
+If any verification fails, the original stays exactly where it is.
+
+Stage 4: User Action
+
+Then I'd give you four choices:
+
+Option 1 (my recommendation)
+✓ Replace Original
+
+The app:
+
+Converts
+Verifies
+Deletes the original
+Renames the new file to the original filename
+
+So:
+
+Before
+
+IMG_1234.CR2
+
+↓
+
+After
+
+IMG_1234.JPG
+
+No duplicate remains.
+
+Option 2
+Keep Both
+IMG_1234.CR2
+IMG_1234.JPG
+Option 3
+Move Original to Archive
+Archive\
+    IMG_1234.CR2
+
+Photos\
+    IMG_1234.JPG
+Option 4
+Move Original to Recycle Bin
+
+This is probably what I'd make the default because it's recoverable.
+
+I would also build in safety features
+
+Before deleting anything:
+
+Compare hashes of the new file (to ensure it isn't corrupted).
+Confirm the new file opens.
+Confirm the output dimensions are correct.
+Confirm metadata is preserved.
+
+If any check fails:
+
+❌ Original retained
+
+Nothing is lost.
+
+For duplicate cleanup
+
+I'd use the exact same philosophy.
+
+When you click Approve on a duplicate group:
+
+Keep:
+✓ IMG_1234.JPG
+
+Delete:
+IMG_1234 (1).JPG
+IMG_1234 - Copy.JPG
+IMG_1234 copy.JPG
+
+Nothing happens immediately.
+
+Instead, those files go into a Cleanup Queue where you can review everything before executing the cleanup.
+
+My recommendation for Willard AI
+
+I would make "Replace Original After Successful Verification" the default option for conversions.
+
+That gives you the storage savings you want without filling your NAS with duplicate converted files, while still ensuring the original is only removed after the new file has been thoroughly validated. It's the safest balance between automation and protecting irreplaceable media.

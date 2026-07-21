@@ -1,0 +1,206 @@
+yoU FAILED TO see alot of things like dashboard saying duplicates but then clean up page has none
+
+You're right—I was too focused on the scan engine and I missed a much bigger pattern across all of your screenshots.
+
+Looking at them together, this isn't just a "Scanning Forever" bug.
+
+It's a system-wide state inconsistency.
+
+Here are the contradictions I now see:
+
+Dashboard	Actual Page	Problem
+Duplicates: 1,507 (27.26 GB)	Cleanup: 0 Bytes, no duplicate groups	Two different data sources or stale cache
+Documents: 234	Documents page: 0 indexed documents	Dashboard and Documents page disagree
+Library: Healthy	Header: Scanning forever	Health state inconsistent
+Thumbnails: Healthy	Thumbnail cache: 0 built / 24,489 missing	Health check is wrong or stale
+24,551 files AI analyzed counter exists	AI Search: 0/24,551 analyzed	AI subsystem state inconsistent
+24,564 media files visible	Library Explorer empty	Different backend/API or blocked initialization
+Scan Complete (45.9s)	Header still says Scanning	Completion event/state never propagated
+Optimize scans forever	Media already indexed	Waiting on wrong condition
+People never loads	Media already indexed	Same issue
+Collections spinner forever	Media works	Same issue
+
+This is far larger than just isScanning.
+
+What this tells me
+
+The application appears to have multiple independent sources of truth.
+
+For example:
+
+Dashboard
+    ↓
+dashboard route
+
+Cleanup
+    ↓
+cleanup route
+
+Documents
+    ↓
+documents route
+
+Optimize
+    ↓
+optimize service
+
+People
+    ↓
+face service
+
+Media
+    ↓
+library engine
+
+Each one appears to be maintaining its own understanding of the library.
+
+That should never happen.
+
+Another example you caught
+
+Dashboard says:
+
+Duplicates
+1507
+27.26 GB
+
+Cleanup says
+
+Potential Savings
+0 Bytes
+
+Those two numbers cannot both be correct.
+
+That isn't a UI bug.
+
+It means:
+
+different SQL
+different tables
+different caches
+or different services
+
+are answering the same question.
+
+Documents is another huge clue
+
+Dashboard:
+
+234 documents
+
+Documents page:
+
+0 indexed documents
+
+Media page even shows DOCX thumbnails.
+
+So the documents obviously exist.
+
+Meaning the Documents page is probably querying a different table or waiting on some initialization that never occurs.
+
+Thumbnails
+
+Dashboard:
+
+Health
+✓ Thumbnails
+
+Settings:
+
+0 built
+
+24,489 missing
+
+Those literally contradict each other.
+
+Cleanup
+
+Dashboard:
+
+Duplicates
+1507
+
+Cleanup
+
+0 groups
+
+0 bytes
+
+Again...
+
+Different source.
+
+I actually think this deserves a larger task than #172.
+
+#173 — Unify Library State & Data Sources
+
+Goal:
+
+Every feature that reports library information must derive it from the same canonical backend state.
+
+Audit every page:
+
+Dashboard
+Media
+Library
+Collections
+People
+Archives
+Documents
+Operations
+Optimize
+Cleanup
+Search
+AI
+
+For each page document:
+
+API endpoint
+Database tables
+Cached values
+Derived calculations
+Background jobs
+Refresh triggers
+
+Then produce a matrix like:
+
+Feature	Endpoint	Tables	Cache	Source of Truth
+
+Then identify:
+
+duplicate calculations
+stale caches
+legacy routes
+inconsistent queries
+pages waiting on scan state
+pages reading different tables
+
+Acceptance:
+
+If Dashboard says
+
+Documents = 234
+
+Documents page also says
+
+234
+
+If Dashboard says
+
+Duplicates = 1507
+
+Cleanup page also reports
+
+1507
+
+If Dashboard says
+
+Thumbnails Healthy
+
+Settings actually reports thumbnails present.
+
+If Media says
+
+24,564 files
+
+Every feature sees 24,564 files.

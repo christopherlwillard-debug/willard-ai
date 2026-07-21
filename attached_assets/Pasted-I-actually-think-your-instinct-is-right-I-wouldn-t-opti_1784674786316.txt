@@ -1,0 +1,195 @@
+I actually think your instinct is right. I wouldn't optimize images the way your current app is suggesting.
+
+For photos (JPEG, JPG, HEIC)
+
+I would not convert them to WebP as the default.
+
+Instead I'd make the optimizer support profiles.
+
+Profile	Target	Quality	Use Case
+Archive (Recommended)	JPEG XL (future) or JPEG	Visually lossless	Long-term storage
+High Quality JPEG	JPEG	95-98%	Best compatibility
+Balanced JPEG	JPEG	90-92%	20-40% smaller with almost invisible difference
+Maximum Compression	AVIF/WebP	Adjustable	Only if user explicitly wants it
+
+For your app, I'd make High Quality JPEG the default.
+
+Better than just changing format
+
+Instead of converting every JPG to another format, I'd optimize the existing JPEG.
+
+Things like:
+
+Progressive JPEG
+Remove EXIF thumbnails
+Strip duplicate metadata
+Optimize Huffman tables
+Recompress only if smaller
+
+Many JPEGs shrink 10–30% with zero visual quality loss.
+
+HEIC
+
+I'd actually leave HEIC alone.
+
+Apple already compresses HEIC extremely well.
+
+Most of the time you'll make it larger converting it.
+
+I'd simply show:
+
+Already optimal
+
+PNG
+
+Same thing.
+
+Don't convert everything to WebP.
+
+Instead:
+
+PNG optimization
+Remove unused chunks
+Better DEFLATE compression
+
+Lossless.
+
+Your duplicate page
+
+This is where I think Willard AI can become much better than other media managers.
+
+Right now it shows
+
+Hash
+Copies
+Waste
+
+That's useful...
+
+…but not enough to confidently delete files.
+
+I'd redesign it like this:
+
+──────────────────────────────────────────
+
+Duplicate Group #42
+
+┌──────────────┐     ┌──────────────┐
+│ Thumbnail A  │     │ Thumbnail B  │
+│              │     │              │
+└──────────────┘     └──────────────┘
+
+IMG_1610.MP4          IMG_1610_1.MP4
+
+392 MB                392 MB
+
+Created:
+6/2/2023              6/3/2023
+
+Folder:
+/Vacation              /Phone Backup
+
+Resolution:
+4K                     4K
+
+Duration:
+00:01:22               00:01:22
+
+Hash
+Same
+
+────────────────────────────
+
+Keep:
+● Left
+○ Right
+
+Delete:
+☑ Right copy
+
+[Approve]
+Even better...
+
+When there are 6 duplicates, show them all.
+
+Duplicate Group
+
+☑ Keep oldest
+
+☐ Keep newest
+
+☐ Keep highest resolution
+
+☐ Keep shortest path
+
+☐ Keep manually selected
+Then Approval becomes meaningful
+
+Instead of
+
+Approve
+
+I'd make it
+
+Approve Cleanup
+
+Which simply creates a cleanup plan.
+
+Nothing is deleted.
+
+Then another page
+
+Cleanup Queue
+
+Delete:
+
+IMG_1234.jpg
+
+Reason:
+Duplicate
+
+Keeping:
+
+IMG_1234 (Original).jpg
+
+Recovered:
+2.4 GB
+
+[Execute Cleanup]
+I would also add this
+
+For every duplicate pair, show a similarity indicator.
+
+★★★★★
+100% identical
+(Hash match)
+
+★★★★★
+99.99%
+(Binary identical)
+
+★★★★☆
+Visually identical
+
+★★★☆☆
+Looks similar
+
+★★☆☆☆
+Possible duplicate
+
+Users are much more comfortable deleting files when they can see why they're considered duplicates.
+
+My biggest recommendation
+
+I would change Optimize from "format conversion" into an Optimization Engine.
+
+Instead of trying to convert everything to WebP, it should recommend the best action per file type:
+
+JPEG → Optimize JPEG (lossless by default).
+PNG → Lossless PNG optimization.
+HEIC → Leave as-is unless the user requests otherwise.
+AVI/MPG → Re-encode to H.265 with configurable quality (where large savings are realistic).
+MOV → Analyze first. If it's already H.264/H.265, leave it; if it's an older codec, offer conversion.
+MP4 → Don't convert if it's already efficient—simply mark it "Optimal."
+
+That approach preserves quality, avoids unnecessary conversions, and gives users confidence that the optimizer is making intelligent decisions rather than blindly changing formats. I think it also fits the vision you've described for Willard AI: an application that understands your media and recommends the right optimization for each file, instead of applying one-size-fits-all rules.

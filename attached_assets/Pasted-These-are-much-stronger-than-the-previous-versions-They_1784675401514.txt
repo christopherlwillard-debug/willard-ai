@@ -1,0 +1,301 @@
+These are much stronger than the previous versions. They're evolving from feature requests into actual product specifications. I do have several recommendations, though.
+
+#177 – Duplicate Review
+
+Overall: 9.8/10
+
+I really like the staged deletion model. It's exactly how professional tools like Lightroom, Photo Mechanic, and DigiKam reduce the fear of deleting files.
+
+I'd add one feature you don't have
+Show WHY the recommendation was made
+
+Instead of only:
+
+Keep Oldest
+
+show:
+
+Recommended Keep
+
+✓ Oldest file
+Created:
+2018-06-02
+
+Reason:
+Original camera import
+
+Delete:
+Phone Backup\
+Google Photos\
+Dropbox\
+
+or
+
+Recommended Keep
+
+Highest Resolution
+
+6048×4032
+
+Delete
+
+3024×2016
+
+The app should explain its reasoning.
+
+I would also never delete directly.
+
+Even after Execute Cleanup.
+
+I'd make the API:
+
+POST /cleanup/execute
+
+move everything to
+
+WillardAI/.Trash/
+
+or the Windows Recycle Bin.
+
+Then create
+
+Cleanup History
+
+Deleted:
+145 files
+
+Recoverable:
+30 days
+
+That gives users a second chance.
+
+Add one more duplicate type
+
+Right now you only have
+
+Hash identical
+
+I'd prepare for future expansion.
+
+Duplicate Type
+
+★★★★★
+Binary identical
+
+★★★★★
+Hash identical
+
+★★★★☆
+Visual duplicate
+
+★★★☆☆
+Near duplicate
+
+★★☆☆☆
+Burst photo
+
+★★☆☆☆
+Screenshot duplicate
+
+Even if only Hash is implemented today, the UI will scale.
+
+#176 – Optimize Center
+
+This is where I think you can make Willard AI better than every consumer media manager.
+
+Biggest change I'd make
+
+Don't optimize by extension.
+
+Optimize by actual media characteristics.
+
+For images:
+
+Instead of
+
+.JPG
+
+think
+
+JPEG
+
+Already optimized
+
+or
+
+JPEG
+
+Contains unnecessary metadata
+
+Savings:
+12%
+
+Method:
+Lossless optimization
+
+Two JPEGs can be completely different.
+
+RAW conversion
+
+I like your workflow.
+
+The only thing I'd change:
+
+Instead of
+
+Quality 100
+
+I'd make it
+
+Quality 98
+
+Why?
+
+JPEG quality 100 often:
+
+increases size dramatically
+can disable some encoder optimizations
+is visually indistinguishable from 98–99
+
+Unless you're specifically targeting maximum fidelity regardless of size, quality 98 is usually the better balance.
+
+Verification
+
+I would expand verification.
+
+Current:
+
+✅ Exists
+
+✅ Metadata
+
+✅ Resolution
+
+I'd add
+
+Histogram generated
+
+Image renders
+
+Hash of decoded pixels
+
+No decoder warnings
+
+Aspect ratio unchanged
+
+Orientation correct
+
+Embedded ICC profile exists
+
+Thumbnail generated
+Biggest feature you're missing
+Estimated visual difference
+
+Instead of
+
+Savings
+
+32%
+
+show
+
+Estimated Quality
+
+★★★★★
+
+Visually identical
+
+Expected savings
+
+32%
+
+or
+
+★★★★☆
+
+Slight differences visible only at 400% zoom
+
+Users care far more about how it will look than encoder settings.
+
+Even bigger...
+
+I'd make Optimize explain itself.
+
+Example:
+
+IMG_4812.JPG
+
+Recommendation
+
+Lossless optimization
+
+Reason
+
+Progressive JPEG disabled
+
+Metadata duplicated
+
+Old Huffman tables
+
+Estimated savings
+
+18%
+
+Visual change
+
+None
+
+That builds trust.
+
+One feature I'd absolutely add
+
+This would make Willard AI feel like an AI product.
+
+Instead of
+
+Convert
+
+show
+
+Why am I recommending this?
+
+Click it.
+
+This JPEG was created in 2011.
+
+It uses non-optimized Huffman tables.
+
+The image data will remain identical.
+
+Expected savings:
+17%.
+
+Visual impact:
+None.
+
+or
+
+This AVI uses Motion JPEG.
+
+Re-encoding to H.265 should reduce size by approximately 71%.
+
+Expected quality:
+★★★★★
+
+Playback compatibility:
+Excellent
+
+Now the user understands the recommendation instead of blindly trusting it.
+
+Overall
+
+If I were prioritizing implementation, I'd actually build them in this order:
+
+#177 (Duplicate Review) — Highest risk because it deletes user data. Getting the review and staging flow right is critical.
+#176 (Optimize Center) — Adds intelligent optimization while protecting originals through verification and user choice.
+
+The common thread between both tasks is something I think is worth making a guiding principle for Willard AI:
+
+Never destroy user data without first making the decision transparent, verifiable, and reversible whenever possible.
+
+That philosophy fits the archival-quality application you're building and will make users much more comfortable trusting it with irreplaceable photos and videos.
