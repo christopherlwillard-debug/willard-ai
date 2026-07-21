@@ -301,7 +301,7 @@ export interface PdfMeta {
 export async function extractPdfMeta(fullPath: string): Promise<PdfMeta> {
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const buffer = fs.readFileSync(fullPath);
+    const buffer = await fs.promises.readFile(fullPath);
     const uint8 = new Uint8Array(buffer);
     const loadingTask = (pdfjsLib as any).getDocument({ data: uint8, verbosity: 0 });
     const doc = await loadingTask.promise;

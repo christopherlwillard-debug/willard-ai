@@ -351,9 +351,9 @@ function dirMtimeCachePath(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", "dir-scan-cache.json");
 }
 
-function loadDirMtimeCache(nasPath: string): Map<string, DirCacheEntry> {
+async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheEntry>> {
   try {
-    const raw = fs.readFileSync(dirMtimeCachePath(nasPath), "utf8");
+    const raw = await fs.promises.readFile(dirMtimeCachePath(nasPath), "utf8");
     const parsed = JSON.parse(raw);
     if ((parsed?.v === 2 || parsed?.v === 3) && typeof parsed.dirs === "object") {
       // v3 adds root — validate it matches to prevent stale caches from a different library path
@@ -397,24 +397,24 @@ function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>): 
 // In-place content modifications that leave parent directory mtime unchanged
 // (standard POSIX / SMB behaviour) are NOT detected by this check.  They are
 // caught by resolveSkippedDirs during a normal QUICK scan or by a FULL scan.
-function dirCachePreCheck(
+async function dirCachePreCheck(
   nasPath:  string,
   cacheIn:  Map<string, DirCacheEntry>,
   skipDirs: Set<string>,
   settings: ScannerSettings,
-): { allHit: boolean; dirCacheOut: Map<string, DirCacheEntry>; dirStatMs: number } {
+): Promise<{ allHit: boolean; dirCacheOut: Map<string, DirCacheEntry>; dirStatMs: number }> {
   const dirCacheOut = new Map<string, DirCacheEntry>();
   let allHit = true;
   const t0 = Date.now();
 
-  function recurse(currentDir: string): void {
+  async function recurse(currentDir: string): Promise<void> {
     if (!allHit) return; // abort on first miss — rest of tree is irrelevant
 
     let entries: fs.Dirent[];
     let dStat: fs.Stats;
     try {
-      dStat   = fs.statSync(currentDir);
-      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+      dStat   = await fs.promises.stat(currentDir);
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
     } catch {
       allHit = false;
       return;
@@ -447,11 +447,11 @@ function dirCachePreCheck(
       if (isSystemDir(entry.name, settings)) continue;
       const fullPath = path.join(currentDir, entry.name);
       if (skipDirs.has(path.resolve(fullPath))) continue;
-      recurse(fullPath);
+      await recurse(fullPath);
     }
   }
 
-  recurse(nasPath);
+  await recurse(nasPath);
 
   // If any cached directory was not encountered (a subtree was deleted), the
   // dirCacheOut will be smaller than cacheIn — flag as a miss.
@@ -751,9 +751,9 @@ async function getPreviousElapsedMs(nasPath: string, profile: string): Promise<n
 
 // ── NAS availability check ───────────────────────────────────────────────────
 
-function isNasAvailable(nasPath: string): boolean {
+async function isNasAvailable(nasPath: string): Promise<boolean> {
   try {
-    fs.statSync(nasPath);
+    await fs.promises.stat(nasPath);
     return true;
   } catch {
     return false;
@@ -883,7 +883,7 @@ async function runScanJob(
     // ── NAS availability check (after scan_started so all terminal exits emit
     //    the full scan_started → terminal → scan_summary → scan_finished triplet)
     sdbg('nas_check_start', { scanRoot });
-    if (!isNasAvailable(scanRoot)) {
+    if (!await isNasAvailable(scanRoot)) {
       slog('terminal', { completionReason: 'failed', ...getResources(), nasOffline: true });
       slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: 0 });
       slog('scan_finished', { completionReason: 'failed' });
@@ -894,7 +894,7 @@ async function runScanJob(
 
     // Load the directory mtime cache from the previous scan so we can skip
     // entire unchanged directory trees without stat'ing every file inside them.
-    const dirCacheIn  = loadDirMtimeCache(state.nasPath);
+    const dirCacheIn  = await loadDirMtimeCache(state.nasPath);
     const dirCacheOut = new Map<string, DirCacheEntry>();
     const skippedDirs: string[] = [];
 
@@ -908,7 +908,7 @@ async function runScanJob(
     // not update parent directory mtime on POSIX/SMB) are eventually detected.
     let diagDirStatMs = 0;
     if (dirCacheIn.size > 0 && state.profile !== "FULL" && !resumedScanStartedAt) {
-      const preCheck = dirCachePreCheck(state.nasPath, dirCacheIn, skipDirs, scannerSettings);
+      const preCheck = await dirCachePreCheck(state.nasPath, dirCacheIn, skipDirs, scannerSettings);
       diagDirStatMs = preCheck.dirStatMs;
       if (preCheck.allHit) {
         if (fastPathStreak < MAX_FAST_PATH_STREAK) {
@@ -1261,7 +1261,7 @@ async function runScanJob(
         if (binaryChanged) {
           // Source file changed — delete the stale thumbnail so the thumbnail
           // worker regenerates it from the new file content.
-          try { fs.unlinkSync(oldThumb); } catch { /* already gone */ }
+          fs.promises.unlink(oldThumb).catch(() => { /* already gone */ });
         }
 
         // Orphan check: DB pointer exists but the .webp was manually removed
@@ -1271,7 +1271,7 @@ async function runScanJob(
         const orphanedThumbnail =
           !binaryChanged &&
           existing.thumbnailPath != null &&
-          !fs.existsSync(oldThumb);
+          !(await fs.promises.access(oldThumb).then(() => true, () => false));
 
         state.phase = "hashing";
         const _fpT0b = Date.now();
@@ -1552,9 +1552,9 @@ async function runScanJob(
     let walkTimedOut = false;
     let _walkTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
     if (state.profile === "FULL") {
-      _walkTimeoutTimer = setTimeout(() => {
+      _walkTimeoutTimer = setTimeout(async () => {
         _walkTimeoutTimer = null;
-        if (state.filesTotal === 0 && isNasAvailable(scanRoot)) {
+        if (state.filesTotal === 0 && await isNasAvailable(scanRoot)) {
           const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
           sdbg('walk_timeout', { scanRoot, msg });
           walkTimedOut = true;
@@ -2099,7 +2099,7 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
   state.phase = "metadata";
 
   try {
-    if (!isNasAvailable(state.nasPath)) {
+    if (!await isNasAvailable(state.nasPath)) {
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
@@ -2154,7 +2154,7 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
         state.currentPath = row.relativePath;
         state.currentFileStartedAt = Date.now();
 
-        if (!fs.existsSync(fullPath)) {
+        if (!(await fs.promises.access(fullPath).then(() => true, () => false))) {
           // File gone — leave for the next scan's deletion detection, but bump
           // the version so this job terminates.
           await db.update(mediaFilesTable).set({ scannerVersion: SCANNER_VERSION })
@@ -2241,7 +2241,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
   try {
     // Check NAS
-    if (!isNasAvailable(nasPath)) {
+    if (!await isNasAvailable(nasPath)) {
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
@@ -2515,7 +2515,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
 
   const runPass = async (): Promise<void> => {
     try {
-      if (!isNasAvailable(nasPath)) return;
+      if (!await isNasAvailable(nasPath)) return;
 
       const rows = await db.select({
         id: mediaFilesTable.id,
@@ -2540,7 +2540,10 @@ export function startThumbnailReconciliation(nasPath: string): void {
       }
 
       cursor = rows[rows.length - 1]!.id;
-      const missing = rows.filter(r => r.thumbnailPath && !fs.existsSync(r.thumbnailPath));
+      const missingFlags = await Promise.all(rows.map(r => r.thumbnailPath
+        ? fs.promises.access(r.thumbnailPath).then(() => false, () => true)
+        : Promise.resolve(false)));
+      const missing = rows.filter((_, i) => missingFlags[i]);
       if (missing.length > 0) {
         await db.update(mediaFilesTable)
           .set({ thumbnailPath: null, thumbnailGeneratedAt: null })
@@ -2609,7 +2612,7 @@ export async function recoverInterruptedJobs(): Promise<void> {
 export async function emitStartupHealth(nasPath: string): Promise<void> {
   try {
     // Dir cache
-    const dirCache = loadDirMtimeCache(nasPath);
+    const dirCache = await loadDirMtimeCache(nasPath);
     const cacheEntries = dirCache.size;
 
     // DB counts
@@ -2625,10 +2628,8 @@ export async function emitStartupHealth(nasPath: string): Promise<void> {
     let thumbsOnDisk = 0;
     try {
       const thumbDir = getThumbnailDir(nasPath);
-      if (fs.existsSync(thumbDir)) {
-        thumbsOnDisk = fs.readdirSync(thumbDir).filter(f => f.endsWith(".webp")).length;
-      }
-    } catch { /* non-fatal */ }
+      thumbsOnDisk = (await fs.promises.readdir(thumbDir)).filter(f => f.endsWith(".webp")).length;
+    } catch { /* dir not found or non-fatal */ }
 
     const missingThumbs = Math.max(0, thumbPathsInDb - thumbsOnDisk);
 
