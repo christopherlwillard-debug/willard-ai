@@ -24,30 +24,8 @@ import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
 import { logger } from "../logger";
 
-// ── Timeout constants ─────────────────────────────────────────────────────────
-// Hard deadlines for per-file operations.  Exceeding these produces a PARTIAL
-// outcome (file is indexed with nulls + a status column) rather than blocking
-// the entire scan.  Values are intentionally generous to avoid false positives
-// on slow NAS mounts; they exist solely to prevent indefinite hangs.
-const FINGERPRINT_TIMEOUT_MS = 15_000;  // 15 s — reading a small sample of a file
-const META_TIMEOUT_MS        = 30_000;  // 30 s — sharp / exifr / ffprobe / pdf-parse
-
-/**
- * Races `promise` against a timer.  Rejects with `{ code: "operation_timeout" }`
- * if the timer fires first.  The original promise is not cancelled (not possible
- * in Node), but its eventual resolution/rejection is silently discarded.
- */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(Object.assign(new Error(`operation timed out after ${ms} ms`), { code: "operation_timeout" }));
-    }, ms);
-    promise.then(
-      v  => { clearTimeout(timer); resolve(v); },
-      e  => { clearTimeout(timer); reject(e);  },
-    );
-  });
-}
+import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
+export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
@@ -268,6 +246,8 @@ const MEDIA_FILE_UPSERT_SET = {
   contentHash:          sql`excluded.content_hash`,
   quickFingerprint:     sql`excluded.quick_fingerprint`,
   scannerVersion:       sql`excluded.scanner_version`,
+  fingerprintStatus:    sql`excluded.fingerprint_status`,
+  metadataStatus:       sql`excluded.metadata_status`,
   lastScanAction:       sql`excluded.last_scan_action`,
   lastScannedAt:        sql`excluded.last_scanned_at`,
   // Preserve previously generated thumbnails unless this scan explicitly
@@ -1367,8 +1347,19 @@ async function runScanJob(
         if (after.size !== currentSize || after.mtime.getTime() !== currentMtime.getTime()) {
           currentSize  = after.size;
           currentMtime = after.mtime;
-          const refreshedFp = await computeQuickFingerprint(f.fullPath, currentSize);
-          if (refreshedFp !== null) quickFingerprint = refreshedFp;
+          const _rfpT0 = Date.now();
+          sdbg('fingerprint_start', { relativePath, context: 'conflict_reread' });
+          let _rfpResult: string | null = null;
+          try {
+            _rfpResult = await withTimeout(computeQuickFingerprint(f.fullPath, currentSize), FINGERPRINT_TIMEOUT_MS);
+            sdbg('fingerprint_end', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timedOut: false });
+          } catch (e) {
+            if ((e as { code?: string }).code === 'operation_timeout') {
+              fingerprintStatus = "timeout";
+              sdbg('fingerprint_timeout', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timeoutType: 'operation_timeout' });
+            } else { throw e; }
+          }
+          if (_rfpResult !== null) quickFingerprint = _rfpResult;
           const _reanalyzeT0 = Date.now();
           sdbg('meta_extract_start', { relativePath, mediaType, context: 'reanalysis' });
           try {
