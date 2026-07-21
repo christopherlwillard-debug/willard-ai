@@ -468,9 +468,9 @@ function ScanBanner({
           }
         </span>
         {!isPreIndexing && (
-          <span className="text-xs text-blue-500 shrink-0">
+          <span className="text-xs text-blue-500 shrink-0" title="Files discovered on disk in this scan">
             {progress.filesProcessed.toLocaleString()}
-            {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} files
+            {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} on disk
           </span>
         )}
       </div>
@@ -505,7 +505,7 @@ function ScanBanner({
           {progress.counters.new       > 0 && <span className="text-green-400">+{progress.counters.new}</span>}
           {progress.counters.modified  > 0 && <span className="text-yellow-400">~{progress.counters.modified}</span>}
           {progress.counters.moved     > 0 && <span className="text-cyan-400">→{progress.counters.moved}</span>}
-          {progress.counters.deleted   > 0 && <span className="text-red-400">✕{progress.counters.deleted}</span>}
+          {progress.counters.deleted   > 0 && <span className="text-red-400" title="Files removed from library in this scan">{progress.counters.deleted.toLocaleString()} removed</span>}
         </div>
       </div>
 

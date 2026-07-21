@@ -50,8 +50,8 @@ export function BuildingLibraryProgress() {
           <p className="text-sm font-medium text-foreground">Syncing library in background</p>
           <p className="text-xs text-muted-foreground">
             {total
-              ? `${scanned.toLocaleString()} of ${total.toLocaleString()} files checked`
-              : `${scanned.toLocaleString()} files checked so far`}
+              ? `${scanned.toLocaleString()} / ${total.toLocaleString()} files on disk`
+              : `${scanned.toLocaleString()} files discovered so far`}
             {job.stage ? ` • ${job.stage}` : ""}
             {" — your library is fully usable while this runs."}
           </p>

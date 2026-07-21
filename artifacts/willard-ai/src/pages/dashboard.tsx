@@ -418,20 +418,27 @@ export default function Dashboard() {
 
       {/* ── Stat Cards Row ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {statCards.map(({ label, value, sub, icon: Icon, iconBg, iconColor, barColor, barPct }) => (
-          <div
-            key={label}
-            className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden min-w-0"
-          >
-            <div className={cn("inline-flex items-center justify-center w-9 h-9 rounded-lg mb-3", iconBg)}>
-              <Icon className={cn("w-4.5 h-4.5", iconColor)} style={{ width: 18, height: 18 }} />
+        {statCards.map(({ label, value, sub, icon: Icon, iconBg, iconColor, barColor, barPct }) => {
+          const showSyncing = isScanning && (label === "Photos" || label === "Videos" || label === "Documents");
+          return (
+            <div
+              key={label}
+              className="relative rounded-lg border border-border bg-card px-4 py-4 pb-5 overflow-hidden min-w-0"
+            >
+              <div className={cn("inline-flex items-center justify-center w-9 h-9 rounded-lg mb-3", iconBg)}>
+                <Icon className={cn("w-4.5 h-4.5", iconColor)} style={{ width: 18, height: 18 }} />
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-0.5">{label}</p>
+              <p className="text-xl font-bold tabular-nums leading-tight">{value}</p>
+              {showSyncing ? (
+                <p className="text-[10px] text-blue-400/70 mt-0.5 truncate" title="Count may change while scan is running">· Syncing</p>
+              ) : (
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub}</p>
+              )}
+              <StatBar pct={barPct} color={barColor} />
             </div>
-            <p className="text-[11px] text-muted-foreground mb-0.5">{label}</p>
-            <p className="text-xl font-bold tabular-nums leading-tight">{value}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub}</p>
-            <StatBar pct={barPct} color={barColor} />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* ── Health Status Bar ───────────────────────────────────────────── */}
