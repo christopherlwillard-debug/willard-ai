@@ -1,0 +1,178 @@
+I think this is one of the stronger tasks you've written because it's based on a specific code path rather than a general symptom. Assuming the investigation really found that cursor logic, this is much more concrete than earlier hypotheses.
+
+That said, I'd tighten two areas.
+
+1. Don't assume the cursor is the only reason for 0 thumbnails
+
+The screenshots are consistent with this explanation:
+
+Cache = 0 bytes
+Built = 0
+Missing = 24,489
+Progress never increases
+
+If a completed job's cursor is being reused, then yes, a query like:
+
+WHERE id > lastCursor
+
+could immediately return zero rows.
+
+However, I'd make the acceptance criteria prove that's what happened.
+
+For example, require logging:
+
+Thumbnail job started
+resumeMode=false
+cursor=0
+eligibleFiles=24,489
+
+or
+
+Thumbnail job started
+resumeMode=true
+cursor=183742
+eligibleFiles=3,811
+reason=Interrupted by server restart
+
+That way you know exactly why the job chose its starting point.
+
+2. Separate "resume" from "new job"
+
+I'd make the logic explicit.
+
+Instead of:
+
+resume if interrupted
+
+I'd define:
+
+New job
+Generate Missing
+
+↓
+
+cursor = 0
+
+↓
+
+scan for missing thumbnails
+Resume job
+Recovered after restart
+
+↓
+
+resume cursor
+
+↓
+
+continue
+
+Those are two fundamentally different workflows.
+
+One thing I'd definitely add
+
+I would instrument the thumbnail lifecycle exactly like you did for scans.
+
+Example:
+
+Thumbnail job created
+
+↓
+
+Resume mode?
+false
+
+↓
+
+Cursor
+0
+
+↓
+
+Eligible files
+24,489
+
+↓
+
+Queue populated
+24,489
+
+↓
+
+Worker started
+
+↓
+
+First thumbnail written
+
+↓
+
+Cache size increased
+
+↓
+
+Built = 1
+
+If the log stops before "Queue populated," you've found the problem immediately.
+
+About the dashboard
+
+I completely agree with this change.
+
+Right now:
+
+Syncing library in background
+
+has become meaningless because it appears while nothing user-visible is happening.
+
+I'd distinguish:
+
+Scanning library (FULL/QUICK scan actively processing files)
+Generating thumbnails
+Watching for changes (idle)
+Ready
+
+Those communicate very different states.
+
+One more verification I'd require
+
+After clearing the cache:
+
+Verify:
+
+thumbnail files on disk = 0
+
+↓
+
+Generate Missing
+
+↓
+
+thumbnail files on disk = 1
+
+↓
+
+thumbnail files on disk = 10
+
+↓
+
+...
+
+Not just that the UI counter changes.
+
+That proves the generator is actually writing output.
+
+Overall
+
+If the code investigation truly found that completed thumbnail jobs are incorrectly reusing their persisted cursor, then I think this is a very plausible root cause for the "0 of 24,489 forever" behavior.
+
+I'd rate this task 9.5/10.
+
+The only thing I'd add is stronger instrumentation proving:
+
+why the cursor value was chosen,
+how many files were eligible,
+whether work was actually queued,
+and when the first thumbnail was successfully written.
+
+Those four log points will make this class of bug much easier to diagnose if it ever reappears.

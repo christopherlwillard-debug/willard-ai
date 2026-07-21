@@ -130,6 +130,14 @@ export function getActiveJobProfile(): import("./types").JobProfile | null {
   return null;
 }
 
+/** Returns the job type of the currently active (non-paused, non-cancelled) job, or null if idle. */
+export function getActiveJobType(): JobType | null {
+  for (const [, state] of activeJobs) {
+    if (!state.pauseRequested && !state.cancelRequested) return state.jobType;
+  }
+  return null;
+}
+
 export function getJobProgress(jobId: number): ProgressEvent | null {
   const state = activeJobs.get(jobId);
   if (!state) return null;
@@ -633,6 +641,7 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
 
   const state: ActiveJobState = {
     id:               job.id,
+    jobType:          opts.jobType,
     nasPath:          opts.nasPath,
     profile:          opts.profile,
     priority,
@@ -690,6 +699,7 @@ export async function resumeJob(jobId: number): Promise<boolean> {
 
   const state: ActiveJobState = {
     id:               job.id,
+    jobType:          job.jobType as JobType,
     nasPath:          job.nasPath,
     profile,
     priority,
@@ -2252,9 +2262,12 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       .set({ totalFiles: state.filesTotal, startedAt: state.startedAt })
       .where(eq(libraryJobsTable.id, jobId));
 
-    // Cursor-based batch processing — resume from the most recently persisted
-    // cursor so a restart doesn't reprocess from the beginning every time.
+    // Only resume cursor from jobs interrupted by a server restart.
+    // NEVER resume from DONE or user-cancelled jobs — a completed job's
+    // cursor=max_id causes WHERE id>cursor to return 0 rows, silently
+    // producing 0 thumbnails even when 24,489 files are waiting.
     let cursor = 0;
+    let resumeMode = false;
     try {
       const [prevJob] = await db.select({ cursor: libraryJobsTable.cursor })
         .from(libraryJobsTable)
@@ -2262,7 +2275,9 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
           eq(libraryJobsTable.nasPath, nasPath),
           eq(libraryJobsTable.jobType, "THUMBNAILS"),
           ne(libraryJobsTable.id, jobId),
+          eq(libraryJobsTable.status, "FAILED"),
           sql`${libraryJobsTable.cursor} IS NOT NULL`,
+          sql`${libraryJobsTable.error} LIKE '%Interrupted by server restart%'`,
         ))
         .orderBy(sql`${libraryJobsTable.id} DESC`)
         .limit(1);
@@ -2270,10 +2285,20 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         const parsed = parseInt(prevJob.cursor, 10);
         if (!isNaN(parsed) && parsed > 0) {
           cursor = parsed;
-          console.info(`[thumbnail-job] Resuming from cursor=${cursor} (persisted by previous job)`);
+          resumeMode = true;
         }
       }
     } catch { /* non-fatal — start from 0 */ }
+
+    logger.info({
+      jobId,
+      phase: 'thumbnail_job_started',
+      resumeMode,
+      cursor,
+      eligibleFiles: totalCount ?? 0,
+    }, resumeMode
+      ? `[thumbnail-job] Resuming from cursor=${cursor} after server restart — eligibleFiles=${totalCount ?? 0}`
+      : `[thumbnail-job] Starting fresh from cursor=0 — eligibleFiles=${totalCount ?? 0}`);
 
     // Helper: pause/cancel handling
     const handlePauseCancel = async (): Promise<boolean> => {
@@ -2319,6 +2344,10 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
             thumbnailGeneratedAt: new Date(),
           }).where(eq(mediaFilesTable.id, file.id));
           state.counters.thumbnails++;
+          if (state.counters.thumbnails === 1) {
+            logger.info({ jobId, phase: 'thumbnail_first_written', path: file.relativePath },
+              '[thumbnail-job] First thumbnail written to disk');
+          }
         }
       } catch { /* skip failed — don't abort the job */ }
       state.filesProcessed++;

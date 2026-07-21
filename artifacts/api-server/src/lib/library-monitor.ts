@@ -1,6 +1,6 @@
 import { db, appSettingsTable } from "@workspace/db";
 import { checkNasReachableAsync } from "./nas-storage";
-import { getActiveJobId, requestPause, startJob } from "./library-engine";
+import { getActiveJobId, getActiveJobType, requestPause, requestCancel, startJob } from "./library-engine";
 import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
 import { shouldPauseScan } from "./monitor-helpers";
@@ -136,17 +136,32 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         state.offlineSince = new Date();
         // Seed a sensible "last successful connection" for a fresh process.
         if (!state.lastOnlineAt && lastScanAt) state.lastOnlineAt = lastScanAt;
-        // Pause any running indexing job so it can resume cleanly later.
+        // Pause scan jobs so they can resume cleanly later.
+        // Thumbnail/metadata jobs handle per-file errors gracefully — cancel
+        // them so the reconnect scan can auto-restart them with cursor=0.
         const activeId = getActiveJobId();
         if (activeId !== null) {
-          requestPause(activeId);
-          logger.warn({
-            pauseSource: "library_monitor",
-            consecutiveFailures,
-            activeId,
-            nasPath,
-            reason: reach.message,
-          }, "Library went offline — paused active indexing job");
+          const activeType = getActiveJobType();
+          if (activeType === "THUMBNAILS" || activeType === "METADATA") {
+            requestCancel(activeId, "NAS_OFFLINE");
+            logger.warn({
+              pauseSource: "library_monitor",
+              consecutiveFailures,
+              activeId,
+              activeType,
+              nasPath,
+              reason: reach.message,
+            }, "Library went offline — cancelled thumbnail/metadata job (will restart after reconnect scan)");
+          } else {
+            requestPause(activeId);
+            logger.warn({
+              pauseSource: "library_monitor",
+              consecutiveFailures,
+              activeId,
+              nasPath,
+              reason: reach.message,
+            }, "Library went offline — paused active indexing job");
+          }
         } else {
           logger.warn({ nasPath, reason: reach.message }, "Library went offline");
         }

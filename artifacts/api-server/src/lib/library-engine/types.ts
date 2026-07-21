@@ -93,6 +93,7 @@ export interface ProgressEvent {
 
 export interface ActiveJobState {
   id:               number;
+  jobType:          JobType;
   nasPath:          string;
   profile:          JobProfile;
   priority:         JobPriority;

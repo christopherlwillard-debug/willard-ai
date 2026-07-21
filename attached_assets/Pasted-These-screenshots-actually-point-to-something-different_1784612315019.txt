@@ -1,0 +1,314 @@
+These screenshots actually point to something different than the original scan hang.
+
+Here's what I notice:
+
+1. The library scan appears to be finished
+
+Across the screenshots:
+
+✅ 5,508 / 5,508 files on disk
+✅ 100%
+❌ Still says "Syncing library in background"
+❌ Dashboard badge still says "Indexing 100%"
+
+That means the scan itself is no longer making progress, but the application still thinks the indexing job is active.
+
+2. Thumbnail generation never actually starts
+
+Your thumbnail status shows:
+
+0 / 24,489 built
+24,489 remaining
+0 Bytes cache
+0% complete
+
+Hours later...
+
+Still:
+
+0 / 24,489
+
+Not 5 thumbnails.
+
+Not 20.
+
+Not 1.
+
+Zero.
+
+That is a huge clue.
+
+3. This doesn't look like a slow thumbnail generator
+
+If thumbnail generation were simply slow, I'd expect:
+
+12 / 24,489
+
+↓
+
+58 / 24,489
+
+↓
+
+143 / 24,489
+
+Instead you're seeing:
+
+0 / 24,489
+
+for hours.
+
+That means the thumbnail worker never actually began processing its first file.
+
+I think you now have a job orchestration problem
+
+The application seems to believe:
+
+Library Scan
+↓
+
+100%
+
+↓
+
+Thumbnail Job queued
+
+↓
+
+Thumbnail Job running
+
+↓
+
+Indexing still active
+
+But reality appears to be:
+
+Library Scan
+
+↓
+
+100%
+
+↓
+
+Something never completed
+
+↓
+
+Thumbnail queue never starts
+
+↓
+
+UI stays "Scanning..."
+
+That is very different from:
+
+"thumbnail generation is slow."
+
+There are now three possibilities
+Possibility A (my leading suspect)
+
+The scan job never transitions into a terminal state.
+
+Because of that:
+
+thumbnail queue waits forever
+dashboard stays syncing
+navbar stays scanning
+Possibility B
+
+The thumbnail job is waiting on a lock.
+
+For example:
+
+Index job owns library lock
+
+↓
+
+Thumbnail job waiting
+
+↓
+
+Index job never releases lock
+
+Result:
+
+0 / 24,489 forever
+Possibility C
+
+The thumbnail queue was never populated.
+
+Meaning:
+
+Generate Missing
+
+↓
+
+Job created
+
+↓
+
+No work enqueued
+
+↓
+
+0/24,489 forever
+The biggest clue
+
+This one:
+
+0 Bytes cache
+
+If the thumbnail generator had started and immediately failed on one file, I'd expect at least:
+
+1 thumbnail
+
+or
+
+a cache folder created
+
+Instead you have:
+
+0 thumbnails
+
+0 bytes
+
+That suggests nothing ever executed.
+
+What I would ask Replit to investigate
+
+I wouldn't investigate image processing.
+
+I'd investigate the job scheduler.
+
+Specifically:
+
+Generate Missing
+
+↓
+
+Who creates the thumbnail job?
+
+↓
+
+Who fills the queue?
+
+↓
+
+Who starts workers?
+
+↓
+
+Who marks the first file IN_PROGRESS?
+
+↓
+
+Why is built still zero?
+I think there is another state machine bug
+
+Right now I think your application has multiple job types:
+
+library scan
+thumbnail generation
+optimization
+cleanup
+
+I'm starting to wonder whether they all share one "active job" state.
+
+If so:
+
+Scan never reaches COMPLETED
+
+↓
+
+Thumbnail waits forever
+
+↓
+
+Optimize waits forever
+
+↓
+
+Everything appears stuck
+
+That would explain nearly every screenshot you've shown over the past two days.
+
+This is the task I'd create now
+
+I honestly think this is becoming more important than the timeout work.
+
+#169 - Investigate job transition deadlock
+
+Goal
+
+Prove every background job transitions cleanly through:
+
+QUEUED
+
+↓
+
+RUNNING
+
+↓
+
+COMPLETED
+
+or
+
+FAILED
+
+or
+
+CANCELLED
+
+Verify:
+
+library scan releases locks
+thumbnail job starts
+first thumbnail dequeued
+first thumbnail written
+queue progresses
+next job starts
+
+Instrument:
+
+Scan completed
+
+↓
+
+Thumbnail job created
+
+↓
+
+Thumbnail queue size
+
+↓
+
+Worker 1 started
+
+↓
+
+First thumbnail generated
+
+↓
+
+Cache bytes increased
+
+↓
+
+Job completed
+My current suspicion
+
+After seeing all these screenshots, I'm no longer convinced the primary issue is inside metadata extraction or thumbnail generation.
+
+I'm starting to suspect the application's background job orchestration/state machine.
+
+The evidence that's pushing me in that direction is:
+
+Indexing reaches 100%.
+Thumbnailing sits at 0 / 24,489.
+Cache remains 0 bytes.
+"Scanning..." never disappears.
+Dashboard never leaves "Syncing."
+
+Those all look like a system that's waiting for a job transition that never occurs, rather than a worker that's simply taking a long time. I think the next investigation should focus on how background jobs are handed off and whether locks or active-job state are preventing the thumbnail job from ever starting.

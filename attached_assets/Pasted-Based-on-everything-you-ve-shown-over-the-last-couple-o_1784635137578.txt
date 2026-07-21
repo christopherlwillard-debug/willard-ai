@@ -1,0 +1,88 @@
+Based on everything you've shown over the last couple of days, I actually believe the application is incorrectly reporting that the NAS is offline, not that your WD My Cloud is actually disconnecting.
+
+Here's why:
+
+You consistently say you can still access Z:\ from Windows.
+The app continues to display and browse your indexed media.
+The scan often reaches 100% before getting stuck.
+The NAS path remains configured correctly.
+The "Test NAS Path" feature was throwing a JavaScript error (Illegal return statement), which is an application bug—not a network error.
+
+None of that points to a physically disconnected NAS.
+
+My leading suspicion now
+
+I think there are two separate problems that are interacting:
+
+The NAS health detection is unreliable.
+It sometimes concludes the NAS is offline when it isn't.
+The broken Worker you found is one confirmed bug in that area.
+The synchronous polling/health-check logic may also be overly aggressive.
+The job state machine is getting stuck.
+Scan reaches 100% but never transitions to a terminal state.
+Thumbnail generation sits at 0 indefinitely.
+The UI remains in "Scanning..." for hours.
+
+Those two issues can easily reinforce each other.
+
+What I would ask Replit to verify
+
+Rather than assuming the NAS is offline, I'd have it log every offline decision.
+
+For example:
+
+Library health check
+path=Z:\
+online=false
+reason=...
+
+Immediately followed by:
+
+Pausing indexing
+source=library_monitor
+scanId=...
+
+If the logs show:
+
+online=false
+
+while Windows can still browse Z:\, then you've proven the application is producing a false offline detection.
+
+One thing that concerns me
+
+The application should never tell the user "NAS Offline" without explaining why.
+
+Instead of just saying:
+
+NAS Offline
+
+it should expose the underlying reason, for example:
+
+ENOENT
+ETIMEDOUT
+EACCES
+Worker timeout
+Health check failed
+SMB unreachable
+
+Right now you're flying blind because the UI collapses all failures into "offline."
+
+I would add another task
+
+I'd create something like:
+
+#172 – Diagnose false NAS offline detection
+
+Acceptance criteria:
+
+Every transition to OFFLINE is logged with:
+timestamp
+reason/error
+exception (if any)
+health-check duration
+whether Windows path access actually failed
+Every transition back ONLINE is logged.
+The UI shows the actual failure reason instead of a generic "NAS Offline."
+The application only changes to OFFLINE after the configured debounce threshold.
+
+That task won't fix the bug by itself, but it will tell you exactly why the application believes the NAS is offline. Right now, based on your evidence, I think the application is making incorrect health decisions rather than your WD My Cloud actually dropping off the network.

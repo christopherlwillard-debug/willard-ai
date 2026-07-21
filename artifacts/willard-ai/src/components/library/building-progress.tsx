@@ -29,6 +29,7 @@ export function BuildingLibraryProgress() {
 
   if (!job) return null;
 
+  const isThumbnailJob = job.stage === "thumbnailing";
   const scanned = job.filesProcessed ?? 0;
   const total = job.filesTotal ?? null;
   const pct = total && total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : null;
@@ -47,12 +48,15 @@ export function BuildingLibraryProgress() {
       <div className="flex items-center gap-3">
         <Loader2 className="w-4 h-4 text-muted-foreground animate-spin shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground">Syncing library in background</p>
+          <p className="text-sm font-medium text-foreground">
+            {isThumbnailJob ? "Generating thumbnails" : "Syncing library in background"}
+          </p>
           <p className="text-xs text-muted-foreground">
-            {total
-              ? `${scanned.toLocaleString()} / ${total.toLocaleString()} files on disk`
-              : `${scanned.toLocaleString()} files discovered so far`}
-            {job.stage ? ` • ${job.stage}` : ""}
+            {isThumbnailJob
+              ? `${scanned.toLocaleString()} of ${total?.toLocaleString() ?? "?"} thumbnails built`
+              : (total
+                ? `${scanned.toLocaleString()} / ${total.toLocaleString()} files on disk`
+                : `${scanned.toLocaleString()} files discovered so far`)}
             {" — your library is fully usable while this runs."}
           </p>
         </div>
