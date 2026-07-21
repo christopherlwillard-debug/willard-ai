@@ -22,10 +22,9 @@ import {
   Zap, Shield, CheckCircle2, SkipForward, ScanLine,
   Sparkles, TrendingDown, AlertTriangle, ChevronDown, ChevronRight,
   Download, RotateCcw, ArrowRight, FileBox, Play, X, CheckCheck,
-  FolderOpen, RefreshCw, AlertCircle, Clock,
+  RefreshCw, AlertCircle, Clock,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -109,13 +108,15 @@ interface ConversionSummary {
   failed:          number;
   skipped:         number;
   totalSavedBytes: number;
-  backupDir:       string;
+  stagingDir?:     string;
   results:         ConversionFileResult[];
 }
 
+type FinalizeAction = "recycle" | "replace" | "keep-both" | "archive";
+
 interface ConversionJob {
   id:             number;
-  status:         "pending" | "running" | "done" | "failed";
+  status:         "pending" | "running" | "awaiting_action" | "done" | "failed";
   approvedExts:   string[];
   backupDir:      string | null;
   nasPath:        string;
@@ -264,12 +265,14 @@ function RunConversionsDialog({
   existingJobId?: number;
 }) {
   const { toast } = useToast();
-  const [backupDir, setBackupDir] = useState("");
-  const [phase, setPhase] = useState<"config" | "running" | "done">("config");
+  const [phase, setPhase] = useState<"config" | "running" | "awaiting_action" | "done">("config");
   const [progress, setProgress] = useState<ConversionProgress | null>(null);
   const [fileResults, setFileResults] = useState<ConversionFileResult[]>([]);
-  const [summary, setSummary]         = useState<ConversionSummary | null>(null);
-  const [runError, setRunError]       = useState<string | null>(null);
+  const [summary, setSummary]              = useState<ConversionSummary | null>(null);
+  const [runError, setRunError]            = useState<string | null>(null);
+  const [selectedAction, setSelectedAction] = useState<FinalizeAction>("recycle");
+  const [finalizing, setFinalizing]         = useState(false);
+  const [finalizeJobId, setFinalizeJobId]   = useState<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   const approved = groups.filter(g => approvedExts.has(g.extension));
@@ -297,8 +300,10 @@ function RunConversionsDialog({
       setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
     });
     es.addEventListener("summary", (e) => {
-      setSummary(JSON.parse(e.data) as ConversionSummary);
-      setPhase("done");
+      const data = JSON.parse(e.data) as ConversionSummary;
+      setSummary(data);
+      if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
+      setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
       es.close();
       esRef.current = null;
     });
@@ -336,7 +341,6 @@ function RunConversionsDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           approvedExts: approved.map(g => g.extension),
-          backupDir: backupDir.trim() || undefined,
         }),
       });
       if (!resp.ok) {
@@ -345,6 +349,7 @@ function RunConversionsDialog({
         return;
       }
       const job = await resp.json();
+      setFinalizeJobId(job.id);
       setPhase("running");
       setFileResults([]);
 
@@ -363,9 +368,10 @@ function RunConversionsDialog({
       });
 
       es.addEventListener("summary", (e) => {
-        const data = JSON.parse(e.data) as ConversionSummary;
+        const data = JSON.parse(e.data) as ConversionSummary & { jobId?: number };
         setSummary(data);
-        setPhase("done");
+        if (data.jobId) setFinalizeJobId(data.jobId);
+        setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
         es.close();
         esRef.current = null;
       });
@@ -384,12 +390,35 @@ function RunConversionsDialog({
     }
   }
 
+  async function handleFinalize(jobId: number) {
+    setFinalizing(true);
+    try {
+      const resp = await fetch(`/api/optimize/jobs/${jobId}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: selectedAction }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        toast({ title: "Finalize failed", description: (body as any).error ?? "Unknown error", variant: "destructive" });
+        return;
+      }
+      setPhase("done");
+      toast({ title: "Done", description: `Originals ${selectedAction === "recycle" ? "recycled" : selectedAction === "replace" ? "deleted" : selectedAction === "keep-both" ? "kept alongside optimized copies" : "archived"}.` });
+    } catch (err: any) {
+      toast({ title: "Finalize failed", description: err.message, variant: "destructive" });
+    } finally {
+      setFinalizing(false);
+    }
+  }
+
   useEffect(() => {
     return () => { esRef.current?.close(); };
   }, []);
 
-  const isRunning = phase === "running";
-  const isDone    = phase === "done";
+  const isRunning        = phase === "running";
+  const isAwaitingAction = phase === "awaiting_action";
+  const isDone           = phase === "done";
 
   return (
     <Dialog open={open} onOpenChange={o => !o && handleClose()}>
@@ -402,13 +431,17 @@ function RunConversionsDialog({
             {isRetry
               ? phase === "running"
                 ? "Re-running interrupted conversion job — do not close this window."
+                : isAwaitingAction
+                ? "Conversions staged. Your originals are untouched — choose what to do with them."
                 : phase === "done"
                 ? "Retry complete. Review the results below."
                 : "Connecting…"
               : phase === "config"
-              ? "Originals are backed up before any conversion. Review settings before running."
+              ? "Originals are kept untouched during conversion. Converted files are staged for your review."
               : phase === "running"
               ? "Conversion in progress — do not close this window."
+              : isAwaitingAction
+              ? "Conversions staged. Your originals are untouched — choose what to do with them."
               : "Conversion complete. Review the results below."}
           </DialogDescription>
         </DialogHeader>
@@ -437,29 +470,12 @@ function RunConversionsDialog({
               </div>
             </div>
 
-            {/* Backup dir */}
-            <div className="space-y-1.5">
-              <Label className="font-mono text-xs">Backup folder (originals saved here before conversion)</Label>
-              <div className="flex items-center gap-2">
-                <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0" />
-                <Input
-                  className="font-mono text-xs h-8"
-                  placeholder="Default: NAS/WillardAI/ConversionBackups/<timestamp>"
-                  value={backupDir}
-                  onChange={e => setBackupDir(e.target.value)}
-                />
-              </div>
-              <p className="text-[10px] font-mono text-muted-foreground">
-                Leave blank to use the default backup path inside your NAS.
-              </p>
-            </div>
-
             {/* Safety notice */}
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-              <p className="text-xs font-mono text-amber-400">
-                ⚠ Every original file is copied to the backup folder before conversion.
-                If ffmpeg fails for a file, the original is restored automatically.
-                Conversion of large video files may take several minutes per file.
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2">
+              <p className="text-xs font-mono text-emerald-400">
+                ✓ Your originals are never touched during conversion. Converted files are written to a
+                protected staging area inside WillardAI/conversions/. After conversion completes, you
+                choose what happens to each original: recycle, delete, keep both, or archive.
               </p>
             </div>
 
@@ -528,6 +544,70 @@ function RunConversionsDialog({
           </div>
         )}
 
+        {/* ── Awaiting action phase ── */}
+        {isAwaitingAction && summary && (
+          <div className="space-y-4">
+            {/* Stats */}
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: "Staged",     value: summary.succeeded, cls: "text-emerald-400" },
+                { label: "Failed",     value: summary.failed,    cls: "text-red-400" },
+                { label: "Skipped",    value: summary.skipped,   cls: "text-muted-foreground" },
+                { label: "Space Saved", value: formatBytes(summary.totalSavedBytes), cls: "text-emerald-400" },
+              ].map(({ label, value, cls }) => (
+                <div key={label} className="border border-border rounded p-2 text-center">
+                  <p className={`text-lg font-bold font-mono ${cls}`}>{value}</p>
+                  <p className="text-[10px] font-mono text-muted-foreground uppercase">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Action selection */}
+            <div className="space-y-2">
+              <p className="text-xs font-mono text-muted-foreground">
+                Choose what to do with the <strong className="text-foreground">{summary.succeeded}</strong> original file{summary.succeeded !== 1 ? "s" : ""} after applying conversions:
+              </p>
+              {([
+                { value: "recycle" as FinalizeAction,   icon: "🗑️", label: "Recycle Originals",  desc: "Move originals to WillardAI/.Trash — recoverable." },
+                { value: "replace" as FinalizeAction,   icon: "⚡", label: "Delete Originals",   desc: "Permanently delete originals. Saves the most space." },
+                { value: "keep-both" as FinalizeAction, icon: "📂", label: "Keep Both",           desc: "Optimized file saved as filename_optimized.ext next to the original." },
+                { value: "archive" as FinalizeAction,   icon: "📦", label: "Archive Originals",   desc: "Move originals to WillardAI/archive/ — kept but out of the way." },
+              ] as const).map(({ value, icon, label, desc }) => (
+                <button
+                  key={value}
+                  onClick={() => setSelectedAction(value)}
+                  className={`w-full text-left px-3 py-2.5 rounded border text-xs font-mono transition-colors ${
+                    selectedAction === value
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border bg-secondary/20 text-muted-foreground hover:border-primary/50"
+                  }`}
+                >
+                  <span className="mr-2">{icon}</span>
+                  <strong className="text-foreground">{label}</strong>
+                  <span className="ml-2 text-muted-foreground">{desc}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* File preview */}
+            {summary.results.length > 0 && (
+              <div className="space-y-1 max-h-40 overflow-y-auto border border-border rounded p-2">
+                {summary.results.filter(r => r.status === "success").slice(0, 50).map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs font-mono py-0.5">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span className="truncate text-muted-foreground flex-1" title={r.filePath}>
+                      {r.filePath.split("/").pop()}
+                    </span>
+                    {r.savedBytes !== undefined && r.savedBytes > 0 && (
+                      <span className="text-emerald-400 shrink-0">-{formatBytes(r.savedBytes)}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Done / summary phase ── */}
         {isDone && summary && (
           <div className="space-y-4">
@@ -544,13 +624,6 @@ function RunConversionsDialog({
                   <p className="text-[10px] font-mono text-muted-foreground uppercase">{label}</p>
                 </div>
               ))}
-            </div>
-
-            {/* Backup dir note */}
-            <div className="rounded-md border border-border bg-secondary/30 px-3 py-2">
-              <p className="text-xs font-mono text-muted-foreground">
-                <span className="text-foreground">Originals backed up to:</span> {summary.backupDir}
-              </p>
             </div>
 
             {/* File results */}
@@ -601,6 +674,26 @@ function RunConversionsDialog({
             <Button variant="outline" size="sm" className="font-mono" disabled>
               Running…
             </Button>
+          )}
+          {isAwaitingAction && finalizeJobId && (
+            <>
+              <Button variant="outline" size="sm" className="font-mono" onClick={handleClose} disabled={finalizing}>
+                Decide Later
+              </Button>
+              <Button
+                size="sm"
+                className="font-mono gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => handleFinalize(finalizeJobId)}
+                disabled={finalizing}
+              >
+                {finalizing ? <RotateCcw className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
+                {finalizing ? "Applying…" : "Apply — " + (
+                  selectedAction === "recycle" ? "Recycle Originals" :
+                  selectedAction === "replace" ? "Delete Originals" :
+                  selectedAction === "keep-both" ? "Keep Both" : "Archive Originals"
+                )}
+              </Button>
+            </>
           )}
           {isDone && (
             <Button size="sm" className="font-mono" onClick={handleClose}>
@@ -735,10 +828,11 @@ function RecentJobsPanel({
   const isInterrupted = (j: ConversionJob) =>
     j.status === "failed" && j.error?.includes("Interrupted by server restart");
 
-  const interrupted = jobs.filter(isInterrupted);
-  const otherFailed = jobs.filter(j => j.status === "failed" && !isInterrupted(j));
-  const running     = jobs.filter(j => j.status === "running");
-  const done        = jobs.filter(j => j.status === "done");
+  const interrupted    = jobs.filter(isInterrupted);
+  const otherFailed    = jobs.filter(j => j.status === "failed" && !isInterrupted(j));
+  const running        = jobs.filter(j => j.status === "running");
+  const awaitingAction = jobs.filter(j => j.status === "awaiting_action");
+  const done           = jobs.filter(j => j.status === "done");
 
   if (jobs.length === 0) return null;
 
@@ -825,8 +919,50 @@ function RecentJobsPanel({
         </div>
       ))}
 
+      {/* Awaiting action jobs — staged conversions need user decision */}
+      {awaitingAction.map(job => (
+        <div
+          key={job.id}
+          className="rounded-md border border-orange-500/40 bg-orange-500/5 px-4 py-3 flex flex-col gap-3"
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-orange-400 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-mono font-semibold text-orange-400">
+                Conversions staged — originals untouched
+              </p>
+              <p className="text-xs font-mono text-muted-foreground mt-0.5">
+                {job.succeededFiles} file{job.succeededFiles !== 1 ? "s" : ""} converted · Started {new Date(job.createdAt).toLocaleString()}
+              </p>
+              <p className="text-xs font-mono text-muted-foreground mt-1">
+                Choose what to do with the originals:
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pl-8">
+            {([
+              { action: "recycle",   label: "🗑️ Recycle" },
+              { action: "replace",   label: "⚡ Delete" },
+              { action: "keep-both", label: "📂 Keep Both" },
+              { action: "archive",   label: "📦 Archive" },
+            ] as const).map(({ action, label }) => (
+              <Button
+                key={action}
+                size="sm"
+                variant="outline"
+                className="font-mono text-xs h-7 px-2"
+                onClick={() => onRetry(job.id)}
+                disabled={retryLoading}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ))}
+
       {/* Summary of done jobs */}
-      {done.length > 0 && interrupted.length === 0 && otherFailed.length === 0 && running.length === 0 && (
+      {done.length > 0 && interrupted.length === 0 && otherFailed.length === 0 && running.length === 0 && awaitingAction.length === 0 && (
         <div className="rounded-md border border-border bg-secondary/20 px-4 py-2 flex items-center gap-3">
           <Clock className="w-4 h-4 text-muted-foreground shrink-0" />
           <p className="text-xs font-mono text-muted-foreground">
@@ -894,7 +1030,7 @@ export default function Optimize() {
     },
     refetchInterval: (query) => {
       const jobs = query.state.data as ConversionJob[] | undefined;
-      return jobs?.some(j => j.status === "running") ? 3000 : false;
+      return jobs?.some(j => j.status === "running" || j.status === "awaiting_action") ? 3000 : false;
     },
   });
 
