@@ -1,0 +1,211 @@
+This screenshot actually changes my confidence quite a bit.
+
+I don't think #168's root-cause statement is proven yet, and I think there's another issue staring us in the face.
+
+The biggest clue is this
+
+Your Settings page says:
+
+✅ Connected
+⚠️ Watching for changes
+⚠️ AI Index up to date
+Indexing paused
+Indexing in progress
+
+Those are contradictory states.
+
+If the monitor had truly decided the NAS was offline, I would expect something more like:
+
+❌ Connected
+❌ Library offline
+
+Instead it says:
+
+Connected
+Paused
+
+That suggests the application knows the drive is reachable but has paused the indexing job for some other reason.
+
+Even more interesting
+
+The NAS test reports:
+
+Check failed: Illegal return statement
+
+That is not an SMB or Windows network error.
+
+It's a JavaScript/runtime error.
+
+Typical NAS failures look like:
+
+ENOENT
+ENETUNREACH
+ETIMEDOUT
+EACCES
+EPERM
+
+"Illegal return statement" is what you get from JavaScript itself when code executes an invalid return outside an allowed context (or similar parsing/execution issue).
+
+That strongly suggests the test itself is broken, not the NAS.
+
+If that's coming from your NAS_CHECK_WORKER inline script, I'd investigate that before assuming the worker is incorrectly reporting the NAS as offline.
+
+I would not merge #168 as written
+
+Not because the improvements are bad—they're good engineering.
+
+Specifically:
+
+async checks ✔️
+debounce ✔️
+lighter probe ✔️
+
+Those all make sense.
+
+But I would rewrite the "Problem" section.
+
+Instead of:
+
+The library monitor falsely reports the drive as disconnected...
+
+I'd write:
+
+The application intermittently pauses active indexing despite the configured library remaining accessible. Preliminary investigation suggests the library monitoring and reachability checks may be overly sensitive or otherwise malfunctioning, but the exact trigger has not yet been confirmed.
+
+That's a much stronger engineering statement because it's supported by the evidence.
+
+The "Illegal return statement" deserves its own investigation
+
+Before changing the monitor, I'd find out:
+
+Which endpoint does Test NAS Path call?
+Does that endpoint invoke checkNasReachableAsync()?
+Does it create a Worker?
+Does the Worker throw?
+Is the error coming from the Worker source string itself?
+
+Because if the Worker has a syntax/runtime bug, then switching more code over to it could make things worse.
+
+Here's what I'd ask Replit to do first
+Capture the complete stack trace for:
+Illegal return statement
+
+Not just the message.
+
+Log:
+Test NAS Path started
+
+↓
+
+Worker created
+
+↓
+
+Worker exited
+
+↓
+
+Result
+Verify whether the monitor is actually calling requestPause().
+
+Specifically log:
+
+Library monitor
+
+check result = FAIL
+
+consecutiveFailures = 1
+
+requestPause()
+
+or
+
+Library monitor
+
+check result = PASS
+
+Without those logs, it's still possible the scan is pausing for an entirely different reason.
+
+My current priority
+
+If I were prioritizing fixes now, it would be:
+
+Fix the "Illegal return statement" in the NAS test path.
+Determine why indexing enters "paused" while the library is still "Connected."
+Then improve the monitor (async + debounce), if the logs confirm it's responsible.
+
+So I think #168 contains good hardening changes, but I would not state that you've found the root cause yet. The new screenshot actually points me toward a bug in the application's NAS test or monitoring logic rather than evidence that Windows or your WD My Cloud is disconnecting.
+
+the screenshot just shows a different status now 
+
+That's a fair point. I shouldn't read too much into that one screenshot in isolation.
+
+If the status changed between screenshots, then I wouldn't use the current "Connected / Indexing paused" state as evidence against your theory. The important pattern is the behavior over time, not a single UI state.
+
+Looking across all the screenshots you've shared over the last hour, the recurring pattern is:
+
+Scan starts normally.
+It gets very close to finishing (or reaches 100%).
+It stops making progress.
+Sometimes it pauses.
+Sometimes it stays "Scanning..." forever.
+Sometimes it transitions to thumbnailing but never progresses.
+The status indicators change between screenshots.
+
+That tells me the application's internal state is becoming inconsistent, but it doesn't yet tell us why.
+
+About #168
+
+I still like most of the engineering changes:
+
+✅ Use the async reachability check instead of synchronous polling.
+✅ Add debounce (don't pause after a single failed check).
+✅ Make the health probe lighter.
+
+Those are good improvements regardless.
+
+What I would change is how the task is justified.
+
+Instead of saying:
+
+"The root cause is the library monitor falsely reporting the drive as disconnected."
+
+I'd say:
+
+"The library monitor's current implementation is susceptible to transient failures and aggressive pause behavior. While this has not yet been proven to be the primary cause of the observed scan stalls, making the monitor asynchronous, lightweight, and tolerant of brief failures improves robustness and removes one potential source of false pauses."
+
+That wording matches the evidence you have today.
+
+The thing I want to see before calling this the root cause
+
+I'd want one log sequence like this:
+
+Library check FAILED
+↓
+
+requestPause(scanId=123)
+
+↓
+
+Scan state = PAUSED
+
+If those events line up in time with the UI freezing, then I'd be very confident the monitor is causing (or contributing to) the issue.
+
+If instead the logs show:
+
+Worker hung
+↓
+
+Scan stopped progressing
+↓
+
+30 seconds later
+↓
+
+Library monitor reported offline
+
+then the monitor is reacting to an already-stuck scan, not causing it.
+
+That's why I still think the instrumentation from #156 is the key. It should let you establish the sequence of events instead of inferring it from changing UI states.
+
+So, I think #168 is worth doing as a robustness improvement, but I'd avoid labeling it as the root-cause fix until the logs confirm the monitor is actually the component initiating the pause.

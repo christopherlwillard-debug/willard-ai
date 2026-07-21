@@ -1,0 +1,147 @@
+I think this is a much stronger task. The biggest improvement is that you've separated what is definitely broken from what is still a hypothesis.
+
+I agree with the confirmed bug
+
+If the worker is created with eval: true and the evaluated script contains top-level return statements, then:
+
+the worker never executes its intended logic,
+it throws a JavaScript syntax/runtime error,
+and "Illegal return statement" is exactly the kind of error I'd expect.
+
+That is a concrete bug that explains why the Test NAS Path feature fails. It's a legitimate bug to fix regardless of anything else.
+
+I also like that you've decoupled it from the scan issue
+
+This is the important change.
+
+Instead of saying:
+
+"This fixes the scan."
+
+You're now saying:
+
+"This fixes the broken Worker. The scan stalls are still under investigation."
+
+That's much more defensible.
+
+One thing I'd still add
+
+Because the Worker has apparently never worked correctly, I'd make the acceptance criteria slightly stronger.
+
+Instead of only:
+
+returns online: true
+
+I'd verify both success and failure paths.
+
+For example:
+
+Success
+valid directory
+
+↓
+
+online=true
+
+↓
+
+message="Online — path is accessible"
+Failure
+nonexistent directory
+
+↓
+
+online=false
+
+↓
+
+ENOENT
+Timeout
+
+Simulate a worker timeout and verify:
+
+online=false
+
+reason=timeout
+
+That gives you confidence the Worker behaves correctly in all three terminal cases.
+
+I would also be careful with this statement
+
+Remove readdirSync; statSync + accessSync is sufficient.
+
+That's probably true for your definition of reachability, but I'd state it explicitly:
+
+Reachability is defined as:
+
+path exists
+path is a directory
+path is readable
+
+That way you aren't implicitly changing the semantics of the health check.
+
+About switching the monitor to async
+
+I agree with doing it, but I'd make one operational requirement explicit:
+
+The monitor must never run overlapping checks.
+
+For example, if a check takes 10 seconds and the timer fires every 20 seconds, you're fine.
+
+But if a check hangs for 30 seconds, you don't want another check starting before the first one finishes.
+
+A simple "only one health check in flight" guard prevents piling up worker threads.
+
+I'd also log why a pause happened
+
+This is something I'd definitely add.
+
+Instead of only:
+
+requestPause()
+
+Log:
+
+{
+  "scanId": "...",
+  "pauseSource": "library_monitor",
+  "consecutiveFailures": 2,
+  "reason": "NAS unreachable"
+}
+
+That way if you ever see:
+
+{
+  "pauseSource": "user"
+}
+
+or
+
+{
+  "pauseSource": "worker_timeout"
+}
+
+you immediately know the monitor wasn't responsible.
+
+Overall
+
+I think this version is solid.
+
+At this point I actually see two independent work items emerging:
+
+A. Definite bug
+Fix the Worker.
+Fix the Test NAS Path button.
+Add regression tests.
+
+That's straightforward and should be merged.
+
+B. Possible contributor to scan instability
+Async monitor.
+Debounce.
+Single in-flight check.
+Pause logging.
+
+Those are worthwhile robustness improvements, but I'd continue to describe them as preventative improvements until the logs show that the monitor is actually what's pausing your scans.
+
+That separation keeps the engineering honest while still improving the reliability of the application.
