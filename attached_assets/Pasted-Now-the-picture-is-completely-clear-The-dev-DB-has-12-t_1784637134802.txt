@@ -1,0 +1,24 @@
+Now the picture is completely clear. The dev DB has 12 total eligible files, all with thumbnails — but the user sees 24,489 missing. They're looking at the deployed app on their real NAS. My fixes haven't been deployed yet. But there may also be a deeper bug. Let me read the deployed server's logs and the actual thumbnail job query logic to understand why it produces 0:
+
+Found the real root causes in the deployment logs:
+
+[warn] ffmpeg not found — thumbnails unavailable until it is installed
+[warn] Library went offline nasPath="Z:\" reason="Windows drive letters are not reachable from this server"
+Two fundamental problems on the deployed server — not code bugs:
+
+FFmpeg isn't installed in the cloud deployment. Every generateThumbnail() call silently fails inside its try/catch → job completes instantly with 0 thumbnails written.
+
+Z:\ is a Windows drive letter — inaccessible from Replit's Linux cloud server. The library goes offline immediately on startup, which triggers the pause/cancel path.
+
+My code fixes (cursor bug, monitor cancel) are correct, but they only matter when the app is running in an environment where FFmpeg exists and the NAS is reachable. The deployed Replit cloud can never reach a Z:\ drive on your local machine.
+
+This app is designed to be self-hosted — run on the same machine (or local network) as your NAS, where Z:\ is a mapped drive and FFmpeg is installed. The cloud deployment can't see your local drives.
+
+How are you currently running Willard AI?
+
+Locally on my Windows machine (same machine as Z:\)
+Media Center Search files… Newest indexed Full Rescan Gen Thumbnails thumbnailing — IMG_0854.MP4 20,125 / 24,488 on disk 82% ETA 6m 28s 11.0/s Pause Cancel
+8 minutes ago
+It's working! 20,125 / 24,488 at 82% with an ETA of 6 minutes. The fixes are doing their job on your local machine where FFmpeg is installed and Z:\ is reachable.
+
+The deployment logs were a red herring — those just reflect the cloud server which can never reach a local Windows drive. Your real instance running locally is generating thumbnails just fine.

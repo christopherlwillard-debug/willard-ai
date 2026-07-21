@@ -2348,8 +2348,33 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
             logger.info({ jobId, phase: 'thumbnail_first_written', path: file.relativePath },
               '[thumbnail-job] First thumbnail written to disk');
           }
+        } else if (result.error) {
+          state.counters.thumbnailsFailed++;
+          // Log the first 20 distinct errors to surface the root cause without flooding logs
+          if (state.counters.thumbnailsFailed <= 20) {
+            logger.warn({
+              jobId,
+              phase: 'thumbnail_generate_failed',
+              path: file.relativePath,
+              ext: file.extension,
+              error: result.error,
+              failureCount: state.counters.thumbnailsFailed,
+            }, `[thumbnail-job] Failed to generate thumbnail: ${result.error}`);
+          }
         }
-      } catch { /* skip failed — don't abort the job */ }
+      } catch (err: any) {
+        state.counters.thumbnailsFailed++;
+        if (state.counters.thumbnailsFailed <= 20) {
+          logger.warn({
+            jobId,
+            phase: 'thumbnail_generate_exception',
+            path: file.relativePath,
+            ext: file.extension,
+            error: err?.message ?? String(err),
+            failureCount: state.counters.thumbnailsFailed,
+          }, `[thumbnail-job] Exception generating thumbnail: ${err?.message ?? err}`);
+        }
+      }
       state.filesProcessed++;
     };
 

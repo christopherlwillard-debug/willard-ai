@@ -24,15 +24,18 @@ export function BuildingLibraryProgress() {
   const job = health?.activeJob as {
     filesProcessed?: number;
     filesTotal?: number | null;
-    stage?: string | null;
+    phase?: string | null;
+    counters?: { thumbnails?: number; thumbnailsFailed?: number } | null;
   } | null | undefined;
 
   if (!job) return null;
 
-  const isThumbnailJob = job.stage === "thumbnailing";
+  const isThumbnailJob = job.phase === "thumbnailing";
   const scanned = job.filesProcessed ?? 0;
   const total = job.filesTotal ?? null;
   const pct = total && total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : null;
+  const thumbsWritten = job.counters?.thumbnails ?? 0;
+  const thumbsFailed = job.counters?.thumbnailsFailed ?? 0;
 
   const count = (type: string) =>
     dashboard?.typeBreakdown?.find((b: { fileType: string; count: number }) => b.fileType === type)?.count ?? 0;
@@ -53,7 +56,11 @@ export function BuildingLibraryProgress() {
           </p>
           <p className="text-xs text-muted-foreground">
             {isThumbnailJob
-              ? `${scanned.toLocaleString()} of ${total?.toLocaleString() ?? "?"} thumbnails built`
+              ? (() => {
+                  const parts = [`${thumbsWritten.toLocaleString()} written`];
+                  if (thumbsFailed > 0) parts.push(`${thumbsFailed.toLocaleString()} failed`);
+                  return `${parts.join(", ")} · ${scanned.toLocaleString()} of ${total?.toLocaleString() ?? "?"} examined`;
+                })()
               : (total
                 ? `${scanned.toLocaleString()} / ${total.toLocaleString()} files on disk`
                 : `${scanned.toLocaleString()} files discovered so far`)}

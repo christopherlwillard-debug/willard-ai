@@ -63,15 +63,16 @@ export interface JobSummary {
 // ── Progress event structure (stable contract — never break clients) ───────────
 
 export interface JobCounters {
-  new:        number;
-  modified:   number;
-  moved:      number;
-  unchanged:  number;
-  deleted:    number;
-  hashed:     number;
-  thumbnails: number;
-  skipped:    number;
-  reanalyzed: number; // files that changed mid-index and were re-analyzed
+  new:              number;
+  modified:         number;
+  moved:            number;
+  unchanged:        number;
+  deleted:          number;
+  hashed:           number;
+  thumbnails:       number;
+  thumbnailsFailed: number;
+  skipped:          number;
+  reanalyzed:       number; // files that changed mid-index and were re-analyzed
 }
 
 export interface ProgressEvent {
@@ -113,7 +114,7 @@ export interface ActiveJobState {
 }
 
 export const EMPTY_COUNTERS = (): JobCounters => ({
-  new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0, hashed: 0, thumbnails: 0, skipped: 0, reanalyzed: 0,
+  new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0, hashed: 0, thumbnails: 0, thumbnailsFailed: 0, skipped: 0, reanalyzed: 0,
 });
 
 export const PRIORITY_RANK: Record<JobPriority, number> = { HIGH: 3, NORMAL: 2, LOW: 1 };
