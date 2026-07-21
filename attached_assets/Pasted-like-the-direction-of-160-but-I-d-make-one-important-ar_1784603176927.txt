@@ -1,0 +1,174 @@
+like the direction of #160, but I'd make one important architectural adjustment.
+
+Right now it combines one correctness fix with three UX improvements. Those are related, but they solve different problems and should be validated independently.
+
+Overall: 9.5/10
+
+The diagnosis is good, but I'd tighten a few assumptions and clarify the acceptance criteria.
+
+Problem 1: Filtering DELETED rows
+
+This is the strongest part of the task.
+
+If existingByPath is intended to represent the current live library, then loading rows already marked DELETED is unnecessary work and can definitely distort diagnostics.
+
+However, I'd soften this statement:
+
+"db_load_complete.rows matches the true live-file count."
+
+That is only true if every consumer of the library defines "live" exactly the same way.
+
+I'd instead write:
+
+db_load_complete.rows equals the number of database rows eligible for reconciliation during this scan.
+
+That avoids accidentally coupling the instrumentation to UI semantics.
+
+Problem 2: Library count vs scan count
+
+I completely agree these are different quantities.
+
+I'd actually define them explicitly.
+
+For example:
+
+Metric	Meaning
+Scan Files	Files discovered on disk during the current scan
+Library Files	Files currently represented in the database
+Pending Deletions	Database rows awaiting reconciliation
+
+Once those definitions exist, the UI confusion largely disappears.
+
+I would avoid hiding counts
+
+This is the one thing I'd change.
+
+Instead of:
+
+hide totals behind "Syncing..."
+
+I'd prefer showing both numbers.
+
+For example:
+
+Library
+24,564 files
+
+Scan
+16,173 discovered
+(syncing)
+
+or
+
+Library
+24,564 files
+Updating…
+
+Hiding information usually makes users wonder whether something is broken.
+
+Don't assume the counts should always agree
+
+This sentence:
+
+After the scan fully finalises the displayed numbers agree.
+
+I'd rewrite.
+
+They should agree if:
+
+no scan errors
+deletion reconciliation completed
+no concurrent file changes
+no ignored files changed
+
+I'd instead require:
+
+After a successful FULL scan reaches its terminal state, the library count converges to the reconciled on-disk file count.
+
+That's much more precise.
+
+Delta indicator
+
+Completely agree.
+
+Raw
+
+-4
+
+means nothing.
+
+I'd make it:
+
+4 removed
+
+or
+
+Removed: 4
+
+Much clearer.
+
+I'd add one more verification
+
+Right now the task proves the UI.
+
+I'd also verify the database.
+
+After completion:
+
+Files on disk
+
+=
+
+Live DB rows
+
++
+
+Ignored files
+
++
+
+Intentional exclusions
+
+Otherwise you could end up with matching UI numbers while the DB is still inconsistent.
+
+I would split this into two subtasks
+
+Personally I'd separate it like this.
+
+#160A — Scan Count Correctness
+Filter DELETED rows
+Verify reconciliation counts
+Verify deletion detection
+Verify DB counts
+#160B — Scan Count UX
+Syncing labels
+Delta wording
+Progress wording
+Dashboard messaging
+
+That way if the backend fix uncovers another issue, you don't have to untangle it from UI changes.
+
+One more thing I'd instrument
+
+Since you're already doing #156, I'd add one more lifecycle log.
+
+{
+  "phase": "reconciliation_complete",
+  "diskFiles": 16173,
+  "liveDbRows": 16173,
+  "deletedRows": 8391,
+  "ignoredFiles": 0
+}
+
+That gives you a single authoritative checkpoint proving reconciliation worked before the UI updates.
+
+Final assessment
+
+This is another solid task, but I would frame it as "count reconciliation" rather than "count mismatch."
+
+The mismatch isn't inherently a bug—it's expected during reconciliation. The real problems are:
+
+Potentially incorrect reconciliation inputs (loading already-DELETED rows).
+A UI that doesn't explain why two different counts are temporarily different.
+
+Addressing those separately will make both the backend behavior and the user experience easier to reason about.
