@@ -41,6 +41,27 @@ describe("withTimeout", () => {
     assert.equal(result, 99);
   });
 
+  test("multiple concurrent hanging workers all drain within timeout + margin (scan worker model)", async () => {
+    const TIMEOUT_MS = 40;
+    const WORKER_COUNT = 8;
+    const MARGIN_MS = 500;
+    const neverResolves = (): Promise<void> => new Promise(() => {});
+    const start = Date.now();
+    // Simulate N scan workers each blocked on a permanently hanging file op.
+    // This mirrors the Promise.all(allWorkerPromises) pattern in job-engine.ts:
+    // if withTimeout works, all workers must drain within TIMEOUT_MS regardless
+    // of how many there are.
+    const workers = Array.from({ length: WORKER_COUNT }, () =>
+      withTimeout(neverResolves(), TIMEOUT_MS).catch(() => { /* expected timeout */ }),
+    );
+    await Promise.all(workers);
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < TIMEOUT_MS + MARGIN_MS,
+      `all ${WORKER_COUNT} workers must drain within ${TIMEOUT_MS + MARGIN_MS} ms; took ${elapsed} ms`,
+    );
+  });
+
   test("discards late resolution of original promise after timeout fires", async () => {
     let lateResolve!: (v: string) => void;
     const slow = new Promise<string>(r => { lateResolve = r; });

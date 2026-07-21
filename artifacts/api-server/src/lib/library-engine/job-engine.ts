@@ -1342,9 +1342,23 @@ async function runScanJob(
       // ── Conflict detection: file changed while being indexed ──────────
       // Re-stat after extraction; if size/mtime moved, re-read once so we
       // never store a mix of old-file and new-file values.
+      // Uses async stat + withTimeout so a hung NAS mount cannot stall the worker.
       try {
-        const after = fs.statSync(f.fullPath);
-        if (after.size !== currentSize || after.mtime.getTime() !== currentMtime.getTime()) {
+        const _restatT0 = Date.now();
+        sdbg('restat_start', { relativePath });
+        let _restatTimedOut = false;
+        let after: import("fs").Stats | null = null;
+        try {
+          after = await withTimeout(fs.promises.stat(f.fullPath), FINGERPRINT_TIMEOUT_MS);
+          sdbg('restat_end', { relativePath, elapsedMs: Date.now() - _restatT0, timedOut: false });
+        } catch (e) {
+          if ((e as { code?: string }).code === 'operation_timeout') {
+            _restatTimedOut = true;
+            sdbg('restat_timeout', { relativePath, elapsedMs: Date.now() - _restatT0, timeoutType: 'operation_timeout' });
+          } else { throw e; } // e.g. ENOENT — propagates to outer catch (file vanished)
+        }
+        if (!_restatTimedOut && after !== null &&
+            (after.size !== currentSize || after.mtime.getTime() !== currentMtime.getTime())) {
           currentSize  = after.size;
           currentMtime = after.mtime;
           const _rfpT0 = Date.now();
@@ -1352,25 +1366,25 @@ async function runScanJob(
           let _rfpResult: string | null = null;
           try {
             _rfpResult = await withTimeout(computeQuickFingerprint(f.fullPath, currentSize), FINGERPRINT_TIMEOUT_MS);
-            sdbg('fingerprint_end', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timedOut: false });
           } catch (e) {
             if ((e as { code?: string }).code === 'operation_timeout') {
               fingerprintStatus = "timeout";
               sdbg('fingerprint_timeout', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timeoutType: 'operation_timeout' });
             } else { throw e; }
           }
+          sdbg('fingerprint_end', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timedOut: fingerprintStatus === "timeout" });
           if (_rfpResult !== null) quickFingerprint = _rfpResult;
           const _reanalyzeT0 = Date.now();
           sdbg('meta_extract_start', { relativePath, mediaType, context: 'reanalysis' });
           try {
             await withTimeout(extractAll(), META_TIMEOUT_MS);
-            sdbg('meta_extract_end', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timedOut: false });
           } catch (e) {
             if ((e as { code?: string }).code === 'operation_timeout') {
               metadataStatus = "timeout";
               sdbg('meta_extract_timeout', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timeoutType: 'operation_timeout' });
             } else { throw e; }
           }
+          sdbg('meta_extract_end', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timedOut: metadataStatus === "timeout" });
           state.counters.reanalyzed++;
         }
       } catch {
