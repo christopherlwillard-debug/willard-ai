@@ -73,6 +73,7 @@ const EXTENDED_EVENTS_FULL_WALK = [
   "batch_flush_complete",
   "detecting_deletions",
   "duplicate_detection",
+  "reconciliation_complete",
   "done_written",
 ] as const;
 
@@ -294,6 +295,60 @@ function assertExtendedCheckpointsFullWalk(checkpoints: Checkpoint[], label: str
   }
 }
 
+/**
+ * Reconciliation invariant: after deletion detection completes,
+ *   liveDbRowsAfter === diskFiles
+ * (within a tolerance for files skipped by user exclusion rules).
+ *
+ * Only called for full-walk DONE scans — fast-path scans don't do a full walk so
+ * the diskFiles count may be lower than liveDbRowsBefore (that is expected).
+ *
+ * tolerance accounts for files the scanner skips due to user-configured exclusion rules
+ * (ignoredFolders, ignoredExtensions, etc.). These are on disk but not in the library,
+ * so diskFiles < liveDbRowsAfter is valid when exclusions exist. The tolerance
+ * is intentionally loose (5 000) because the test-media corpus is small and
+ * any genuine divergence will be orders of magnitude larger.
+ */
+function assertReconciliationInvariant(checkpoints: Checkpoint[], label: string): void {
+  if (isFastPath(checkpoints)) return; // only applies to full-walk scans
+
+  const cp = checkpoints.find((c) => c.event === "reconciliation_complete");
+  assert.ok(cp, `${label}: reconciliation_complete checkpoint must be present`);
+
+  const f = cp!.fields;
+  for (const key of ["diskFiles", "liveDbRowsBefore", "markedDeleted", "liveDbRowsAfter", "ignoredFiles"] as const) {
+    assert.ok(
+      typeof f[key] === "number",
+      `${label}: reconciliation_complete.${key} should be a number, got ${JSON.stringify(f[key])}`,
+    );
+  }
+
+  const diskFiles       = f["diskFiles"] as number;
+  const liveDbRowsAfter = f["liveDbRowsAfter"] as number;
+  const markedDeleted   = f["markedDeleted"] as number;
+  const liveDbRowsBefore = f["liveDbRowsBefore"] as number;
+
+  // liveDbRowsBefore - markedDeleted === liveDbRowsAfter (arithmetic consistency)
+  assert.strictEqual(
+    liveDbRowsAfter,
+    liveDbRowsBefore - markedDeleted,
+    `${label}: reconciliation_complete arithmetic: liveDbRowsAfter(${liveDbRowsAfter}) ` +
+    `should equal liveDbRowsBefore(${liveDbRowsBefore}) - markedDeleted(${markedDeleted})`,
+  );
+
+  // After reconciliation the library DB count should converge to the on-disk count.
+  // A small tolerance accounts for user exclusion rules (files on disk but not indexed).
+  // A large gap indicates a genuine reconciliation bug.
+  const TOLERANCE = 5_000;
+  assert.ok(
+    Math.abs(liveDbRowsAfter - diskFiles) <= TOLERANCE,
+    `${label}: reconciliation_complete invariant: ` +
+    `|liveDbRowsAfter(${liveDbRowsAfter}) - diskFiles(${diskFiles})| = ` +
+    `${Math.abs(liveDbRowsAfter - diskFiles)} exceeds tolerance ${TOLERANCE}. ` +
+    `This indicates deletion detection did not converge the DB to the on-disk file count.`,
+  );
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 
 describe("Scan engine lifecycle proof", { concurrency: false }, async () => {
@@ -351,6 +406,7 @@ describe("Scan engine lifecycle proof", { concurrency: false }, async () => {
     const cp1 = extractCheckpoints(job1, `First FULL #${r1.jobId}`);
     const terminal1 = assertLifecycleContract(cp1, `First FULL #${r1.jobId}`);
     assertExtendedCheckpointsFullWalk(cp1, `First FULL #${r1.jobId}`);
+    assertReconciliationInvariant(cp1, `First FULL #${r1.jobId}`);
 
     const r2 = await triggerScan("FULL");
     assert.strictEqual(r2.alreadyRunning, false, "Second FULL scan should not report alreadyRunning");
@@ -361,6 +417,7 @@ describe("Scan engine lifecycle proof", { concurrency: false }, async () => {
     const cp2 = extractCheckpoints(job2, `Second FULL #${r2.jobId}`);
     const terminal2 = assertLifecycleContract(cp2, `Second FULL #${r2.jobId}`);
     assertExtendedCheckpointsFullWalk(cp2, `Second FULL #${r2.jobId}`);
+    assertReconciliationInvariant(cp2, `Second FULL #${r2.jobId}`);
 
     // ── Parity: both scans reach completion with zero terminal resources ──────
     // The event sequences may differ if the second scan uses the dir-cache fast-path

@@ -989,7 +989,10 @@ async function runScanJob(
         scannerVersion: mediaFilesTable.scannerVersion,
         thumbnailPath: mediaFilesTable.thumbnailPath,
         lastScanAction: mediaFilesTable.lastScanAction,
-      }).from(mediaFilesTable).where(eq(mediaFilesTable.nasPath, state.nasPath));
+      }).from(mediaFilesTable).where(and(
+        eq(mediaFilesTable.nasPath, state.nasPath),
+        sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM ${'DELETED'}`,
+      ));
     } catch (dbLoadErr: any) {
       const _e = dbLoadErr instanceof Error ? dbLoadErr : new Error(String(dbLoadErr));
       slog('db_load_failed', { err: _e, elapsedMs: Date.now() - _t0DbLoad });
@@ -997,7 +1000,9 @@ async function runScanJob(
     }
     const diagDbLoadMs = Date.now() - _t0DbLoad;
     stageTiming.db_load = diagDbLoadMs;
-    slog('db_load_complete', { rows: dbRows.length, elapsedMs: diagDbLoadMs, ..._slow(diagDbLoadMs) });
+    // eligibleRows = non-DELETED rows loaded for reconciliation (does NOT include
+    // previously-DELETED records, so this count is the true live-candidate count).
+    slog('db_load_complete', { eligibleRows: dbRows.length, elapsedMs: diagDbLoadMs, ..._slow(diagDbLoadMs) });
 
     for (const row of dbRows) {
       existingByPath.set(row.relativePath, row);
@@ -1711,6 +1716,10 @@ async function runScanJob(
     // Uses the seenPaths set (populated during walk + resolveSkippedDirs) instead
     // of lastScannedAt timestamps, so unchanged files no longer need a DB write
     // on every QUICK sweep.
+    //
+    // existingByPath now contains only non-DELETED rows (filtered at load time),
+    // so every candidate here is a genuinely live row that may need reconciliation.
+    const liveDbRowsBefore = existingByPath.size;
     const deletedPaths: string[] = [];
     for (const [relPath] of existingByPath) {
       if (!seenPaths.has(relPath)) deletedPaths.push(relPath);
@@ -1730,6 +1739,18 @@ async function runScanJob(
     }
     stageTiming.detecting_deletions = Date.now() - _t0Deletions;
     sdbg('deletion_detection_complete', { deleted: state.counters.deleted, candidates: deletedPaths.length, elapsedMs: stageTiming.detecting_deletions });
+
+    // §reconciliation_complete — single authoritative checkpoint proving reconciliation
+    // worked before the UI updates. liveDbRowsAfter is computed (not a second DB query)
+    // to keep the hot path free of extra round-trips.
+    // Invariant (FULL scan, no errors): liveDbRowsAfter === diskFiles.
+    sdbg('reconciliation_complete', {
+      diskFiles:         state.filesTotal,
+      liveDbRowsBefore,
+      markedDeleted:     state.counters.deleted,
+      liveDbRowsAfter:   liveDbRowsBefore - state.counters.deleted,
+      ignoredFiles:      state.counters.skipped,
+    });
 
     // ── Duplicate detection (two-stage: size+fingerprint groups → confirm with
     //    full SHA-256 only for candidates) ──────────────────────────────────
