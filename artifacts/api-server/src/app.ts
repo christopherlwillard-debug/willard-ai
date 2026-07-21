@@ -221,6 +221,12 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS watcher_poll_interval_seconds integer NOT NULL DEFAULT 60;
   `);
+  await pool.query(`
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS fingerprint_status text;
+    ALTER TABLE media_files
+      ADD COLUMN IF NOT EXISTS metadata_status text;
+  `);
 }
 
 const PgStore = connectPgSimple(session);

@@ -24,6 +24,31 @@ import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
 import { logger } from "../logger";
 
+// ── Timeout constants ─────────────────────────────────────────────────────────
+// Hard deadlines for per-file operations.  Exceeding these produces a PARTIAL
+// outcome (file is indexed with nulls + a status column) rather than blocking
+// the entire scan.  Values are intentionally generous to avoid false positives
+// on slow NAS mounts; they exist solely to prevent indefinite hangs.
+const FINGERPRINT_TIMEOUT_MS = 15_000;  // 15 s — reading a small sample of a file
+const META_TIMEOUT_MS        = 30_000;  // 30 s — sharp / exifr / ffprobe / pdf-parse
+
+/**
+ * Races `promise` against a timer.  Rejects with `{ code: "operation_timeout" }`
+ * if the timer fires first.  The original promise is not cancelled (not possible
+ * in Node), but its eventual resolution/rejection is silently discarded.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(Object.assign(new Error(`operation timed out after ${ms} ms`), { code: "operation_timeout" }));
+    }, ms);
+    promise.then(
+      v  => { clearTimeout(timer); resolve(v); },
+      e  => { clearTimeout(timer); reject(e);  },
+    );
+  });
+}
+
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 const activeJobs = new Map<number, ActiveJobState>();
@@ -1134,7 +1159,7 @@ async function runScanJob(
     // Returns a result describing what to write; all DB writes are batched by
     // the caller so Promise.all can run multiple of these concurrently.
     interface FileResult {
-      action:               "NEW" | "MODIFIED" | "MOVED" | "SKIP";
+      action:               "NEW" | "MODIFIED" | "MOVED" | "SKIP" | "PARTIAL";
       relativePath:         string;
       name:                 string;
       targetId?:            number;
@@ -1164,6 +1189,9 @@ async function runScanJob(
       let contentHash: string | null = null;
       let currentSize  = f.sizeBytes;
       let currentMtime = f.modifiedAt;
+      // Populated when an operation exceeds its hard deadline; null on normal outcome.
+      let fingerprintStatus: string | null = null;
+      let metadataStatus:    string | null = null;
       // Set to true when this file's thumbnail must be invalidated: either the
       // source binary changed (so the existing thumbnail is stale) or the .webp
       // file is missing from disk (orphan). The caller flushes these IDs via
@@ -1174,34 +1202,49 @@ async function runScanJob(
         if (!isFirstScan) {
           // Compute fingerprint for move detection
           state.phase = "hashing";
-          quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
-          if (quickFingerprint === null) {
+          const _fpT0a = Date.now();
+          sdbg('fingerprint_start', { relativePath, context: 'new_file' });
+          let _fpNewTimedOut = false;
+          try {
+            quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS);
+          } catch (e) {
+            if ((e as { code?: string }).code === 'operation_timeout') {
+              _fpNewTimedOut = true;
+              fingerprintStatus = "timeout";
+              sdbg('fingerprint_timeout', { relativePath, context: 'new_file', elapsedMs: Date.now() - _fpT0a, timeoutType: 'operation_timeout' });
+            } else { throw e; }
+          }
+          sdbg('fingerprint_end', { relativePath, context: 'new_file', elapsedMs: Date.now() - _fpT0a, timedOut: _fpNewTimedOut });
+
+          if (_fpNewTimedOut) {
+            // Move detection is impossible without a fingerprint; fall through to NEW
+          } else if (quickFingerprint === null) {
             state.filesProcessed++;
             tickSpeed(state);
             return { action: "SKIP", relativePath, name: f.name, skipReason: "Could not read file (permission denied or unreadable)" };
-          }
-
-          // Stage 1: fingerprint match — atomic (JS single-threaded, no await between check+delete)
-          const movedFromId = existingByFingerprint.get(quickFingerprint);
-          if (movedFromId !== undefined) {
-            existingByFingerprint.delete(quickFingerprint);
-            state.counters.moved++;
-            state.filesProcessed++;
-            tickSpeed(state);
-            return { action: "MOVED", relativePath, name: f.name, targetId: movedFromId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
-          }
-
-          // Stage 2: legacy full-hash rows (rows without fingerprints from before v2)
-          if (legacySizes.has(f.sizeBytes)) {
-            contentHash = await hashFile(f.fullPath);
-            state.counters.hashed++;
-            const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
-            if (legacyId !== undefined) {
-              if (contentHash) existingByHash.delete(contentHash);
+          } else {
+            // Stage 1: fingerprint match — atomic (JS single-threaded, no await between check+delete)
+            const movedFromId = existingByFingerprint.get(quickFingerprint);
+            if (movedFromId !== undefined) {
+              existingByFingerprint.delete(quickFingerprint);
               state.counters.moved++;
               state.filesProcessed++;
               tickSpeed(state);
-              return { action: "MOVED", relativePath, name: f.name, targetId: legacyId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
+              return { action: "MOVED", relativePath, name: f.name, targetId: movedFromId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
+            }
+
+            // Stage 2: legacy full-hash rows (rows without fingerprints from before v2)
+            if (legacySizes.has(f.sizeBytes)) {
+              contentHash = await hashFile(f.fullPath);
+              state.counters.hashed++;
+              const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
+              if (legacyId !== undefined) {
+                if (contentHash) existingByHash.delete(contentHash);
+                state.counters.moved++;
+                state.filesProcessed++;
+                tickSpeed(state);
+                return { action: "MOVED", relativePath, name: f.name, targetId: legacyId, quickFingerprint, sizeBytes: currentSize, modifiedAt: currentMtime };
+              }
             }
           }
         }
@@ -1236,8 +1279,20 @@ async function runScanJob(
           !fs.existsSync(oldThumb);
 
         state.phase = "hashing";
-        quickFingerprint = await computeQuickFingerprint(f.fullPath, f.sizeBytes);
-        if (quickFingerprint === null) {
+        const _fpT0b = Date.now();
+        sdbg('fingerprint_start', { relativePath, context: 'modified_file' });
+        let _fpModTimedOut = false;
+        try {
+          quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS);
+        } catch (e) {
+          if ((e as { code?: string }).code === 'operation_timeout') {
+            _fpModTimedOut = true;
+            fingerprintStatus = "timeout";
+            sdbg('fingerprint_timeout', { relativePath, context: 'modified_file', elapsedMs: Date.now() - _fpT0b, timeoutType: 'operation_timeout' });
+          } else { throw e; }
+        }
+        sdbg('fingerprint_end', { relativePath, context: 'modified_file', elapsedMs: Date.now() - _fpT0b, timedOut: _fpModTimedOut });
+        if (!_fpModTimedOut && quickFingerprint === null) {
           state.filesProcessed++;
           tickSpeed(state);
           return { action: "SKIP", relativePath, name: f.name, skipReason: "Could not read file (permission denied or unreadable)" };
@@ -1289,7 +1344,16 @@ async function runScanJob(
         }
       };
       const _metaT0 = Date.now();
-      await extractAll();
+      sdbg('meta_extract_start', { relativePath, mediaType });
+      try {
+        await withTimeout(extractAll(), META_TIMEOUT_MS);
+      } catch (e) {
+        if ((e as { code?: string }).code === 'operation_timeout') {
+          metadataStatus = "timeout";
+          sdbg('meta_extract_timeout', { relativePath, mediaType, elapsedMs: Date.now() - _metaT0, timeoutType: 'operation_timeout' });
+        } else { throw e; }
+      }
+      sdbg('meta_extract_end', { relativePath, mediaType, elapsedMs: Date.now() - _metaT0, timedOut: metadataStatus === "timeout" });
       diagMetaExtractionMs += Date.now() - _metaT0;
       if (mediaType === "photo" || VIDEO_META_EXTS.has(f.ext) || f.ext === "pdf") {
         diagMetadataExtracted++;
@@ -1305,7 +1369,17 @@ async function runScanJob(
           currentMtime = after.mtime;
           const refreshedFp = await computeQuickFingerprint(f.fullPath, currentSize);
           if (refreshedFp !== null) quickFingerprint = refreshedFp;
-          await extractAll();
+          const _reanalyzeT0 = Date.now();
+          sdbg('meta_extract_start', { relativePath, mediaType, context: 'reanalysis' });
+          try {
+            await withTimeout(extractAll(), META_TIMEOUT_MS);
+            sdbg('meta_extract_end', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timedOut: false });
+          } catch (e) {
+            if ((e as { code?: string }).code === 'operation_timeout') {
+              metadataStatus = "timeout";
+              sdbg('meta_extract_timeout', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timeoutType: 'operation_timeout' });
+            } else { throw e; }
+          }
           state.counters.reanalyzed++;
         }
       } catch {
@@ -1324,6 +1398,7 @@ async function runScanJob(
         videoCodec, videoBitrate, fps, audioCodec, dateCreated,
         pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords,
         contentHash, quickFingerprint, scannerVersion: SCANNER_VERSION,
+        fingerprintStatus, metadataStatus,
         lastScanAction: action, lastScannedAt: scanStartedAt,
         thumbnailPath: null, thumbnailGeneratedAt: null, indexedAt: new Date(),
       };
@@ -1509,6 +1584,7 @@ async function runScanJob(
             // We already hold this file — complete its processing (drain semantics).
             // Do NOT discard it, even if pause/cancel was set while we were waiting.
             const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
+            sdbg('worker_file_start', { relativePath, workerCount: activeWorkerCount });
             seenPaths.add(relativePath);
 
             const existing = existingByPath.get(relativePath);

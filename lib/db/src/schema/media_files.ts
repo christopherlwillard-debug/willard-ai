@@ -58,6 +58,12 @@ export const mediaFilesTable = pgTable("media_files", {
   quickFingerprint:     text("quick_fingerprint"),
   scannerVersion:       integer("scanner_version").notNull().default(0),
 
+  // ── Per-operation diagnostic status ───────────────────────────────────────
+  // Null for normal outcomes. Set to "timeout" when the operation exceeded its
+  // hard deadline and the file was indexed with partial data rather than skipped.
+  fingerprintStatus:    text("fingerprint_status"),
+  metadataStatus:       text("metadata_status"),
+
   lastScanAction:       text("last_scan_action"),
   lastScannedAt:        timestamp("last_scanned_at"),
 
