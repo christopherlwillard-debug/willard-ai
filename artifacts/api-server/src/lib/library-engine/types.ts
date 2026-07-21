@@ -76,41 +76,43 @@ export interface JobCounters {
 }
 
 export interface ProgressEvent {
-  jobId:          number;
-  status:         JobStatus;
-  phase:          ScanPhase;
-  profile:        JobProfile | null;
-  progress:       number;           // 0–100
-  filesProcessed: number;
-  filesTotal:     number;
-  currentPath:    string;
-  etaSeconds:     number | null;
-  speed:          number;           // files/second (rolling)
-  counters:       JobCounters;
-  summary:        JobSummary | null; // populated when status === "DONE"
+  jobId:                number;
+  status:               JobStatus;
+  phase:                ScanPhase;
+  profile:              JobProfile | null;
+  progress:             number;           // 0–100
+  filesProcessed:       number;
+  filesTotal:           number;
+  currentPath:          string;
+  currentFileStartedAt: number | null;   // epoch ms — when the current file started; null between files
+  etaSeconds:           number | null;
+  speed:                number;           // files/second (rolling)
+  counters:             JobCounters;
+  summary:              JobSummary | null; // populated when status === "DONE"
 }
 
 // ── In-memory job state ────────────────────────────────────────────────────────
 
 export interface ActiveJobState {
-  id:               number;
-  jobType:          JobType;
-  nasPath:          string;
-  profile:          JobProfile;
-  priority:         JobPriority;
-  pauseRequested:   boolean;
-  cancelRequested:  boolean;
-  cancellationReason: CancellationReason | null;
-  startedAt:        Date;
+  id:                   number;
+  jobType:              JobType;
+  nasPath:              string;
+  profile:              JobProfile;
+  priority:             JobPriority;
+  pauseRequested:       boolean;
+  cancelRequested:      boolean;
+  cancellationReason:   CancellationReason | null;
+  startedAt:            Date;
   // Progress
-  phase:            ScanPhase;
-  filesTotal:       number;
-  filesProcessed:   number;
-  currentPath:      string;
-  counters:         JobCounters;
-  speedWindow:      number[];       // epoch ms timestamps for rolling ETA
-  throttle:         ThrottleProfile;
-  skippedList:      SkippedFile[];
+  phase:                ScanPhase;
+  filesTotal:           number;
+  filesProcessed:       number;
+  currentPath:          string;
+  currentFileStartedAt: number | null;  // epoch ms — set when a file starts processing
+  counters:             JobCounters;
+  speedWindow:          number[];       // epoch ms timestamps for rolling ETA
+  throttle:             ThrottleProfile;
+  skippedList:          SkippedFile[];
 }
 
 export const EMPTY_COUNTERS = (): JobCounters => ({

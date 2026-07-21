@@ -160,6 +160,7 @@ export function getJobProgress(jobId: number): ProgressEvent | null {
     filesProcessed: state.filesProcessed,
     filesTotal: state.filesTotal,
     currentPath: state.currentPath,
+    currentFileStartedAt: state.currentFileStartedAt,
     etaSeconds,
     speed,
     counters: { ...state.counters },
@@ -640,23 +641,24 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
   }).returning();
 
   const state: ActiveJobState = {
-    id:               job.id,
-    jobType:          opts.jobType,
-    nasPath:          opts.nasPath,
-    profile:          opts.profile,
+    id:                   job.id,
+    jobType:              opts.jobType,
+    nasPath:              opts.nasPath,
+    profile:              opts.profile,
     priority,
-    pauseRequested:   false,
-    cancelRequested:  false,
-    cancellationReason: null,
-    startedAt:        new Date(),
-    phase:            "walking",
-    filesTotal:       0,
-    filesProcessed:   0,
-    currentPath:      "",
-    counters:         EMPTY_COUNTERS(),
-    speedWindow:      [],
-    throttle:         await getThrottleProfile(),
-    skippedList:      [],
+    pauseRequested:       false,
+    cancelRequested:      false,
+    cancellationReason:   null,
+    startedAt:            new Date(),
+    phase:                "walking",
+    filesTotal:           0,
+    filesProcessed:       0,
+    currentPath:          "",
+    currentFileStartedAt: null,
+    counters:             EMPTY_COUNTERS(),
+    speedWindow:          [],
+    throttle:             await getThrottleProfile(),
+    skippedList:          [],
   };
   activeJobs.set(job.id, state);
 
@@ -698,23 +700,24 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   const scanStartedAt = saved.scanStartedAt ? new Date(saved.scanStartedAt) : undefined;
 
   const state: ActiveJobState = {
-    id:               job.id,
-    jobType:          job.jobType as JobType,
-    nasPath:          job.nasPath,
+    id:                   job.id,
+    jobType:              job.jobType as JobType,
+    nasPath:              job.nasPath,
     profile,
     priority,
-    pauseRequested:   false,
-    cancelRequested:  false,
-    cancellationReason: null,
-    startedAt:        new Date(),
-    phase:            "walking",
-    filesTotal:       0,
-    filesProcessed:   0,
-    currentPath:      "",
-    counters:         { ...EMPTY_COUNTERS(), ...restoredCounters },
-    speedWindow:      [],
-    throttle:         await getThrottleProfile(),
-    skippedList:      restoredSkipped,
+    pauseRequested:       false,
+    cancelRequested:      false,
+    cancellationReason:   null,
+    startedAt:            new Date(),
+    phase:                "walking",
+    filesTotal:           0,
+    filesProcessed:       0,
+    currentPath:          "",
+    currentFileStartedAt: null,
+    counters:             { ...EMPTY_COUNTERS(), ...restoredCounters },
+    speedWindow:          [],
+    throttle:             await getThrottleProfile(),
+    skippedList:          restoredSkipped,
   };
   activeJobs.set(job.id, state);
 
@@ -1171,6 +1174,7 @@ async function runScanJob(
     const processOneFile = async (f: { fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }): Promise<FileResult> => {
       const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
       state.currentPath = relativePath;
+      state.currentFileStartedAt = Date.now();
 
       const existing = existingByPath.get(relativePath);
       let quickFingerprint: string | null = null;
@@ -1196,12 +1200,13 @@ async function runScanJob(
           sdbg('fingerprint_start', { relativePath, context: 'new_file' });
           let _fpNewTimedOut = false;
           try {
-            quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS);
+            quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           } catch (e) {
-            if ((e as { code?: string }).code === 'operation_timeout') {
+            const _code = (e as { code?: string }).code;
+            if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
               _fpNewTimedOut = true;
               fingerprintStatus = "timeout";
-              sdbg('fingerprint_timeout', { relativePath, context: 'new_file', elapsedMs: Date.now() - _fpT0a, timeoutType: 'operation_timeout' });
+              sdbg('fingerprint_timeout', { relativePath, context: 'new_file', elapsedMs: Date.now() - _fpT0a, timeoutType: _code });
             } else { throw e; }
           }
           sdbg('fingerprint_end', { relativePath, context: 'new_file', elapsedMs: Date.now() - _fpT0a, timedOut: _fpNewTimedOut });
@@ -1273,12 +1278,13 @@ async function runScanJob(
         sdbg('fingerprint_start', { relativePath, context: 'modified_file' });
         let _fpModTimedOut = false;
         try {
-          quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS);
+          quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
         } catch (e) {
-          if ((e as { code?: string }).code === 'operation_timeout') {
+          const _code = (e as { code?: string }).code;
+          if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
             _fpModTimedOut = true;
             fingerprintStatus = "timeout";
-            sdbg('fingerprint_timeout', { relativePath, context: 'modified_file', elapsedMs: Date.now() - _fpT0b, timeoutType: 'operation_timeout' });
+            sdbg('fingerprint_timeout', { relativePath, context: 'modified_file', elapsedMs: Date.now() - _fpT0b, timeoutType: _code });
           } else { throw e; }
         }
         sdbg('fingerprint_end', { relativePath, context: 'modified_file', elapsedMs: Date.now() - _fpT0b, timedOut: _fpModTimedOut });
@@ -1336,11 +1342,12 @@ async function runScanJob(
       const _metaT0 = Date.now();
       sdbg('meta_extract_start', { relativePath, mediaType });
       try {
-        await withTimeout(extractAll(), META_TIMEOUT_MS);
+        await withTimeout(extractAll(), META_TIMEOUT_MS, () => state.cancelRequested);
       } catch (e) {
-        if ((e as { code?: string }).code === 'operation_timeout') {
+        const _code = (e as { code?: string }).code;
+        if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
           metadataStatus = "timeout";
-          sdbg('meta_extract_timeout', { relativePath, mediaType, elapsedMs: Date.now() - _metaT0, timeoutType: 'operation_timeout' });
+          sdbg('meta_extract_timeout', { relativePath, mediaType, elapsedMs: Date.now() - _metaT0, timeoutType: _code });
         } else { throw e; }
       }
       sdbg('meta_extract_end', { relativePath, mediaType, elapsedMs: Date.now() - _metaT0, timedOut: metadataStatus === "timeout" });
@@ -1359,12 +1366,13 @@ async function runScanJob(
         let _restatTimedOut = false;
         let after: import("fs").Stats | null = null;
         try {
-          after = await withTimeout(fs.promises.stat(f.fullPath), FINGERPRINT_TIMEOUT_MS);
+          after = await withTimeout(fs.promises.stat(f.fullPath), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           sdbg('restat_end', { relativePath, elapsedMs: Date.now() - _restatT0, timedOut: false });
         } catch (e) {
-          if ((e as { code?: string }).code === 'operation_timeout') {
+          const _code = (e as { code?: string }).code;
+          if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
             _restatTimedOut = true;
-            sdbg('restat_timeout', { relativePath, elapsedMs: Date.now() - _restatT0, timeoutType: 'operation_timeout' });
+            sdbg('restat_timeout', { relativePath, elapsedMs: Date.now() - _restatT0, timeoutType: _code });
           } else { throw e; } // e.g. ENOENT — propagates to outer catch (file vanished)
         }
         if (!_restatTimedOut && after !== null &&
@@ -1375,11 +1383,12 @@ async function runScanJob(
           sdbg('fingerprint_start', { relativePath, context: 'conflict_reread' });
           let _rfpResult: string | null = null;
           try {
-            _rfpResult = await withTimeout(computeQuickFingerprint(f.fullPath, currentSize), FINGERPRINT_TIMEOUT_MS);
+            _rfpResult = await withTimeout(computeQuickFingerprint(f.fullPath, currentSize), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           } catch (e) {
-            if ((e as { code?: string }).code === 'operation_timeout') {
+            const _code = (e as { code?: string }).code;
+            if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
               fingerprintStatus = "timeout";
-              sdbg('fingerprint_timeout', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timeoutType: 'operation_timeout' });
+              sdbg('fingerprint_timeout', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timeoutType: _code });
             } else { throw e; }
           }
           sdbg('fingerprint_end', { relativePath, context: 'conflict_reread', elapsedMs: Date.now() - _rfpT0, timedOut: fingerprintStatus === "timeout" });
@@ -1387,11 +1396,12 @@ async function runScanJob(
           const _reanalyzeT0 = Date.now();
           sdbg('meta_extract_start', { relativePath, mediaType, context: 'reanalysis' });
           try {
-            await withTimeout(extractAll(), META_TIMEOUT_MS);
+            await withTimeout(extractAll(), META_TIMEOUT_MS, () => state.cancelRequested);
           } catch (e) {
-            if ((e as { code?: string }).code === 'operation_timeout') {
+            const _code = (e as { code?: string }).code;
+            if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
               metadataStatus = "timeout";
-              sdbg('meta_extract_timeout', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timeoutType: 'operation_timeout' });
+              sdbg('meta_extract_timeout', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timeoutType: _code });
             } else { throw e; }
           }
           sdbg('meta_extract_end', { relativePath, mediaType, context: 'reanalysis', elapsedMs: Date.now() - _reanalyzeT0, timedOut: metadataStatus === "timeout" });
@@ -2142,6 +2152,7 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
       for (const row of rows) {
         const fullPath = path.join(state.nasPath, row.relativePath);
         state.currentPath = row.relativePath;
+        state.currentFileStartedAt = Date.now();
 
         if (!fs.existsSync(fullPath)) {
           // File gone — leave for the next scan's deletion detection, but bump
@@ -2335,6 +2346,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
     const processFile = async (file: { id: number; relativePath: string; extension: string }): Promise<void> => {
       const sourcePath = path.join(nasPath, file.relativePath);
       state.currentPath = file.relativePath;
+      state.currentFileStartedAt = Date.now();
       tickSpeed(state);
       try {
         const result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality);
