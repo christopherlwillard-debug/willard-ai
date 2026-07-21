@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import * as fs from "fs";
 import * as path from "path";
-import { checkNasReachable } from "../lib/nas-storage";
+import { checkNasReachableAsync } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
@@ -39,59 +39,70 @@ interface DriveCandidate {
   message: string;
 }
 
-function probeCandidate(p: string, label: string, kind: DriveCandidate["kind"]): DriveCandidate | null {
-  const reach = checkNasReachable(p);
+// Async — uses checkNasReachableAsync so network drive probing never blocks
+// the event loop even when a Windows drive letter is unresponsive.
+async function probeCandidate(p: string, label: string, kind: DriveCandidate["kind"]): Promise<DriveCandidate | null> {
+  const reach = await checkNasReachableAsync(p);
   if (!reach.online) return null;
   let itemCount: number | null = null;
-  try { itemCount = fs.readdirSync(reach.path).length; } catch { itemCount = null; }
+  try {
+    const entries = await fs.promises.readdir(reach.path);
+    itemCount = entries.length;
+  } catch { itemCount = null; }
   return { path: reach.path, label, kind, online: true, itemCount, message: reach.message };
 }
 
-function detectWindowsDrives(): DriveCandidate[] {
-  const found: DriveCandidate[] = [];
+async function detectWindowsDrives(): Promise<DriveCandidate[]> {
   // C: is the system drive — list it last so removable/network drives lead.
   const letters = "DEFGHIJKLMNOPQRSTUVWXYZABC".split("");
-  for (const letter of letters) {
-    const drivePath = `${letter}:\\`;
-    try {
-      if (!fs.existsSync(drivePath)) continue;
-    } catch { continue; }
-    const kind: DriveCandidate["kind"] = letter === "C" ? "local" : "external";
-    const candidate = probeCandidate(drivePath, `${letter}: drive`, kind);
-    if (candidate) found.push(candidate);
-  }
-  return found;
+  // Probe all drive letters in parallel — each runs in its own worker thread
+  // via checkNasReachableAsync so a hung drive can't block the others.
+  const results = await Promise.allSettled(
+    letters.map(letter =>
+      probeCandidate(`${letter}:\\`, `${letter}: drive`, letter === "C" ? "local" : "external")
+    )
+  );
+  return results
+    .filter((r): r is PromiseFulfilledResult<DriveCandidate> => r.status === "fulfilled" && r.value !== null)
+    .map(r => r.value!);
 }
 
-function detectUnixMounts(): DriveCandidate[] {
-  const found: DriveCandidate[] = [];
+async function detectUnixMounts(): Promise<DriveCandidate[]> {
   const roots: Array<{ dir: string; kind: DriveCandidate["kind"] }> = [
     { dir: "/mnt", kind: "network" },
     { dir: "/media", kind: "external" },
     { dir: "/Volumes", kind: "external" },
     { dir: "/srv", kind: "network" },
   ];
+  const all: DriveCandidate[] = [];
   for (const { dir, kind } of roots) {
     let entries: string[] = [];
-    try { entries = fs.readdirSync(dir); } catch { continue; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry);
-      try { if (!fs.statSync(full).isDirectory()) continue; } catch { continue; }
-      const candidate = probeCandidate(full, entry, kind);
-      if (candidate) found.push(candidate);
+    try { entries = await fs.promises.readdir(dir); } catch { continue; }
+    const results = await Promise.allSettled(
+      entries.map(async entry => {
+        const full = path.join(dir, entry);
+        try {
+          const st = await fs.promises.stat(full);
+          if (!st.isDirectory()) return null;
+        } catch { return null; }
+        return probeCandidate(full, entry, kind);
+      })
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) all.push(r.value);
     }
   }
-  return found;
+  return all;
 }
 
-router.get("/system/drives", (_req: Request, res: Response) => {
+router.get("/system/drives", async (_req: Request, res: Response) => {
   if (isReplit()) {
     // Cloud server: a user's local drive is legitimately unreachable here.
     res.json({ available: false, drives: [] });
     return;
   }
   try {
-    const drives = process.platform === "win32" ? detectWindowsDrives() : detectUnixMounts();
+    const drives = await (process.platform === "win32" ? detectWindowsDrives() : detectUnixMounts());
     res.json({ available: true, drives });
   } catch {
     res.json({ available: true, drives: [] });

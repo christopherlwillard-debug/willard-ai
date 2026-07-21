@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db, appSettingsTable } from "@workspace/db";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { checkNasReachable } from "../lib/nas-storage";
+import { checkNasReachableAsync } from "../lib/nas-storage";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -32,7 +32,8 @@ router.get("/health/status", async (_req, res) => {
     nasPath = rows[0]?.nasPath ?? "";
   } catch { /* fall through with empty path → offline */ }
 
-  const reach = checkNasReachable(nasPath);
+  // Async NAS check — never blocks the event loop even on slow/hung network drives.
+  const reach = await checkNasReachableAsync(nasPath);
 
   // Integrity sweep: verify indexed (non-deleted) files still exist on disk.
   // Missing = row present but file gone; corrupt = file exists but is empty.
@@ -53,7 +54,7 @@ router.get("/health/status", async (_req, res) => {
         for (const row of rows as { relative_path: string; size_bytes: number }[]) {
           const abs = path.join(nasPath, row.relative_path);
           try {
-            const st = fs.statSync(abs);
+            const st = await fs.promises.stat(abs);
             if (st.size === 0 && Number(row.size_bytes) > 0) corrupt++;
           } catch {
             missing++;

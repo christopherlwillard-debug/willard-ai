@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { mediaFilesTable, libraryJobsTable, appSettingsTable, archivesTable } from "@workspace/db";
+import { mediaFilesTable, libraryJobsTable, appSettingsTable, archivesTable, scanJobsTable } from "@workspace/db";
 import { eq, and, lt, ne, sql, isNull, or, gt, inArray } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
@@ -2579,6 +2579,53 @@ export function startThumbnailReconciliation(nasPath: string): void {
 // ── Interrupt recovery (call on server start) ─────────────────────────────────
 
 export async function recoverInterruptedJobs(): Promise<void> {
+  // ── Startup diagnostic: snapshot both job tables BEFORE any cleanup ────────
+  // This log helps diagnose "scanning forever" issues visible after a restart.
+  // The computed isScanning reflects the state the dashboard would have shown.
+  try {
+    const libCounts = await db.execute(
+      sql`SELECT status, COUNT(*) AS cnt FROM library_jobs GROUP BY status`
+    );
+    const scanCounts = await db.execute(
+      sql`SELECT status, COUNT(*) AS cnt FROM scan_jobs GROUP BY status`
+    ).catch(() => ({ rows: [] }));
+    const libMap: Record<string, number> = {};
+    for (const r of libCounts.rows as { status: string; cnt: string }[]) {
+      libMap[r.status] = Number(r.cnt);
+    }
+    const scanMap: Record<string, number> = {};
+    for (const r of scanCounts.rows as { status: string; cnt: string }[]) {
+      scanMap[r.status] = Number(r.cnt);
+    }
+    const computedIsScanning = (libMap["RUNNING"] ?? 0) > 0;
+    const legacyRunning = scanMap["running"] ?? 0;
+    console.info(
+      `[library-engine] startup job state — library_jobs: ${JSON.stringify(libMap)}, ` +
+      `scan_jobs (legacy): ${JSON.stringify(scanMap)}, ` +
+      `computed isScanning: ${computedIsScanning}` +
+      (legacyRunning > 0
+        ? ` ⚠ legacy scan_jobs has ${legacyRunning} stuck 'running' row(s) — draining now`
+        : ""),
+    );
+  } catch { /* non-fatal — always proceed */ }
+
+  // ── Drain legacy scan_jobs stuck in 'running' ──────────────────────────────
+  // The dashboard previously read isScanning from scan_jobs (old scan engine,
+  // lowercase status "running"). Any row left in "running" after a crash would
+  // freeze the entire UI forever because the old query was never cleared.
+  // Now the dashboard reads from library_jobs (current engine), but we still
+  // drain stuck legacy rows as a safety net for databases created before the fix.
+  try {
+    const { rowCount: legacyDrained } = await db.update(scanJobsTable)
+      .set({ status: "failed" })
+      .where(eq(scanJobsTable.status, "running"));
+    if (legacyDrained && legacyDrained > 0) {
+      console.warn(
+        `[library-engine] Drained ${legacyDrained} legacy scan_jobs row(s) stuck in 'running' state`
+      );
+    }
+  } catch { /* scan_jobs may not exist on a fresh install — non-fatal */ }
+
   // Jobs that were actively RUNNING when the server stopped → FAILED (crashed)
   const { rowCount: failedCount } = await db.update(libraryJobsTable).set({
     status:             "FAILED",

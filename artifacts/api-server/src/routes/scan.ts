@@ -1,3 +1,21 @@
+/**
+ * LEGACY SCAN ENGINE — DEPRECATED
+ *
+ * This module implements the original synchronous scan system (POST /scan,
+ * GET /scan/status, GET /scan/history).  It writes to `scan_jobs` with
+ * lowercase status strings ("running" / "completed" / "failed").
+ *
+ * The current engine is `lib/library-engine/job-engine.ts`, which writes to
+ * `library_jobs` with uppercase status ("RUNNING" / "DONE" / "FAILED").
+ *
+ * The dashboard's isScanning now reads from library_jobs (current engine).
+ * These legacy routes are retained for backward compatibility but should NOT
+ * be used for any new features.  The synchronous walk inside POST /scan can
+ * block the Node.js event loop for the full duration of a large library scan.
+ *
+ * TODO: retire POST /scan, GET /scan/status, GET /scan/history once all
+ *       frontend consumers have been migrated to /api/library/* routes.
+ */
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { scanJobsTable, indexedFilesTable, archivesTable, appSettingsTable } from "@workspace/db";

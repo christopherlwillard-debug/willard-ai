@@ -2,7 +2,7 @@ import * as fs from "fs";
 import { sql } from "drizzle-orm";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { checkNasReachable } from "./nas-storage";
+import { checkNasReachableAsync } from "./nas-storage";
 import { logger } from "./logger";
 
 /**
@@ -371,7 +371,7 @@ export async function runEnrichmentTick(): Promise<void> {
       paused = row?.indexingPaused ?? false;
     } catch { return; }
     if (!nasPath || paused) return;
-    const reach = checkNasReachable(nasPath);
+    const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
     const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK);

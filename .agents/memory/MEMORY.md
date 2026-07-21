@@ -15,5 +15,6 @@
 - [Local embeddings via transformers.js](local-embeddings.md) — AI proxies have no /embeddings; use local MiniLM 384-dim + pgvector; also normalize "photo" vs "image" media types
 - [PowerShell Windows encoding](powershell-windows-encoding.md) — em-dash and box-drawing chars in .ps1 files break Windows CP1252 parsing; use ASCII-only in all launcher scripts
 - [wouter not react-router-dom](wouter-router.md) — project uses wouter; replace useSearchParams→useSearch+URLSearchParams, useNavigate→useLocation from wouter
+- [isScanning source must be libraryJobsTable](isscanning-source.md) — dashboard isScanning must read libraryJobsTable status="RUNNING"; never scanJobsTable (legacy, lowercase "running")
 - [Job engine stuck-scan root cause](job-engine-stuck-scan.md) — fs.statSync in resolveSkippedDirs blocks event loop inside walkDone.then(); queue never closes, workers stuck at queue.pop() forever
 - [Thumbnail cursor bug + monitor cancel rule](thumbnail-cursor-bug.md) — cursor must only resume from restart-interrupted FAILED jobs; monitor must cancel (not pause) thumbnail jobs when NAS goes offline

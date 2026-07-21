@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { db, pool, appSettingsTable } from "@workspace/db";
-import { checkNasReachable, getWillardAIDir } from "./nas-storage";
+import { checkNasReachableAsync, getWillardAIDir } from "./nas-storage";
 import { logger } from "./logger";
 
 /**
@@ -407,7 +407,7 @@ export async function runFaceTick(): Promise<void> {
       paused = row?.indexingPaused ?? false;
     } catch { return; }
     if (!nasPath || paused) return;
-    const reach = checkNasReachable(nasPath);
+    const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
     const { rows } = await pool.query(

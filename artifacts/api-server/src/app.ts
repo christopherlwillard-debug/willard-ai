@@ -10,7 +10,7 @@ import { appSettingsTable, organizationJobsTable, conversionJobsTable } from "@w
 import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
-import { bootstrapWillardAIDir, nasLogStream, checkNasReachable } from "./lib/nas-storage";
+import { bootstrapWillardAIDir, nasLogStream, checkNasReachableAsync } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs, notifyUiConnected, emitStartupHealth, startThumbnailReconciliation } from "./lib/library-engine";
 import { warmThumbnailCache } from "./routes/media";
@@ -336,13 +336,14 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
 app.use("/api", router);
 
 // Initialize NAS log stream from persisted settings on startup
-db.select().from(appSettingsTable).limit(1).then((rows) => {
+db.select().from(appSettingsTable).limit(1).then(async (rows) => {
   const nasPath = rows[0]?.nasPath;
   if (nasPath) {
     // Only bootstrap/attach logging when the location is actually reachable.
     // Bootstrapping an unreachable path (e.g. a Windows "Z:" drive) would
     // create a fake local folder that later masks the offline state.
-    const reach = checkNasReachable(nasPath);
+    // Uses async check so Windows network-drive probing never blocks startup.
+    const reach = await checkNasReachableAsync(nasPath);
     if (reach.online) {
       try {
         bootstrapWillardAIDir(nasPath);
