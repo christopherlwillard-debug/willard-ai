@@ -252,6 +252,8 @@ export default function Settings() {
 
       <ScannerSettingsSection />
 
+      <OptimizeProfileSection />
+
       <Card className="border-primary/50">
         <CardHeader>
           <CardTitle className="flex items-center text-primary">
@@ -1460,6 +1462,142 @@ function SecuritySection() {
         </Card>
       </div>
     </>
+  );
+}
+
+function OptimizeProfileSection() {
+  const { toast } = useToast();
+  const [profile, setProfile] = useState<"ARCHIVE" | "BALANCED" | "MAXIMUM">("ARCHIVE");
+  const [rawEnabled, setRawEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings").then(r => r.json()).then((s: any) => {
+      if (s.optimizeProfile) setProfile(s.optimizeProfile);
+      if (typeof s.rawConversionEnabled === "boolean") setRawEnabled(s.rawConversionEnabled);
+    }).catch(() => {});
+  }, []);
+
+  async function save(newProfile: typeof profile, newRaw: boolean) {
+    setSaving(true);
+    try {
+      const resp = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optimizeProfile: newProfile, rawConversionEnabled: newRaw }),
+      });
+      if (!resp.ok) throw new Error("Failed to save");
+      toast({ title: "Optimize profile saved" });
+    } catch {
+      toast({ title: "Failed to save optimize profile", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const profiles: Array<{
+    id: "ARCHIVE" | "BALANCED" | "MAXIMUM";
+    label: string;
+    sub: string;
+    bullets: string[];
+  }> = [
+    {
+      id: "ARCHIVE",
+      label: "Archive",
+      sub: "Maximum quality, lossless-only conversions",
+      bullets: [
+        "JPEG re-compressed at quality 95 (visually identical)",
+        "PNG losslessly re-compressed",
+        "BMP / TIFF → PNG (lossless)",
+        "Legacy video → H.265 MP4",
+      ],
+    },
+    {
+      id: "BALANCED",
+      label: "Balanced",
+      sub: "Small quality trade-off for better savings",
+      bullets: [
+        "JPEG re-compressed at quality 92 (imperceptible difference)",
+        "PNG losslessly re-compressed",
+        "BMP / TIFF → PNG (lossless)",
+        "Legacy video → H.265 MP4",
+      ],
+    },
+    {
+      id: "MAXIMUM",
+      label: "Maximum",
+      sub: "Highest space savings, modern formats",
+      bullets: [
+        "JPEG / PNG → WebP (minimal visible difference)",
+        "Legacy video → H.265 MP4",
+        "Not recommended for photo archives",
+      ],
+    },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Settings2 className="w-5 h-5" /> Optimization Profile</CardTitle>
+        <CardDescription>Controls how the Optimize Center converts files. The selected profile applies to the next scan and all conversions.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {profiles.map(p => {
+            const isSelected = profile === p.id;
+            return (
+              <button
+                key={p.id}
+                onClick={() => { setProfile(p.id); save(p.id, rawEnabled); }}
+                disabled={saving}
+                className={`text-left rounded-lg border p-4 transition-all ${
+                  isSelected
+                    ? "border-primary bg-primary/10 ring-1 ring-primary"
+                    : "border-border bg-secondary/20 hover:border-primary/40"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-mono font-bold text-sm">{p.label}</span>
+                  {isSelected && <Badge variant="secondary" className="text-[10px] font-mono">Active</Badge>}
+                </div>
+                <p className="text-xs text-muted-foreground font-mono mb-2">{p.sub}</p>
+                <ul className="space-y-1">
+                  {p.bullets.map((b, i) => (
+                    <li key={i} className="text-[11px] font-mono text-muted-foreground flex items-start gap-1.5">
+                      <span className="text-primary mt-0.5">›</span>
+                      {b}
+                    </li>
+                  ))}
+                </ul>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="border border-border/50 rounded-md p-4 space-y-2 bg-secondary/10">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-mono font-medium">RAW Camera Conversion</p>
+              <p className="text-xs text-muted-foreground font-mono mt-0.5">
+                When enabled, RAW files (.cr2, .nef, .arw, etc.) become conversion candidates.
+                Originals are always backed up. Only enable if you no longer need to edit these files.
+              </p>
+            </div>
+            <Switch
+              checked={rawEnabled}
+              onCheckedChange={(v) => { setRawEnabled(v); save(profile, v); }}
+              disabled={saving}
+            />
+          </div>
+          {rawEnabled && (
+            <div className="flex items-center gap-2 text-xs font-mono text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              RAW conversion is irreversible without the backup. Ensure your backup directory is on a separate drive.
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

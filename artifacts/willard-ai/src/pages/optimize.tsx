@@ -45,11 +45,19 @@ interface FormatGroup {
   totalBytes:            number;
   category:              MediaCategory;
   status:                FormatStatus;
+  method:                string | null;
   targetFormat:          string | null;
+  targetExt:             string | null;
   qualityLoss:           QualityLoss | null;
+  qualityStars:          number | null;
+  qualityLabel:          string | null;
+  compatibilityLabel:    string | null;
   estimatedSavingsBytes: number;
   estimatedSavingsRatio: number | null;
   reason:                string;
+  explainerText:         string;
+  jpegIssues:            string[] | undefined;
+  detectedCodec:         string | undefined;
   sampleFiles:           SampleFile[];
 }
 
@@ -152,6 +160,30 @@ function QualityBadge({ loss }: { loss: QualityLoss | null }) {
   );
 }
 
+function QualityStars({ stars, label }: { stars: number | null; label: string | null }) {
+  if (!stars) return null;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-amber-400 text-sm leading-none tracking-tighter">
+        {"★".repeat(stars)}{"☆".repeat(5 - stars)}
+      </span>
+      {label && <span className="text-[10px] font-mono text-muted-foreground">{label}</span>}
+    </div>
+  );
+}
+
+function CompatibilityBadge({ label }: { label: string | null }) {
+  if (!label) return null;
+  const cls = label === "Excellent"
+    ? "text-emerald-400 bg-emerald-400/10 border-emerald-400/20"
+    : label === "Good"
+    ? "text-blue-400 bg-blue-400/10 border-blue-400/20"
+    : "text-amber-400 bg-amber-400/10 border-amber-400/20";
+  return (
+    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${cls}`}>{label}</span>
+  );
+}
+
 function CategoryIcon({ cat }: { cat: MediaCategory }) {
   const icons: Record<MediaCategory, string> = {
     image: "🖼", video: "🎬", audio: "🎵", document: "📄", other: "📁",
@@ -182,7 +214,8 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 
 function SizePreview({ group }: { group: FormatGroup }) {
   if (!group.sampleFiles || group.sampleFiles.length === 0) return null;
-  const ratio = group.estimatedSavingsRatio ?? 0;
+  const ratio      = group.estimatedSavingsRatio ?? 0;
+  const targetName = group.method ?? group.targetFormat ?? "target format";
   return (
     <div className="mt-2 space-y-1">
       <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1.5">
@@ -207,7 +240,7 @@ function SizePreview({ group }: { group: FormatGroup }) {
       })}
       {ratio > 0 && (
         <p className="text-[10px] font-mono text-muted-foreground pt-1 border-t border-border/30 mt-1">
-          Estimate based on typical {Math.round(ratio * 100)}% compression ratio for {group.extension.toUpperCase()} → {group.targetFormat ?? "target format"}.
+          Estimate based on typical {Math.round(ratio * 100)}% compression ratio — {targetName}.
           Actual results vary by content.
         </p>
       )}
@@ -391,7 +424,7 @@ function RunConversionsDialog({
                     <CategoryIcon cat={g.category} />
                     <span className="font-bold">.{g.extension.toUpperCase()}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="text-primary">{g.targetFormat}</span>
+                    <span className="text-primary">{g.method ?? g.targetFormat ?? "—"}</span>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span>{g.fileCount.toLocaleString()} files</span>
@@ -642,7 +675,7 @@ function ConfirmDialog({
                     <CategoryIcon cat={g.category} />
                     <span className="font-mono font-bold text-sm">.{g.extension.toUpperCase()}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="font-mono text-sm text-primary">{g.targetFormat}</span>
+                    <span className="font-mono text-sm text-primary">{g.method ?? g.targetFormat ?? "—"}</span>
                   </div>
                   <div className="flex gap-2 items-center">
                     <QualityBadge loss={g.qualityLoss} />
@@ -1187,9 +1220,9 @@ export default function Optimize() {
                     <TableHead className="font-mono">Format</TableHead>
                     <TableHead className="font-mono text-right">Files</TableHead>
                     <TableHead className="font-mono text-right">Size</TableHead>
-                    <TableHead className="font-mono">Target</TableHead>
+                    <TableHead className="font-mono">Method</TableHead>
                     <TableHead className="font-mono">Est. Savings</TableHead>
-                    <TableHead className="font-mono">Quality</TableHead>
+                    <TableHead className="font-mono">Visual Quality</TableHead>
                     <TableHead className="font-mono">Status</TableHead>
                     <TableHead className="font-mono text-center">Action</TableHead>
                   </TableRow>
@@ -1230,8 +1263,10 @@ export default function Optimize() {
                           <TableCell className="text-right font-mono text-sm">
                             {formatBytes(group.totalBytes)}
                           </TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground max-w-[120px] truncate">
-                            {group.targetFormat ?? "—"}
+                          <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px]">
+                            <span className="truncate block" title={group.method ?? group.targetFormat ?? undefined}>
+                              {group.method ?? group.targetFormat ?? "—"}
+                            </span>
                           </TableCell>
                           <TableCell>
                             {group.estimatedSavingsBytes > 0 ? (
@@ -1246,7 +1281,7 @@ export default function Optimize() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <QualityBadge loss={group.qualityLoss} />
+                            <QualityStars stars={group.qualityStars} label={group.qualityLabel} />
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={group.status} />
@@ -1283,18 +1318,64 @@ export default function Optimize() {
                           </TableCell>
                         </TableRow>
 
-                        {/* Expanded detail row: reason + before/after size preview */}
+                        {/* Expanded detail row */}
                         {expanded && (
                           <TableRow key={`${group.extension}-detail`} className="bg-secondary/20 hover:bg-secondary/20">
                             <TableCell colSpan={9} className="py-3 pl-10 pr-4">
                               <div className="space-y-3">
-                                {/* Reason */}
+                                {/* Status reason */}
                                 <div className="flex items-start gap-2">
                                   {group.status === "protected" && <Shield className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />}
                                   {group.status === "convert"   && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />}
                                   {group.status === "optimal"   && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />}
                                   <p className="text-xs font-mono text-muted-foreground">{group.reason}</p>
                                 </div>
+
+                                {/* Detected codec (for video containers) */}
+                                {group.detectedCodec && (
+                                  <div className="flex items-center gap-2 text-xs font-mono">
+                                    <span className="text-muted-foreground">Detected codec:</span>
+                                    <span className="font-bold text-primary">{group.detectedCodec.toUpperCase()}</span>
+                                  </div>
+                                )}
+
+                                {/* JPEG issues found in sample analysis */}
+                                {group.jpegIssues && group.jpegIssues.length > 0 && (
+                                  <div className="flex items-start gap-2 text-xs font-mono">
+                                    <span className="text-muted-foreground shrink-0">Sample analysis:</span>
+                                    <span className="text-amber-400">{group.jpegIssues.join(" · ")}</span>
+                                  </div>
+                                )}
+
+                                {/* "Why am I recommending this?" explainer */}
+                                {group.explainerText && group.status === "convert" && (
+                                  <div className="rounded-md border border-border/50 bg-primary/5 px-3 py-2">
+                                    <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-1">
+                                      Why am I recommending this?
+                                    </p>
+                                    <p className="text-xs font-mono text-foreground/80 leading-relaxed">
+                                      {group.explainerText}
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* Compatibility + quality metadata */}
+                                {(group.compatibilityLabel || group.qualityLoss) && (
+                                  <div className="flex items-center gap-3 flex-wrap">
+                                    {group.compatibilityLabel && (
+                                      <div className="flex items-center gap-1.5 text-xs font-mono">
+                                        <span className="text-muted-foreground">Compatibility:</span>
+                                        <CompatibilityBadge label={group.compatibilityLabel} />
+                                      </div>
+                                    )}
+                                    {group.qualityLoss && (
+                                      <div className="flex items-center gap-1.5 text-xs font-mono">
+                                        <span className="text-muted-foreground">Quality loss:</span>
+                                        <QualityBadge loss={group.qualityLoss} />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
 
                                 {/* Before/after size preview (convert groups only) */}
                                 {group.status === "convert" && group.sampleFiles.length > 0 && (

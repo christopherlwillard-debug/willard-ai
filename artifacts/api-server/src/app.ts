@@ -58,6 +58,12 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS celebration_shown_at timestamp;
   `);
   await pool.query(`
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS optimize_profile text NOT NULL DEFAULT 'ARCHIVE';
+    ALTER TABLE app_settings
+      ADD COLUMN IF NOT EXISTS raw_conversion_enabled boolean NOT NULL DEFAULT false;
+  `);
+  await pool.query(`
     ALTER TABLE media_files
       ADD COLUMN IF NOT EXISTS favorite boolean NOT NULL DEFAULT false;
     ALTER TABLE media_files

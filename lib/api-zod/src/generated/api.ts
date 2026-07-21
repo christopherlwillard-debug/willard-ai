@@ -150,7 +150,9 @@ export const GetSettingsResponse = zod.object({
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
   "celebrationShownAt": zod.string().nullish(),
-  "watcherPollIntervalSeconds": zod.number().optional()
+  "watcherPollIntervalSeconds": zod.number().optional(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional()
 })
 
 
@@ -166,7 +168,9 @@ export const UpdateSettingsBody = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "onboardingDismissed": zod.boolean().optional(),
   "celebrationShown": zod.boolean().optional(),
-  "watcherPollIntervalSeconds": zod.number().int().min(10).max(3600).optional()
+  "watcherPollIntervalSeconds": zod.number().int().min(10).max(3600).optional(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -182,7 +186,9 @@ export const UpdateSettingsResponse = zod.object({
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
   "celebrationShownAt": zod.string().nullish(),
-  "watcherPollIntervalSeconds": zod.number().optional()
+  "watcherPollIntervalSeconds": zod.number().optional(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional()
 })
 
 

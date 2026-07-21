@@ -29,6 +29,8 @@ export const appSettingsTable = pgTable("app_settings", {
   followSymlinks:     boolean("follow_symlinks").notNull().default(false),
   indexOtherFiles:    boolean("index_other_files").notNull().default(true),
   watcherPollIntervalSeconds: integer("watcher_poll_interval_seconds").notNull().default(60),
+  optimizeProfile: text("optimize_profile").notNull().default("ARCHIVE"),
+  rawConversionEnabled: boolean("raw_conversion_enabled").notNull().default(false),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });
