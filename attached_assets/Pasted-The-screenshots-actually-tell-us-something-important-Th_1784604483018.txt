@@ -1,0 +1,191 @@
+The screenshots actually tell us something important.
+
+This doesn't look like a slow scan anymore. It looks like the job lifecycle is never reaching its terminal state.
+
+What I observe
+
+From the Media Center screenshot:
+
+Scan is 100% complete.
+It has processed 5,506 / 5,508 files.
+It is stuck in indexing.
+The displayed filename is IMG_9884.JPEG.
+The UI still offers Pause, Cancel, and Force Discard, which means the backend still believes the job is active.
+
+From the Dashboard:
+
+Progress is 100%.
+It says "Syncing library in background".
+Navbar still says Scanning...
+Dashboard badge still says Indexing 100%.
+Nothing has transitioned into a terminal state.
+
+Those symptoms all point to one thing:
+
+The backend never told the frontend "this job has finished."
+
+What is not proven
+
+I do not think you can conclude that IMG_9884.JPEG is corrupt.
+
+That filename is simply the last one the UI received.
+
+It could be hanging:
+
+during metadata extraction
+during thumbnail generation
+during fingerprinting
+during a DB write
+during duplicate detection
+while waiting for another worker
+during final cleanup
+
+The screenshot alone cannot distinguish those.
+
+The fact that it's 5,506 / 5,508 is actually the biggest clue
+
+Notice something odd.
+
+It's not
+
+5508 / 5508
+
+It's
+
+5506 / 5508
+
+So two files never completed.
+
+That means one of two things:
+
+Possibility 1
+
+Two workers are still executing.
+
+If you have an 8-worker pool, maybe 6 exited and 2 never returned.
+
+Possibility 2
+
+The worker finished, but the completion callback never incremented the processed count.
+
+Both are job-engine problems.
+
+I think #156 becomes even more important
+
+Right now your logs should answer questions like:
+
+Worker 1
+processing IMG_9884.JPEG
+
+START metadata
+
+SUCCESS
+
+START thumbnail
+
+SUCCESS
+
+START DB write
+
+SUCCESS
+
+EXIT
+
+or
+
+Worker 7
+
+processing IMG_9884.JPEG
+
+START metadata
+
+(no SUCCESS)
+
+or
+
+Worker 7
+
+EXIT
+
+workersRemaining=1
+
+Without that, you're still guessing.
+
+One thing I would instrument immediately
+
+Since you're already modifying the worker loop, I'd add one line before and after every major operation.
+
+For every file:
+
+START processOneFile
+
+START fingerprint
+END fingerprint
+
+START metadata
+END metadata
+
+START thumbnail
+END thumbnail
+
+START DB upsert
+END DB upsert
+
+END processOneFile
+
+If one stage never logs its END, you've found the hang.
+
+I would also log worker shutdown
+
+For example:
+
+Worker 1 exited
+remaining=7
+
+Worker 2 exited
+remaining=6
+
+...
+
+Worker 8 exited
+remaining=0
+
+If you only ever see
+
+remaining=2
+
+then you immediately know two workers never returned.
+
+My current suspicion
+
+Based only on the screenshots—not on assumptions about the code—I think the most likely problem is:
+
+One or more worker promises never resolve, preventing Promise.all(allWorkerPromises) from returning, so the scan never reaches its completion path.
+
+Notice that's different from saying:
+
+"The JPEG is corrupt."
+
+A corrupt JPEG is one possible reason a worker never returns, but it's far from the only one.
+
+What I'd ask Replit to do next
+
+I would ask for evidence rather than another proposed fix:
+
+Instrument the worker lifecycle around processOneFile().
+
+For every worker, log:
+
+Worker started
+File path
+START/END of fingerprint
+START/END of metadata extraction
+START/END of thumbnail generation
+START/END of database update
+Worker exited
+
+Then run the scan again and show the logs from the final 10 files.
+
+The goal is to identify which operation never returns, rather than inferring it from the last filename shown in the UI.
+
+That run will likely narrow the problem down to a single stage and give you a concrete fix instead of another educated guess.

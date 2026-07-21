@@ -1,0 +1,123 @@
+I would not approve #164 yet based on the evidence shown.
+
+The proposed fix is reasonable as a defensive improvement, but the conclusion that a corrupt JPEG is the root cause is not proven by the symptoms you've described.
+
+Why I don't think it's proven
+
+The reasoning goes:
+
+Scan is stuck on IMG_9884.JPEG
+→ therefore extractPhotoMeta() hung
+→ therefore sharp() or exifr.parse() hung.
+
+That's only one possibility.
+
+The UI showing the last processed filename doesn't necessarily mean that's the file currently blocking. It may simply be the last progress update before the scan stalled elsewhere.
+
+Other equally plausible causes include:
+
+processOneFile() waiting on a database write.
+Thumbnail generation hanging.
+Duplicate detection for that file.
+Fingerprinting.
+A worker deadlock.
+Promise.all(allWorkerPromises) waiting because a different worker is stuck on another file.
+A queue that never closes.
+A database transaction that never completes.
+
+Without instrumentation, you can't conclude it's the metadata extractor.
+
+This is exactly what #156 is supposed to answer
+
+If #156 is implemented, the logs should tell you:
+
+worker 3
+processing IMG_9884.JPEG
+START extractPhotoMeta
+
+(no SUCCESS)
+
+
+or
+
+worker 3
+extractPhotoMeta SUCCESS
+
+START DB write
+
+(no SUCCESS)
+
+or
+
+worker exited
+
+7/8 workers exited
+
+(worker 8 never exits)
+
+That's the difference between evidence and inference.
+
+What I would do instead
+
+I'd change #164 from:
+
+Fix scan hanging at 100% on bad files
+
+to something like:
+
+#164 – Prevent metadata extraction from blocking scan completion
+
+What & Why
+
+Metadata extraction currently has no execution timeout. If a metadata library (sharp, exifr, PDF parser, FFmpeg, etc.) hangs on a malformed or unsupported file, a scan worker may never return, potentially preventing scan completion.
+
+Although this has not yet been confirmed as the cause of the current scan hang, adding bounded execution time makes the scan engine more resilient and prevents a single file from indefinitely blocking a worker.
+
+That wording is technically accurate.
+
+I'd also broaden the scope
+
+Don't only timeout:
+
+extractPhotoMeta()
+
+Also consider:
+
+video metadata
+PDF metadata
+fingerprint generation
+thumbnail generation
+AI analysis (if applicable)
+
+The general principle should be:
+
+No single file operation may block a scan indefinitely.
+
+One thing I would absolutely require
+
+Don't silently skip.
+
+Log something like:
+
+{
+  "scanId": "...",
+  "file": "IMG_9884.JPEG",
+  "phase": "metadata",
+  "completionReason": "timeout",
+  "elapsedMs": 30000
+}
+
+Otherwise you'll never know it happened.
+
+My recommendation
+
+I would not merge #164 as "the fix" for your current issue.
+
+I would merge it as a hardening task that improves the robustness of the scan engine regardless of the current bug.
+
+Then I'd let the instrumentation from #156 determine whether:
+
+metadata extraction is actually hanging,
+or whether the scan is stalling somewhere else.
+
+That way you're solving a real robustness issue without prematurely attributing the current scan hang to a specific cause that hasn't yet been demonstrated.

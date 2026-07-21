@@ -1,0 +1,130 @@
+I would approve this version. It's much more disciplined than the original because it separates finding the problem from making the system resilient.
+
+There are only two things I'd tighten before calling it final.
+
+1. Don't make fingerprint timeouts an automatic SKIP
+
+This is the one part I disagree with.
+
+Right now you have:
+
+Operation	Outcome
+Fingerprint timeout	SKIP
+
+I think that's too aggressive.
+
+A fingerprint is important for move detection and duplicate analysis, but it isn't required to represent a file in the library.
+
+I'd recommend:
+
+Operation	Outcome	Library
+Fingerprint timeout	PARTIAL	Indexed without fingerprint
+Metadata timeout	PARTIAL	Indexed with basic metadata
+Conflict re-read timeout	PARTIAL	Indexed with first-pass metadata
+
+Then simply mark:
+
+fingerprintPending = true
+
+or
+
+fingerprintStatus = timeout
+
+The library can still show the file, and a later maintenance or optimization job can retry fingerprint generation.
+
+Otherwise, a single hung fingerprint means the user loses visibility of a perfectly valid file, which feels like a poor tradeoff.
+
+2. Timeouts should be classified
+
+Instead of logging only:
+
+{
+  "completionReason": "timeout"
+}
+
+I'd log:
+
+{
+  "operation": "photo_metadata",
+  "timeoutType": "operation_timeout",
+  "elapsedMs": 30000
+}
+
+or
+
+{
+  "operation": "fingerprint",
+  "timeoutType": "operation_timeout"
+}
+
+That makes reporting much easier later.
+
+One thing I'd explicitly add
+
+After Phase 2 completes, require one verification:
+
+No worker promise may remain unresolved after the timeout period plus a small grace window.
+
+For example:
+
+timeout = 30s
+
+worker exits ≤ 31s
+
+That proves the timeout actually releases the worker instead of merely abandoning work while the promise continues running in the background.
+
+Long-term architecture
+
+This task also hints at something I'd eventually add:
+
+Every expensive per-file operation becomes a pluggable stage.
+
+Example:
+
+process file
+
+↓
+
+basic index
+
+↓
+
+fingerprint
+
+↓
+
+metadata
+
+↓
+
+thumbnail
+
+↓
+
+AI
+
+↓
+
+DONE
+
+Each stage has:
+
+timeout
+retry policy
+partial success
+structured result
+
+That architecture naturally supports resilience without one stage blocking the others.
+
+Overall assessment
+
+I'd rate this version 10/10.
+
+Compared to the first draft, it's much stronger because it:
+
+Doesn't claim an unproven root cause.
+Separates investigation from mitigation.
+Introduces explicit PARTIAL outcomes.
+Treats timeouts as a resilience feature rather than "the fix."
+
+The only substantive change I'd make is not treating fingerprint timeouts as automatic SKIP. Indexing the file with a missing fingerprint is usually a better user experience, and fingerprint generation can be retried later without making the file disappear from the library. That keeps the library complete while still protecting the scan engine from a single indefinitely blocking operation.

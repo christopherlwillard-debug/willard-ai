@@ -1,0 +1,79 @@
+I would approve the revised #164, with one adjustment.
+
+The task now has a clear purpose:
+
+Hardening the scan engine so that one file cannot block an entire scan.
+
+That's a worthwhile improvement regardless of whether it explains the current incident.
+
+The only thing I'd change is separating diagnostic instrumentation from behavior changes.
+
+Why
+
+Task #156 already established lifecycle instrumentation. If #164 adds more logging at the same time it changes timeout behavior, then if the bug disappears you won't know whether:
+
+the additional logs identified the problem,
+or the timeout masked it.
+
+Keeping diagnosis and behavior separate makes it easier to understand what actually fixed the issue.
+
+My recommendation
+
+I'd split the work into two phases within #164:
+
+Phase 1 – Evidence (no behavioral change)
+
+Add per-operation worker logs around:
+fingerprinting
+metadata extraction
+conflict-detection re-read
+Log worker entry/exit.
+Capture one stuck scan if it reproduces.
+
+If the existing #156 logs already identify the blocking stage, Phase 1 may be very small.
+
+Phase 2 – Hardening
+
+Once the evidence is collected (or if the evidence remains inconclusive):
+
+Add withTimeout().
+Apply it to all potentially blocking per-file operations.
+Emit structured timeout events.
+Skip only the timed-out operation for that file.
+Allow the worker to continue and the scan to finish.
+
+That sequence keeps the investigation clean while still delivering the robustness improvement you want.
+
+One more thing I'd add
+
+I'd be careful about how a timeout is handled.
+
+Instead of simply returning SKIP, I'd define explicit outcomes such as:
+
+SUCCESS
+PARTIAL (basic indexing completed, metadata timed out)
+SKIPPED
+FAILED
+
+A timeout during metadata extraction doesn't necessarily mean the file should be considered skipped. You may still have:
+
+path
+filename
+size
+timestamps
+MIME type
+
+That's valuable information, and the UI can later indicate that metadata is incomplete rather than implying the entire file was skipped.
+
+Overall
+
+I think the revised #164 is a solid hardening task. I just wouldn't present it as the fix for the current hang until the logs demonstrate that's where the workers are actually stalling.
+
+The order I'd follow is:
+
+Use the instrumentation from #156 to identify where workers stop.
+Add per-operation logging if needed.
+Implement bounded execution (withTimeout) for all per-file operations.
+Verify that a timed-out file results in a completed scan rather than a permanently active job.
+
+That gives you both a more reliable scan engine and a much stronger understanding of what actually caused the original problem.
