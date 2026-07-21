@@ -819,11 +819,15 @@ function ConfirmDialog({
 function RecentJobsPanel({
   jobs,
   onRetry,
+  onFinalize,
   retryLoading,
+  finalizeLoading,
 }: {
   jobs: ConversionJob[];
   onRetry: (jobId: number) => void;
+  onFinalize: (jobId: number, action: FinalizeAction) => void;
   retryLoading: boolean;
+  finalizeLoading: boolean;
 }) {
   const isInterrupted = (j: ConversionJob) =>
     j.status === "failed" && j.error?.includes("Interrupted by server restart");
@@ -951,8 +955,8 @@ function RecentJobsPanel({
                 size="sm"
                 variant="outline"
                 className="font-mono text-xs h-7 px-2"
-                onClick={() => onRetry(job.id)}
-                disabled={retryLoading}
+                onClick={() => onFinalize(job.id, action)}
+                disabled={finalizeLoading}
               >
                 {label}
               </Button>
@@ -1050,6 +1054,29 @@ export default function Optimize() {
     },
     onError: (e: Error) => {
       toast({ title: "Retry failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const finalizeMutation = useMutation({
+    mutationFn: async ({ jobId, action }: { jobId: number; action: FinalizeAction }) => {
+      const resp = await fetch(`/api/optimize/jobs/${jobId}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as any).error ?? "Finalize failed");
+      }
+      return resp.json() as Promise<ConversionJob>;
+    },
+    onSuccess: (_job, { action }) => {
+      refetchJobs();
+      const label = action === "recycle" ? "moved to Trash" : action === "replace" ? "deleted" : action === "keep-both" ? "kept alongside converted" : "archived";
+      toast({ title: "Originals " + label, description: "Conversion finalized successfully." });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Finalize failed", description: e.message, variant: "destructive" });
     },
   });
 
@@ -1220,7 +1247,9 @@ export default function Optimize() {
         <RecentJobsPanel
           jobs={recentJobs}
           onRetry={(jobId) => retryMutation.mutate(jobId)}
+          onFinalize={(jobId, action) => finalizeMutation.mutate({ jobId, action })}
           retryLoading={retryMutation.isPending}
+          finalizeLoading={finalizeMutation.isPending}
         />
       )}
 

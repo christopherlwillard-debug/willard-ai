@@ -489,6 +489,8 @@ function buildExplainerText(ext: string, rule: FormatRule, profile: OptimizeProf
 
 // ── Image conversion via sharp ─────────────────────────────────────────────────
 
+const RAW_EXTS = new Set(["cr2","cr3","nef","nrw","arw","srf","sr2","dng","raf","orf","rw2","pef","x3f","rwl","raw","mrw"]);
+
 async function convertImageAsync(
   srcPath: string,
   destPath: string,
@@ -496,6 +498,23 @@ async function convertImageAsync(
   profile: OptimizeProfile,
 ): Promise<string | null> {
   try {
+    const srcExt = path.extname(srcPath).toLowerCase().slice(1);
+
+    // RAW source files cannot be decoded by Sharp — always route through ffmpeg first.
+    // ffmpeg with -q:v 1 produces JPEG at ~quality 98; -map_metadata 0 preserves EXIF.
+    if (RAW_EXTS.has(srcExt)) {
+      const result = spawnSync("ffmpeg", [
+        "-y", "-i", srcPath,
+        "-q:v", "2",           // ~quality 96, smaller than q:v 1 with negligible loss
+        "-map_metadata", "0",  // preserve EXIF, ICC, GPS
+        destPath,
+      ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
+      if (result.status !== 0) {
+        return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
+      }
+      return null;
+    }
+
     const sharp = (await import("sharp")).default;
     const quality = profile === "BALANCED" ? 92 : 95;
 
@@ -515,13 +534,8 @@ async function convertImageAsync(
         .webp({ quality: 85 })
         .toFile(destPath);
     } else {
-      // RAW → JPEG (quality 98) or generic ffmpeg fallback
-      const rawExts = new Set(["cr2","cr3","nef","nrw","arw","srf","sr2","dng","raf","orf","rw2","pef","x3f","rwl","raw","mrw"]);
-      const srcExt = path.extname(srcPath).toLowerCase().slice(1);
-      const args = rawExts.has(srcExt)
-        ? ["-y", "-i", srcPath, "-q:v", "1", "-map_metadata", "0", "-vf", "transpose=0", destPath]
-        : ["-y", "-i", srcPath, destPath];
-      const result = spawnSync("ffmpeg", args, {
+      // Generic ffmpeg fallback for other image formats
+      const result = spawnSync("ffmpeg", ["-y", "-i", srcPath, destPath], {
         encoding: "utf8", stdio: "pipe", timeout: 300_000,
       });
       if (result.status !== 0) {
@@ -559,6 +573,7 @@ async function verifyConvertedFile(
 ): Promise<{ passed: boolean; checks: string[]; failedCheck?: string }> {
   const checks: string[] = [];
 
+  // Check 1: Output file exists and non-zero
   if (!fs.existsSync(destPath)) {
     return { passed: false, checks, failedCheck: "Output file does not exist" };
   }
@@ -568,6 +583,7 @@ async function verifyConvertedFile(
   }
   checks.push("Output exists and is non-zero");
 
+  // Check 2: Size regression (for same-ext: output must be smaller)
   if (isSameExt && convertedBytes >= originalBytes) {
     return { passed: false, checks, failedCheck: "Output not smaller than original" };
   }
@@ -576,23 +592,62 @@ async function verifyConvertedFile(
   if (category === "image") {
     try {
       const sharp = (await import("sharp")).default;
+
+      // Check 3: Output decodes without error
       const dstMeta = await sharp(destPath, { failOn: "none" }).metadata();
       if (!dstMeta.width || !dstMeta.height) {
         return { passed: false, checks, failedCheck: "Output image has no dimensions (decode failed)" };
       }
       checks.push(`Decoded OK — ${dstMeta.width}×${dstMeta.height}`);
+
+      // Checks 4–7: Compare against source metadata (best-effort — skip if source unreadable)
       try {
         const srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
+
         if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
+          // Check 4: Total pixel count within 15% (allows auto-rotation swap)
           const srcPixels = srcMeta.width * srcMeta.height;
           const dstPixels = dstMeta.width * dstMeta.height;
-          const ratio = Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels);
-          if (ratio < 0.85) {
+          if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
             return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
           }
           checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
+
+          // Check 5: Aspect ratio preserved within 5% (catches unintentional cropping/distortion)
+          const srcAspect = srcMeta.width / srcMeta.height;
+          const dstAspect = dstMeta.width / dstMeta.height;
+          const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
+          if (aspectRatio < 0.95) {
+            return { passed: false, checks, failedCheck: `Aspect ratio mismatch: ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
+          }
+          checks.push("Aspect ratio preserved");
+
+          // Check 6: Orientation tag present/correct when source had one
+          if (srcMeta.orientation !== undefined && dstMeta.orientation !== undefined) {
+            // After re-encode with auto-rotate, orientation should be 1 (normal)
+            // Allow orientation 1 (normal) or same as source
+            if (dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
+              checks.push(`Orientation changed: ${srcMeta.orientation} → ${dstMeta.orientation} (may require review)`);
+            } else {
+              checks.push(`Orientation OK (${dstMeta.orientation})`);
+            }
+          }
         }
-      } catch { /* best effort */ }
+
+        // Check 7: EXIF metadata preserved if source had it
+        if (srcMeta.exif && !dstMeta.exif) {
+          checks.push("WARN: Source had EXIF but output does not — metadata may have been stripped");
+        } else if (srcMeta.exif && dstMeta.exif) {
+          checks.push("EXIF metadata preserved");
+        }
+
+        // Check 8: ICC color profile preserved if source had one
+        if (srcMeta.icc && !dstMeta.icc) {
+          checks.push("WARN: Source had ICC profile but output does not");
+        } else if (srcMeta.icc && dstMeta.icc) {
+          checks.push("ICC color profile preserved");
+        }
+      } catch { /* best effort — source may be unreadable (RAW) */ }
     } catch (err: any) {
       return { passed: false, checks, failedCheck: `Decode failed: ${(err.message ?? "unknown").slice(0, 200)}` };
     }
