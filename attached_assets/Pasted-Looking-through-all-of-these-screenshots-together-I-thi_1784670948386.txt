@@ -1,0 +1,225 @@
+Looking through all of these screenshots together, I think we've moved beyond isolated bugs. I think the application has a systemic state synchronization problem.
+
+Here's what I see:
+
+1. The scanner is lying about its state
+
+The Media page says:
+
+✅ Scan complete (45.9s)
+
+But every page still shows:
+
+🟡 Scanning...
+
+hours later.
+
+Those two states cannot both be true.
+
+That means whatever completed the scan never told the rest of the application it completed.
+
+2. Every page is waiting for something
+
+Your screenshots show:
+
+Library → skeleton forever
+Collections → spinner forever
+People → skeleton forever
+Archives → empty loading state
+Documents → 0 indexed
+Optimize → "Scanning NAS..."
+Cleanup → no statistics
+AI Search → 0 analyzed
+AI Chat → idle
+Header → "Scanning..."
+
+Those aren't independent failures.
+
+They're all behaving like:
+
+"Don't load until indexing is finished."
+
+But indexing already finished.
+
+3. The media page proves the database is fine
+
+Media shows
+
+24,564 files
+folders
+videos
+photos
+thumbnails
+
+So the database is clearly readable.
+
+If the database were broken, Media wouldn't work.
+
+4. The scan completed in 45 seconds
+
+That tells us the scan engine itself isn't hanging.
+
+Instead, something after completion is.
+
+Usually that means one of these:
+
+scan
+ ↓
+persist DB
+ ↓
+generate event
+ ↓
+refresh caches
+ ↓
+mark COMPLETE
+ ↓
+broadcast COMPLETE
+
+One of those last steps never happened.
+
+5. The whole application appears gated on a single global flag
+
+Every screen seems to be doing something like:
+
+if (library.isScanning) {
+    wait();
+}
+
+instead of
+
+loadFromDatabase();
+refreshWhenReady();
+
+That's why everything is frozen.
+
+I would stop fixing individual pages.
+
+At this point I would not work on:
+
+thumbnails
+AI Search
+Documents
+Collections
+People
+Cleanup
+
+Those are almost certainly victims.
+
+I think the root issue is here:
+
+The application has one global library state that is never transitioning out of "SCANNING".
+
+The scan engine completed.
+
+The UI never got told.
+
+I would create one major stabilization task instead of more feature fixes.
+#172 — Fix Global Library State Machine & Job Completion
+Problem
+
+The application reports scanning indefinitely even after scans complete successfully.
+
+Evidence:
+
+Media reports Scan complete (45.9s).
+Header continues showing Scanning....
+Optimize waits forever.
+Collections never load.
+Documents remain at 0.
+People never initialize.
+AI Search reports 0 analyzed.
+Cleanup never calculates.
+Library page skeletons persist.
+
+This indicates the application's global "library scanning" state never transitions from ACTIVE → IDLE after a successful scan.
+
+The database is populated and readable, so downstream features are blocked by stale application state rather than missing data.
+
+Investigation
+
+Audit the complete lifecycle of a scan:
+
+STARTED
+↓
+
+SCANNING
+↓
+
+FINAL DB FLUSH
+↓
+
+QUEUE DRAIN
+
+↓
+
+JOB COMPLETE
+
+↓
+
+EVENT EMITTED
+
+↓
+
+GLOBAL STORE UPDATED
+
+↓
+
+UI INVALIDATION
+
+↓
+
+HEADER STATE RESET
+
+↓
+
+DEPENDENT MODULES START
+
+Determine exactly which transition never occurs.
+
+Verify
+
+Instrument every transition:
+
+SCAN STARTED
+
+QUEUE EMPTY
+
+FINAL DB WRITE
+
+SCAN COMPLETE
+
+JOB MARKED DONE
+
+LIBRARY STATE = IDLE
+
+EVENT BROADCAST
+
+UI RECEIVED EVENT
+
+COLLECTIONS REFRESH
+
+PEOPLE REFRESH
+
+DOCUMENT INDEX REFRESH
+
+AI REFRESH
+
+Every transition should appear once.
+
+If one never appears, you've found the bug.
+
+Acceptance
+
+After a successful scan:
+
+Header no longer shows "Scanning..."
+Collections populate
+Library page loads immediately
+Documents count appears
+People initialize
+Optimize begins analysis
+Cleanup computes statistics
+AI Search becomes available
+No page waits indefinitely for a completed scan
+
+I actually think this is the highest-priority issue in the project now. From everything you've shown, the scan engine appears to be doing its job, but the application never exits its global "scanning" state. Until that state machine is fixed, every new feature is going to behave unpredictably because they're all waiting on a completion event that never arrives.

@@ -1,0 +1,296 @@
+think this is a much stronger task than the previous version because it's now grounded in specific code rather than symptoms.
+
+That said, I would make three important changes before giving it to Replit.
+
+1. Separate confirmed bugs from hypotheses
+
+Right now the task says:
+
+Bug 1 — Wrong table, wrong case (the root cause)
+
+I would soften that slightly.
+
+You've confirmed that the dashboard is querying the wrong table and wrong status, but we haven't yet proven that's the only reason every page stays in scanning forever.
+
+I'd write:
+
+Confirmed bug: The dashboard determines isScanning from the legacy scanJobsTable using "running" while the current library engine writes to libraryJobsTable using "RUNNING". This causes the dashboard to report stale scanning state whenever old legacy jobs remain.
+
+That states what you know without over-claiming.
+
+2. Split the event-loop work into a separate section
+
+This:
+
+dashboard freezes because of sync filesystem calls
+
+is a different class of problem.
+
+I'd organize it like this:
+
+Confirmed Bug #1
+Global scanning state uses legacy job table.
+
+Confirmed Bug #2
+Dashboard performs synchronous NAS filesystem operations every poll.
+
+Potential Effect
+These synchronous operations can stall the Node event loop and delay unrelated requests.
+
+That makes the investigation cleaner.
+
+3. Add instrumentation before changing behavior
+
+This is the biggest thing I'd add.
+
+Before changing anything, log exactly what the app thinks.
+
+Something like:
+
+Dashboard state:
+
+libraryJobs RUNNING: X
+
+libraryJobs COMPLETE: X
+
+scanJobs running: X
+
+scanJobs complete: X
+
+isScanning computed: true
+
+reason: legacy scanJobs entry #42
+
+or
+
+Header status:
+
+Current engine:
+RUNNING jobs: 0
+
+Legacy engine:
+running jobs: 1
+
+Header showing:
+SCANNING
+
+Reason:
+legacy scan job
+
+That log will immediately prove whether Bug #1 is actually causing the header state.
+
+I'd also add one more acceptance criterion
+
+Right now you have:
+
+Header returns to Full Rescan
+
+I'd also add:
+
+Acceptance
+
+There is only one authoritative source of truth for scan state.
+
+The UI, dashboard, and job engine all derive scan status from the same libraryJobsTable state.
+
+Otherwise six months from now someone will accidentally introduce another "isScanning" variable.
+
+Overall assessment
+
+Compared to your earlier roadmap tasks, I'd rate this one:
+
+Evidence: 9.5/10
+Specificity: 10/10
+Likelihood of fixing the real issue: High
+Risk: Low
+
+The only thing I'd still investigate alongside this is the relationship between the old scanJobsTable and the new libraryJobsTable. If both systems are still active in the codebase, I'd ask Replit to identify every remaining reference to scanJobsTable and determine whether the legacy scan system can be retired entirely. Maintaining two parallel job systems is exactly the kind of architectural drift that leads to stale state, conflicting UI, and bugs like the ones you're seeing.
+
+
+Library
+Commands
+Search files
+.agents
+.config
+.git
+artifacts
+api-server
+mockup-sandbox
+willard-ai
+willard-mobile
+attached_assets
+14
+e2e
+lib
+scripts
+test-media
+.env.example
+.gitignore
+.npmrc
+ARCHITECTURE.md
+LOCAL_SETUP.md
+playwright.config.ts
+Repair Willard AI.bat
+replit.md
+Setup Willard AI.bat
+setup-db.cjs
+Start Willard AI.bat
+Stop Willard AI.bat
+tsconfig.base.json
+tsconfig.json
+Update Willard AI.bat
+Packager files
+node_modules
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+Config files
+.replit
+.replitignore
+replit.nix
+
+
+#172 - Fix Global "Scanning Forever" State
+What & Why
+The app shows "Scanning…" in the header indefinitely — even hours after a scan completes. This causes Collections, Library, People, Documents, Optimize, Cleanup, and AI Search to show spinners or empty states because they depend on the same global scan flag.
+
+Two bugs were confirmed by direct code inspection:
+
+Confirmed Bug #1 — Global scan state reads from the legacy job table routes/dashboard.ts computes isScanning by querying scanJobsTable for status "running" (lowercase). The current library engine writes all jobs to libraryJobsTable with status "RUNNING" (uppercase). These are two separate parallel scan systems. The dashboard never reads the current engine's state, so any old scanJobsTable row stuck in "running" will freeze isScanning: true for the lifetime of the server — indefinitely.
+
+Confirmed Bug #2 — Dashboard performs synchronous NAS I/O on every poll The dashboard route calls synchronous checkNasReachable(nasPath) (which executes existsSync + statSync + accessSync + readdirSync on the NAS path) and a synchronous getDiskStats() on every request. The dashboard is polled every 3 seconds while isScanning: true. On a Windows NAS (Z:) each of these calls can stall for hundreds of milliseconds, blocking the Node.js event loop and making every other concurrent API request (Collections, People, etc.) appear to hang.
+
+Potential Effect The combination of Bug #1 keeping the poll interval locked at 3 seconds and Bug #2 blocking the event loop on each poll explains why every page in the app appears frozen while a scan is nominally running.
+
+Underlying architectural drift scan.ts (legacy) and job-engine.ts (current) are both fully wired up, writing to different tables (scanJobsTable vs libraryJobsTable) with different status enums. The dashboard watches only the legacy table. Retiring or clearly separating the two systems would eliminate this class of bug permanently.
+
+Done looks like
+Before any code changes: a startup log clearly states how many jobs are in each table and what the computed isScanning value is and why (confirming which bug is active)
+After a successful scan, the header returns to "Full Rescan" within one poll cycle (≤ 30 seconds)
+Collections, Library, People, Documents, and Cleanup load data immediately without waiting for a scan to finish
+Navigating the app while a scan is running remains responsive
+There is exactly one authoritative source of truth for scan state — the UI, dashboard, and job engine all derive isScanning from libraryJobsTable exclusively, with no other table or variable shadowing it
+Out of scope
+Replacing or removing the legacy scan.ts / scanJobsTable system entirely (investigate and document, but do not delete until routes are audited)
+AI Search embedding analysis (0/24551 files) — separate enrichment feature
+Steps
+Instrument first — log the exact state before touching anything — On server startup (and on each GET /api/dashboard request in debug mode), emit a structured log showing: count of libraryJobsTable rows in each status, count of scanJobsTable rows in each status, and the final isScanning value with the reason. This proves which bug is causing the frozen header before any fix is applied.
+
+Fix isScanning source in dashboard — Change the dashboard route to derive isScanning from libraryJobsTable status "RUNNING" (covering SCAN, THUMBNAILS, and METADATA job types) and remove the scanJobsTable query from this computation entirely.
+
+Drain stale scanJobsTable legacy jobs at startup — Add a startup cleanup step (alongside the existing libraryJobsTable RUNNING→FAILED sweep) that marks any scanJobsTable rows stuck in "running" as "failed", so a restart always clears the stale state.
+
+Make dashboard NAS checks async — Replace the synchronous checkNasReachable + getDiskStats calls in routes/dashboard.ts with the existing checkNasReachableAsync. Cache the result briefly (e.g. 5 seconds) so high-frequency polls during a scan don't re-stat the NAS on every request.
+
+Convert remaining sync checkNasReachable call sites — Audit and convert the remaining synchronous call sites in health.ts, system.ts, app.ts, ai-enrichment.ts, and face-recognition.ts to use checkNasReachableAsync.
+
+Audit scanJobsTable usage and document retirement path — List every route and UI component that still reads or writes scanJobsTable. Determine whether the legacy /scan, /scan/status, and /scan/history routes are still called by the frontend. If they are unused, mark them deprecated with a comment block. Do not delete them in this task, but leave a clear note for the next task that does.
+
+Verify pages load independently of scan state — Check that Collections, People, Documents, and Cleanup fetch data unconditionally from the DB. If any is found to gate loading on isScanning, remove that gate.
+
+Relevant files
+artifacts/api-server/src/routes/dashboard.ts:1-103
+artifacts/api-server/src/routes/scan.ts
+artifacts/api-server/src/routes/index.ts
+artifacts/api-server/src/routes/health.ts
+artifacts/api-server/src/routes/system.ts
+artifacts/api-server/src/app.ts
+artifacts/api-server/src/lib/nas-storage.ts:85-200
+artifacts/api-server/src/lib/ai-enrichment.ts
+artifacts/api-server/src/lib/face-recognition.ts
+artifacts/api-server/src/lib/library-engine/job-engine.ts:2580-2600
+artifacts/willard-ai/src/components/layout/layout.tsx
+artifacts/willard-ai/src/pages/dashboard.tsx
+artifacts/willard-ai/src/pages/collections.tsx
+artifacts/willard-ai/src/pages/explorer.tsx
+artifacts/willard-ai/src/pages/people.tsx
+artifacts/willard-ai/src/pages/documents.tsx
+artifacts/willard-ai/src/pages/cleanup.tsx
+
+I think this is now at the level where I'd actually hand it to an engineer. It's evidence-based, has a clear investigation path, and doesn't jump to deleting legacy code.
+
+There are only two additions I'd make.
+
+1. Add a "single source of truth" requirement
+
+Right now you say:
+
+derive isScanning from libraryJobsTable
+
+I'd make that an explicit architectural rule.
+
+For example:
+
+Architecture requirement
+
+libraryJobsTable is the only authoritative source for library job state. No route, service, hook, or UI component may independently derive scan status from scanJobsTable, local variables, timers, or cached booleans. Any code needing scan state must consume the same source of truth.
+
+That prevents someone from "fixing" one page while another still uses the legacy logic.
+
+2. Add verification for event propagation
+
+Your task proves the backend state, but I'd also verify the frontend actually receives the update.
+
+I'd add another step:
+
+Verify state propagation
+
+After a library job transitions from RUNNING → COMPLETED, verify that:
+
+the dashboard API reports isScanning = false
+the frontend polling detects the change
+the global layout store updates
+the header switches from Scanning... to Full Rescan
+dependent pages stop displaying loading indicators without requiring a browser refresh
+
+This catches another common failure mode: the backend is fixed but the frontend cache never updates.
+
+One thing I really like
+
+This section:
+
+Instrument first — log the exact state before touching anything
+
+is exactly the right approach.
+
+Instead of immediately changing code, you're asking the application to prove what's happening. Those logs will either validate the hypothesis or immediately point somewhere else.
+
+I would also ask for one diagnostic endpoint
+
+While they're already working in this area, I'd have them add something like:
+
+GET /api/debug/library-state
+
+that returns:
+
+{
+  "libraryJobs": {
+    "RUNNING": 0,
+    "COMPLETED": 5,
+    "FAILED": 1
+  },
+  "scanJobs": {
+    "running": 1,
+    "completed": 20
+  },
+  "computed": {
+    "isScanning": false,
+    "source": "libraryJobsTable"
+  },
+  "watcher": {
+    "connected": true,
+    "lastSweep": "...",
+    "state": "WATCHING"
+  },
+  "thumbnailJob": {
+    "running": false
+  }
+}
+
+That endpoint would make future debugging dramatically easier because you wouldn't have to infer state from the UI.
+
+Overall
+
+This has evolved from "I think this is the bug" into "here's the evidence, here's how to prove it, here's how to fix it, and here's how to verify the fix." That's the kind of task that tends to produce reliable results rather than iterative guesswork.
+
+One final observation from all the screenshots you've shared over the last couple of days: there appears to be a broader architectural issue beyond this specific bug. The app currently has multiple subsystems—library scanning, thumbnails, AI enrichment, face recognition, cleanup, optimize, collections—that all seem to infer "library readiness" independently. After #172, I'd strongly consider a follow-up architectural task to define a single Library State Manager (or equivalent) that owns states like STARTING, SCANNING, WATCHING, THUMBNAILING, READY, and ERROR, with every UI component subscribing to that one source instead of each feature inventing its own readiness logic. That would eliminate an entire class of synchronization bugs going forward.

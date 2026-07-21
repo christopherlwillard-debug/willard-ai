@@ -1,0 +1,107 @@
+I think this is a much stronger task than the previous version because it's now grounded in specific code rather than symptoms.
+
+That said, I would make three important changes before giving it to Replit.
+
+1. Separate confirmed bugs from hypotheses
+
+Right now the task says:
+
+Bug 1 — Wrong table, wrong case (the root cause)
+
+I would soften that slightly.
+
+You've confirmed that the dashboard is querying the wrong table and wrong status, but we haven't yet proven that's the only reason every page stays in scanning forever.
+
+I'd write:
+
+Confirmed bug: The dashboard determines isScanning from the legacy scanJobsTable using "running" while the current library engine writes to libraryJobsTable using "RUNNING". This causes the dashboard to report stale scanning state whenever old legacy jobs remain.
+
+That states what you know without over-claiming.
+
+2. Split the event-loop work into a separate section
+
+This:
+
+dashboard freezes because of sync filesystem calls
+
+is a different class of problem.
+
+I'd organize it like this:
+
+Confirmed Bug #1
+Global scanning state uses legacy job table.
+
+Confirmed Bug #2
+Dashboard performs synchronous NAS filesystem operations every poll.
+
+Potential Effect
+These synchronous operations can stall the Node event loop and delay unrelated requests.
+
+That makes the investigation cleaner.
+
+3. Add instrumentation before changing behavior
+
+This is the biggest thing I'd add.
+
+Before changing anything, log exactly what the app thinks.
+
+Something like:
+
+Dashboard state:
+
+libraryJobs RUNNING: X
+
+libraryJobs COMPLETE: X
+
+scanJobs running: X
+
+scanJobs complete: X
+
+isScanning computed: true
+
+reason: legacy scanJobs entry #42
+
+or
+
+Header status:
+
+Current engine:
+RUNNING jobs: 0
+
+Legacy engine:
+running jobs: 1
+
+Header showing:
+SCANNING
+
+Reason:
+legacy scan job
+
+That log will immediately prove whether Bug #1 is actually causing the header state.
+
+I'd also add one more acceptance criterion
+
+Right now you have:
+
+Header returns to Full Rescan
+
+I'd also add:
+
+Acceptance
+
+There is only one authoritative source of truth for scan state.
+
+The UI, dashboard, and job engine all derive scan status from the same libraryJobsTable state.
+
+Otherwise six months from now someone will accidentally introduce another "isScanning" variable.
+
+Overall assessment
+
+Compared to your earlier roadmap tasks, I'd rate this one:
+
+Evidence: 9.5/10
+Specificity: 10/10
+Likelihood of fixing the real issue: High
+Risk: Low
+
+The only thing I'd still investigate alongside this is the relationship between the old scanJobsTable and the new libraryJobsTable. If both systems are still active in the codebase, I'd ask Replit to identify every remaining reference to scanJobsTable and determine whether the legacy scan system can be retired entirely. Maintaining two parallel job systems is exactly the kind of architectural drift that leads to stale state, conflicting UI, and bugs like the ones you're seeing.

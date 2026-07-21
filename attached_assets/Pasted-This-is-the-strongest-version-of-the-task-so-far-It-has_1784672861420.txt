@@ -1,0 +1,70 @@
+This is the strongest version of the task so far. It has moved from "here's a symptom" to a proper engineering specification with:
+
+Clear evidence
+Confirmed code findings
+Instrumentation before changes
+Architectural constraints
+End-to-end verification
+Explicit acceptance criteria
+
+If I were reviewing this as a senior engineer, there are only two things I'd change.
+
+1. Don't state the "Potential Effect" as a conclusion
+
+Right now you have:
+
+The combination of Bug #1 ... explains why every page in the app appears frozen...
+
+I'd make it slightly more objective:
+
+Potential Effect
+
+Bug #1 causes the application to remain in a perpetual scanning state.
+Bug #2 can block the Node.js event loop during frequent dashboard polling.
+Together these are strong candidates for the observed UI freezes, but the instrumentation in Step 1 should confirm the execution path before behavioral changes are made.
+
+That keeps the investigation honest.
+
+2. Add a rollback safeguard
+
+Since this touches the central scan state, I'd add one final acceptance criterion:
+
+Regression requirement
+
+Existing scan behavior must remain correct:
+
+Full scans report RUNNING while active.
+QUICK scans report RUNNING while active.
+Thumbnail jobs report RUNNING while active.
+Metadata jobs report RUNNING while active.
+Watcher-only idle state does not report RUNNING.
+Multiple concurrent library jobs still result in isScanning = true until the final active job completes.
+
+That protects against fixing the "Scanning Forever" bug by accidentally making the UI never show scanning at all.
+
+One tiny wording change
+
+Instead of:
+
+There is exactly one authoritative source of truth...
+
+I'd make it:
+
+Architecture requirement (mandatory):
+
+libraryJobsTable becomes the single authoritative source of truth for library job state. After this task completes, no production code may derive library scanning state from scanJobsTable, local variables, timers, cached booleans, or duplicate state stores.
+
+That makes it read like a project-wide invariant.
+
+Overall
+
+I'd rate this:
+
+Problem definition: 10/10
+Evidence: 10/10
+Implementation plan: 10/10
+Verification: 10/10
+Risk: Low
+Likelihood of solving the issue: High
+
+This is now the kind of task I would expect an experienced engineer to pick up and implement without needing much clarification. More importantly, it doesn't just patch the current symptom—it establishes a clear architectural rule (a single source of truth for scan state) that should prevent this class of bugs from recurring.
