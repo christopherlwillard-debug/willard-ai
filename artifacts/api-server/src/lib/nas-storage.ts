@@ -138,30 +138,34 @@ export function checkNasReachable(nasPath: string | null | undefined): NasReacha
   }
 }
 
+// Reachability is defined as: path exists + is a directory + is readable.
+// The body is wrapped in an IIFE because the Worker runs the string as a plain
+// script (eval: true), not a CommonJS module wrapper, so bare top-level
+// `return` statements are illegal without it.
 const NAS_CHECK_WORKER = `
-const { parentPort, workerData } = require('worker_threads');
-const fs = require('fs');
-const path = require('path');
-const p = workerData.resolved;
-try {
-  if (!fs.existsSync(p)) {
-    parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library not found: ' + p });
-    return;
+(function () {
+  const { parentPort, workerData } = require('worker_threads');
+  const fs = require('fs');
+  const p = workerData.resolved;
+  try {
+    if (!fs.existsSync(p)) {
+      parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library not found: ' + p });
+      return;
+    }
+    const stat = fs.statSync(p);
+    if (!stat.isDirectory()) {
+      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: false, readable: false, message: 'Library location is not a directory' });
+      return;
+    }
+    try { fs.accessSync(p, 4); } catch {
+      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: true, readable: false, message: 'Library exists but is not readable (permission denied)' });
+      return;
+    }
+    parentPort.postMessage({ online: true, path: p, exists: true, isDirectory: true, readable: true, message: 'Online \u2014 path is accessible' });
+  } catch (err) {
+    parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library unreachable: ' + (err instanceof Error ? err.message : String(err)) });
   }
-  const stat = fs.statSync(p);
-  if (!stat.isDirectory()) {
-    parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: false, readable: false, message: 'Library location is not a directory' });
-    return;
-  }
-  try { fs.accessSync(p, 4); } catch {
-    parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: true, readable: false, message: 'Library exists but is not readable (permission denied)' });
-    return;
-  }
-  const entries = fs.readdirSync(p);
-  parentPort.postMessage({ online: true, path: p, exists: true, isDirectory: true, readable: true, message: 'Online \u2014 ' + entries.length + ' item' + (entries.length !== 1 ? 's' : '') + ' at root' });
-} catch (err) {
-  parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library unreachable: ' + (err instanceof Error ? err.message : String(err)) });
-}
+})();
 `;
 
 /**
@@ -207,7 +211,7 @@ export function checkNasReachableAsync(
     worker.on("error", (err) => {
       clearTimeout(timer);
       worker.terminate();
-      resolve({ online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: "Check failed: " + err.message });
+      resolve({ online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: "Check failed: " + (err instanceof Error ? err.message : String(err)) });
     });
   });
 }

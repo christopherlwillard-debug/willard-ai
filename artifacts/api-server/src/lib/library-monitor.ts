@@ -1,8 +1,9 @@
 import { db, appSettingsTable } from "@workspace/db";
-import { checkNasReachable } from "./nas-storage";
+import { checkNasReachableAsync } from "./nas-storage";
 import { getActiveJobId, requestPause, startJob } from "./library-engine";
 import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
+import { shouldPauseScan } from "./monitor-helpers";
 
 /**
  * Smart Library Health monitor.
@@ -17,7 +18,8 @@ import { logger } from "./logger";
  * State is in-memory (rebuilt after a restart from the first check).
  */
 
-export type LibraryMonitorStatus = "unconfigured" | "online" | "offline";
+import type { LibraryMonitorStatus } from "./monitor-helpers";
+export type { LibraryMonitorStatus };
 
 export interface LibraryHealthSnapshot {
   status: LibraryMonitorStatus;
@@ -58,6 +60,7 @@ const state: MonitorState = {
 
 let timer: NodeJS.Timeout | null = null;
 let checking = false;
+let consecutiveFailures = 0;
 
 export const MONITOR_INTERVAL_MS = 20_000;
 
@@ -92,12 +95,17 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
       return getLibraryHealthSnapshot();
     }
 
-    const reach = checkNasReachable(nasPath);
+    // Run the reachability check in a Worker thread (never blocks the event loop).
+    // The `checking` flag is set before this await so a concurrent heartbeat that
+    // fires while the Worker is still in flight is dropped immediately (line above).
+    const reach = await checkNasReachableAsync(nasPath);
     const previous = state.status;
     state.path = reach.path;
     state.message = reach.message;
 
     if (reach.online) {
+      // Reset the failure streak on any successful check.
+      consecutiveFailures = 0;
       state.status = "online";
       state.lastOnlineAt = new Date();
       if (previous === "offline") {
@@ -116,7 +124,15 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         }
       }
     } else {
+      consecutiveFailures++;
       if (state.status !== "offline") {
+        // Debounce: require 2 consecutive failed checks before declaring offline
+        // and pausing the scan. A single transient SMB blip is silently forgiven.
+        if (consecutiveFailures < 2) {
+          logger.warn({ nasPath, consecutiveFailures, reason: reach.message },
+            "Library check failed (will pause if next check also fails)");
+          return getLibraryHealthSnapshot();
+        }
         state.offlineSince = new Date();
         // Seed a sensible "last successful connection" for a fresh process.
         if (!state.lastOnlineAt && lastScanAt) state.lastOnlineAt = lastScanAt;
@@ -124,7 +140,13 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         const activeId = getActiveJobId();
         if (activeId !== null) {
           requestPause(activeId);
-          logger.warn({ activeId, nasPath }, "Library went offline — paused active indexing job");
+          logger.warn({
+            pauseSource: "library_monitor",
+            consecutiveFailures,
+            activeId,
+            nasPath,
+            reason: reach.message,
+          }, "Library went offline — paused active indexing job");
         } else {
           logger.warn({ nasPath, reason: reach.message }, "Library went offline");
         }

@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import { db, appSettingsTable } from "@workspace/db";
-import { checkNasReachable } from "./nas-storage";
+import { checkNasReachableAsync } from "./nas-storage";
 import { getActiveJobId, getActiveJobProfile, startJob, waitForUiConnected } from "./library-engine";
 import { recordActivity } from "./library-activity";
 import { logger } from "./logger";
@@ -311,7 +311,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
       return;
     }
 
-    const reach = checkNasReachable(nasPath);
+    const reach = await checkNasReachableAsync(nasPath);
     const wasOnline = state.online;
     state.online = reach.online;
 

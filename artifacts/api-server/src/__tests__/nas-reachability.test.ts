@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkNasReachable } from "../lib/nas-storage.ts";
+import { checkNasReachable, checkNasReachableAsync } from "../lib/nas-storage.ts";
 
 const onPosix = process.platform !== "win32";
 
@@ -85,6 +85,56 @@ test("a readable absolute directory is online", () => {
   assert.equal(r.online, true);
   assert.equal(r.isDirectory, true);
   assert.equal(r.readable, true);
+});
+
+// ── checkNasReachableAsync — Worker IIFE regression tests ─────────────────────
+//
+// The Worker body previously contained bare `return` statements at the top level
+// of a script-eval context (eval: true), causing "Illegal return statement" on
+// every call. These three tests prove all three terminal cases work after the
+// IIFE fix:  success, path-not-found, and timeout.
+
+test("async: accessible directory → online=true, message='Online — path is accessible'", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "willard-async-ok-"));
+  fs.writeFileSync(path.join(dir, "probe.txt"), "willard");
+  try {
+    const r = await checkNasReachableAsync(dir);
+    assert.equal(r.online, true, `Expected online=true, got: ${r.message}`);
+    assert.equal(r.isDirectory, true);
+    assert.equal(r.readable, true);
+    assert.equal(r.message, "Online \u2014 path is accessible");
+  } finally {
+    try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+test("async: nonexistent path → online=false, message mentions 'Library not found'", async () => {
+  const missing = path.join(os.tmpdir(), "willard-async-missing-does-not-exist-xyz");
+  const r = await checkNasReachableAsync(missing);
+  assert.equal(r.online, false);
+  assert.equal(r.exists, false);
+  assert.match(r.message, /Library not found/i);
+});
+
+test("async: tiny timeout fires before Worker responds → online=false, timeout message (not 'Illegal return')", async () => {
+  // Use a real path so the Worker would succeed if given enough time,
+  // but kill it after 1 ms to force the timeout branch.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "willard-async-timeout-"));
+  try {
+    const r = await checkNasReachableAsync(dir, 1);
+    assert.equal(r.online, false);
+    // Must be the timeout message, NOT the old crash message.
+    assert.ok(
+      !/illegal return/i.test(r.message),
+      `Got the old crash message instead of a timeout: "${r.message}"`,
+    );
+    assert.ok(
+      /not responding|timeout|drive/i.test(r.message),
+      `Expected a timeout/not-responding message, got: "${r.message}"`,
+    );
+  } finally {
+    try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
+  }
 });
 
 // ── Windows platform gate — must ALLOW drive letters through to fs checks ────
