@@ -52,7 +52,10 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
     reason: "RAW conversion enabled — output JPEG at quality 98 with full EXIF, 4:4:4 chroma, and embedded ICC color profile preserved.",
   };
 
-  // Image: JPEG & PNG targets differ by profile
+  // Image: JPEG & PNG targets differ by profile.
+  // Archive profile is strictly lossless — JPEG cannot be losslessly re-compressed with Sharp
+  // (any JPEG→JPEG operation alters pixel values). Mark as protected so users pick Balanced/Maximum.
+  const isArchive = !isBalanced && !isMaximum;
   const jpgRule: FormatRule = isMaximum ? {
     status: "convert", category: "image",
     method: "Convert to WebP",
@@ -61,19 +64,24 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
     compatibilityLabel: "Good",
     estimatedSavingsRatio: 0.27,
     reason: "WebP provides 25–30% better compression than JPEG at equivalent visual quality",
-  } : {
+  } : isBalanced ? {
     status: "convert", category: "image",
-    method: isBalanced ? "Re-compress (quality 92)" : "Lossless re-compress",
-    targetFormat: isBalanced ? "JPEG Optimized (92)" : "JPEG Optimized",
+    method: "Re-compress (quality 92)",
+    targetFormat: "JPEG Optimized (92)",
     targetExt: "jpg",
-    qualityLoss: isBalanced ? "minimal" : "none",
-    qualityStars: 5,
-    qualityLabel: isBalanced ? "Imperceptibly different" : "Visually identical",
+    qualityLoss: "minimal", qualityStars: 5, qualityLabel: "Imperceptibly different",
     compatibilityLabel: "Excellent",
     estimatedSavingsRatio: 0.18,
-    reason: isBalanced
-      ? "Re-encoding at quality 92 with progressive encoding and optimized Huffman tables saves 15–25% with imperceptible quality change"
-      : "Re-encoding with optimized Huffman tables and progressive encoding saves 10–25% with zero perceptible quality change",
+    reason: "Re-encoding at quality 92 with progressive encoding and optimized Huffman tables saves 15–25% with imperceptible quality change",
+  } : {
+    // Archive: JPEG cannot be losslessly optimized without jpegtran; protect instead of silently losing quality
+    status: "protected", category: "image",
+    method: "No action — lossless JPEG optimization not available",
+    targetFormat: "JPEG", targetExt: "jpg",
+    qualityLoss: "none", qualityStars: 5, qualityLabel: "No change",
+    compatibilityLabel: "Excellent",
+    estimatedSavingsRatio: 0,
+    reason: "Archive profile is lossless-only. JPEG re-encoding always alters pixel values, even at quality 95. Switch to Balanced to re-compress at quality 92 with imperceptible quality change.",
   };
 
   const pngRule: FormatRule = isMaximum ? {
@@ -531,19 +539,42 @@ async function convertImageAsync(
   try {
     const srcExt = path.extname(srcPath).toLowerCase().slice(1);
 
-    // RAW source files cannot be decoded by Sharp — always route through ffmpeg first.
-    // ffmpeg with -q:v 1 produces JPEG at ~quality 98; -map_metadata 0 preserves EXIF.
+    // RAW source files cannot be decoded by Sharp — route through ffmpeg first, then post-process.
+    // Two-step pipeline for spec compliance:
+    //   Step 1 (ffmpeg): RAW → baseline JPEG; quality 98 (-q:v 2), 4:4:4 chroma, Huffman optimal,
+    //                    full metadata including ICC + EXIF + GPS preserved.
+    //   Step 2 (sharp):  baseline JPEG → progressive JPEG; apply visual auto-rotation so EXIF
+    //                    orientation tag is baked into pixels and reset to 1.
     if (RAW_EXTS.has(srcExt)) {
-      const result = spawnSync("ffmpeg", [
-        "-y", "-i", srcPath,
-        "-q:v", "1",           // quality ~98 as specified; q:v 2 would be ~96
-        "-map_metadata", "0",  // preserve EXIF, ICC, GPS
-        destPath,
-      ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
-      if (result.status !== 0) {
-        return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
+      const ffmpegTmp = destPath + ".raw_tmp.jpg";
+      try {
+        const result = spawnSync("ffmpeg", [
+          "-y", "-i", srcPath,
+          "-q:v", "2",              // quality ~98 (q:v 1 = quality 100; spec says 98 not 100)
+          "-pix_fmt", "yuvj444p",   // 4:4:4 chroma subsampling — no chroma data loss
+          "-huffman", "optimal",    // Huffman optimization passes
+          "-map_metadata", "0",     // preserve EXIF, ICC color profile, GPS, timestamps
+          ffmpegTmp,
+        ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
+        if (result.status !== 0) {
+          return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
+        }
+
+        // Step 2: post-process with sharp for progressive encoding and visual auto-rotation.
+        // sharp.rotate() with no argument reads EXIF orientation and rotates pixels, then
+        // resets the orientation tag to 1 — spec requirement for auto-rotate.
+        const sharp = (await import("sharp")).default;
+        await sharp(ffmpegTmp, { failOn: "none" })
+          .rotate()                      // auto-rotate from EXIF orientation, resets tag to 1
+          .withMetadata()                // preserve ICC, EXIF, GPS from the ffmpeg output
+          .jpeg({ quality: 98, progressive: true, optimiseCoding: true, chromaSubsampling: "4:4:4", force: true })
+          .toFile(destPath);
+
+        return null;
+      } finally {
+        // Always clean up temp file regardless of success or failure
+        try { fs.unlinkSync(ffmpegTmp); } catch { /* already gone or never created */ }
       }
-      return null;
     }
 
     const sharp = (await import("sharp")).default;
@@ -651,63 +682,76 @@ async function verifyConvertedFile(
         return { passed: false, checks, failedCheck: `Thumbnail generation failed: ${(err.message ?? "unknown").slice(0, 120)}` };
       }
 
-      // Check 5: Pixel hash — SHA-256 of downscaled raw pixels (fast, stored for audit)
-      try {
-        const pixelBuf = await sharp(destPath, { failOn: "none" })
-          .resize(256, 256, { fit: "inside" })
-          .raw()
-          .toBuffer();
+      // Check 5: Pixel hash — SHA-256 of downscaled raw pixels (mandatory; stored for audit trail)
+      {
+        let pixelBuf: Buffer;
+        try {
+          pixelBuf = await sharp(destPath, { failOn: "none" })
+            .resize(256, 256, { fit: "inside" })
+            .raw()
+            .toBuffer();
+        } catch (err: any) {
+          return { passed: false, checks, failedCheck: `Pixel hash extraction failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+        }
         const pixelHash = crypto.createHash("sha256").update(pixelBuf).digest("hex").slice(0, 16);
         checks.push(`Pixel hash (256px): ${pixelHash}`);
-      } catch { /* best effort — non-blocking */ }
+      }
 
-      // Check 6: Histogram / channel statistics (detects catastrophic color shifts)
-      try {
-        const stats = await sharp(destPath, { failOn: "none" }).stats();
+      // Check 6: Histogram / channel statistics — mandatory; detects catastrophic color shifts
+      {
+        let stats: import("sharp").Stats;
+        try {
+          stats = await sharp(destPath, { failOn: "none" }).stats();
+        } catch (err: any) {
+          return { passed: false, checks, failedCheck: `Channel stats extraction failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+        }
         const chSummary = stats.channels.map((c, i) =>
           `ch${i}: mean=${c.mean.toFixed(1)} stdev=${c.stdev.toFixed(1)}`
         ).join(", ");
         checks.push(`Channel stats: ${chSummary}`);
-      } catch { /* best effort — non-blocking */ }
+      }
 
       // Checks 7–10: Compare against source metadata (skip for RAW sources, which Sharp can't decode)
       if (!isRawSource) {
+        let srcMeta: import("sharp").Metadata;
         try {
-          const srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
+          srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
+        } catch (err: any) {
+          return { passed: false, checks, failedCheck: `Source metadata read failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+        }
 
-          if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
-            // Check 7: Total pixel count within 15% (allows auto-rotation dimension swap)
-            const srcPixels = srcMeta.width * srcMeta.height;
-            const dstPixels = dstMeta.width * dstMeta.height;
-            if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
-              return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
-            }
-            checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
-
-            // Check 8: Aspect ratio preserved within 5% (catches unintentional crop/distortion)
-            const srcAspect = srcMeta.width / srcMeta.height;
-            const dstAspect = dstMeta.width / dstMeta.height;
-            const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
-            if (aspectRatio < 0.95) {
-              return { passed: false, checks, failedCheck: `Aspect ratio mismatch: src ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → dst ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
-            }
-            checks.push("Aspect ratio preserved");
-
-            // Check 9: Orientation — after re-encode, orientation must be 1 (auto-rotated) or same
-            if (srcMeta.orientation !== undefined) {
-              if (dstMeta.orientation !== undefined && dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
-                return { passed: false, checks, failedCheck: `Orientation mismatch: source=${srcMeta.orientation}, output=${dstMeta.orientation}` };
-              }
-              checks.push(`Orientation OK (${dstMeta.orientation ?? "normalized"})`);
-            }
+        if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
+          // Check 7: Total pixel count within 15% (allows auto-rotation dimension swap)
+          const srcPixels = srcMeta.width * srcMeta.height;
+          const dstPixels = dstMeta.width * dstMeta.height;
+          if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
+            return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
           }
+          checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
 
-          // Check 10: EXIF preserved — hard fail if source had EXIF but output does not
-          if (srcMeta.exif && !dstMeta.exif) {
-            return { passed: false, checks, failedCheck: "EXIF metadata was stripped during conversion (source had EXIF)" };
+          // Check 8: Aspect ratio preserved within 5% (catches unintentional crop/distortion)
+          const srcAspect = srcMeta.width / srcMeta.height;
+          const dstAspect = dstMeta.width / dstMeta.height;
+          const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
+          if (aspectRatio < 0.95) {
+            return { passed: false, checks, failedCheck: `Aspect ratio mismatch: src ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → dst ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
           }
-          if (srcMeta.exif && dstMeta.exif) checks.push("EXIF metadata preserved");
-        } catch { /* best effort — source read error is non-blocking */ }
+          checks.push("Aspect ratio preserved");
+
+          // Check 9: Orientation — after re-encode, orientation must be 1 (auto-rotated) or same
+          if (srcMeta.orientation !== undefined) {
+            if (dstMeta.orientation !== undefined && dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
+              return { passed: false, checks, failedCheck: `Orientation mismatch: source=${srcMeta.orientation}, output=${dstMeta.orientation}` };
+            }
+            checks.push(`Orientation OK (${dstMeta.orientation ?? "normalized"})`);
+          }
+        }
+
+        // Check 10: EXIF preserved — hard fail if source had EXIF but output does not
+        if (srcMeta.exif && !dstMeta.exif) {
+          return { passed: false, checks, failedCheck: "EXIF metadata was stripped during conversion (source had EXIF)" };
+        }
+        if (srcMeta.exif && dstMeta.exif) checks.push("EXIF metadata preserved");
       } else {
         // For RAW → JPEG: verify output has ICC profile (spec requirement)
         if (!dstMeta.icc) {
@@ -1092,7 +1136,14 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
  * - archive:   Move original to WillardAI/archive/<relPath>; staged file takes original's path.
  * Appends each action to WillardAI/logs/conversions.jsonl. Cleans up staging dir on completion.
  */
-router.post("/optimize/jobs/:id/finalize", async (req, res) => {
+// Canonical alias from the task spec: POST /optimize/conversion/:jobId/action
+// Bridges jobId → id param so the shared handler can read req.params.id.
+router.post("/optimize/conversion/:jobId/action", async (req: any, res) => {
+  req.params.id = req.params.jobId;
+  return finalizeHandlerImpl(req, res);
+});
+
+async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
@@ -1228,7 +1279,9 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Finalize failed" });
   }
-});
+}
+
+router.post("/optimize/jobs/:id/finalize", finalizeHandlerImpl);
 
 router.get("/optimize/jobs/:id", async (req, res) => {
   try {
