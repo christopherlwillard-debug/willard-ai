@@ -490,6 +490,33 @@ export interface CleanupHistoryResult {
   sessions: CleanupHistorySession[];
 }
 
+export interface TrashEntry {
+  ts: string;
+  originalPath: string;
+  trashPath: string;
+  sizeBytes: number;
+  expiresAt: string;
+  filename: string;
+  expired: boolean;
+}
+
+export interface TrashListResult {
+  entries: TrashEntry[];
+}
+
+export interface RestoreRequest {
+  trashPath: string;
+  originalPath: string;
+}
+
+export interface RestoreResult {
+  restored: boolean;
+}
+
+export interface ErrorResult {
+  error: string;
+}
+
 export interface LargeFileResult {
   files: IndexedFile[];
   total: number;

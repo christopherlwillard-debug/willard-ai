@@ -688,6 +688,35 @@ export const GetCleanupHistoryResponse = zod.object({
 
 
 /**
+ * @summary List files currently in the .Trash folder (newest first)
+ */
+export const GetCleanupTrashResponse = zod.object({
+  "entries": zod.array(zod.object({
+  "ts": zod.string(),
+  "originalPath": zod.string(),
+  "trashPath": zod.string(),
+  "sizeBytes": zod.number(),
+  "expiresAt": zod.string(),
+  "filename": zod.string(),
+  "expired": zod.boolean()
+}))
+})
+
+
+/**
+ * @summary Restore a file from .Trash back to its original location
+ */
+export const RestoreFromTrashBody = zod.object({
+  "trashPath": zod.string(),
+  "originalPath": zod.string()
+})
+
+export const RestoreFromTrashResponse = zod.object({
+  "restored": zod.boolean()
+})
+
+
+/**
  * @summary List all conversations
  */
 export const ListOpenaiConversationsResponseItem = zod.object({

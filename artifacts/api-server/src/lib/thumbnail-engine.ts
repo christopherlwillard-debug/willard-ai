@@ -133,6 +133,30 @@ function generatePdfThumbnail(
   return null;
 }
 
+// ── FFmpeg image-to-thumbnail fallback ────────────────────────────────────────
+// Used when sharp is unavailable or fails (e.g. HEIC without libheif, AVIF, or
+// a native binding issue on the user's platform). ffmpeg handles far more image
+// formats and doesn't rely on platform-specific native add-ons.
+
+function generateImageThumbnailFfmpeg(
+  sourcePath: string,
+  destPath: string,
+  sizePx: number,
+): string | null {
+  const result = spawnSync("ffmpeg", [
+    "-y",
+    "-i", sourcePath,
+    "-vf", `scale=${sizePx}:-2`,
+    "-frames:v", "1",
+    destPath,
+  ], { encoding: "buffer", timeout: 30000 });
+  if (result.status !== 0 || !fs.existsSync(destPath)) {
+    const stderr = result.stderr ? Buffer.from(result.stderr).toString("utf8").slice(0, 200) : "";
+    return `ffmpeg image conversion failed (exit ${result.status}): ${stderr}`;
+  }
+  return null;
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export interface ThumbnailResult {
@@ -150,9 +174,16 @@ export async function generateThumbnail(
   const thumbDir = ensureThumbnailDir(nasPath);
   const destPath = path.join(thumbDir, thumbnailFilename(mediaFileId));
 
-  // Already generated
+  // Already generated — verify the file is non-empty.
+  // Partial writes from an interrupted backfill job can leave a 0-byte file on
+  // disk; a valid WebP thumbnail is always well above 100 bytes.
   if (fs.existsSync(destPath)) {
-    return { destPath, error: null };
+    try {
+      const { size } = fs.statSync(destPath);
+      if (size > 100) return { destPath, error: null };
+    } catch { /* fall through and regenerate */ }
+    // File is empty / unreadable — delete and regenerate
+    try { fs.unlinkSync(destPath); } catch { /* ignore */ }
   }
 
   const preset = qualityPreset(quality);
@@ -162,6 +193,23 @@ export async function generateThumbnail(
 
   if (IMAGE_EXTS.has(ext)) {
     error = await generateImageThumbnail(sourcePath, destPath, preset.sizePx, preset.quality);
+    // Fallback: if sharp fails (missing native libs, HEIC without libheif, AVIF,
+    // platform binding issues) try ffmpeg — it handles a much wider format range
+    // without platform-specific build dependencies.
+    if (error) {
+      const sharpError = error;
+      const ffmpegError = generateImageThumbnailFfmpeg(sourcePath, destPath, preset.sizePx);
+      if (!ffmpegError && fs.existsSync(destPath)) {
+        try {
+          if (fs.statSync(destPath).size > 100) {
+            error = null; // ffmpeg fallback succeeded
+          }
+        } catch { /* keep original error */ }
+      }
+      if (error) {
+        error = `sharp: ${sharpError}; ffmpeg: ${ffmpegError ?? "unknown"}`;
+      }
+    }
   } else if (VIDEO_EXTS.has(ext)) {
     error = generateVideoThumbnail(sourcePath, destPath, preset.sizePx);
   } else if (ext === "pdf") {

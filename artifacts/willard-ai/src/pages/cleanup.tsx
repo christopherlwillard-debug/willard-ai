@@ -9,6 +9,8 @@ import {
   useListArchives, getListArchivesQueryKey,
   useExecuteCleanup,
   useGetCleanupHistory, getGetCleanupHistoryQueryKey,
+  useGetCleanupTrash, getGetCleanupTrashQueryKey,
+  useRestoreFromTrash,
 } from "@workspace/api-client-react";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -20,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Trash2, Copy, FileWarning, Clock, FolderOpen, Package, Download,
   Star, Image as ImageIcon, CheckCircle2, XCircle, History, ListChecks,
-  ShieldCheck, AlertTriangle, X,
+  ShieldCheck, AlertTriangle, X, RotateCcw,
 } from "lucide-react";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -375,6 +377,28 @@ export default function Cleanup() {
   const { data: emptyFolders, isLoading: emptyLoading } = useGetEmptyFolders({ query: { queryKey: getGetEmptyFoldersQueryKey() } });
   const { data: archives, isLoading: archivesLoading } = useListArchives({ limit: 200 }, { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } });
   const { data: historyData }                          = useGetCleanupHistory({ query: { queryKey: getGetCleanupHistoryQueryKey() } });
+  const { data: trashData, isLoading: trashLoading }   = useGetCleanupTrash({ query: { queryKey: getGetCleanupTrashQueryKey() } });
+
+  const [restoringPath, setRestoringPath] = useState<string | null>(null);
+  const [restoreError,  setRestoreError]  = useState<string | null>(null);
+
+  const { mutate: restoreFile } = useRestoreFromTrash();
+
+  const handleRestore = (trashPath: string, originalPath: string) => {
+    setRestoringPath(trashPath);
+    setRestoreError(null);
+    restoreFile({ data: { trashPath, originalPath } }, {
+      onSuccess: () => {
+        setRestoringPath(null);
+        qc.invalidateQueries({ queryKey: getGetCleanupTrashQueryKey() });
+        qc.invalidateQueries({ queryKey: getGetCleanupSummaryQueryKey() });
+      },
+      onError: (err: any) => {
+        setRestoringPath(null);
+        setRestoreError(err?.message ?? "Restore failed");
+      },
+    });
+  };
 
   const [queue, setQueue] = useState<CleanupQueueEntry[]>(() => readQueue(localStorage));
   const [showExecuteModal, setShowExecuteModal] = useState(false);
@@ -673,6 +697,76 @@ export default function Cleanup() {
                     </AccordionItem>
                   ))}
                 </Accordion>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── TRASH ────────────────────────────────────────────────────── */}
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-sm font-mono flex items-center gap-2">
+                <Trash2 className="w-4 h-4" /> TRASH
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Files moved to .Trash — restore before the 30-day expiry or they will be permanently removed
+              </p>
+            </CardHeader>
+            <CardContent>
+              {restoreError && (
+                <div className="mb-3 rounded border border-red-800 bg-red-900/20 px-3 py-2 font-mono text-xs text-red-400 flex items-center justify-between gap-2">
+                  <span>{restoreError}</span>
+                  <button onClick={() => setRestoreError(null)} className="shrink-0"><X className="w-3 h-3" /></button>
+                </div>
+              )}
+              {trashLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              ) : !trashData?.entries.length ? (
+                <p className="text-center text-muted-foreground font-mono text-sm py-8">
+                  Trash is empty — deleted files will appear here for 30 days
+                </p>
+              ) : (
+                <div className="space-y-1 max-h-96 overflow-y-auto">
+                  {trashData.entries.map((entry, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-center justify-between gap-3 rounded px-3 py-2 font-mono text-xs ${entry.expired ? "opacity-50" : "bg-secondary/20 hover:bg-secondary/30"}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className={`truncate font-medium ${entry.expired ? "text-muted-foreground line-through" : ""}`}>
+                          {entry.filename}
+                        </div>
+                        <div className="truncate text-[10px] text-muted-foreground mt-0.5">
+                          {entry.originalPath} · {formatBytes(entry.sizeBytes)}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          Deleted {formatDate(entry.ts)}
+                          {entry.expired
+                            ? " · Permanently removed"
+                            : ` · Expires ${formatDate(entry.expiresAt)}`}
+                        </div>
+                      </div>
+                      {entry.expired ? (
+                        <Badge variant="outline" className="shrink-0 text-[10px] text-muted-foreground">
+                          Expired
+                        </Badge>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0 h-7 px-2 text-[10px]"
+                          disabled={restoringPath === entry.trashPath}
+                          onClick={() => handleRestore(entry.trashPath, entry.originalPath)}
+                        >
+                          <RotateCcw className="w-3 h-3 mr-1" />
+                          {restoringPath === entry.trashPath ? "Restoring…" : "Restore"}
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>

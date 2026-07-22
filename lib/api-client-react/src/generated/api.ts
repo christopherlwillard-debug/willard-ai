@@ -40,6 +40,7 @@ import type {
   DriveList,
   DuplicateGroupResult,
   EmptyFolder,
+  ErrorResult,
   FileSearchResult,
   FolderListing,
   FolderStat,
@@ -72,13 +73,16 @@ import type {
   OrganizeDispositionResult,
   OrganizeJobInput,
   OrganizePlanUpdateInput,
+  RestoreRequest,
+  RestoreResult,
   ScanJob,
   ScanStatus,
   SearchFilesParams,
   SessionsResult,
   SettingsInput,
   StorageStats,
-  SystemEnvironment
+  SystemEnvironment,
+  TrashListResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -2837,6 +2841,153 @@ export function useGetCleanupHistory<TData = Awaited<ReturnType<typeof getCleanu
 
 
 
+
+export const getGetCleanupTrashUrl = () => {
+
+
+
+
+  return `/api/cleanup/trash`
+}
+
+/**
+ * @summary List files currently in the .Trash folder (newest first)
+ */
+export const getCleanupTrash = async ( options?: RequestInit): Promise<TrashListResult> => {
+
+  return customFetch<TrashListResult>(getGetCleanupTrashUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCleanupTrashQueryKey = () => {
+    return [
+    `/api/cleanup/trash`
+    ] as const;
+    }
+
+
+export const getGetCleanupTrashQueryOptions = <TData = Awaited<ReturnType<typeof getCleanupTrash>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCleanupTrash>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCleanupTrashQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCleanupTrash>>> = ({ signal }) => getCleanupTrash({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCleanupTrash>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCleanupTrashQueryResult = NonNullable<Awaited<ReturnType<typeof getCleanupTrash>>>
+export type GetCleanupTrashQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List files currently in the .Trash folder (newest first)
+ */
+
+export function useGetCleanupTrash<TData = Awaited<ReturnType<typeof getCleanupTrash>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCleanupTrash>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCleanupTrashQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRestoreFromTrashUrl = () => {
+
+
+
+
+  return `/api/cleanup/restore`
+}
+
+/**
+ * @summary Restore a file from .Trash back to its original location
+ */
+export const restoreFromTrash = async (restoreRequest: RestoreRequest, options?: RequestInit): Promise<RestoreResult> => {
+
+  return customFetch<RestoreResult>(getRestoreFromTrashUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(restoreRequest)
+  }
+);}
+
+
+
+
+export const getRestoreFromTrashMutationOptions = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof restoreFromTrash>>, TError,{data: BodyType<RestoreRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof restoreFromTrash>>, TError,{data: BodyType<RestoreRequest>}, TContext> => {
+
+const mutationKey = ['restoreFromTrash'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof restoreFromTrash>>, {data: BodyType<RestoreRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  restoreFromTrash(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RestoreFromTrashMutationResult = NonNullable<Awaited<ReturnType<typeof restoreFromTrash>>>
+    export type RestoreFromTrashMutationBody = BodyType<RestoreRequest>
+    export type RestoreFromTrashMutationError = ErrorType<ErrorResult>
+
+    /**
+ * @summary Restore a file from .Trash back to its original location
+ */
+export const useRestoreFromTrash = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof restoreFromTrash>>, TError,{data: BodyType<RestoreRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof restoreFromTrash>>,
+        TError,
+        {data: BodyType<RestoreRequest>},
+        TContext
+      > => {
+      return useMutation(getRestoreFromTrashMutationOptions(options));
+    }
 
 export const getListOpenaiConversationsUrl = () => {
 

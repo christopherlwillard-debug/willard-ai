@@ -451,6 +451,117 @@ router.post("/cleanup/execute", async (req, res) => {
   }
 });
 
+// ── GET /cleanup/trash — read trash-manifest.jsonl ───────────────────────────
+
+router.get("/cleanup/trash", async (_req, res) => {
+  try {
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const nasPath = settingsRows[0]?.nasPath ?? "";
+    if (!nasPath) {
+      res.json({ entries: [] });
+      return;
+    }
+
+    const manifestPath = trashManifestPath(nasPath);
+    if (!fs.existsSync(manifestPath)) {
+      res.json({ entries: [] });
+      return;
+    }
+
+    const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
+    const now   = Date.now();
+    const entries = lines
+      .map(line => {
+        try {
+          const e = JSON.parse(line);
+          return {
+            ts:           e.ts           as string,
+            originalPath: e.originalPath as string,
+            trashPath:    e.trashPath    as string,
+            sizeBytes:    Number(e.sizeBytes ?? 0),
+            expiresAt:    e.expiresAt    as string,
+            filename:     path.basename(e.originalPath ?? ""),
+            expired:      e.expiresAt ? new Date(e.expiresAt).getTime() < now : false,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .reverse(); // newest first
+
+    res.json({ entries });
+  } catch {
+    res.status(500).json({ error: "Failed to read trash manifest" });
+  }
+});
+
+// ── POST /cleanup/restore — move file from .Trash back to original path ───────
+
+router.post("/cleanup/restore", async (req, res) => {
+  try {
+    const { trashPath, originalPath } = req.body as { trashPath?: string; originalPath?: string };
+    if (!trashPath || !originalPath) {
+      res.status(400).json({ error: "trashPath and originalPath are required" });
+      return;
+    }
+
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const nasPath = settingsRows[0]?.nasPath ?? "";
+    if (!nasPath) {
+      res.status(409).json({ error: "No library configured" });
+      return;
+    }
+
+    // Verify the file still exists in trash
+    if (!fs.existsSync(trashPath)) {
+      res.status(404).json({ error: "File not found in trash — it may have been permanently removed" });
+      return;
+    }
+
+    // Check expiry from manifest before restoring
+    const manifestPath = trashManifestPath(nasPath);
+    if (fs.existsSync(manifestPath)) {
+      const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
+      const entry = lines
+        .map(l => { try { return JSON.parse(l); } catch { return null; } })
+        .find((e: any) => e?.trashPath === trashPath);
+      if (entry?.expiresAt && new Date(entry.expiresAt).getTime() < Date.now()) {
+        res.status(409).json({ error: "Entry has expired — the file was permanently removed" });
+        return;
+      }
+    }
+
+    // Ensure destination directory exists
+    fs.mkdirSync(path.dirname(originalPath), { recursive: true });
+
+    // Move file back
+    fs.renameSync(trashPath, originalPath);
+
+    // Remove this entry from the manifest (rewrite without the restored line)
+    if (fs.existsSync(manifestPath)) {
+      const lines  = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
+      const kept   = lines.filter(l => {
+        try { return JSON.parse(l)?.trashPath !== trashPath; }
+        catch { return true; }
+      });
+      fs.writeFileSync(manifestPath, kept.length ? kept.join("\n") + "\n" : "");
+    }
+
+    // Clear RECYCLED marker so the next scan re-indexes the file normally
+    await db.execute(sql`
+      UPDATE media_files
+      SET last_scan_action = NULL
+      WHERE REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${originalPath}, chr(92), '/')
+        AND last_scan_action = 'RECYCLED'
+    `);
+
+    res.json({ restored: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Restore failed" });
+  }
+});
+
 // ── GET /cleanup/history — read cleanup-history.jsonl ────────────────────────
 
 router.get("/cleanup/history", async (_req, res) => {

@@ -749,6 +749,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/CleanupHistoryResult"
 
+  /cleanup/trash:
+    get:
+      operationId: getCleanupTrash
+      tags: [cleanup]
+      summary: List files currently in the .Trash folder (newest first)
+      responses:
+        "200":
+          description: Trash entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrashListResult"
+
+  /cleanup/restore:
+    post:
+      operationId: restoreFromTrash
+      tags: [cleanup]
+      summary: Restore a file from .Trash back to its original location
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreRequest"
+      responses:
+        "200":
+          description: File restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResult"
+        "400":
+          description: Missing parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+        "404":
+          description: File not found in trash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+        "409":
+          description: Entry expired or no library configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
   # ── AI Chat ───────────────────────────────────────────────────────────────
   /openai/conversations:
     get:
@@ -2189,6 +2239,69 @@ components:
             $ref: "#/components/schemas/CleanupHistorySession"
       required:
         - sessions
+
+    TrashEntry:
+      type: object
+      properties:
+        ts:
+          type: string
+        originalPath:
+          type: string
+        trashPath:
+          type: string
+        sizeBytes:
+          type: integer
+        expiresAt:
+          type: string
+        filename:
+          type: string
+        expired:
+          type: boolean
+      required:
+        - ts
+        - originalPath
+        - trashPath
+        - sizeBytes
+        - expiresAt
+        - filename
+        - expired
+
+    TrashListResult:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrashEntry"
+      required:
+        - entries
+
+    RestoreRequest:
+      type: object
+      properties:
+        trashPath:
+          type: string
+        originalPath:
+          type: string
+      required:
+        - trashPath
+        - originalPath
+
+    RestoreResult:
+      type: object
+      properties:
+        restored:
+          type: boolean
+      required:
+        - restored
+
+    ErrorResult:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
 
     LargeFileResult:
       type: object
