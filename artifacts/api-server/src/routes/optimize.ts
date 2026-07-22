@@ -615,8 +615,8 @@ async function verifyConvertedFile(
   }
   checks.push("Output exists and is non-zero");
 
-  // Check 2: Size regression (for same-ext: output must be smaller)
-  if (isSameExt && convertedBytes >= originalBytes) {
+  // Check 2: Size sanity — output must be smaller than source (universal for all conversions)
+  if (convertedBytes >= originalBytes) {
     return { passed: false, checks, failedCheck: "Output not smaller than original" };
   }
   checks.push("Size check passed");
@@ -1134,22 +1134,35 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
       if (file.status !== "success" || !file.stagedPath) continue;
       if (!fs.existsSync(file.stagedPath)) continue;
 
-      const originalPath = file.filePath;
-      const stagedPath   = file.stagedPath;
-      const stem         = path.basename(originalPath, path.extname(originalPath));
-      const targetExt    = path.extname(stagedPath).slice(1);
-      const dir          = path.dirname(originalPath);
-      const relPath      = path.relative(path.resolve(nasPath), path.resolve(originalPath));
-      let outputPath     = "";
+      const originalPath  = file.filePath;
+      const stagedPath    = file.stagedPath;
+      const originalExt   = path.extname(originalPath).slice(1).toLowerCase();
+      const convertedExt  = path.extname(stagedPath).slice(1).toLowerCase();
+      const isCrossFormat = convertedExt !== originalExt;
+      const stem          = path.basename(originalPath, path.extname(originalPath));
+      const dir           = path.dirname(originalPath);
+      const relPath       = path.relative(path.resolve(nasPath), path.resolve(originalPath));
+
+      // For cross-format conversions (RAW→JPG, AVI→MP4, etc.) the output file MUST use the
+      // converted format's extension. Never write JPEG bytes into a .cr2 file.
+      const convertedPath = isCrossFormat
+        ? path.join(dir, `${stem}.${convertedExt}`)
+        : originalPath;
+      const convertedRelPath = isCrossFormat
+        ? path.relative(path.resolve(nasPath), path.resolve(convertedPath))
+        : relPath;
+
+      let outputPath = "";
 
       try {
         if (action === "replace") {
+          // Remove original, place converted file at its correct path (may differ in extension)
           if (fs.existsSync(originalPath)) fs.unlinkSync(originalPath);
-          fs.renameSync(stagedPath, originalPath);
-          outputPath = originalPath;
+          fs.renameSync(stagedPath, convertedPath);
+          outputPath = convertedPath;
         } else if (action === "recycle") {
           if (process.platform === "win32") {
-            // Windows: use PowerShell to send file to the OS Recycle Bin (recoverable)
+            // Windows: use PowerShell to send original to OS Recycle Bin (recoverable)
             const psResult = spawnSync("powershell", [
               "-NoProfile", "-Command",
               `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${originalPath.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`,
@@ -1158,24 +1171,28 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
               throw new Error(`Recycle Bin move failed: ${(psResult.stderr ?? "").slice(0, 300)}`);
             }
           } else {
-            // Linux/macOS/Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
+            // Linux/macOS/Replit: move original to WillardAI/.Trash/<timestamp>/ (reversible)
             const trashPath = path.join(trashBase, relPath);
             fs.mkdirSync(path.dirname(trashPath), { recursive: true });
             if (fs.existsSync(originalPath)) fs.renameSync(originalPath, trashPath);
           }
-          fs.renameSync(stagedPath, originalPath);
-          outputPath = originalPath;
+          // Place converted at correct path (extension matches format)
+          fs.renameSync(stagedPath, convertedPath);
+          outputPath = convertedPath;
         } else if (action === "keep-both") {
-          const keepBothPath = path.join(dir, `${stem}_optimized.${targetExt}`);
+          // Original stays in place; converted gets _optimized suffix with converted extension
+          const keepBothPath = path.join(dir, `${stem}_optimized.${convertedExt}`);
           fs.renameSync(stagedPath, keepBothPath);
           outputPath = keepBothPath;
         } else if (action === "archive") {
+          // Archive original at WillardAI/archive/; converted placed at correct path
           const archivePath = path.join(archiveBase, relPath);
           fs.mkdirSync(path.dirname(archivePath), { recursive: true });
           if (fs.existsSync(originalPath)) fs.renameSync(originalPath, archivePath);
-          fs.renameSync(stagedPath, originalPath);
-          outputPath = originalPath;
+          fs.renameSync(stagedPath, convertedPath);
+          outputPath = convertedPath;
         }
+        void convertedRelPath; // used for logging only
         fileOutcomes.push({ originalPath, outputPath, action });
       } catch (err: any) {
         fileOutcomes.push({ originalPath, outputPath: "", action, error: err.message });
@@ -1327,6 +1344,22 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
         continue;
+      }
+
+      // For JPEG files not covered by the scan cache (>20 per group or stale cache),
+      // run on-demand per-file analysis at execute time — true per-file decision.
+      // This mirrors the codec-sensitive-container pattern: never convert without analysis.
+      if ((ext === "jpg" || ext === "jpeg") && !perFileDecision) {
+        const jpegIssues = await analyzeJpegFile(fullPath);
+        if (jpegIssues.length === 0) {
+          skipped++;
+          const skipReason = "JPEG already optimal — progressive, well-compressed, reasonable metadata";
+          results.push({ filePath: fullPath, status: "skipped", error: skipReason });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
+          continue;
+        }
+        // Issues found — proceed with conversion (perFileDecision stays undefined, ext-level rule applies)
       }
 
       // If this file was individually analyzed and flagged as "no conversion needed", skip it.
