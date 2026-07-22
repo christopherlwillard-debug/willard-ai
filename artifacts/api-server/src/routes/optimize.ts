@@ -410,14 +410,34 @@ function walkForConversion(
 
 // ── Per-file JPEG characteristic analysis ─────────────────────────────────────
 
+/** Returns an array of identified issues. Empty array means the JPEG is already optimal — skip it. */
 async function analyzeJpegFile(filePath: string): Promise<string[]> {
   try {
     const sharp = (await import("sharp")).default;
     const meta  = await sharp(filePath, { failOn: "none" }).metadata();
     const issues: string[] = [];
-    if (meta.isProgressive === false) issues.push("progressive encoding disabled");
-    if (meta.hasProfile === false)    issues.push("no embedded ICC color profile");
-    if (issues.length === 0)          issues.push("Huffman tables can be optimized");
+
+    // Issue 1: Progressive encoding improves load performance and reduces file size
+    if (meta.isProgressive === false) {
+      issues.push("progressive encoding disabled");
+    }
+
+    // Issue 2: Non-optimized Huffman tables — detectable via significant entropy gap.
+    // A well-optimized JPEG has chromaSubsampling set and effective entropy coding.
+    // We compare EXIF overhead vs image size: large EXIF relative to total size suggests duplication.
+    const totalBytes = (() => { try { return fs.statSync(filePath).size; } catch { return 0; } })();
+    const exifBytes  = meta.exif?.length ?? 0;
+    if (totalBytes > 0 && exifBytes / totalBytes > 0.05) {
+      issues.push("excessive metadata overhead (EXIF > 5% of file size)");
+    }
+
+    // Issue 3: Chroma subsampling — 4:2:0 is more efficient; 4:4:4 typically not needed for photos
+    if (meta.chromaSubsampling && meta.chromaSubsampling !== "4:2:0" && meta.chromaSubsampling !== "4:2:2") {
+      issues.push(`suboptimal chroma subsampling (${meta.chromaSubsampling})`);
+    }
+
+    // An already-optimal JPEG: progressive + reasonable metadata + standard chroma = no issues
+    // Do NOT add a catch-all — empty array means "already optimal, skip conversion"
     return issues;
   } catch {
     return [];
@@ -1095,6 +1115,7 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
       files: Array<{
         filePath: string; stagedPath?: string; status: string;
         originalBytes?: number; convertedBytes?: number; isSameExt?: boolean;
+        verification?: string[];
       }>;
       totalSaved: number;
       stagingDir: string;
@@ -1127,9 +1148,21 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
           fs.renameSync(stagedPath, originalPath);
           outputPath = originalPath;
         } else if (action === "recycle") {
-          const trashPath = path.join(trashBase, relPath);
-          fs.mkdirSync(path.dirname(trashPath), { recursive: true });
-          if (fs.existsSync(originalPath)) fs.renameSync(originalPath, trashPath);
+          if (process.platform === "win32") {
+            // Windows: use PowerShell to send file to the OS Recycle Bin (recoverable)
+            const psResult = spawnSync("powershell", [
+              "-NoProfile", "-Command",
+              `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${originalPath.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`,
+            ], { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
+            if (psResult.status !== 0) {
+              throw new Error(`Recycle Bin move failed: ${(psResult.stderr ?? "").slice(0, 300)}`);
+            }
+          } else {
+            // Linux/macOS/Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
+            const trashPath = path.join(trashBase, relPath);
+            fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+            if (fs.existsSync(originalPath)) fs.renameSync(originalPath, trashPath);
+          }
           fs.renameSync(stagedPath, originalPath);
           outputPath = originalPath;
         } else if (action === "keep-both") {
@@ -1149,15 +1182,16 @@ router.post("/optimize/jobs/:id/finalize", async (req, res) => {
       }
 
       appendConversionLog(nasPath, {
-        ts:             new Date().toISOString(),
-        jobId:          id,
+        ts:                  new Date().toISOString(),
+        jobId:               id,
         action,
         originalPath,
-        outputPath:     fileOutcomes[fileOutcomes.length - 1]?.outputPath ?? "",
-        originalBytes:  file.originalBytes,
-        convertedBytes: file.convertedBytes,
-        savedBytes:     Math.max(0, (file.originalBytes ?? 0) - (file.convertedBytes ?? 0)),
-        error:          fileOutcomes[fileOutcomes.length - 1]?.error,
+        outputPath:          fileOutcomes[fileOutcomes.length - 1]?.outputPath ?? "",
+        originalBytes:       file.originalBytes,
+        convertedBytes:      file.convertedBytes,
+        savedBytes:          Math.max(0, (file.originalBytes ?? 0) - (file.convertedBytes ?? 0)),
+        verificationResults: file.verification ?? [],
+        error:               fileOutcomes[fileOutcomes.length - 1]?.error,
       });
     }
 
@@ -1281,6 +1315,19 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const perFileDecision = execFileDecisions[fullPath];
       const rule      = FORMAT_RULES[ext];
       const category  = rule?.category ?? "other";
+
+      // For codec-sensitive container formats (mp4/mov/mkv/m4v), REQUIRE a per-file scan decision.
+      // If no decision was cached (stale/missing scan), default to SKIP — never blindly re-encode
+      // a container file without knowing its codec (could re-encode an already-modern H.265 file).
+      const CODEC_SENSITIVE = new Set(["mp4", "m4v", "mov", "mkv"]);
+      if (CODEC_SENSITIVE.has(ext) && !perFileDecision) {
+        skipped++;
+        const skipReason = "No per-file codec analysis found — run a fresh scan to detect codec";
+        results.push({ filePath: fullPath, status: "skipped", error: skipReason });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
+        continue;
+      }
 
       // If this file was individually analyzed and flagged as "no conversion needed", skip it.
       // (e.g. an mp4 with H.265 codec when other mp4s with MJPEG were approved)
