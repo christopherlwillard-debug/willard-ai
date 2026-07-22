@@ -12,6 +12,7 @@ import {
 } from "@workspace/api-client-react";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
+import { readQueue, writeQueue, type CleanupQueueEntry } from "@/lib/cleanup-queue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,8 +35,6 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-const QUEUE_KEY = "willard-cleanup-queue-v1";
-
 type KeepPreset = "oldest" | "newest" | "highest_res" | "shortest_path";
 
 interface KeepDecision {
@@ -43,19 +42,6 @@ interface KeepDecision {
   deleteIds: number[];
   reason: string;
   evidence: string;
-}
-
-interface CleanupQueueEntry {
-  groupHash: string;
-  keepFileId: number;
-  deleteFileIds: number[];
-  keepFilename: string;
-  keepFolder: string;
-  deleteFilenames: string[];
-  totalSavedBytes: number;
-  reason: string;
-  evidence: string;
-  addedAt: string;
 }
 
 // ─── Keep-preset engine ───────────────────────────────────────────────────────
@@ -311,15 +297,6 @@ function DuplicateGroupCard({
   );
 }
 
-// ─── localStorage helpers ─────────────────────────────────────────────────────
-
-function readQueue(): CleanupQueueEntry[] {
-  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) ?? "[]"); } catch { return []; }
-}
-function writeQueue(q: CleanupQueueEntry[]) {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-}
-
 // ─── Export report ────────────────────────────────────────────────────────────
 
 function exportReport(summary: any, duplicates: any, largeFiles: any, oldFiles: any, emptyFolders: any, archives: any) {
@@ -394,7 +371,7 @@ export default function Cleanup() {
   const { data: archives, isLoading: archivesLoading } = useListArchives({ limit: 200 }, { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } });
   const { data: historyData }                          = useGetCleanupHistory({ query: { queryKey: getGetCleanupHistoryQueryKey() } });
 
-  const [queue, setQueue] = useState<CleanupQueueEntry[]>(() => readQueue());
+  const [queue, setQueue] = useState<CleanupQueueEntry[]>(() => readQueue(localStorage));
   const [showExecuteModal, setShowExecuteModal] = useState(false);
   const [executeResult, setExecuteResult] = useState<{ recycled: number; recoveredBytes: number; errors: string[] } | null>(null);
 
@@ -402,7 +379,7 @@ export default function Cleanup() {
 
   const stagedHashes = useMemo(() => new Set(queue.map(q => q.groupHash)), [queue]);
 
-  useEffect(() => { writeQueue(queue); }, [queue]);
+  useEffect(() => { writeQueue(queue, localStorage); }, [queue]);
 
   const handleStage = useCallback((entry: CleanupQueueEntry) => {
     setQueue(prev => {

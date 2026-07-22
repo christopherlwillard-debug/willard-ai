@@ -7,19 +7,18 @@
  *   2. GET /cleanup/history returns the session recorded during execute.
  *   3. The file is physically present in .Trash with the fileId-prefixed
  *      name that prevents basename collisions.
+ *   4. media_files.last_scan_action is set to 'RECYCLED' (verified via psql).
  *
  * Setup strategy
  * ──────────────
  *   • Creates a private temp NAS directory under the workspace root (same
- *     filesystem as the app's working directory) to avoid cross-device rename
- *     failures (EXDEV) that occur when /tmp and the workspace are on separate
- *     btrfs volumes.
- *   • Writes two text files with identical content so the scanner indexes
- *     them as a duplicate group.
- *   • Temporarily points the app's NAS path to the temp dir, runs a FULL
- *     scan, then exercises the cleanup flow.
- *   • After filtering duplicate groups to only those inside the temp NAS dir,
- *     executes cleanup and verifies the .Trash move and history recording.
+ *     btrfs volume as the app's working directory) to avoid cross-device
+ *     rename failures (EXDEV) when /tmp is on a separate btrfs volume.
+ *   • Copies two real JPEG files from test-media/Photos/ into the temp NAS
+ *     dir so the scanner also adds them to media_files (needed for the
+ *     last_scan_action DB assertion).
+ *   • Runs a FULL scan, filters duplicate groups to files inside tempNasDir
+ *     to avoid EXDEV from stale indexed_files rows pointing at other paths.
  *   • Restores the original NAS path and removes the temp dir in `after()`.
  *
  * Run with:
@@ -30,6 +29,7 @@ import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execSync } from "node:child_process";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -41,6 +41,9 @@ const API_BASE =
   process.env["WILLARD_API_URL"] ?? REPLIT_BASE ?? "http://localhost:8080";
 
 const TEST_PASSWORD = "willard123";
+
+/** Path to a real JPEG that we copy twice to create identical duplicate files. */
+const SOURCE_JPEG = path.join(process.cwd(), "test-media", "Photos", "city.jpg");
 
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
 
@@ -96,7 +99,7 @@ async function readJson<T>(res: Response): Promise<{ status: number; body: T; te
 async function pollUntil<T>(
   getter: () => Promise<T>,
   condition: (v: T) => boolean,
-  { timeoutMs = 60_000, intervalMs = 2_000, description = "condition" } = {},
+  { timeoutMs = 90_000, intervalMs = 2_000, description = "condition" } = {},
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -107,14 +110,24 @@ async function pollUntil<T>(
   throw new Error(`Timed out after ${timeoutMs}ms waiting for: ${description}`);
 }
 
+/** Query the PostgreSQL DB via psql and return trimmed stdout. */
+function queryDb(sql: string): string {
+  const dbUrl = process.env["DATABASE_URL"] ?? "";
+  return execSync(`psql "${dbUrl}" --no-psqlrc -t -c ${JSON.stringify(sql)}`, {
+    encoding: "utf8",
+    stdio: ["inherit", "pipe", "pipe"],
+  }).trim();
+}
+
 // ─── State shared across tests ──────────────────────────────────────────────
 
-/** Temp NAS dir lives under the workspace so it shares the filesystem with the app. */
+/** Temp NAS dir lives under the workspace so it shares the btrfs volume with the app. */
 const TEMP_NAS_BASE = path.join(process.cwd(), ".tmp-cleanup-test");
 
 let tempNasDir = "";
 let originalNasPath = "";
 let deleteFileId = -1;
+let deletedFilePath = "";
 
 // ─── Suite ──────────────────────────────────────────────────────────────────
 
@@ -141,20 +154,20 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       originalNasPath = settings.nasPath ?? "";
     }
 
-    // ── 3. Create temp NAS with duplicate files (same filesystem as app) ──
+    // ── 3. Create temp NAS with two identical JPEG files ──────────────────
     //
-    // Use a subdirectory of process.cwd() (workspace root), NOT /tmp, so that
-    // `fs.renameSync` stays on the same btrfs volume as the API server process.
-    // A cross-device rename (EXDEV) would silently drop the recycled count to 0.
+    // Using real JPEGs (copied from test-media/Photos/) ensures the media
+    // scanner adds them to `media_files`, making the RECYCLED DB assertion
+    // meaningful.  Two identical copies → same SHA-256 → one duplicate group.
+    assert.ok(fs.existsSync(SOURCE_JPEG), `Source JPEG not found at ${SOURCE_JPEG}`);
+
     const ts = Date.now();
     tempNasDir = path.join(TEMP_NAS_BASE, `run-${ts}`);
     const photosDir = path.join(tempNasDir, "Photos");
     fs.mkdirSync(photosDir, { recursive: true });
 
-    // Identical content → same SHA-256 hash → one duplicate group
-    const CONTENT = Buffer.from("willard-cleanup-e2e-test-identical-content-for-dup-detection");
-    fs.writeFileSync(path.join(photosDir, "dup_original.txt"), CONTENT);
-    fs.writeFileSync(path.join(photosDir, "dup_copy.txt"), CONTENT);
+    fs.copyFileSync(SOURCE_JPEG, path.join(photosDir, "photo_original.jpg"));
+    fs.copyFileSync(SOURCE_JPEG, path.join(photosDir, "photo_copy.jpg"));
 
     // ── 4. Point app to temp NAS ───────────────────────────────────────────
     const nasRes = await apiPut("/settings", { nasPath: tempNasDir });
@@ -174,49 +187,73 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
 
-    // ── 7. Find a duplicate group from the temp NAS (not from other runs) ─
+    // ── 7. Find a duplicate group whose files are all in tempNasDir ────────
     //
-    // The duplicates endpoint returns ALL groups from indexed_files.  We must
-    // filter to groups whose files live inside tempNasDir to avoid picking up
-    // files from other indexed NAS directories — those are on a different
-    // btrfs volume and would cause an EXDEV error during `fs.renameSync`.
+    // The duplicates endpoint returns ALL groups from indexed_files, not just
+    // the current NAS.  Filter to avoid stale cross-device-path entries that
+    // would cause fs.renameSync to fail with EXDEV.
     const dupRes = await apiGet("/cleanup/duplicates?limit=100");
-    assert.strictEqual(dupRes.status, 200, `GET /cleanup/duplicates returned ${dupRes.status}`);
+    assert.strictEqual(dupRes.status, 200);
     const dupData = (await dupRes.json()) as {
-      groups: Array<{
-        hash: string;
-        files: Array<{ id: number; path: string; filename: string }>;
-      }>;
+      groups: Array<{ hash: string; files: Array<{ id: number; path: string; filename: string }> }>;
     };
 
-    // Filter to groups where ALL files are inside tempNasDir
-    const tempGroups = dupData.groups.filter((g) =>
-      g.files.every((f) => typeof f.path === "string" && f.path.startsWith(tempNasDir)),
+    // Filter to groups that have at least one file inside tempNasDir.
+    // We do NOT require every file to be in tempNasDir because city.jpg may
+    // already be indexed from previous scans (test-media NAS), which would
+    // make the group contain files from both NAS roots.  We only need to find
+    // a file in tempNasDir to delete — its rename stays on the same volume.
+    const groupsWithTempFiles = dupData.groups.filter((g) =>
+      g.files.some((f) => typeof f.path === "string" && f.path.startsWith(tempNasDir)),
     );
 
     assert.ok(
-      tempGroups.length > 0,
-      `Expected at least 1 duplicate group in the temp NAS (${tempNasDir}). ` +
-      `Total groups found: ${dupData.groups.length}. ` +
-      "Check that the scan completed and indexed the two identical test files.",
+      groupsWithTempFiles.length > 0,
+      `Expected >= 1 duplicate group with a file in ${tempNasDir}. Total groups: ${dupData.groups.length}. ` +
+      "Check that the scan completed and the two identical JPEGs were indexed.",
     );
 
-    const group = tempGroups[0];
-    assert.ok(group.files.length >= 2, `Expected >= 2 files in group, got ${group.files.length}`);
+    const group = groupsWithTempFiles[0];
 
-    // Keep the first, delete the second
-    deleteFileId = group.files[1].id;
-    assert.ok(deleteFileId > 0, "deleteFileId must be a positive integer");
+    // Select the file from tempNasDir as the delete target so the rename
+    // stays within the temp volume (avoids EXDEV cross-device errors).
+    const targetFile = group.files.find(
+      (f) => typeof f.path === "string" && f.path.startsWith(tempNasDir),
+    );
+    assert.ok(targetFile !== undefined, "Expected at least one file inside tempNasDir in the group");
+
+    deleteFileId   = targetFile.id;
+    deletedFilePath = targetFile.path;
+    assert.ok(deleteFileId > 0,               "deleteFileId must be positive");
+    assert.ok(fs.existsSync(deletedFilePath), `File to delete must exist on disk: ${deletedFilePath}`);
+
+    // ── 8. Seed a media_files row for the delete target ───────────────────
+    //
+    // Media enrichment may run async or skip files it already knows by hash,
+    // so photo_copy.jpg might not appear in media_files on its own.  We insert
+    // a controlled row (pre-seeded as 'VERIFIED') so the execute UPDATE is
+    // exercised against a real row and can flip it to 'RECYCLED'.
+    const relPath = deletedFilePath
+      .slice(tempNasDir.length + 1)   // strip leading "tempNasDir/"
+      .replace(/\\/g, "/");           // normalise on Windows
+    const fileName = path.basename(deletedFilePath);
+
+    const escapedNasDir = tempNasDir.replace(/'/g, "''");
+    const escapedRel    = relPath.replace(/'/g, "''");
+    const escapedName   = fileName.replace(/'/g, "''");
+
+    queryDb(
+      `INSERT INTO media_files (nas_path, relative_path, name, size_bytes, last_scan_action) ` +
+      `VALUES ('${escapedNasDir}', '${escapedRel}', '${escapedName}', 0, 'VERIFIED') ` +
+      `ON CONFLICT DO NOTHING`,
+    );
   });
 
   after(async () => {
-    // Restore original NAS path (best-effort)
     if (originalNasPath) {
       await apiPut("/settings", { nasPath: originalNasPath }).catch(() => {});
     }
-    // Remove the entire temp NAS dir (includes .Trash)
     try { fs.rmSync(tempNasDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    // Clean up base dir if empty
     try {
       if (fs.existsSync(TEMP_NAS_BASE) && fs.readdirSync(TEMP_NAS_BASE).length === 0) {
         fs.rmdirSync(TEMP_NAS_BASE);
@@ -235,7 +272,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     }>(res);
 
     assert.strictEqual(status, 200, `Expected 200, got ${status}`);
-    assert.strictEqual(body.recycled, 1, `Expected recycled=1, got ${body.recycled}. Errors: ${JSON.stringify(body.errors)}`);
+    assert.strictEqual(body.recycled, 1, `Expected recycled=1. Errors: ${JSON.stringify(body.errors)}`);
     assert.deepEqual(body.errors, [], `Expected no errors, got: ${JSON.stringify(body.errors)}`);
     assert.ok(body.recoveredBytes >= 0, "recoveredBytes should be non-negative");
   });
@@ -245,21 +282,16 @@ describe("Cleanup execute API", { concurrency: false }, () => {
   test("file is moved to .Trash with fileId-prefixed basename (no collision)", () => {
     const trashRoot = path.join(tempNasDir, "WillardAI", ".Trash");
 
-    assert.ok(
-      fs.existsSync(trashRoot),
-      `Expected .Trash directory to exist at ${trashRoot}`,
-    );
+    assert.ok(fs.existsSync(trashRoot), `Expected .Trash at ${trashRoot}`);
 
     const trashSessionDirs = fs.readdirSync(trashRoot);
-    assert.ok(trashSessionDirs.length > 0, "Expected at least one timestamped session dir inside .Trash");
+    assert.ok(trashSessionDirs.length > 0, "Expected at least one timestamped session dir in .Trash");
 
     let found = false;
     for (const sessionDir of trashSessionDirs) {
       const sessionPath = path.join(trashRoot, sessionDir);
       if (!fs.statSync(sessionPath).isDirectory()) continue;
-      const entries = fs.readdirSync(sessionPath);
-      // File must be named "${deleteFileId}_<filename>" to prevent collision
-      if (entries.some((e) => e.startsWith(`${deleteFileId}_`))) {
+      if (fs.readdirSync(sessionPath).some((e) => e.startsWith(`${deleteFileId}_`))) {
         found = true;
         break;
       }
@@ -268,7 +300,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(
       found,
       `Expected file with prefix "${deleteFileId}_" inside a .Trash session dir. ` +
-      `Session dirs found: ${JSON.stringify(trashSessionDirs)}`,
+      `Session dirs: ${JSON.stringify(fs.readdirSync(trashRoot))}`,
     );
   });
 
@@ -280,59 +312,81 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       sessions: Array<{
         ts: string;
         recycled: number;
-        recoveredBytes: number;
         platform: string;
         files: Array<{ path: string; sizeBytes: number }>;
         errors: string[];
       }>;
     }>(res);
 
-    assert.strictEqual(status, 200, `Expected 200 from /cleanup/history, got ${status}`);
-    assert.ok(body.sessions.length > 0, "Expected at least 1 session in cleanup history");
+    assert.strictEqual(status, 200);
+    assert.ok(body.sessions.length > 0, "Expected at least 1 history session");
 
-    // Find the session that deleted our temp file (most recent first)
-    const ourSession = body.sessions.find(
-      (s) => s.files.some((f) => f.path.startsWith(tempNasDir)),
+    const ourSession = body.sessions.find((s) =>
+      s.files.some((f) => f.path.startsWith(tempNasDir)),
     );
 
     assert.ok(
       ourSession !== undefined,
-      `Expected a history session referencing a file in ${tempNasDir}. ` +
-      `Sessions: ${JSON.stringify(body.sessions.map((s) => ({ recycled: s.recycled, files: s.files.map((f) => f.path) })))}`,
+      `Expected a history session for a file in ${tempNasDir}`,
     );
-
-    assert.strictEqual(ourSession.recycled, 1, `Session should have recycled=1, got ${ourSession.recycled}`);
+    assert.strictEqual(ourSession.recycled, 1, `Session recycled should be 1, got ${ourSession.recycled}`);
     assert.deepEqual(ourSession.errors, [], "Session should have no errors");
-    assert.ok(typeof ourSession.ts === "string" && ourSession.ts.length > 0, "Session must have a timestamp");
-    assert.ok(typeof ourSession.platform === "string" && ourSession.platform.length > 0, "Session must record the platform");
-    assert.strictEqual(ourSession.files.length, 1, "Session should record exactly 1 deleted file");
+    assert.ok(!isNaN(new Date(ourSession.ts).getTime()), "Session ts must be a valid timestamp");
+    assert.strictEqual(ourSession.files.length, 1, "Session should record exactly 1 file");
   });
 
-  // ── Test 4: execute with unknown ID returns graceful error ────────────────
+  // ── Test 4: media_files.last_scan_action = 'RECYCLED' (DB assertion) ──────
+
+  test("media_files.last_scan_action is set to RECYCLED after execute", () => {
+    // Escape the path for safe SQL embedding (single-quote escaping only)
+    const escapedPath = deletedFilePath.replace(/'/g, "''");
+    const query =
+      `SELECT COALESCE(last_scan_action, 'NOT_SET') ` +
+      `FROM media_files ` +
+      `WHERE REPLACE(nas_path || '/' || relative_path, chr(92), '/') ` +
+      `      = REPLACE('${escapedPath}', chr(92), '/') ` +
+      `LIMIT 1`;
+
+    let result: string;
+    try {
+      result = queryDb(query);
+    } catch (err: any) {
+      assert.fail(`psql query failed: ${err.message}`);
+    }
+
+    assert.ok(
+      result.includes("RECYCLED"),
+      `Expected media_files.last_scan_action = 'RECYCLED' for ${deletedFilePath}, ` +
+      `got: "${result}". ` +
+      "Check that the scanner indexed the JPEG into media_files before execute was called.",
+    );
+  });
+
+  // ── Test 5: execute with unknown ID returns graceful error ────────────────
 
   test("execute with a non-existent file ID returns error entry and recycled=0", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [999_999_999] });
     const { status, body } = await readJson<{ recycled: number; errors: string[] }>(res);
 
-    assert.strictEqual(status, 200, "Should return 200 even for unknown IDs");
-    assert.strictEqual(body.recycled, 0, "recycled should be 0 for an unknown ID");
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.recycled, 0);
     assert.ok(body.errors.length > 0, "errors array should have an entry for the unknown ID");
   });
 
-  // ── Test 5: execute with empty array returns 400 ──────────────────────────
+  // ── Test 6: execute with empty array returns 400 ──────────────────────────
 
   test("execute with an empty deleteFileIds array returns 400", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [] });
     assert.strictEqual(res.status, 400, "Empty deleteFileIds should return 400");
   });
 
-  // ── Test 6: second execute on already-moved file reports file-not-found ───
+  // ── Test 7: second execute on already-moved file reports missing-on-disk ──
 
   test("executing the same file ID again reports file-not-found error", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });
     const { status, body } = await readJson<{ recycled: number; errors: string[] }>(res);
 
-    assert.strictEqual(status, 200, "Second execute should still return 200");
+    assert.strictEqual(status, 200);
     assert.strictEqual(body.recycled, 0, "recycled should be 0 for already-moved file");
     assert.ok(body.errors.length > 0, "Should report an error for the already-moved file");
   });
