@@ -77,6 +77,7 @@ export interface JobCounters {
 
 export interface ProgressEvent {
   jobId:                number;
+  jobType:              JobType;
   status:               JobStatus;
   phase:                ScanPhase;
   profile:              JobProfile | null;

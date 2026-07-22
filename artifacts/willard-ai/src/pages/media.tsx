@@ -28,6 +28,7 @@ import {
   Camera,
   Calendar,
   Aperture,
+  ImagePlus,
   Heart,
   Sparkles,
 } from "lucide-react";
@@ -57,6 +58,9 @@ interface JobCounters {
   deleted: number;
   hashed: number;
   thumbnails: number;
+  thumbnailsFailed: number;
+  skipped: number;
+  reanalyzed: number;
 }
 
 interface SkippedFile {
@@ -100,6 +104,7 @@ interface DuplicateGroup {
 
 interface ProgressEvent {
   jobId: number;
+  jobType: string;
   status: "RUNNING" | "PAUSED" | "DONE" | "FAILED" | "CANCELLED";
   phase: string;
   profile: string | null;
@@ -415,16 +420,27 @@ function ScanBanner({
 }) {
   if (!progress) return null;
 
+  const isThumbs = progress.jobType === "THUMBNAILS";
+
   if (progress.status === "DONE" && progress.summary) {
     return <ScanSummaryCard summary={progress.summary} jobId={progress.jobId} onDismiss={onDismiss} />;
   }
 
   if (progress.status === "DONE") {
     return (
-      <div className="flex items-center gap-2 px-4 py-2 bg-green-900/30 border border-green-700/40 rounded-lg text-sm text-green-300 font-mono">
+      <div className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-mono ${
+        isThumbs
+          ? "bg-purple-900/30 border-purple-700/40 text-purple-300"
+          : "bg-green-900/30 border-green-700/40 text-green-300"
+      }`}>
         <CheckCircle2 className="w-4 h-4 shrink-0" />
-        <span>Scan complete — {progress.filesProcessed.toLocaleString()} files processed.</span>
-        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200">
+        <span>
+          {isThumbs
+            ? `Thumbnails complete — ${progress.counters.thumbnails.toLocaleString()} generated.`
+            : `Scan complete — ${progress.filesProcessed.toLocaleString()} files processed.`
+          }
+        </span>
+        <button onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -433,10 +449,11 @@ function ScanBanner({
 
   if (progress.status === "FAILED" || progress.status === "CANCELLED") {
     const color = progress.status === "CANCELLED" ? "amber" : "red";
+    const noun  = isThumbs ? "Thumbnail job" : "Scan";
     return (
       <div className={`flex items-center gap-2 px-4 py-2 bg-${color}-900/30 border border-${color}-700/40 rounded-lg text-sm text-${color}-300 font-mono`}>
         <AlertCircle className="w-4 h-4 shrink-0" />
-        <span>{progress.status === "CANCELLED" ? "Scan cancelled." : `Scan failed.`}</span>
+        <span>{progress.status === "CANCELLED" ? `${noun} cancelled.` : `${noun} failed.`}</span>
         <button onClick={onDismiss} className="ml-auto">
           <X className="w-3.5 h-3.5" />
         </button>
@@ -444,6 +461,57 @@ function ScanBanner({
     );
   }
 
+  // ── Thumbnail job running banner ─────────────────────────────────────────────
+  if (isThumbs) {
+    const pct      = progress.progress;
+    const built    = progress.counters.thumbnails;
+    const total    = progress.filesTotal;
+    const filename = progress.currentPath ? progress.currentPath.split("/").pop() : "";
+    const isStalled = progress.currentFileStartedAt !== null
+      && Date.now() - progress.currentFileStartedAt > 8_000;
+
+    return (
+      <div className="rounded-lg border border-purple-700/40 bg-purple-900/20 px-4 py-3 space-y-2 font-mono text-sm">
+        <div className="flex items-center gap-2 text-purple-300">
+          <ImagePlus className="w-4 h-4 shrink-0 animate-pulse text-purple-400" />
+          <span className="truncate flex-1 text-xs text-purple-400" title={progress.currentPath}>
+            {filename ? `Generating thumbnail — ${filename}` : "Generating thumbnails\u2026"}
+          </span>
+          {isStalled && (
+            <span className="text-xs text-amber-400 shrink-0 animate-pulse" title="This file is taking longer than usual">
+              slow file\u2026
+            </span>
+          )}
+          <span className="text-xs text-purple-500 shrink-0">
+            {built.toLocaleString()}{total > 0 ? ` / ${total.toLocaleString()}` : ""} built
+          </span>
+        </div>
+
+        <div className="w-full bg-purple-900/50 rounded-full h-1.5">
+          <div
+            className="bg-purple-400 h-1.5 rounded-full transition-all duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-purple-400">
+          <span>{pct}%</span>
+          {progress.etaSeconds !== null && progress.etaSeconds > 0 && (
+            <span>ETA {formatEta(progress.etaSeconds)}</span>
+          )}
+          {progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
+          {progress.counters.thumbnailsFailed > 0 && (
+            <span className="text-red-400">{progress.counters.thumbnailsFailed} failed</span>
+          )}
+          <button onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 flex items-center gap-1 ml-auto">
+            <X className="w-3 h-3" /> Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Scan job running banner ──────────────────────────────────────────────────
   const pct      = progress.progress;
   const isPaused = progress.status === "PAUSED";
   const isLoading = progress.phase === "loading" && !isPaused;
@@ -961,13 +1029,22 @@ export default function Media() {
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "RUNNING" || status === "PAUSED" ? 1000 : false;
+      // Fast poll while a job is running; slow-poll while idle so we pick up
+      // auto-started follow-up jobs (e.g. thumbnail backfill after scan).
+      return status === "RUNNING" || status === "PAUSED" ? 1000 : 5000;
     },
   });
 
   const prevActiveStatus = useRef<string | null>(null);
+  const prevActiveJobId  = useRef<number | null>(null);
   useEffect(() => {
     const status = activeJobQuery.data?.status;
+    const jobId  = activeJobQuery.data?.jobId ?? null;
+    // When a brand-new job starts (different jobId, now RUNNING), surface the banner.
+    if (status === "RUNNING" && jobId !== null && jobId !== prevActiveJobId.current) {
+      setDismissedProgress(false);
+    }
+    // When any job transitions to DONE, refresh data and surface the summary.
     if (prevActiveStatus.current !== "DONE" && status === "DONE") {
       queryClient.invalidateQueries({ queryKey: ["media-files"] });
       queryClient.invalidateQueries({ queryKey: ["media-folders"] });
@@ -975,7 +1052,8 @@ export default function Media() {
       setDismissedProgress(false);
     }
     if (status) prevActiveStatus.current = status;
-  }, [activeJobQuery.data?.status, queryClient]);
+    if (jobId !== null) prevActiveJobId.current = jobId;
+  }, [activeJobQuery.data?.status, activeJobQuery.data?.jobId, queryClient]);
 
   // ── Scan mutation ───────────────────────────────────────────────────────────
 

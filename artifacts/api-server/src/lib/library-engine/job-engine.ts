@@ -99,6 +99,7 @@ export function getLastCompletedProgress(): ProgressEvent | null {
 function recordCompletion(state: ActiveJobState, summary: JobSummary): void {
   lastCompletedProgress = {
     jobId: state.id,
+    jobType: state.jobType,
     status: "DONE",
     phase: "finalizing",
     profile: state.profile,
@@ -106,6 +107,7 @@ function recordCompletion(state: ActiveJobState, summary: JobSummary): void {
     filesProcessed: state.filesProcessed,
     filesTotal: state.filesTotal,
     currentPath: "",
+    currentFileStartedAt: null,
     etaSeconds: 0,
     speed: 0,
     counters: { ...state.counters },
@@ -153,6 +155,7 @@ export function getJobProgress(jobId: number): ProgressEvent | null {
 
   return {
     jobId: state.id,
+    jobType: state.jobType,
     status,
     phase: state.phase,
     profile: state.profile,
