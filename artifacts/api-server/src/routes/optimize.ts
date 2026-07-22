@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
+import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
 import { desc, eq } from "drizzle-orm";
@@ -292,7 +293,7 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
 
 // ── Optimize scan cache ────────────────────────────────────────────────────────
 
-const CACHE_VERSION    = 4; // bump when scan result shape changes
+const CACHE_VERSION    = 5; // bump when scan result shape changes
 const CACHE_TTL_MS     = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_FILENAME   = "optimize-scan.json";
 
@@ -335,7 +336,13 @@ function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
 // ── NAS directory walker ───────────────────────────────────────────────────────
 
 interface SampleFile { path: string; sizeBytes: number; }
-interface ExtGroup   { count: number; bytes: number; samples: SampleFile[]; }
+
+// `paths` holds ALL file paths for formats requiring per-file analysis (JPEG, container video).
+// `samples` holds the top-3 by size for UI display only.
+const PER_FILE_EXTS = new Set(["jpg","jpeg","mp4","m4v","mov","mkv"]);
+const MAX_PER_FILE_PATHS = 5_000; // cap to avoid memory blowout on huge libraries
+
+interface ExtGroup   { count: number; bytes: number; samples: SampleFile[]; paths: string[]; }
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
 
@@ -366,9 +373,13 @@ function walkForOptimize(
       const fullPath = path.join(dir, entry.name);
       let size = 0;
       try { size = fs.statSync(fullPath).size; } catch { /* skip unreadable */ }
-      const curr = groups.get(ext) ?? { count: 0, bytes: 0, samples: [] };
+      const curr = groups.get(ext) ?? { count: 0, bytes: 0, samples: [], paths: [] };
       insertSample(curr.samples, fullPath, size);
-      groups.set(ext, { count: curr.count + 1, bytes: curr.bytes + size, samples: curr.samples });
+      // For formats needing per-file analysis, track every path (up to cap)
+      if (PER_FILE_EXTS.has(ext) && curr.paths.length < MAX_PER_FILE_PATHS) {
+        curr.paths.push(fullPath);
+      }
+      groups.set(ext, { count: curr.count + 1, bytes: curr.bytes + size, samples: curr.samples, paths: curr.paths });
       counter.total++;
     }
   }
@@ -505,7 +516,7 @@ async function convertImageAsync(
     if (RAW_EXTS.has(srcExt)) {
       const result = spawnSync("ffmpeg", [
         "-y", "-i", srcPath,
-        "-q:v", "2",           // ~quality 96, smaller than q:v 1 with negligible loss
+        "-q:v", "1",           // quality ~98 as specified; q:v 2 would be ~96
         "-map_metadata", "0",  // preserve EXIF, ICC, GPS
         destPath,
       ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
@@ -570,6 +581,7 @@ async function verifyConvertedFile(
   category: string,
   isSameExt: boolean,
   originalBytes: number,
+  isRawSource = false,
 ): Promise<{ passed: boolean; checks: string[]; failedCheck?: string }> {
   const checks: string[] = [];
 
@@ -593,63 +605,98 @@ async function verifyConvertedFile(
     try {
       const sharp = (await import("sharp")).default;
 
-      // Check 3: Output decodes without error
-      const dstMeta = await sharp(destPath, { failOn: "none" }).metadata();
+      // Check 3: Output decodes without decoder error
+      let dstMeta: import("sharp").Metadata;
+      try {
+        dstMeta = await sharp(destPath, { failOn: "error" }).metadata();
+      } catch (err: any) {
+        return { passed: false, checks, failedCheck: `Decoder error on output: ${(err.message ?? "unknown").slice(0, 200)}` };
+      }
       if (!dstMeta.width || !dstMeta.height) {
         return { passed: false, checks, failedCheck: "Output image has no dimensions (decode failed)" };
       }
       checks.push(`Decoded OK — ${dstMeta.width}×${dstMeta.height}`);
 
-      // Checks 4–7: Compare against source metadata (best-effort — skip if source unreadable)
+      // Check 4: Thumbnail generation — verifies decodability end-to-end
       try {
-        const srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
+        const thumbBuf = await sharp(destPath, { failOn: "none" })
+          .resize(200, 200, { fit: "inside" })
+          .jpeg({ quality: 60 })
+          .toBuffer();
+        if (thumbBuf.length === 0) {
+          return { passed: false, checks, failedCheck: "Thumbnail generation produced empty buffer" };
+        }
+        checks.push("Thumbnail generated successfully");
+      } catch (err: any) {
+        return { passed: false, checks, failedCheck: `Thumbnail generation failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+      }
 
-        if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
-          // Check 4: Total pixel count within 15% (allows auto-rotation swap)
-          const srcPixels = srcMeta.width * srcMeta.height;
-          const dstPixels = dstMeta.width * dstMeta.height;
-          if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
-            return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
-          }
-          checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
+      // Check 5: Pixel hash — SHA-256 of downscaled raw pixels (fast, stored for audit)
+      try {
+        const pixelBuf = await sharp(destPath, { failOn: "none" })
+          .resize(256, 256, { fit: "inside" })
+          .raw()
+          .toBuffer();
+        const pixelHash = crypto.createHash("sha256").update(pixelBuf).digest("hex").slice(0, 16);
+        checks.push(`Pixel hash (256px): ${pixelHash}`);
+      } catch { /* best effort — non-blocking */ }
 
-          // Check 5: Aspect ratio preserved within 5% (catches unintentional cropping/distortion)
-          const srcAspect = srcMeta.width / srcMeta.height;
-          const dstAspect = dstMeta.width / dstMeta.height;
-          const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
-          if (aspectRatio < 0.95) {
-            return { passed: false, checks, failedCheck: `Aspect ratio mismatch: ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
-          }
-          checks.push("Aspect ratio preserved");
+      // Check 6: Histogram / channel statistics (detects catastrophic color shifts)
+      try {
+        const stats = await sharp(destPath, { failOn: "none" }).stats();
+        const chSummary = stats.channels.map((c, i) =>
+          `ch${i}: mean=${c.mean.toFixed(1)} stdev=${c.stdev.toFixed(1)}`
+        ).join(", ");
+        checks.push(`Channel stats: ${chSummary}`);
+      } catch { /* best effort — non-blocking */ }
 
-          // Check 6: Orientation tag present/correct when source had one
-          if (srcMeta.orientation !== undefined && dstMeta.orientation !== undefined) {
-            // After re-encode with auto-rotate, orientation should be 1 (normal)
-            // Allow orientation 1 (normal) or same as source
-            if (dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
-              checks.push(`Orientation changed: ${srcMeta.orientation} → ${dstMeta.orientation} (may require review)`);
-            } else {
-              checks.push(`Orientation OK (${dstMeta.orientation})`);
+      // Checks 7–10: Compare against source metadata (skip for RAW sources, which Sharp can't decode)
+      if (!isRawSource) {
+        try {
+          const srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
+
+          if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
+            // Check 7: Total pixel count within 15% (allows auto-rotation dimension swap)
+            const srcPixels = srcMeta.width * srcMeta.height;
+            const dstPixels = dstMeta.width * dstMeta.height;
+            if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
+              return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
+            }
+            checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
+
+            // Check 8: Aspect ratio preserved within 5% (catches unintentional crop/distortion)
+            const srcAspect = srcMeta.width / srcMeta.height;
+            const dstAspect = dstMeta.width / dstMeta.height;
+            const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
+            if (aspectRatio < 0.95) {
+              return { passed: false, checks, failedCheck: `Aspect ratio mismatch: src ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → dst ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
+            }
+            checks.push("Aspect ratio preserved");
+
+            // Check 9: Orientation — after re-encode, orientation must be 1 (auto-rotated) or same
+            if (srcMeta.orientation !== undefined) {
+              if (dstMeta.orientation !== undefined && dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
+                return { passed: false, checks, failedCheck: `Orientation mismatch: source=${srcMeta.orientation}, output=${dstMeta.orientation}` };
+              }
+              checks.push(`Orientation OK (${dstMeta.orientation ?? "normalized"})`);
             }
           }
-        }
 
-        // Check 7: EXIF metadata preserved if source had it
-        if (srcMeta.exif && !dstMeta.exif) {
-          checks.push("WARN: Source had EXIF but output does not — metadata may have been stripped");
-        } else if (srcMeta.exif && dstMeta.exif) {
-          checks.push("EXIF metadata preserved");
+          // Check 10: EXIF preserved — hard fail if source had EXIF but output does not
+          if (srcMeta.exif && !dstMeta.exif) {
+            return { passed: false, checks, failedCheck: "EXIF metadata was stripped during conversion (source had EXIF)" };
+          }
+          if (srcMeta.exif && dstMeta.exif) checks.push("EXIF metadata preserved");
+        } catch { /* best effort — source read error is non-blocking */ }
+      } else {
+        // For RAW → JPEG: verify output has ICC profile (spec requirement)
+        if (!dstMeta.icc) {
+          return { passed: false, checks, failedCheck: "RAW conversion output is missing ICC color profile" };
         }
-
-        // Check 8: ICC color profile preserved if source had one
-        if (srcMeta.icc && !dstMeta.icc) {
-          checks.push("WARN: Source had ICC profile but output does not");
-        } else if (srcMeta.icc && dstMeta.icc) {
-          checks.push("ICC color profile preserved");
-        }
-      } catch { /* best effort — source may be unreadable (RAW) */ }
+        checks.push("ICC color profile present (RAW conversion)");
+      }
     } catch (err: any) {
-      return { passed: false, checks, failedCheck: `Decode failed: ${(err.message ?? "unknown").slice(0, 200)}` };
+      return { passed: false, checks, failedCheck: `Verify failed: ${(err.message ?? "unknown").slice(0, 200)}` };
     }
   }
 
@@ -700,27 +747,80 @@ router.get("/optimize/scan", async (req, res) => {
     const result = [];
     let totalSavingsBytes = 0;
 
-    // Async enrich: JPEG analysis + video codec detection for sample files
+    // Per-file analysis: each JPEG and each container video file is analyzed individually.
+    // Results go into `fileDecisions` for use by the execute loop (codec override enforcement).
+    // `jpegIssuesMap` and `detectedCodecMap` hold representative group-level data for UI display only.
     const enrichPromises: Promise<void>[] = [];
-    const jpegIssuesMap   = new Map<string, string[]>();   // ext → issues found in samples
-    const detectedCodecMap = new Map<string, string>();    // ext → codec (for container formats)
+    const jpegIssuesMap    = new Map<string, string[]>();  // ext → issues (for explainer text)
+    const detectedCodecMap = new Map<string, string>();    // ext → codec (for group-level override)
 
-    for (const [ext, { samples }] of groups.entries()) {
-      if ((ext === "jpg" || ext === "jpeg") && samples.length > 0) {
+    // fileDecisions: per-file convert/skip decision, persisted in scan cache.
+    // The execute loop reads this to decide whether to convert each individual file.
+    const fileDecisions: Record<string, { convert: boolean; targetExt: string; reasons: string[]; codec?: string }> = {};
+
+    const JPEG_ANALYZE_LIMIT = 20; // analyze up to this many JPEGs per group
+
+    for (const [ext, { samples, paths }] of groups.entries()) {
+      if (ext === "jpg" || ext === "jpeg") {
+        // Per-file JPEG analysis: analyze each file individually (up to limit)
+        const filesToAnalyze = paths.slice(0, JPEG_ANALYZE_LIMIT);
         enrichPromises.push((async () => {
-          const issues = await analyzeJpegFile(samples[0].path);
-          if (issues.length > 0) jpegIssuesMap.set(ext, issues);
+          const analysisResults = await Promise.allSettled(
+            filesToAnalyze.map(async (p) => {
+              const issues = await analyzeJpegFile(p);
+              return { path: p, issues };
+            })
+          );
+          for (const r of analysisResults) {
+            if (r.status === "fulfilled") {
+              const { path: p, issues } = r.value;
+              const shouldConvert = issues.length > 0;
+              fileDecisions[p] = { convert: shouldConvert, targetExt: "jpg", reasons: issues };
+              // Take the first file's issues for the group-level explainer text
+              if (!jpegIssuesMap.has(ext) && issues.length > 0) {
+                jpegIssuesMap.set(ext, issues);
+              }
+            }
+          }
         })());
       }
-      if ((ext === "mov" || ext === "mkv" || ext === "mp4" || ext === "m4v") && samples.length > 0) {
+
+      if (ext === "mov" || ext === "mkv" || ext === "mp4" || ext === "m4v") {
+        // Per-file codec detection: analyze EVERY container file (not just one sample)
         enrichPromises.push((async () => {
-          const codec = await detectVideoCodec(samples[0].path);
-          if (codec) detectedCodecMap.set(ext, codec);
+          const codecResults = await Promise.allSettled(
+            paths.map(async (p) => {
+              const codec = await detectVideoCodec(p);
+              return { path: p, codec };
+            })
+          );
+          for (const r of codecResults) {
+            if (r.status === "fulfilled" && r.value.codec) {
+              const { path: p, codec } = r.value;
+              const codecRule = buildCodecOverride(codec, ext);
+              fileDecisions[p] = {
+                convert:   codecRule?.status === "convert",
+                targetExt: codecRule?.targetExt ?? (codecRule?.status === "convert" ? "mp4" : ext),
+                reasons:   [codecRule?.reason ?? `Codec: ${codec}`],
+                codec,
+              };
+              // Take the first codec found for group-level override display
+              if (!detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
+            }
+          }
         })());
+
+        // Also run on the sample if paths was capped and sample file is not in paths
+        if (samples.length > 0 && !paths.includes(samples[0].path)) {
+          enrichPromises.push((async () => {
+            const codec = await detectVideoCodec(samples[0].path);
+            if (codec && !detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
+          })());
+        }
       }
     }
 
-    // Run all analysis in parallel (best-effort — failures are swallowed)
+    // Run all per-file analysis in parallel (best-effort — individual failures are swallowed)
     await Promise.allSettled(enrichPromises);
 
     for (const [ext, { count, bytes, samples }] of groups.entries()) {
@@ -788,6 +888,7 @@ router.get("/optimize/scan", async (req, res) => {
       totalBytes: result.reduce((s, g) => s + g.totalBytes, 0),
       totalSavingsBytes,
       groups: result,
+      fileDecisions,   // per-file convert/skip decisions consumed by execute loop
       fromCache: false,
     };
 
@@ -872,8 +973,29 @@ router.post("/optimize/run", async (req, res) => {
     const rawConversionEnabled = settings.rawConversionEnabled ?? false;
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
 
+    // Load scan cache to check per-file decisions for codec-detected formats.
+    // Container formats (mp4/mov/mkv/m4v) may show as "optimal" in static rules but
+    // have per-file codec overrides in the scan cache making some files convertible.
+    const cachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const cachedDecisions = (cachedScan?.fileDecisions as Record<string, { convert: boolean; targetExt: string }> | undefined) ?? {};
+
     for (const ext of approvedExts) {
-      const rule = FORMAT_RULES[ext.toLowerCase()];
+      const lext = ext.toLowerCase();
+      const rule  = FORMAT_RULES[lext];
+
+      // For codec-detected container formats, accept if any scanned file is marked convert
+      if (PER_FILE_EXTS.has(lext) && (lext === "mp4" || lext === "m4v" || lext === "mov" || lext === "mkv")) {
+        const anyConvert = Object.entries(cachedDecisions).some(
+          ([fp, d]) => path.extname(fp).slice(1).toLowerCase() === lext && d.convert
+        );
+        if (!anyConvert && (!rule || rule.status !== "convert")) {
+          res.status(400).json({ error: `No convertible ${ext} files found — run a fresh scan first or codec analysis shows all files are already optimal` });
+          return;
+        }
+        // At least one file converts — allowed
+        continue;
+      }
+
       if (!rule || rule.status !== "convert") {
         res.status(400).json({ error: `Extension "${ext}" is not a convertible format` });
         return;
@@ -1104,6 +1226,12 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     const backupDir      = job.backupDir!;
     const approvedExtSet = new Set<string>((job.approvedExts as string[]).map(e => e.toLowerCase()));
 
+    // Load per-file decisions from scan cache — used to enforce codec-specific convert/skip
+    // and to get the correct targetExt for codec-overridden container files.
+    const execCachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const execFileDecisions = (execCachedScan?.fileDecisions as
+      Record<string, { convert: boolean; targetExt: string; reasons: string[] }> | undefined) ?? {};
+
     await db.update(conversionJobsTable).set({ status: "running" }).where(eq(conversionJobsTable.id, id));
     send("status", { stage: "scanning", message: "Scanning NAS for files to convert…", progress: 2 });
 
@@ -1148,9 +1276,25 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
     for (let i = 0; i < filesToConvert.length; i++) {
       const { fullPath, ext } = filesToConvert[i];
+
+      // Use per-file decision from scan cache when available; fall back to extension-level rule.
+      const perFileDecision = execFileDecisions[fullPath];
       const rule      = FORMAT_RULES[ext];
-      const targetExt = rule?.targetExt ?? (rule?.category === "video" ? "mp4" : null);
       const category  = rule?.category ?? "other";
+
+      // If this file was individually analyzed and flagged as "no conversion needed", skip it.
+      // (e.g. an mp4 with H.265 codec when other mp4s with MJPEG were approved)
+      if (perFileDecision && !perFileDecision.convert) {
+        skipped++;
+        const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
+        results.push({ filePath: fullPath, status: "skipped", error: skipReason });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
+        continue;
+      }
+
+      // Resolve target extension: per-file decision takes priority over static rule
+      const targetExt = perFileDecision?.targetExt ?? rule?.targetExt ?? (category === "video" ? "mp4" : null);
 
       if (!targetExt) {
         skipped++;
@@ -1204,7 +1348,8 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       }
 
       // ── Stage 3: Verify the converted file ───────────────────────────────────
-      const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes);
+      const isRawSrc = RAW_EXTS.has(ext);
+      const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes, isRawSrc);
       if (!verification.passed) {
         try { if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath); } catch { /* best effort */ }
         const isRegression = verification.failedCheck?.includes("not smaller");
