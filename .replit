@@ -24,6 +24,14 @@ args = "organize-helpers-tests"
 task = "workflow.run"
 args = "e2e-dashboard-scan"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "cleanup-queue-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "cleanup-execute-tests"
+
 [[workflows.workflow]]
 name = "organize-helpers-tests"
 author = "agent"
@@ -45,6 +53,28 @@ args = "node --experimental-strip-types --test e2e/dashboard-after-scan.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "cleanup-queue-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --experimental-strip-types --test artifacts/api-server/src/__tests__/cleanup-queue.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "cleanup-execute-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node --experimental-strip-types --test e2e/cleanup-execute.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [agent]
 stack = "PNPM_WORKSPACE"
