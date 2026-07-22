@@ -2301,7 +2301,7 @@ export const getGetDuplicateFilesUrl = (params?: GetDuplicateFilesParams,) => {
 }
 
 /**
- * @summary Get groups of duplicate files (by hash)
+ * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
  */
 export const getDuplicateFiles = async (params?: GetDuplicateFilesParams, options?: RequestInit): Promise<DuplicateGroupResult> => {
 
@@ -2348,7 +2348,7 @@ export type GetDuplicateFilesQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Get groups of duplicate files (by hash)
+ * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
  */
 
 export function useGetDuplicateFiles<TData = Awaited<ReturnType<typeof getDuplicateFiles>>, TError = ErrorType<unknown>>(

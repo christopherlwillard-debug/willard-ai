@@ -627,7 +627,7 @@ paths:
     get:
       operationId: getDuplicateFiles
       tags: [cleanup]
-      summary: Get groups of duplicate files (by hash)
+      summary: Get groups of duplicate files (by hash or perceptual fingerprint)
       parameters:
         - name: limit
           in: query
@@ -2086,6 +2086,9 @@ components:
           type: integer
         matchType:
           type: string
+          enum:
+            - HASH_IDENTICAL
+            - PERCEPTUAL_SIMILAR
         matchConfidence:
           type: integer
         files:

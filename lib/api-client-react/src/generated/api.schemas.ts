@@ -439,11 +439,19 @@ export interface DuplicateFileInfo {
   cameraModel?: string | null;
 }
 
+export type DuplicateGroupMatchType = typeof DuplicateGroupMatchType[keyof typeof DuplicateGroupMatchType];
+
+
+export const DuplicateGroupMatchType = {
+  HASH_IDENTICAL: 'HASH_IDENTICAL',
+  PERCEPTUAL_SIMILAR: 'PERCEPTUAL_SIMILAR',
+} as const;
+
 export interface DuplicateGroup {
   hash: string;
   fileCount: number;
   totalWastedBytes: number;
-  matchType: string;
+  matchType: DuplicateGroupMatchType;
   matchConfidence: number;
   files: DuplicateFileInfo[];
 }

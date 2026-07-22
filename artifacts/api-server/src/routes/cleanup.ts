@@ -24,84 +24,157 @@ function trashManifestPath(nasPath: string) {
 router.get("/cleanup/duplicates", async (req, res) => {
   try {
     const { limit = "20", offset = "0" } = req.query as Record<string, string>;
+    const pageLimit  = parseInt(limit);
+    const pageOffset = parseInt(offset);
 
-    const dupHashes = await db.execute(sql`
-      SELECT content_hash, COUNT(*) as file_count, SUM(size_bytes) as total_size
+    // ── 1. Exact-hash groups ────────────────────────────────────────────────
+    const exactHashGroups = await db.execute(sql`
+      SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size
       FROM ${indexedFilesTable}
       WHERE content_hash IS NOT NULL
       GROUP BY content_hash
       HAVING COUNT(*) > 1
-      ORDER BY SUM(size_bytes) DESC
-      LIMIT ${parseInt(limit)}
-      OFFSET ${parseInt(offset)}
     `);
 
-    const totalGroupsResult = await db.execute(sql`
-      SELECT COUNT(*) as "totalGroups" FROM (
-        SELECT content_hash FROM ${indexedFilesTable}
-        WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
-      ) t
+    // ── 2. Perceptual-hash groups (same quickFingerprint, different hashes) ─
+    // Join media_files (has quickFingerprint) with indexed_files (has path/size for wasted bytes).
+    // Exclude fingerprint groups where all files share a single non-null content_hash
+    // (those are already surfaced by the exact-hash query above).
+    const perceptualGroups = await db.execute(sql`
+      SELECT
+        m.quick_fingerprint AS group_key,
+        COUNT(DISTINCT m.id) AS file_count,
+        SUM(i.size_bytes)   AS total_size
+      FROM ${mediaFilesTable} m
+      JOIN ${indexedFilesTable} i
+        ON REPLACE(i.path, chr(92), '/') =
+           REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
+      WHERE m.quick_fingerprint IS NOT NULL
+        AND m.quick_fingerprint != ''
+      GROUP BY m.quick_fingerprint
+      HAVING COUNT(DISTINCT m.id) > 1
+        AND NOT (
+          COUNT(DISTINCT i.content_hash) = 1
+          AND MIN(i.content_hash) IS NOT NULL
+        )
     `);
 
-    const totalWastedResult = await db.execute(sql`
-      SELECT COALESCE(SUM(t.wasted), 0) as "totalWasted" FROM (
-        SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted
-        FROM ${indexedFilesTable}
-        WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
-      ) t
-    `);
+    // ── 3. Build raw group descriptors sorted by wasted bytes desc ──────────
+    type RawGroup = {
+      groupKey: string;
+      fileCount: number;
+      totalSize: number;
+      matchType: "HASH_IDENTICAL" | "PERCEPTUAL_SIMILAR";
+      matchConfidence: number;
+    };
 
-    const totalGroups = (totalGroupsResult.rows[0] as any)?.totalGroups ?? 0;
-    const totalWasted  = (totalWastedResult.rows[0] as any)?.totalWasted ?? 0;
+    const allRaw: RawGroup[] = [
+      ...(exactHashGroups.rows as any[]).map(r => ({
+        groupKey:        String(r.group_key),
+        fileCount:       parseInt(r.file_count),
+        totalSize:       Number(r.total_size),
+        matchType:       "HASH_IDENTICAL" as const,
+        matchConfidence: 5,
+      })),
+      ...(perceptualGroups.rows as any[]).map(r => ({
+        groupKey:        String(r.group_key),
+        fileCount:       parseInt(r.file_count),
+        totalSize:       Number(r.total_size),
+        matchType:       "PERCEPTUAL_SIMILAR" as const,
+        matchConfidence: 4,
+      })),
+    ].sort((a, b) => {
+      const wastedA = (a.fileCount - 1) * (a.totalSize / a.fileCount);
+      const wastedB = (b.fileCount - 1) * (b.totalSize / b.fileCount);
+      return wastedB - wastedA;
+    });
 
-    const groups = await Promise.all((dupHashes.rows as any[]).map(async (row) => {
-      // LEFT JOIN with media_files to enrich with thumbnails, dimensions, dates, camera model
-      const filesResult = await db.execute(sql`
-        SELECT
-          i.id,
-          i.path,
-          i.filename,
-          i.extension,
-          i.file_type      AS "fileType",
-          i.size_bytes     AS "sizeBytes",
-          i.modified_at    AS "modifiedAt",
-          i.folder,
-          i.content_hash   AS "contentHash",
-          m.id             AS "mediaId",
-          m.thumbnail_path AS "thumbnailPath",
-          m.width,
-          m.height,
-          m.duration_seconds AS "durationSeconds",
-          m.date_taken     AS "dateTaken",
-          m.date_created   AS "dateCreated",
-          m.camera_make    AS "cameraMake",
-          m.camera_model   AS "cameraModel"
-        FROM indexed_files i
-        LEFT JOIN media_files m
-          ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
-        WHERE i.content_hash = ${row.content_hash}
-        LIMIT 10
-      `);
+    const totalGroups      = allRaw.length;
+    const totalWastedBytes = allRaw.reduce((sum, g) => {
+      return sum + Math.round((g.fileCount - 1) * (g.totalSize / g.fileCount));
+    }, 0);
 
-      const fileCount = parseInt(row.file_count);
-      const totalSize = Number(row.total_size);
+    // Apply pagination to the merged list
+    const page = allRaw.slice(pageOffset, pageOffset + pageLimit);
+
+    // ── 4. Enrich each group with per-file details ──────────────────────────
+    const groups = await Promise.all(page.map(async (raw) => {
+      let filesResult;
+
+      if (raw.matchType === "HASH_IDENTICAL") {
+        filesResult = await db.execute(sql`
+          SELECT
+            i.id,
+            i.path,
+            i.filename,
+            i.extension,
+            i.file_type      AS "fileType",
+            i.size_bytes     AS "sizeBytes",
+            i.modified_at    AS "modifiedAt",
+            i.folder,
+            i.content_hash   AS "contentHash",
+            m.id             AS "mediaId",
+            m.thumbnail_path AS "thumbnailPath",
+            m.width,
+            m.height,
+            m.duration_seconds AS "durationSeconds",
+            m.date_taken     AS "dateTaken",
+            m.date_created   AS "dateCreated",
+            m.camera_make    AS "cameraMake",
+            m.camera_model   AS "cameraModel"
+          FROM indexed_files i
+          LEFT JOIN media_files m
+            ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
+          WHERE i.content_hash = ${raw.groupKey}
+          LIMIT 10
+        `);
+      } else {
+        // PERCEPTUAL_SIMILAR: join on quickFingerprint
+        filesResult = await db.execute(sql`
+          SELECT
+            i.id,
+            i.path,
+            i.filename,
+            i.extension,
+            i.file_type      AS "fileType",
+            i.size_bytes     AS "sizeBytes",
+            i.modified_at    AS "modifiedAt",
+            i.folder,
+            i.content_hash   AS "contentHash",
+            m.id             AS "mediaId",
+            m.thumbnail_path AS "thumbnailPath",
+            m.width,
+            m.height,
+            m.duration_seconds AS "durationSeconds",
+            m.date_taken     AS "dateTaken",
+            m.date_created   AS "dateCreated",
+            m.camera_make    AS "cameraMake",
+            m.camera_model   AS "cameraModel"
+          FROM media_files m
+          JOIN indexed_files i
+            ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
+          WHERE m.quick_fingerprint = ${raw.groupKey}
+          LIMIT 10
+        `);
+      }
+
+      const wastedBytes = raw.fileCount > 1
+        ? Math.round((raw.fileCount - 1) * (raw.totalSize / raw.fileCount))
+        : 0;
+
       return {
-        hash:              row.content_hash,
-        fileCount,
-        totalWastedBytes:  fileCount > 1
-          ? Math.round((fileCount - 1) * (totalSize / fileCount))
-          : 0,
-        matchType:         "HASH_IDENTICAL",
-        matchConfidence:   5,
-        files:             filesResult.rows,
+        hash:             raw.matchType === "HASH_IDENTICAL"
+          ? raw.groupKey
+          : `fp:${raw.groupKey}`,
+        fileCount:        raw.fileCount,
+        totalWastedBytes: wastedBytes,
+        matchType:        raw.matchType,
+        matchConfidence:  raw.matchConfidence,
+        files:            filesResult.rows,
       };
     }));
 
-    res.json({
-      groups,
-      totalGroups:      parseInt(totalGroups),
-      totalWastedBytes: Number(totalWasted),
-    });
+    res.json({ groups, totalGroups, totalWastedBytes });
   } catch (e: any) {
     console.error("[cleanup/duplicates]", e);
     res.status(500).json({ error: "Failed to get duplicates" });
@@ -196,22 +269,40 @@ router.get("/cleanup/empty-folders", async (_req, res) => {
 
 router.get("/cleanup/summary", async (_req, res) => {
   try {
-    const dupGroupsResult = await db.execute(sql`
-      SELECT COUNT(*) as "dupGroups" FROM (
-        SELECT content_hash FROM ${indexedFilesTable}
-        WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
-      ) t
-    `);
-    const dupWastedResult = await db.execute(sql`
-      SELECT COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
+    // Exact-hash duplicate groups
+    const exactDupResult = await db.execute(sql`
+      SELECT COUNT(*) as "dupGroups", COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
         SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted
         FROM ${indexedFilesTable}
         WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
 
-    const dupGroups = (dupGroupsResult.rows[0] as any)?.dupGroups ?? 0;
-    const dupWasted  = (dupWastedResult.rows[0] as any)?.dupWasted ?? 0;
+    // Perceptual-hash duplicate groups (same fingerprint, not all same content_hash)
+    const perceptualDupResult = await db.execute(sql`
+      SELECT COUNT(*) as "percGroups", COALESCE(SUM(t.wasted), 0) as "percWasted" FROM (
+        SELECT (COUNT(DISTINCT m.id) - 1) * MAX(i.size_bytes) AS wasted
+        FROM ${mediaFilesTable} m
+        JOIN ${indexedFilesTable} i
+          ON REPLACE(i.path, chr(92), '/') =
+             REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
+        WHERE m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
+        GROUP BY m.quick_fingerprint
+        HAVING COUNT(DISTINCT m.id) > 1
+          AND NOT (
+            COUNT(DISTINCT i.content_hash) = 1
+            AND MIN(i.content_hash) IS NOT NULL
+          )
+      ) t
+    `);
+
+    const exactDupGroups  = Number((exactDupResult.rows[0] as any)?.dupGroups  ?? 0);
+    const exactDupWasted  = Number((exactDupResult.rows[0] as any)?.dupWasted   ?? 0);
+    const percDupGroups   = Number((perceptualDupResult.rows[0] as any)?.percGroups ?? 0);
+    const percDupWasted   = Number((perceptualDupResult.rows[0] as any)?.percWasted  ?? 0);
+
+    const dupGroups = exactDupGroups + percDupGroups;
+    const dupWasted = exactDupWasted + percDupWasted;
 
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
@@ -236,8 +327,8 @@ router.get("/cleanup/summary", async (_req, res) => {
     }
 
     res.json({
-      duplicateGroups:       parseInt(dupGroups),
-      duplicateWastedBytes:  Number(dupWasted),
+      duplicateGroups:       dupGroups,
+      duplicateWastedBytes:  dupWasted,
       largeFileCount:        largeFiles,
       largeFilesBytes:       Number(largeBytes),
       oldFileCount:          oldFiles,
@@ -392,6 +483,5 @@ router.get("/cleanup/history", async (_req, res) => {
 
 // Unused import suppression
 void archivesTable;
-void mediaFilesTable;
 
 export default router;

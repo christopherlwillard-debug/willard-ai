@@ -113,9 +113,14 @@ function computeKeepDecision(files: DuplicateFileInfo[], preset: KeepPreset): Ke
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+const MATCH_TYPE_LABELS: Record<string, string> = {
+  HASH_IDENTICAL:    "Hash Identical",
+  PERCEPTUAL_SIMILAR: "Visually Similar",
+};
+
 function DuplicateTypeBadge({ matchType, confidence }: { matchType: string; confidence: number }) {
   const stars = Math.min(5, Math.max(0, confidence));
-  const label = matchType === "HASH_IDENTICAL" ? "Hash Identical" : matchType.replace(/_/g, " ");
+  const label = MATCH_TYPE_LABELS[matchType] ?? matchType.replace(/_/g, " ");
   return (
     <div className="flex items-center gap-1.5">
       <div className="flex">

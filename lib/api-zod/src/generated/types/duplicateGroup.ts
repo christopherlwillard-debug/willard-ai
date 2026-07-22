@@ -6,12 +6,13 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DuplicateFileInfo } from './duplicateFileInfo';
+import type { DuplicateGroupMatchType } from './duplicateGroupMatchType';
 
 export interface DuplicateGroup {
   hash: string;
   fileCount: number;
   totalWastedBytes: number;
-  matchType: string;
+  matchType: DuplicateGroupMatchType;
   matchConfidence: number;
   files: DuplicateFileInfo[];
 }

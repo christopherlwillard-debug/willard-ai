@@ -541,7 +541,7 @@ export const GetTopFilesResponse = zod.array(GetTopFilesResponseItem)
 
 
 /**
- * @summary Get groups of duplicate files (by hash)
+ * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
  */
 export const GetDuplicateFilesQueryParams = zod.object({
   "limit": zod.coerce.number().optional(),
@@ -553,7 +553,7 @@ export const GetDuplicateFilesResponse = zod.object({
   "hash": zod.string(),
   "fileCount": zod.number(),
   "totalWastedBytes": zod.number(),
-  "matchType": zod.string(),
+  "matchType": zod.enum(['HASH_IDENTICAL', 'PERCEPTUAL_SIMILAR']),
   "matchConfidence": zod.number(),
   "files": zod.array(zod.object({
   "id": zod.number(),
