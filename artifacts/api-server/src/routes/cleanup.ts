@@ -78,7 +78,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
           m.camera_model   AS "cameraModel"
         FROM indexed_files i
         LEFT JOIN media_files m
-          ON i.path = (m.nas_path || '/' || m.relative_path)
+          ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
         WHERE i.content_hash = ${row.content_hash}
         LIMIT 10
       `);
@@ -305,9 +305,11 @@ router.post("/cleanup/execute", async (req, res) => {
           }
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
+          // Prefix filename with fileId to prevent collision when two deleted files share the same basename
           const trashDir = path.join(nasPath, "WillardAI", ".Trash", trashTimestamp);
           fs.mkdirSync(trashDir, { recursive: true });
-          const destPath = path.join(trashDir, file.filename);
+          const safeBasename = `${fileId}_${file.filename}`;
+          const destPath = path.join(trashDir, safeBasename);
           fs.renameSync(filePath, destPath);
 
           // Record in trash manifest so user can locate the file later
@@ -323,10 +325,11 @@ router.post("/cleanup/execute", async (req, res) => {
         }
 
         // Mark media_files row as RECYCLED (soft-delete marker)
+        // Use chr(92) for backslash to normalize Windows \ vs POSIX / separators
         await db.execute(sql`
           UPDATE media_files
           SET last_scan_action = 'RECYCLED'
-          WHERE nas_path || '/' || relative_path = ${filePath}
+          WHERE REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${filePath}, chr(92), '/')
         `);
 
         recycled++;

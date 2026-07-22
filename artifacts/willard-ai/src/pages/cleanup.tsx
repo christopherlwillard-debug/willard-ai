@@ -862,7 +862,7 @@ export default function Cleanup() {
 
       {/* ── EXECUTE CONFIRM MODAL ────────────────────────────────────────── */}
       <Dialog open={showExecuteModal} onOpenChange={setShowExecuteModal}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="font-mono text-sm flex items-center gap-2">
               <Trash2 className="w-4 h-4 text-destructive" /> CONFIRM_CLEANUP
@@ -876,18 +876,46 @@ export default function Cleanup() {
                 This action cannot be undone from Willard AI.
               </p>
             </div>
-            <div className="space-y-1.5 font-mono text-sm">
-              <div className="flex justify-between text-muted-foreground">
-                <span>Groups to process</span>
-                <span className="text-foreground">{queue.length}</span>
+            <div className="grid grid-cols-3 gap-3 font-mono text-sm">
+              <div className="text-center border rounded p-2">
+                <div className="text-foreground font-bold">{queue.length}</div>
+                <div className="text-[10px] text-muted-foreground">groups</div>
               </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>Files to delete</span>
-                <span className="text-destructive">{queueDeleteCount}</span>
+              <div className="text-center border border-destructive/30 rounded p-2">
+                <div className="text-destructive font-bold">{queueDeleteCount}</div>
+                <div className="text-[10px] text-muted-foreground">files to delete</div>
               </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>Space recovered</span>
-                <span className="text-green-400">{formatBytes(queueSavings)}</span>
+              <div className="text-center border border-green-500/30 rounded p-2">
+                <div className="text-green-400 font-bold">{formatBytes(queueSavings)}</div>
+                <div className="text-[10px] text-muted-foreground">recovered</div>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Files to be deleted</p>
+              <div className="max-h-48 overflow-y-auto space-y-1 border rounded p-2 bg-secondary/5">
+                {queue.flatMap(entry =>
+                  entry.deleteFilenames.map((name, i) => (
+                    <div key={`${entry.groupHash}-${i}`} className="flex items-center gap-2 font-mono text-[10px]">
+                      <XCircle className="w-3 h-3 text-destructive flex-shrink-0" />
+                      <span className="text-destructive/80 truncate flex-1" title={name}>{name}</span>
+                      <span className="text-muted-foreground/60 whitespace-nowrap">{formatBytes(entry.totalSavedBytes)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Files to keep</p>
+              <div className="max-h-24 overflow-y-auto space-y-1 border rounded p-2 bg-secondary/5">
+                {queue.map(entry => (
+                  <div key={entry.groupHash} className="flex items-center gap-2 font-mono text-[10px]">
+                    <CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+                    <span className="text-green-400/80 truncate flex-1" title={entry.keepFilename}>{entry.keepFilename}</span>
+                    <span className="text-muted-foreground/60 whitespace-nowrap truncate max-w-[120px]">{entry.reason.split(" — ")[0]}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
