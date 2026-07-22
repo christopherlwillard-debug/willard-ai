@@ -384,10 +384,10 @@ export default function Cleanup() {
 
   const { mutate: restoreFile } = useRestoreFromTrash();
 
-  const handleRestore = (trashPath: string, originalPath: string) => {
+  const handleRestore = (trashPath: string) => {
     setRestoringPath(trashPath);
     setRestoreError(null);
-    restoreFile({ data: { trashPath, originalPath } }, {
+    restoreFile({ data: { trashPath } }, {
       onSuccess: () => {
         setRestoringPath(null);
         qc.invalidateQueries({ queryKey: getGetCleanupTrashQueryKey() });
@@ -758,7 +758,7 @@ export default function Cleanup() {
                           variant="outline"
                           className="shrink-0 h-7 px-2 text-[10px]"
                           disabled={restoringPath === entry.trashPath}
-                          onClick={() => handleRestore(entry.trashPath, entry.originalPath)}
+                          onClick={() => handleRestore(entry.trashPath)}
                         >
                           <RotateCcw className="w-3 h-3 mr-1" />
                           {restoringPath === entry.trashPath ? "Restoring…" : "Restore"}

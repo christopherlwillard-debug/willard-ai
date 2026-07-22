@@ -8,5 +8,6 @@
 
 export interface RestoreRequest {
   trashPath: string;
-  originalPath: string;
+  /** Ignored by the server — destination is derived from the manifest to prevent arbitrary file moves. Kept for client compatibility. */
+  originalPath?: string;
 }

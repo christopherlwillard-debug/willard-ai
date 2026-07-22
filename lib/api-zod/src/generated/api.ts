@@ -708,7 +708,7 @@ export const GetCleanupTrashResponse = zod.object({
  */
 export const RestoreFromTrashBody = zod.object({
   "trashPath": zod.string(),
-  "originalPath": zod.string()
+  "originalPath": zod.string().optional().describe('Ignored by the server — destination is derived from the manifest to prevent arbitrary file moves. Kept for client compatibility.')
 })
 
 export const RestoreFromTrashResponse = zod.object({

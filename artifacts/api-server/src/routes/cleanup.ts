@@ -500,9 +500,11 @@ router.get("/cleanup/trash", async (_req, res) => {
 
 router.post("/cleanup/restore", async (req, res) => {
   try {
-    const { trashPath, originalPath } = req.body as { trashPath?: string; originalPath?: string };
-    if (!trashPath || !originalPath) {
-      res.status(400).json({ error: "trashPath and originalPath are required" });
+    // Accept trashPath from client; originalPath is intentionally ignored —
+    // we derive the destination from the manifest to prevent arbitrary file moves.
+    const { trashPath } = req.body as { trashPath?: string };
+    if (!trashPath) {
+      res.status(400).json({ error: "trashPath is required" });
       return;
     }
 
@@ -513,42 +515,79 @@ router.post("/cleanup/restore", async (req, res) => {
       return;
     }
 
-    // Verify the file still exists in trash
-    if (!fs.existsSync(trashPath)) {
-      res.status(404).json({ error: "File not found in trash — it may have been permanently removed" });
+    // ── Path constraint: trashPath must resolve under <nasPath>/WillardAI/.Trash ──
+    const trashDir          = path.resolve(path.join(nasPath, "WillardAI", ".Trash"));
+    const resolvedTrashPath = path.resolve(trashPath);
+    if (!resolvedTrashPath.startsWith(trashDir + path.sep) &&
+        resolvedTrashPath !== trashDir) {
+      res.status(400).json({ error: "Invalid trashPath — must be within the .Trash directory" });
       return;
     }
 
-    // Check expiry from manifest before restoring
+    // ── Require a manifest entry — do NOT trust client-supplied paths ─────────
     const manifestPath = trashManifestPath(nasPath);
-    if (fs.existsSync(manifestPath)) {
-      const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
-      const entry = lines
-        .map(l => { try { return JSON.parse(l); } catch { return null; } })
-        .find((e: any) => e?.trashPath === trashPath);
-      if (entry?.expiresAt && new Date(entry.expiresAt).getTime() < Date.now()) {
-        res.status(409).json({ error: "Entry has expired — the file was permanently removed" });
-        return;
-      }
+    if (!fs.existsSync(manifestPath)) {
+      res.status(404).json({ error: "No trash manifest found" });
+      return;
     }
 
-    // Ensure destination directory exists
-    fs.mkdirSync(path.dirname(originalPath), { recursive: true });
+    const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
+    const parsed = lines.map(l => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } });
+    const entry  = parsed.find(e => e && path.resolve(String(e.trashPath ?? "")) === resolvedTrashPath);
 
-    // Move file back
-    fs.renameSync(trashPath, originalPath);
-
-    // Remove this entry from the manifest (rewrite without the restored line)
-    if (fs.existsSync(manifestPath)) {
-      const lines  = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
-      const kept   = lines.filter(l => {
-        try { return JSON.parse(l)?.trashPath !== trashPath; }
-        catch { return true; }
-      });
-      fs.writeFileSync(manifestPath, kept.length ? kept.join("\n") + "\n" : "");
+    if (!entry) {
+      res.status(404).json({ error: "File not found in trash manifest — it may have already been restored or permanently removed" });
+      return;
     }
 
-    // Clear RECYCLED marker so the next scan re-indexes the file normally
+    // ── Check expiry ──────────────────────────────────────────────────────────
+    if (entry.expiresAt && new Date(String(entry.expiresAt)).getTime() < Date.now()) {
+      res.status(409).json({ error: "Entry has expired — the file was permanently removed" });
+      return;
+    }
+
+    // ── Derive originalPath from manifest (not client-supplied) ───────────────
+    const originalPath = String(entry.originalPath ?? "");
+    if (!originalPath) {
+      res.status(500).json({ error: "Manifest entry is missing originalPath" });
+      return;
+    }
+
+    // ── originalPath must resolve under nasPath ───────────────────────────────
+    const resolvedOriginalPath = path.resolve(originalPath);
+    const resolvedNasPath      = path.resolve(nasPath);
+    if (!resolvedOriginalPath.startsWith(resolvedNasPath + path.sep) &&
+        resolvedOriginalPath !== resolvedNasPath) {
+      res.status(400).json({ error: "Cannot restore — destination is outside the configured library" });
+      return;
+    }
+
+    // ── Destination collision check ───────────────────────────────────────────
+    if (fs.existsSync(resolvedOriginalPath)) {
+      res.status(409).json({ error: "A file already exists at the restore destination — rename or remove it first" });
+      return;
+    }
+
+    // ── Verify the file still exists in trash ────────────────────────────────
+    if (!fs.existsSync(resolvedTrashPath)) {
+      res.status(404).json({ error: "File not found in trash folder — it may have been permanently removed" });
+      return;
+    }
+
+    // ── Ensure destination directory exists ───────────────────────────────────
+    fs.mkdirSync(path.dirname(resolvedOriginalPath), { recursive: true });
+
+    // ── Move file back ────────────────────────────────────────────────────────
+    fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
+
+    // ── Remove this entry from the manifest (rewrite without the restored line) ─
+    const kept = lines.filter(l => {
+      try { return path.resolve(String((JSON.parse(l) as Record<string, unknown>).trashPath ?? "")) !== resolvedTrashPath; }
+      catch { return true; }
+    });
+    fs.writeFileSync(manifestPath, kept.length ? kept.join("\n") + "\n" : "");
+
+    // ── Clear RECYCLED marker so the next scan re-indexes the file normally ────
     await db.execute(sql`
       UPDATE media_files
       SET last_scan_action = NULL
