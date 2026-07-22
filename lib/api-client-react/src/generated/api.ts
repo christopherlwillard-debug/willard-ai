@@ -31,6 +31,9 @@ import type {
   AuthSetupInput,
   AuthSetupResult,
   AuthStatus,
+  CleanupExecuteRequest,
+  CleanupExecuteResult,
+  CleanupHistoryResult,
   CleanupSummary,
   DashboardSummary,
   DocumentListResult,
@@ -2676,6 +2679,153 @@ export function useGetCleanupSummary<TData = Awaited<ReturnType<typeof getCleanu
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetCleanupSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getExecuteCleanupUrl = () => {
+
+
+
+
+  return `/api/cleanup/execute`
+}
+
+/**
+ * @summary Move selected files to Recycle Bin / .Trash and record history
+ */
+export const executeCleanup = async (cleanupExecuteRequest: CleanupExecuteRequest, options?: RequestInit): Promise<CleanupExecuteResult> => {
+
+  return customFetch<CleanupExecuteResult>(getExecuteCleanupUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(cleanupExecuteRequest)
+  }
+);}
+
+
+
+
+export const getExecuteCleanupMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeCleanup>>, TError,{data: BodyType<CleanupExecuteRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof executeCleanup>>, TError,{data: BodyType<CleanupExecuteRequest>}, TContext> => {
+
+const mutationKey = ['executeCleanup'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof executeCleanup>>, {data: BodyType<CleanupExecuteRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  executeCleanup(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ExecuteCleanupMutationResult = NonNullable<Awaited<ReturnType<typeof executeCleanup>>>
+    export type ExecuteCleanupMutationBody = BodyType<CleanupExecuteRequest>
+    export type ExecuteCleanupMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Move selected files to Recycle Bin / .Trash and record history
+ */
+export const useExecuteCleanup = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeCleanup>>, TError,{data: BodyType<CleanupExecuteRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof executeCleanup>>,
+        TError,
+        {data: BodyType<CleanupExecuteRequest>},
+        TContext
+      > => {
+      return useMutation(getExecuteCleanupMutationOptions(options));
+    }
+
+export const getGetCleanupHistoryUrl = () => {
+
+
+
+
+  return `/api/cleanup/history`
+}
+
+/**
+ * @summary Get cleanup history sessions (newest first)
+ */
+export const getCleanupHistory = async ( options?: RequestInit): Promise<CleanupHistoryResult> => {
+
+  return customFetch<CleanupHistoryResult>(getGetCleanupHistoryUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCleanupHistoryQueryKey = () => {
+    return [
+    `/api/cleanup/history`
+    ] as const;
+    }
+
+
+export const getGetCleanupHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getCleanupHistory>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCleanupHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCleanupHistoryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCleanupHistory>>> = ({ signal }) => getCleanupHistory({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCleanupHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCleanupHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getCleanupHistory>>>
+export type GetCleanupHistoryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get cleanup history sessions (newest first)
+ */
+
+export function useGetCleanupHistory<TData = Awaited<ReturnType<typeof getCleanupHistory>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCleanupHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCleanupHistoryQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

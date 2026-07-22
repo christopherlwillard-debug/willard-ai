@@ -407,17 +407,79 @@ export interface FolderStat {
   totalSizeBytes: number;
 }
 
+export interface DuplicateFileInfo {
+  id: number;
+  path: string;
+  filename: string;
+  extension: string;
+  fileType: string;
+  sizeBytes: number;
+  /** @nullable */
+  modifiedAt?: string | null;
+  folder: string;
+  /** @nullable */
+  contentHash?: string | null;
+  /** @nullable */
+  mediaId?: number | null;
+  /** @nullable */
+  thumbnailPath?: string | null;
+  /** @nullable */
+  width?: number | null;
+  /** @nullable */
+  height?: number | null;
+  /** @nullable */
+  durationSeconds?: number | null;
+  /** @nullable */
+  dateTaken?: string | null;
+  /** @nullable */
+  dateCreated?: string | null;
+  /** @nullable */
+  cameraMake?: string | null;
+  /** @nullable */
+  cameraModel?: string | null;
+}
+
 export interface DuplicateGroup {
   hash: string;
   fileCount: number;
   totalWastedBytes: number;
-  files: IndexedFile[];
+  matchType: string;
+  matchConfidence: number;
+  files: DuplicateFileInfo[];
 }
 
 export interface DuplicateGroupResult {
   groups: DuplicateGroup[];
   totalGroups: number;
   totalWastedBytes: number;
+}
+
+export interface CleanupExecuteRequest {
+  deleteFileIds: number[];
+}
+
+export interface CleanupExecuteResult {
+  recycled: number;
+  recoveredBytes: number;
+  errors: string[];
+}
+
+export type CleanupHistorySessionFilesItem = {
+  path: string;
+  sizeBytes: number;
+};
+
+export interface CleanupHistorySession {
+  ts: string;
+  recycled: number;
+  recoveredBytes: number;
+  platform: string;
+  files: CleanupHistorySessionFilesItem[];
+  errors: string[];
+}
+
+export interface CleanupHistoryResult {
+  sessions: CleanupHistorySession[];
 }
 
 export interface LargeFileResult {

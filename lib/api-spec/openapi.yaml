@@ -717,6 +717,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/CleanupSummary"
 
+  /cleanup/execute:
+    post:
+      operationId: executeCleanup
+      tags: [cleanup]
+      summary: Move selected files to Recycle Bin / .Trash and record history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CleanupExecuteRequest"
+      responses:
+        "200":
+          description: Cleanup result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupExecuteResult"
+
+  /cleanup/history:
+    get:
+      operationId: getCleanupHistory
+      tags: [cleanup]
+      summary: Get cleanup history sessions (newest first)
+      responses:
+        "200":
+          description: Cleanup history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupHistoryResult"
 
   # ── AI Chat ───────────────────────────────────────────────────────────────
   /openai/conversations:
@@ -1996,6 +2027,54 @@ components:
         - fileCount
         - totalSizeBytes
 
+    DuplicateFileInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        path:
+          type: string
+        filename:
+          type: string
+        extension:
+          type: string
+        fileType:
+          type: string
+        sizeBytes:
+          type: integer
+        modifiedAt:
+          type: ["string", "null"]
+        folder:
+          type: string
+        contentHash:
+          type: ["string", "null"]
+        mediaId:
+          type: ["integer", "null"]
+        thumbnailPath:
+          type: ["string", "null"]
+        width:
+          type: ["integer", "null"]
+        height:
+          type: ["integer", "null"]
+        durationSeconds:
+          type: ["number", "null"]
+        dateTaken:
+          type: ["string", "null"]
+        dateCreated:
+          type: ["string", "null"]
+        cameraMake:
+          type: ["string", "null"]
+        cameraModel:
+          type: ["string", "null"]
+      required:
+        - id
+        - path
+        - filename
+        - extension
+        - fileType
+        - sizeBytes
+        - folder
+
     DuplicateGroup:
       type: object
       properties:
@@ -2005,14 +2084,20 @@ components:
           type: integer
         totalWastedBytes:
           type: integer
+        matchType:
+          type: string
+        matchConfidence:
+          type: integer
         files:
           type: array
           items:
-            $ref: "#/components/schemas/IndexedFile"
+            $ref: "#/components/schemas/DuplicateFileInfo"
       required:
         - hash
         - fileCount
         - totalWastedBytes
+        - matchType
+        - matchConfidence
         - files
 
     DuplicateGroupResult:
@@ -2030,6 +2115,77 @@ components:
         - groups
         - totalGroups
         - totalWastedBytes
+
+    CleanupExecuteRequest:
+      type: object
+      properties:
+        deleteFileIds:
+          type: array
+          items:
+            type: integer
+      required:
+        - deleteFileIds
+
+    CleanupExecuteResult:
+      type: object
+      properties:
+        recycled:
+          type: integer
+        recoveredBytes:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
+      required:
+        - recycled
+        - recoveredBytes
+        - errors
+
+    CleanupHistorySession:
+      type: object
+      properties:
+        ts:
+          type: string
+        recycled:
+          type: integer
+        recoveredBytes:
+          type: integer
+        platform:
+          type: string
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              sizeBytes:
+                type: integer
+            required:
+              - path
+              - sizeBytes
+        errors:
+          type: array
+          items:
+            type: string
+      required:
+        - ts
+        - recycled
+        - recoveredBytes
+        - platform
+        - files
+        - errors
+
+    CleanupHistoryResult:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupHistorySession"
+      required:
+        - sessions
 
     LargeFileResult:
       type: object

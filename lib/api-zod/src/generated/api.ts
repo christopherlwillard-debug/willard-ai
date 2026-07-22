@@ -149,10 +149,7 @@ export const GetSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish(),
-  "watcherPollIntervalSeconds": zod.number().optional(),
-  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
-  "rawConversionEnabled": zod.boolean().optional()
+  "celebrationShownAt": zod.string().nullish()
 })
 
 
@@ -167,10 +164,7 @@ export const UpdateSettingsBody = zod.object({
   "otherFilesDestination": zod.string().optional(),
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "onboardingDismissed": zod.boolean().optional(),
-  "celebrationShown": zod.boolean().optional(),
-  "watcherPollIntervalSeconds": zod.number().int().min(10).max(3600).optional(),
-  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
-  "rawConversionEnabled": zod.boolean().optional()
+  "celebrationShown": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -185,10 +179,7 @@ export const UpdateSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish(),
-  "watcherPollIntervalSeconds": zod.number().optional(),
-  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
-  "rawConversionEnabled": zod.boolean().optional()
+  "celebrationShownAt": zod.string().nullish()
 })
 
 
@@ -562,6 +553,8 @@ export const GetDuplicateFilesResponse = zod.object({
   "hash": zod.string(),
   "fileCount": zod.number(),
   "totalWastedBytes": zod.number(),
+  "matchType": zod.string(),
+  "matchConfidence": zod.number(),
   "files": zod.array(zod.object({
   "id": zod.number(),
   "path": zod.string(),
@@ -569,10 +562,18 @@ export const GetDuplicateFilesResponse = zod.object({
   "extension": zod.string(),
   "fileType": zod.string(),
   "sizeBytes": zod.number(),
-  "modifiedAt": zod.string().nullable(),
+  "modifiedAt": zod.string().nullish(),
   "folder": zod.string(),
-  "source": zod.string(),
-  "indexedAt": zod.string()
+  "contentHash": zod.string().nullish(),
+  "mediaId": zod.number().nullish(),
+  "thumbnailPath": zod.string().nullish(),
+  "width": zod.number().nullish(),
+  "height": zod.number().nullish(),
+  "durationSeconds": zod.number().nullish(),
+  "dateTaken": zod.string().nullish(),
+  "dateCreated": zod.string().nullish(),
+  "cameraMake": zod.string().nullish(),
+  "cameraModel": zod.string().nullish()
 }))
 })),
   "totalGroups": zod.number(),
@@ -651,6 +652,38 @@ export const GetCleanupSummaryResponse = zod.object({
   "largeFilesBytes": zod.number(),
   "oldFileCount": zod.number(),
   "emptyFolderCount": zod.number()
+})
+
+
+/**
+ * @summary Move selected files to Recycle Bin / .Trash and record history
+ */
+export const ExecuteCleanupBody = zod.object({
+  "deleteFileIds": zod.array(zod.number())
+})
+
+export const ExecuteCleanupResponse = zod.object({
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "errors": zod.array(zod.string())
+})
+
+
+/**
+ * @summary Get cleanup history sessions (newest first)
+ */
+export const GetCleanupHistoryResponse = zod.object({
+  "sessions": zod.array(zod.object({
+  "ts": zod.string(),
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "platform": zod.string(),
+  "files": zod.array(zod.object({
+  "path": zod.string(),
+  "sizeBytes": zod.number()
+})),
+  "errors": zod.array(zod.string())
+}))
 })
 
 

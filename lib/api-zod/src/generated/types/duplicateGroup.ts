@@ -5,11 +5,13 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
-import type { IndexedFile } from './indexedFile';
+import type { DuplicateFileInfo } from './duplicateFileInfo';
 
 export interface DuplicateGroup {
   hash: string;
   fileCount: number;
   totalWastedBytes: number;
-  files: IndexedFile[];
+  matchType: string;
+  matchConfidence: number;
+  files: DuplicateFileInfo[];
 }
