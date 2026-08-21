@@ -19,6 +19,39 @@ import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
 
+const DEFAULT_ALLOWED_ORIGINS = new Set([
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+]);
+
+function configuredAppOrigins(): Set<string> {
+  const origins = new Set(DEFAULT_ALLOWED_ORIGINS);
+  const addOrigin = (value: string) => {
+    const candidate = value.trim();
+    if (!candidate) return;
+    try {
+      origins.add(new URL(candidate.includes("://") ? candidate : `https://${candidate}`).origin);
+    } catch {
+      logger.warn({ value: candidate }, "Ignoring invalid configured app origin");
+    }
+  };
+  for (const value of (process.env["REPLIT_DOMAINS"] ?? "").split(",")) addOrigin(value);
+  if (process.env["REPLIT_DEV_DOMAIN"]) addOrigin(process.env["REPLIT_DEV_DOMAIN"]);
+  for (const value of (process.env["WILLARD_ALLOWED_ORIGINS"] ?? "").split(",")) addOrigin(value);
+  return origins;
+}
+
+const allowedAppOrigins = configuredAppOrigins();
+function isAllowedAppOrigin(origin: string): boolean {
+  try {
+    return allowedAppOrigins.has(new URL(origin).origin);
+  } catch {
+    return false;
+  }
+}
+
 export async function bootstrapSessionTable(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
@@ -276,9 +309,25 @@ app.use(
     },
   }),
 );
-app.use(cors({ credentials: true, origin: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(cors({
+  credentials: true,
+  origin: (origin, callback) => {
+    // Requests without an Origin header are not browser cross-site requests.
+    callback(null, !origin || isAllowedAppOrigin(origin));
+  },
+}));
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+    const origin = req.headers.origin;
+    if (origin && !isAllowedAppOrigin(origin)) {
+      res.status(403).json({ error: "Untrusted request origin." });
+      return;
+    }
+  }
+  next();
+});
+app.use(express.json({ limit: "32kb" }));
+app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 
 app.use(
   session({

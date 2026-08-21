@@ -6,10 +6,43 @@ import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
+import { z } from "zod";
 
 const router: IRouter = Router();
 
 const BCRYPT_ROUNDS = 12;
+const passwordSchema = z.string().min(6, "Password must be at least 6 characters.").max(256, "Password is too long.");
+const setupSchema = z.object({ password: passwordSchema }).strict();
+const loginSchema = z.object({ password: z.string().min(1, "Password required.").max(256, "Password is too long.") }).strict();
+const recoverySchema = z.object({
+  recoveryKey: z.string().min(1, "Recovery key and new password are required.").max(128),
+  newPassword: passwordSchema,
+}).strict();
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Current and new password are required.").max(256),
+  newPassword: passwordSchema,
+}).strict();
+
+function validationError(result: { success: false; error: z.ZodError }): string {
+  return result.error.issues[0]?.message ?? "Invalid request.";
+}
+
+function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function establishSession(req: Request): Promise<void> {
+  await regenerateSession(req);
+  const sess = req.session as any;
+  const now = new Date().toISOString();
+  sess.authenticated = true;
+  sess.deviceName = getDeviceName(req);
+  sess.ip = req.ip ?? "";
+  sess.createdAt = now;
+  sess.lastSeenAt = now;
+}
 
 function normalizeRecoveryKey(key: string): string {
   return key.replace(/[\s-]/g, "").toUpperCase();
@@ -83,11 +116,12 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
       res.status(409).json({ error: "Password already set. Use change-password instead." });
       return;
     }
-    const { password } = req.body as { password?: string };
-    if (!password || password.length < 6) {
-      res.status(400).json({ error: "Password must be at least 6 characters." });
+    const parsed = setupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: validationError(parsed) });
       return;
     }
+    const { password } = parsed.data;
     const recoveryKey = generateRecoveryKey();
     const recoveryKeyNormalized = normalizeRecoveryKey(recoveryKey);
     const [passwordHash, recoveryKeyHash] = await Promise.all([
@@ -98,12 +132,7 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
       .set({ passwordHash, recoveryKeyHash })
       .where(eq(appSettingsTable.id, settings.id));
 
-    const sess = req.session as any;
-    sess.authenticated = true;
-    sess.deviceName = getDeviceName(req);
-    sess.ip = req.ip ?? "";
-    sess.createdAt = new Date().toISOString();
-    sess.lastSeenAt = new Date().toISOString();
+    await establishSession(req);
 
     res.json({ ok: true, recoveryKey });
   } catch (err) {
@@ -119,22 +148,18 @@ router.post("/auth/login", loginRateLimiter, async (req: Request, res: Response)
       res.status(400).json({ error: "No password set. Complete setup first." });
       return;
     }
-    const { password } = req.body as { password?: string };
-    if (!password) {
-      res.status(400).json({ error: "Password required." });
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: validationError(parsed) });
       return;
     }
+    const { password } = parsed.data;
     const valid = await bcrypt.compare(password, settings.passwordHash);
     if (!valid) {
       res.status(401).json({ error: "Incorrect password." });
       return;
     }
-    const sess = req.session as any;
-    sess.authenticated = true;
-    sess.deviceName = getDeviceName(req);
-    sess.ip = req.ip ?? "";
-    sess.createdAt = new Date().toISOString();
-    sess.lastSeenAt = new Date().toISOString();
+    await establishSession(req);
 
     res.json({ ok: true });
   } catch {
@@ -160,15 +185,12 @@ router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Respo
       res.status(400).json({ error: "No recovery key configured." });
       return;
     }
-    const { recoveryKey, newPassword } = req.body as { recoveryKey?: string; newPassword?: string };
-    if (!recoveryKey || !newPassword) {
-      res.status(400).json({ error: "Recovery key and new password are required." });
+    const parsed = recoverySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: validationError(parsed) });
       return;
     }
-    if (newPassword.length < 6) {
-      res.status(400).json({ error: "Password must be at least 6 characters." });
-      return;
-    }
+    const { recoveryKey, newPassword } = parsed.data;
     const normalizedKey = normalizeRecoveryKey(recoveryKey);
     const valid = await bcrypt.compare(normalizedKey, settings.recoveryKeyHash);
     if (!valid) {
@@ -180,12 +202,8 @@ router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Respo
       .set({ passwordHash: newHash })
       .where(eq(appSettingsTable.id, settings.id));
 
-    const sess = req.session as any;
-    sess.authenticated = true;
-    sess.deviceName = getDeviceName(req);
-    sess.ip = req.ip ?? "";
-    sess.createdAt = new Date().toISOString();
-    sess.lastSeenAt = new Date().toISOString();
+    await pool.query("DELETE FROM session");
+    await establishSession(req);
 
     res.json({ ok: true });
   } catch {
@@ -257,15 +275,12 @@ router.post("/auth/change-password", async (req: Request, res: Response) => {
   }
   try {
     const settings = await getOrCreateSettings();
-    const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
-    if (!currentPassword || !newPassword) {
-      res.status(400).json({ error: "Current and new password are required." });
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: validationError(parsed) });
       return;
     }
-    if (newPassword.length < 6) {
-      res.status(400).json({ error: "New password must be at least 6 characters." });
-      return;
-    }
+    const { currentPassword, newPassword } = parsed.data;
     const valid = await bcrypt.compare(currentPassword, settings.passwordHash!);
     if (!valid) {
       res.status(401).json({ error: "Current password is incorrect." });
@@ -275,6 +290,8 @@ router.post("/auth/change-password", async (req: Request, res: Response) => {
     await db.update(appSettingsTable)
       .set({ passwordHash: newHash })
       .where(eq(appSettingsTable.id, settings.id));
+    await pool.query("DELETE FROM session");
+    await establishSession(req);
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Failed to change password" });
