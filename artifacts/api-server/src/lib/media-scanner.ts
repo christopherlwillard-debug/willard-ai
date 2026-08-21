@@ -381,6 +381,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
             ignoreSidecarFiles: row.ignoreSidecarFiles ?? true,
             ignoreEmptyFolders: row.ignoreEmptyFolders ?? false,
             followSymlinks:     row.followSymlinks     ?? false,
+            indexOtherFiles:   true,
           };
         }
       } catch { /* use defaults */ }

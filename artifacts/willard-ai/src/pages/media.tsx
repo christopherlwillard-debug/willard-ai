@@ -31,6 +31,7 @@ import {
   ImagePlus,
   Heart,
   Sparkles,
+  History,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -158,6 +159,38 @@ function formatDuration(seconds: number): string {
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatJobDuration(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt || !finishedAt) return "—";
+  const seconds = Math.max(0, (new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 1000);
+  return formatDuration(seconds);
+}
+
+function ScanHistory({ jobs }: { jobs: LibraryJob[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <div className="flex items-center gap-2 mb-1.5 text-[10px] font-mono font-semibold uppercase tracking-widest text-muted-foreground">
+        <History className="w-3.5 h-3.5" /> Scan history
+      </div>
+      <div className="space-y-1">
+        {jobs.slice(0, 5).map((job) => {
+          const summary = job.summary;
+          const label = job.profile === "FULL" ? "Full Verify" : "Quick Scan";
+          const newCount = summary?.newFiles ?? 0;
+          return (
+            <div key={job.id} className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
+              <span className="w-28 shrink-0">{formatDate(job.createdAt)}</span>
+              <span className="text-foreground">{label}</span>
+              <span className="ml-auto">{formatJobDuration(job.startedAt, job.finishedAt)}</span>
+              <span className="w-20 text-right">{newCount.toLocaleString()} new</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const TYPE_TABS: { key: MediaType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -1035,6 +1068,16 @@ export default function Media() {
     },
   });
 
+  const historyQuery = useQuery({
+    queryKey: ["library-jobs", "SCAN"],
+    queryFn: async () => {
+      const r = await fetch("/api/library/jobs?type=SCAN&limit=20");
+      if (!r.ok) throw new Error("Failed to load scan history");
+      return r.json() as Promise<{ jobs: LibraryJob[] }>;
+    },
+    staleTime: 15_000,
+  });
+
   const prevActiveStatus = useRef<string | null>(null);
   const prevActiveJobId  = useRef<number | null>(null);
   useEffect(() => {
@@ -1236,7 +1279,7 @@ export default function Media() {
           {isScanning && scanMutation.isPending ? (
             <><Loader2 className="w-3.5 h-3.5 animate-spin" />Scanning…</>
           ) : (
-            <><ScanLine className="w-3.5 h-3.5" />Full Rescan</>
+            <><ScanLine className="w-3.5 h-3.5" />Scan Library</>
           )}
         </Button>
 
@@ -1306,6 +1349,9 @@ export default function Media() {
           />
         </div>
       )}
+      <div className="px-4 shrink-0">
+        <ScanHistory jobs={historyQuery.data?.jobs ?? []} />
+      </div>
 
       {/* ── Type tabs ── */}
       <div className="flex items-center gap-1 px-4 pt-2 border-b border-border shrink-0 overflow-x-auto">

@@ -214,6 +214,16 @@ router.post("/library/scan", async (req: Request, res: Response) => {
     rootPath,
   });
 
+  if (result.errorCode === "NAS_OFFLINE") {
+    res.status(503).json({
+      code: "NAS_OFFLINE",
+      error: "NAS Not Available",
+      message: `Cannot reach ${nasPath}. Check that your NAS is online and the drive is mounted.`,
+      jobId: result.jobId,
+    });
+    return;
+  }
+
   res.json(result);
 });
 
@@ -222,6 +232,44 @@ router.post("/library/scan", async (req: Request, res: Response) => {
 router.get("/library/jobs/active", async (_req: Request, res: Response) => {
   const activeId = getActiveJobId();
   if (activeId === null) {
+    // Pausing removes the worker from the in-memory map. Keep the paused job
+    // visible to polling clients so the Library UI can render Resume instead
+    // of appearing idle.
+    const [paused] = await db.select().from(libraryJobsTable)
+      .where(or(
+        eq(libraryJobsTable.status, "PAUSED"),
+        eq(libraryJobsTable.status, "INTERRUPTED_BY_RESTART"),
+      ))
+      .orderBy(desc(libraryJobsTable.createdAt))
+      .limit(1);
+    if (paused) {
+      const saved = (paused.summary ?? {}) as {
+        partialCounters?: Record<string, number>;
+      };
+      const counters = {
+        new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0,
+        hashed: 0, thumbnails: 0, thumbnailsFailed: 0, skipped: 0, reanalyzed: 0,
+        ...saved.partialCounters,
+      };
+      const total = paused.totalFiles ?? 0;
+      res.json({
+        jobId: paused.id,
+        jobType: paused.jobType,
+        status: paused.status,
+        phase: "walking",
+        profile: paused.profile,
+        progress: total > 0 ? Math.min(100, Math.round((paused.processedFiles / total) * 100)) : 0,
+        filesProcessed: paused.processedFiles,
+        filesTotal: total,
+        currentPath: paused.cursor ?? "",
+        currentFileStartedAt: null,
+        etaSeconds: null,
+        speed: 0,
+        counters,
+        summary: null,
+      });
+      return;
+    }
     // No running job — surface the most recent completion (with summary) so
     // the UI can show the scan-summary card after the job finishes.
     res.json(getLastCompletedProgress());
@@ -234,7 +282,9 @@ router.get("/library/jobs/active", async (_req: Request, res: Response) => {
 // ── GET /api/library/jobs — paginated job history ────────────────────────────
 
 router.get("/library/jobs", async (req: Request, res: Response) => {
-  const nasPath = await getNasPath();
+  const configuredNasPath = await getNasPath();
+  const requestedNasPath = req.query["nasPath"] as string | undefined;
+  const nasPath = requestedNasPath || configuredNasPath;
   const type    = req.query["type"] as string | undefined;
   const limit   = Math.min(100, parseInt(req.query["limit"] as string) || 20);
 

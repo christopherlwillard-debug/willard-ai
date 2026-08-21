@@ -613,7 +613,24 @@ export interface StartJobOptions {
   rootPath?: string;
 }
 
-export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; alreadyRunning: boolean }> {
+export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; alreadyRunning: boolean; errorCode?: "NAS_OFFLINE" }> {
+  // Fail before preempting another job or starting any worker.  Persist the
+  // failed attempt so the history endpoint still explains why it did not run.
+  if (!await isNasAvailable(opts.nasPath)) {
+    const [failedJob] = await db.insert(libraryJobsTable).values({
+      jobType: opts.jobType,
+      profile: opts.profile,
+      priority: opts.profile === "QUICK" ? "HIGH" : opts.profile === "FULL" ? "NORMAL" : "LOW",
+      status: "FAILED",
+      cancellationReason: "NAS_OFFLINE",
+      nasPath: opts.nasPath,
+      rootPath: opts.rootPath ?? null,
+      error: "NAS path is not accessible",
+      finishedAt: new Date(),
+    }).returning({ id: libraryJobsTable.id });
+    return { jobId: failedJob.id, alreadyRunning: false, errorCode: "NAS_OFFLINE" };
+  }
+
   const priority: JobPriority = opts.profile === "QUICK" ? "HIGH"
     : opts.profile === "FULL" ? "NORMAL" : "LOW";
 

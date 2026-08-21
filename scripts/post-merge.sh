@@ -62,19 +62,6 @@ CREATE INDEX IF NOT EXISTS media_files_content_hash_idx  ON media_files (content
 CREATE INDEX IF NOT EXISTS media_files_date_taken_idx    ON media_files (date_taken);
 CREATE INDEX IF NOT EXISTS media_files_gps_idx           ON media_files (gps_latitude, gps_longitude);
 
-CREATE TABLE IF NOT EXISTS media_scan_jobs (
-  id                    serial PRIMARY KEY,
-  status                text NOT NULL DEFAULT 'running',
-  nas_path              text NOT NULL,
-  total_files           integer NOT NULL DEFAULT 0,
-  indexed_files         integer NOT NULL DEFAULT 0,
-  skipped_files         integer NOT NULL DEFAULT 0,
-  thumbnails_generated  integer NOT NULL DEFAULT 0,
-  started_at            timestamp NOT NULL DEFAULT now(),
-  finished_at           timestamp,
-  error                 text
-);
-
 CREATE TABLE IF NOT EXISTS library_jobs (
   id                    serial PRIMARY KEY,
   job_type              text NOT NULL,
@@ -91,6 +78,7 @@ CREATE TABLE IF NOT EXISTS library_jobs (
   total_files           integer,
   processed_files       integer NOT NULL DEFAULT 0,
   summary               jsonb,
+  diagnostics           jsonb,
   error                 text,
   created_at            timestamp NOT NULL DEFAULT now()
 );
