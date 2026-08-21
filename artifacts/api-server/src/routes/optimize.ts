@@ -998,10 +998,9 @@ ${formatSummary || "  (none)"}
 Write only the summary paragraph. No headers, no bullet points, no markdown.`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5-mini",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 200,
-      temperature: 0.4,
+      max_completion_tokens: 200,
     });
 
     const summary = completion.choices[0]?.message?.content?.trim() ?? "Analysis complete.";

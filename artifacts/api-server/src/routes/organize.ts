@@ -433,7 +433,7 @@ function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string
 async function callAiConfidence(planSummary: object): Promise<{ confidence: number; reason: string; recommendation: string } | null> {
   try {
     const c = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5-mini",
       messages: [
         {
           role: "system",
@@ -443,7 +443,7 @@ async function callAiConfidence(planSummary: object): Promise<{ confidence: numb
         { role: "user", content: JSON.stringify(planSummary) },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 200,
+      max_completion_tokens: 200,
     });
     const raw = JSON.parse(c.choices[0]?.message?.content ?? "{}");
     return {
