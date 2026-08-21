@@ -11,6 +11,8 @@ import {
   useGetCleanupHistory, getGetCleanupHistoryQueryKey,
   useGetCleanupTrash, getGetCleanupTrashQueryKey,
   useRestoreFromTrash,
+  useGetScanStatus, getGetScanStatusQueryKey,
+  useStartScan,
 } from "@workspace/api-client-react";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -22,7 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Trash2, Copy, FileWarning, Clock, FolderOpen, Package, Download,
   Star, Image as ImageIcon, CheckCircle2, XCircle, History, ListChecks,
-  ShieldCheck, AlertTriangle, X, RotateCcw,
+  ShieldCheck, AlertTriangle, X, RotateCcw, Loader2, Play,
 } from "lucide-react";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -378,11 +380,34 @@ export default function Cleanup() {
   const { data: archives, isLoading: archivesLoading } = useListArchives({ limit: 200 }, { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } });
   const { data: historyData }                          = useGetCleanupHistory({ query: { queryKey: getGetCleanupHistoryQueryKey() } });
   const { data: trashData, isLoading: trashLoading }   = useGetCleanupTrash({ query: { queryKey: getGetCleanupTrashQueryKey() } });
+  const { data: scanStatus, isLoading: scanStatusLoading } = useGetScanStatus({
+    query: {
+      queryKey: getGetScanStatusQueryKey(),
+      refetchInterval: (query) => query.state.data?.isRunning ? 2000 : 10000,
+    },
+  });
 
   const [restoringPath, setRestoringPath] = useState<string | null>(null);
   const [restoreError,  setRestoreError]  = useState<string | null>(null);
 
   const { mutate: restoreFile } = useRestoreFromTrash();
+  const { mutate: startScan, isPending: isStartingScan } = useStartScan({
+    mutation: {
+      onSuccess: () => {
+        qc.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+      },
+    },
+  });
+
+  // The duplicate endpoint may still contain results from the previous scan
+  // while a new one is running. Refresh it after the status endpoint reports
+  // the new completed scan so the empty state and groups are both accurate.
+  useEffect(() => {
+    if (scanStatus?.lastCompleted) {
+      qc.invalidateQueries({ queryKey: getGetDuplicateFilesQueryKey({ limit: 20 }) });
+      qc.invalidateQueries({ queryKey: getGetCleanupSummaryQueryKey() });
+    }
+  }, [scanStatus?.lastCompleted, qc]);
 
   const handleRestore = (trashPath: string) => {
     setRestoringPath(trashPath);
@@ -442,6 +467,12 @@ export default function Cleanup() {
   const totalSavings = (summary?.duplicateWastedBytes ?? 0) + (summary?.largeFilesBytes ?? 0);
   const queueSavings = queue.reduce((s, e) => s + e.totalSavedBytes, 0);
   const queueDeleteCount = queue.reduce((s, e) => s + e.deleteFileIds.length, 0);
+  const scanCurrent = scanStatus?.current as {
+    stage?: string | null;
+    filesScanned?: number | null;
+    totalFiles?: number | null;
+  } | null | undefined;
+  const hasScanHistory = Boolean(scanStatus?.lastCompleted || scanStatus?.lastFailed);
 
   const archiveClusters: Record<string, { items: any[]; totalSize: number }> = {};
   for (const a of archives?.archives ?? []) {
@@ -549,15 +580,54 @@ export default function Cleanup() {
 
         {/* ── DUPLICATE GROUPS ──────────────────────────────────────────── */}
         <TabsContent value="duplicates" className="mt-4">
-          {dupesLoading ? (
+          {scanStatusLoading || dupesLoading ? (
             <div className="space-y-4">
               <Skeleton className="h-48 w-full" />
               <Skeleton className="h-48 w-full" />
             </div>
+          ) : scanStatus?.isRunning ? (
+            <Card>
+              <CardContent className="py-12 text-center font-mono">
+                <Loader2 className="w-8 h-8 mx-auto mb-4 text-primary animate-spin" />
+                <h2 className="text-lg font-semibold">Scan in progress</h2>
+                <p className="text-sm text-muted-foreground mt-2">
+                  {scanCurrent?.stage || "Preparing your library…"}
+                </p>
+                <p className="text-xs text-muted-foreground/70 mt-1">
+                  {scanCurrent?.filesScanned?.toLocaleString() ?? 0} files scanned
+                  {scanCurrent?.totalFiles ? ` of ${scanCurrent.totalFiles.toLocaleString()}` : ""}
+                </p>
+              </CardContent>
+            </Card>
+          ) : !hasScanHistory ? (
+            <Card>
+              <CardContent className="py-12 text-center font-mono">
+                <Copy className="w-8 h-8 mx-auto mb-4 text-muted-foreground/60" />
+                <h2 className="text-lg font-semibold">Run a scan first</h2>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  We’ll scan your library for identical and visually similar files before showing duplicate groups here.
+                </p>
+                <Button
+                  className="mt-5 font-mono"
+                  onClick={() => startScan()}
+                  disabled={isStartingScan}
+                >
+                  {isStartingScan
+                    ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Starting scan…</>
+                    : <><Play className="w-4 h-4 mr-2" /> Run a scan</>}
+                </Button>
+              </CardContent>
+            </Card>
           ) : !duplicates?.groups.length ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground font-mono text-sm">
-              No duplicate groups found — run a full scan first
-            </CardContent></Card>
+            <Card>
+              <CardContent className="py-12 text-center font-mono">
+                <CheckCircle2 className="w-8 h-8 mx-auto mb-4 text-green-500" />
+                <h2 className="text-lg font-semibold">No duplicates found</h2>
+                <p className="text-sm text-muted-foreground mt-2">
+                  Your library is clear of duplicate file groups.
+                </p>
+              </CardContent>
+            </Card>
           ) : (
             <div className="space-y-4">
               <p className="text-xs text-muted-foreground font-mono">
