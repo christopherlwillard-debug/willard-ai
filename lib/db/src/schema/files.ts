@@ -16,6 +16,7 @@ export const indexedFilesTable = pgTable("indexed_files", {
   indexedAt: timestamp("indexed_at").notNull().defaultNow(),
 }, (t) => [
   index("indexed_files_content_hash_idx").on(t.contentHash),
+  index("indexed_files_folder_idx").on(t.folder),
 ]);
 
 export const insertIndexedFileSchema = createInsertSchema(indexedFilesTable).omit({ id: true, indexedAt: true });

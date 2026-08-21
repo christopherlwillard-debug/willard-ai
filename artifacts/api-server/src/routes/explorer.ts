@@ -1,22 +1,12 @@
 import { Router, type IRouter } from "express";
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
-import { appSettingsTable, archivesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { appSettingsTable, archivesTable, indexedFilesTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import { assertWithinRoot } from "../lib/nas-storage";
 
 const router: IRouter = Router();
-
-function getFolderSizeBytes(folderPath: string): number | null {
-  // Use du with array args (no shell interpolation) for safe folder size computation
-  const result = spawnSync("du", ["-sb", folderPath], { timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
-  if (result.status !== 0 || !result.stdout) return null;
-  const first = result.stdout.toString().trim().split(/\s+/)[0];
-  const bytes = parseInt(first, 10);
-  return isNaN(bytes) ? null : bytes;
-}
 
 const ARCHIVE_EXTS = new Set(["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "cab"]);
 
@@ -84,6 +74,25 @@ router.get("/explorer", async (req, res) => {
       return;
     }
 
+    // The index already contains every file's size. Fetch the aggregated sizes
+    // for this folder once, rather than spawning a blocking `du` process for
+    // every directory entry.
+    const indexedFolderSizes = await db.select({
+      folder: indexedFilesTable.folder,
+      totalSizeBytes: sql<number>`coalesce(sum(${indexedFilesTable.sizeBytes}), 0)`,
+    })
+      .from(indexedFilesTable)
+      .where(sql`${indexedFilesTable.folder} = ${targetPath} OR ${indexedFilesTable.folder} LIKE ${targetPath + path.sep + "%"}`)
+      .groupBy(indexedFilesTable.folder);
+    const folderSizes = new Map<string, number>();
+    for (const row of indexedFolderSizes) {
+      const relativeFolder = path.relative(targetPath, row.folder);
+      const topLevelFolder = relativeFolder.split(/[\\/]/, 1)[0];
+      if (topLevelFolder) {
+        folderSizes.set(topLevelFolder, (folderSizes.get(topLevelFolder) ?? 0) + Number(row.totalSizeBytes));
+      }
+    }
+
     const result = await Promise.all(entries.map(async (entry) => {
       const fullPath = path.join(targetPath, entry.name);
       const isDir = entry.isDirectory();
@@ -100,7 +109,7 @@ router.get("/explorer", async (req, res) => {
         if (isDir) {
           const children = fs.readdirSync(fullPath);
           fileCount = children.length;
-          sizeBytes = getFolderSizeBytes(fullPath);
+          sizeBytes = folderSizes.get(entry.name) ?? 0;
         } else {
           sizeBytes = stat.size;
         }
