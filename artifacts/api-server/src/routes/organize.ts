@@ -651,7 +651,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 router.patch("/organize/jobs/:id/plan", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
     if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
@@ -690,7 +691,8 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
     if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
@@ -869,7 +871,8 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
 router.get("/organize/jobs/:id/dry-run", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first to build the plan" }); return; }
 
@@ -1025,7 +1028,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   const opLog = (line: string) => { try { logStream?.write(line + "\n"); } catch { /* best-effort */ } };
 
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job)                   { send("error", { message: "Job not found" });                          res.end(); return; }
     if (job.status === "executing") { send("error", { message: "Job is already executing" });           res.end(); return; }
     if (!job.planJson)          { send("error", { message: "Run analyze first" });                      res.end(); return; }
@@ -1038,6 +1042,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
     }
+    try { resolveWithinRoot(job.sourcePath, nasPath); }
+    catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1395,7 +1401,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "completed") { res.status(409).json({ error: "Job must be completed before applying disposition" }); return; }
     if (!req.body?.confirm) { res.status(400).json({ error: "confirm: true is required to execute a destructive disposition" }); return; }
@@ -1479,7 +1486,8 @@ router.get("/organize/recovery", async (_req, res) => {
 router.post("/organize/jobs/:id/rollback", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!["executing", "failed"].includes(job.status)) {
       res.status(409).json({ error: `Job status is '${job.status}' — only executing or failed jobs can be rolled back here` }); return;
@@ -1571,6 +1579,8 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured" }); res.end(); return;
     }
+    try { resolveWithinRoot(job.sourcePath, nasPath); }
+    catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
     // Mark as executing so a re-interruption is still detectable as a crashed job
     await db.update(organizationJobsTable)

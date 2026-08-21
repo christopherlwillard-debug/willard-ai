@@ -3,7 +3,6 @@ import { sql } from "drizzle-orm";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage";
-import * as path from "path";
 import { logger } from "./logger";
 
 /**
@@ -272,7 +271,6 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
       name: r.name,
       relativePath: r.relative_path,
       mediaType: r.media_type,
-      thumbnailPath: r.thumbnail_path,
       fullPath: (() => {
         try { return resolveLibraryPath(nasPath, r.relative_path); }
         catch { return ""; }
