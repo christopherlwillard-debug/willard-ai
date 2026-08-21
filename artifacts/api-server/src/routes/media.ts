@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable } from "@workspace/db";
 import { eq, and, like, desc, asc, sql, count, isNotNull } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
+import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 
 const router = Router();
 
@@ -15,6 +16,8 @@ const router = Router();
 let _nasPathCached: string | null | undefined = undefined;
 let _nasPathCachedAt = 0;
 const NAS_PATH_TTL_MS = 60_000;
+const ACTIVE_MEDIA = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
 
 async function getNasPath(): Promise<string | null> {
   const now = Date.now();
@@ -36,16 +39,24 @@ export function invalidateNasPathCache(): void {
 // Populated at startup via warmThumbnailCache() and on every successful serve.
 // Eliminates the DB query + NAS fs.existsSync() on every subsequent request.
 
-const _thumbCache = new Map<number, string>();
+const _thumbCache = new Map<number, { nasPath: string; path: string }>();
 
 export async function warmThumbnailCache(): Promise<void> {
   try {
+    const nasPath = await getNasPath();
+    if (!nasPath) return;
     const rows = await db
       .select({ id: mediaFilesTable.id, thumbnailPath: mediaFilesTable.thumbnailPath })
       .from(mediaFilesTable)
-      .where(isNotNull(mediaFilesTable.thumbnailPath));
+      .where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA, isNotNull(mediaFilesTable.thumbnailPath)));
     for (const row of rows) {
-      if (row.thumbnailPath) _thumbCache.set(row.id, row.thumbnailPath);
+      if (!row.thumbnailPath) continue;
+      try {
+        const thumbPath = resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath));
+        if (fs.existsSync(thumbPath)) _thumbCache.set(row.id, { nasPath, path: thumbPath });
+      } catch {
+        // A stale or poisoned thumbnail path is ignored and regenerated on demand.
+      }
     }
     console.log(`[thumbnail-cache] Warmed with ${_thumbCache.size} entries`);
   } catch (err) {
@@ -187,7 +198,7 @@ router.post("/media/files/:id/favorite", async (req: Request, res: Response) => 
   const [updated] = await db
     .update(mediaFilesTable)
     .set({ favorite, favoritedAt: favorite ? new Date() : null })
-    .where(eq(mediaFilesTable.id, id))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, await getNasPath() ?? ""), ACTIVE_MEDIA))
     .returning({ id: mediaFilesTable.id, favorite: mediaFilesTable.favorite });
 
   if (!updated) {
@@ -206,7 +217,7 @@ router.delete("/media/files/:id", async (req: Request, res: Response) => {
   const [updated] = await db
     .update(mediaFilesTable)
     .set({ lastScanAction: "DELETED" } as any)
-    .where(eq(mediaFilesTable.id, id))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, await getNasPath() ?? ""), ACTIVE_MEDIA))
     .returning({ id: mediaFilesTable.id });
 
   if (!updated) { res.status(404).json({ error: "File not found" }); return; }
@@ -227,15 +238,29 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
 
-  const [file] = await db.select().from(mediaFilesTable).where(eq(mediaFilesTable.id, id)).limit(1);
+  const [file] = await db.select().from(mediaFilesTable)
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+    .limit(1);
   if (!file) { res.status(404).json({ error: "File not found" }); return; }
 
   const fs = await import("fs");
   const path = await import("path");
-  const oldAbs = path.join(nasPath, file.relativePath);
+  let oldAbs: string;
+  try {
+    oldAbs = resolveLibraryPath(nasPath, file.relativePath);
+  } catch {
+    res.status(400).json({ error: "Stored media path is outside the configured library" });
+    return;
+  }
   const dir = path.dirname(file.relativePath);
   const newRelPath = dir === "." ? newName : `${dir}/${newName}`;
-  const newAbs = path.join(nasPath, newRelPath);
+  let newAbs: string;
+  try {
+    newAbs = resolveLibraryPath(nasPath, newRelPath);
+  } catch {
+    res.status(400).json({ error: "New file path is outside the configured library" });
+    return;
+  }
 
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
   if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
@@ -244,7 +269,7 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   const [updated] = await db
     .update(mediaFilesTable)
     .set({ name: newName, relativePath: newRelPath })
-    .where(eq(mediaFilesTable.id, id))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
 
   res.json(updated);
@@ -354,16 +379,14 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   }
 
   // ── Fast path: in-memory cache hit — zero DB queries, zero NAS stat calls ──
-  const cached = _thumbCache.get(id);
-  if (cached) {
-    serveCachedThumb(res, cached, id);
-    return;
-  }
-
-  // ── Slow path: first time this id is requested ────────────────────────────
   const nasPath = await getNasPath();
   if (!nasPath) {
     res.status(404).json({ error: "NAS not configured" });
+    return;
+  }
+  const cached = _thumbCache.get(id);
+  if (cached?.nasPath === nasPath) {
+    serveCachedThumb(res, cached.path, id);
     return;
   }
 
@@ -375,7 +398,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
       extension:     mediaFilesTable.extension,
     })
     .from(mediaFilesTable)
-    .where(eq(mediaFilesTable.id, id))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath)))
     .limit(1);
 
   if (!file) {
@@ -384,27 +407,41 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   }
 
   // Check DB-stored path
-  if (file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
-    _thumbCache.set(id, file.thumbnailPath);
-    serveCachedThumb(res, file.thumbnailPath, id);
-    return;
+  if (file.thumbnailPath) {
+    try {
+      const thumbPath = resolveWithinRoot(file.thumbnailPath, getWillardAIDir(nasPath));
+      if (fs.existsSync(thumbPath)) {
+        _thumbCache.set(id, { nasPath, path: thumbPath });
+        serveCachedThumb(res, thumbPath, id);
+        return;
+      }
+    } catch {
+      // Ignore stale or out-of-library DB paths and continue to the safe fallback.
+    }
   }
 
   // Fallback: check by id-based filename in thumbdir (heals stale DB paths)
   const thumbDir = getThumbnailDir(nasPath);
   const thumbFile = path.join(thumbDir, thumbnailFilename(id));
-  if (fs.existsSync(thumbFile)) {
-    _thumbCache.set(id, thumbFile);
+  const safeThumbFile = resolveWithinRoot(thumbFile, getWillardAIDir(nasPath));
+  if (fs.existsSync(safeThumbFile)) {
+    _thumbCache.set(id, { nasPath, path: safeThumbFile });
     db.update(mediaFilesTable)
-      .set({ thumbnailPath: thumbFile, thumbnailGeneratedAt: new Date() })
-      .where(eq(mediaFilesTable.id, id))
+      .set({ thumbnailPath: safeThumbFile, thumbnailGeneratedAt: new Date() })
+      .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
       .catch(() => {});
-    serveCachedThumb(res, thumbFile, id);
+    serveCachedThumb(res, safeThumbFile, id);
     return;
   }
 
   // Generate on-demand
-  const sourcePath = path.join(nasPath, file.relativePath);
+  let sourcePath: string;
+  try {
+    sourcePath = resolveLibraryPath(nasPath, file.relativePath);
+  } catch {
+    res.status(400).json({ error: "Stored media path is outside the configured library" });
+    return;
+  }
   if (!fs.existsSync(sourcePath)) {
     res.status(404).json({ error: "Source file not found on NAS" });
     return;
@@ -416,13 +453,14 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  _thumbCache.set(id, result.destPath);
+  const safeResultPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
+  _thumbCache.set(id, { nasPath, path: safeResultPath });
   db.update(mediaFilesTable)
-    .set({ thumbnailPath: result.destPath, thumbnailGeneratedAt: new Date() })
-    .where(eq(mediaFilesTable.id, id))
+    .set({ thumbnailPath: safeResultPath, thumbnailGeneratedAt: new Date() })
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .catch(() => {});
 
-  serveCachedThumb(res, result.destPath, id);
+  serveCachedThumb(res, safeResultPath, id);
 });
 
 // ── GET /api/media/file/:id/stream — stream original file ────────────────────
@@ -443,7 +481,7 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
   const [file] = await db
     .select()
     .from(mediaFilesTable)
-    .where(eq(mediaFilesTable.id, id))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath)))
     .limit(1);
 
   if (!file) {
@@ -451,7 +489,13 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
     return;
   }
 
-  const sourcePath = path.join(nasPath, file.relativePath);
+  let sourcePath: string;
+  try {
+    sourcePath = resolveLibraryPath(nasPath, file.relativePath);
+  } catch {
+    res.status(400).json({ error: "Stored media path is outside the configured library" });
+    return;
+  }
   if (!fs.existsSync(sourcePath)) {
     res.status(404).json({ error: "Source file not found on NAS" });
     return;

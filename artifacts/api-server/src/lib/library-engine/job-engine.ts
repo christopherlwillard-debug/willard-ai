@@ -1213,8 +1213,12 @@ async function runScanJob(
       let invalidateThumbnail = false;
 
       if (!existing) {
-        if (!isFirstScan) {
-          // Compute fingerprint for move detection
+        // A FULL scan must fingerprint first-seen files as well. The canonical
+        // media_files catalog is the source for duplicate discovery; leaving
+        // first-scan fingerprints null makes a clean library impossible to
+        // analyze until a second scan.
+        if (!isFirstScan || state.profile === "FULL") {
+          // Compute fingerprint for move detection and duplicate discovery
           state.phase = "hashing";
           const _fpT0a = Date.now();
           sdbg('fingerprint_start', { relativePath, context: 'new_file' });
@@ -1264,7 +1268,7 @@ async function runScanJob(
           }
         }
         action = "NEW";
-        // On first scan quickFingerprint stays null — move detection is impossible anyway
+        // A QUICK first scan may intentionally omit fingerprinting for speed.
       } else {
         // Determine whether the underlying binary changed.
         // "Binary changed" = size or mtime differs from what's in the DB.

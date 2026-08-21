@@ -10,7 +10,8 @@ import {
 
 const router: IRouter = Router();
 
-const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
+const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
 
 /** Query the local index for files matching a keyword, return summary. */
 async function searchLocalFiles(keyword: string): Promise<string> {
@@ -112,16 +113,20 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
       // Local file search — also collect structured results
       try {
         const files = await db.select({
-          filename: indexedFilesTable.filename,
-          path: indexedFilesTable.path,
-          fileType: indexedFilesTable.fileType,
-          sizeBytes: indexedFilesTable.sizeBytes,
-          folder: indexedFilesTable.folder,
-          modifiedAt: indexedFilesTable.modifiedAt,
+          filename: mediaFilesTable.name,
+          path: mediaFilesTable.relativePath,
+          fileType: mediaFilesTable.mediaType,
+          sizeBytes: mediaFilesTable.sizeBytes,
+          folder: mediaFilesTable.relativePath,
+          modifiedAt: mediaFilesTable.modifiedAt,
         })
-          .from(indexedFilesTable)
-          .where(ilike(indexedFilesTable.filename, `%${keyword}%`))
-          .orderBy(desc(indexedFilesTable.sizeBytes))
+          .from(mediaFilesTable)
+          .where(and(
+            NOT_DELETED,
+            settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`,
+            ilike(mediaFilesTable.name, `%${keyword}%`),
+          ))
+          .orderBy(desc(mediaFilesTable.sizeBytes))
           .limit(10);
 
         if (files.length > 0) {
@@ -164,7 +169,10 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
   if (msg.includes("duplicate") || msg.includes("cleanup") || msg.includes("wast") || msg.includes("redundant")) {
     const dupResult = await db.execute(sql`
       SELECT COUNT(*) as groups FROM (
-        SELECT content_hash FROM ${indexedFilesTable} WHERE content_hash IS NOT NULL
+        SELECT content_hash FROM ${mediaFilesTable}
+         WHERE content_hash IS NOT NULL
+           AND ${NOT_DELETED}
+           AND nas_path = ${settings?.nasPath ?? ""}
         GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
@@ -181,13 +189,15 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 }
 
 async function buildSystemPrompt(settings: any): Promise<string> {
-  const [{ totalFiles }] = await db.select({ totalFiles: count() }).from(indexedFilesTable);
+  const nasCondition = settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`;
+  const [{ totalFiles }] = await db.select({ totalFiles: count() }).from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
   const [{ archiveCount }] = await db.select({ archiveCount: count() }).from(archivesTable);
-  const [{ totalSizeBytes }] = await db.select({ totalSizeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)` }).from(indexedFilesTable);
+  const [{ totalSizeBytes }] = await db.select({ totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)` })
+    .from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
   const typeBreakdown = await db.select({
-    fileType: indexedFilesTable.fileType,
+    fileType: mediaFilesTable.mediaType,
     fileCount: count(),
-  }).from(indexedFilesTable).groupBy(indexedFilesTable.fileType);
+  }).from(mediaFilesTable).where(and(NOT_DELETED, nasCondition)).groupBy(mediaFilesTable.mediaType);
 
   const sizeGB = (Number(totalSizeBytes) / (1024 ** 3)).toFixed(2);
   const breakdown = typeBreakdown.map(r => `${r.fileType}: ${r.fileCount}`).join(", ");

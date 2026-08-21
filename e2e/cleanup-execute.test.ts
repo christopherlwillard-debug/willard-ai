@@ -174,16 +174,19 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(nasRes.ok, `Failed to set NAS path: ${await nasRes.text()}`);
 
     // ── 5. Trigger a FULL scan ─────────────────────────────────────────────
-    const scanRes = await apiPost("/scan", {});
+    const scanRes = await apiPost("/library/scan", { profile: "FULL" });
+    const scanBody = await scanRes.text();
     assert.ok(
       scanRes.status === 202 || scanRes.status === 200,
-      `Scan trigger returned ${scanRes.status}: ${await scanRes.text()}`,
+      `Scan trigger returned ${scanRes.status}: ${scanBody}`,
     );
+    const scanJob = JSON.parse(scanBody) as { jobId?: number };
+    assert.ok(scanJob.jobId, "Canonical scan should return a job id");
 
     // ── 6. Wait for scan to complete ───────────────────────────────────────
     await pollUntil(
-      async () => (await (await apiGet("/scan/status")).json()) as { isRunning: boolean },
-      (s) => !s.isRunning,
+      async () => (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as { status: string },
+      (s) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(s.status),
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
 

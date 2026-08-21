@@ -28,7 +28,7 @@ export function getWillardAIDir(nasPath: string): string {
  * This prevents symlink-escape via non-existent child paths:
  *   /nas/symlink-to-outside/newdir  → resolves parent /nas/symlink-to-outside → /outside → fail
  */
-function canonicalizePath(p: string): string {
+export function canonicalizePath(p: string): string {
   let current = path.resolve(p);
   const parts: string[] = [];
   // Walk upward until we find an existing ancestor
@@ -45,7 +45,7 @@ function canonicalizePath(p: string): string {
   return path.resolve(p);
 }
 
-export function assertWithinRoot(targetPath: string, root: string): void {
+export function resolveWithinRoot(targetPath: string, root: string): string {
   const canonicalRoot   = canonicalizePath(root);
   const canonicalTarget = canonicalizePath(targetPath);
 
@@ -56,6 +56,40 @@ export function assertWithinRoot(targetPath: string, root: string): void {
   if (canonicalTarget !== canonicalRoot && !canonicalTarget.startsWith(rootPrefix)) {
     throw new Error("Path traversal rejected: path is outside the allowed root");
   }
+  return canonicalTarget;
+}
+
+export function assertWithinRoot(targetPath: string, root: string): void {
+  resolveWithinRoot(targetPath, root);
+}
+
+/**
+ * Resolve a database-relative media path under the active library root.
+ *
+ * Database paths are untrusted input: a stale row, a manually edited row, or a
+ * symlink can otherwise turn path.join(root, relativePath) into an arbitrary
+ * filesystem read/write. Reject absolute paths before resolving and then
+ * canonicalize the nearest existing ancestor so symlink escapes are caught for
+ * both existing and newly-created paths.
+ */
+export function resolveLibraryPath(nasPath: string, relativePath: string): string {
+  if (typeof nasPath !== "string" || !nasPath.trim()) {
+    throw new Error("No library location configured");
+  }
+  if (typeof relativePath !== "string" || !relativePath.trim() || relativePath.includes("\0")) {
+    throw new Error("Invalid library-relative path");
+  }
+
+  const normalized = relativePath.replace(/\\/g, path.sep);
+  if (
+    path.isAbsolute(normalized) ||
+    /^[A-Za-z]:[\\/]/.test(relativePath) ||
+    relativePath.startsWith("\\\\")
+  ) {
+    throw new Error("Path traversal rejected: media path must be relative to the library");
+  }
+
+  return resolveWithinRoot(path.resolve(nasPath, normalized), nasPath);
 }
 
 export interface NasSubdirStatus {

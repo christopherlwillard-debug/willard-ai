@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { indexedFilesTable, archivesTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
-import { sql, count, gte, lte, desc, eq } from "drizzle-orm";
+import { archivesTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
+import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
@@ -19,43 +20,57 @@ function trashManifestPath(nasPath: string) {
   return path.join(nasPath, "WillardAI", "logs", "trash-manifest.jsonl");
 }
 
+async function getConfiguredNasPath(): Promise<string | null> {
+  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
+  const nasPath = row?.nasPath?.trim();
+  return nasPath || null;
+}
+
+const ACTIVE_MEDIA = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
+
 // ── GET /cleanup/duplicates — enriched with mediaFilesTable data ───────────
 
 router.get("/cleanup/duplicates", async (req, res) => {
   try {
-    const { limit = "20", offset = "0" } = req.query as Record<string, string>;
-    const pageLimit  = parseInt(limit);
-    const pageOffset = parseInt(offset);
+    const nasPath = await getConfiguredNasPath();
+    if (!nasPath) {
+      res.json({ groups: [], totalGroups: 0, totalWastedBytes: 0 });
+      return;
+    }
+    const rawLimit = Number.parseInt(String(req.query.limit ?? "20"), 10);
+    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
+    const pageLimit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 20));
+    const pageOffset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
 
     // ── 1. Exact-hash groups ────────────────────────────────────────────────
     const exactHashGroups = await db.execute(sql`
       SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size
-      FROM ${indexedFilesTable}
-      WHERE content_hash IS NOT NULL
+      FROM ${mediaFilesTable}
+      WHERE nas_path = ${nasPath}
+        AND content_hash IS NOT NULL
+        AND ${ACTIVE_MEDIA}
       GROUP BY content_hash
       HAVING COUNT(*) > 1
     `);
 
     // ── 2. Perceptual-hash groups (same quickFingerprint, different hashes) ─
-    // Join media_files (has quickFingerprint) with indexed_files (has path/size for wasted bytes).
-    // Exclude fingerprint groups where all files share a single non-null content_hash
-    // (those are already surfaced by the exact-hash query above).
     const perceptualGroups = await db.execute(sql`
       SELECT
         m.quick_fingerprint AS group_key,
-        COUNT(DISTINCT m.id) AS file_count,
-        SUM(i.size_bytes)   AS total_size
+        COUNT(*) AS file_count,
+        SUM(m.size_bytes) AS total_size
       FROM ${mediaFilesTable} m
-      JOIN ${indexedFilesTable} i
-        ON REPLACE(i.path, chr(92), '/') =
-           REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
-      WHERE m.quick_fingerprint IS NOT NULL
+      WHERE m.nas_path = ${nasPath}
+        AND m.quick_fingerprint IS NOT NULL
         AND m.quick_fingerprint != ''
+        AND m.last_scan_action IS DISTINCT FROM 'DELETED'
+        AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
       GROUP BY m.quick_fingerprint
-      HAVING COUNT(DISTINCT m.id) > 1
+      HAVING COUNT(*) > 1
         AND NOT (
-          COUNT(DISTINCT i.content_hash) = 1
-          AND MIN(i.content_hash) IS NOT NULL
+          COUNT(m.content_hash) = COUNT(*)
+          AND COUNT(DISTINCT m.content_hash) = 1
         )
     `);
 
@@ -104,44 +119,16 @@ router.get("/cleanup/duplicates", async (req, res) => {
       if (raw.matchType === "HASH_IDENTICAL") {
         filesResult = await db.execute(sql`
           SELECT
-            i.id,
-            i.path,
-            i.filename,
-            i.extension,
-            i.file_type      AS "fileType",
-            i.size_bytes     AS "sizeBytes",
-            i.modified_at    AS "modifiedAt",
-            i.folder,
-            i.content_hash   AS "contentHash",
-            m.id             AS "mediaId",
-            m.thumbnail_path AS "thumbnailPath",
-            m.width,
-            m.height,
-            m.duration_seconds AS "durationSeconds",
-            m.date_taken     AS "dateTaken",
-            m.date_created   AS "dateCreated",
-            m.camera_make    AS "cameraMake",
-            m.camera_model   AS "cameraModel"
-          FROM indexed_files i
-          LEFT JOIN media_files m
-            ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
-          WHERE i.content_hash = ${raw.groupKey}
-          LIMIT 10
-        `);
-      } else {
-        // PERCEPTUAL_SIMILAR: join on quickFingerprint
-        filesResult = await db.execute(sql`
-          SELECT
-            i.id,
-            i.path,
-            i.filename,
-            i.extension,
-            i.file_type      AS "fileType",
-            i.size_bytes     AS "sizeBytes",
-            i.modified_at    AS "modifiedAt",
-            i.folder,
-            i.content_hash   AS "contentHash",
-            m.id             AS "mediaId",
+            m.id,
+            m.nas_path || '/' || m.relative_path AS path,
+            m.name AS filename,
+            m.extension,
+            m.media_type AS "fileType",
+            m.size_bytes AS "sizeBytes",
+            m.modified_at AS "modifiedAt",
+            regexp_replace(m.relative_path, '[^/]+$', '') AS folder,
+            m.content_hash AS "contentHash",
+            m.id AS "mediaId",
             m.thumbnail_path AS "thumbnailPath",
             m.width,
             m.height,
@@ -151,9 +138,39 @@ router.get("/cleanup/duplicates", async (req, res) => {
             m.camera_make    AS "cameraMake",
             m.camera_model   AS "cameraModel"
           FROM media_files m
-          JOIN indexed_files i
-            ON REPLACE(i.path, chr(92), '/') = REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
-          WHERE m.quick_fingerprint = ${raw.groupKey}
+          WHERE m.nas_path = ${nasPath}
+            AND m.content_hash = ${raw.groupKey}
+            AND m.last_scan_action IS DISTINCT FROM 'DELETED'
+            AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
+          LIMIT 10
+        `);
+      } else {
+        // PERCEPTUAL_SIMILAR: join on quickFingerprint
+        filesResult = await db.execute(sql`
+          SELECT
+            m.id,
+            m.nas_path || '/' || m.relative_path AS path,
+            m.name AS filename,
+            m.extension,
+            m.media_type AS "fileType",
+            m.size_bytes AS "sizeBytes",
+            m.modified_at AS "modifiedAt",
+            regexp_replace(m.relative_path, '[^/]+$', '') AS folder,
+            m.content_hash AS "contentHash",
+            m.id AS "mediaId",
+            m.thumbnail_path AS "thumbnailPath",
+            m.width,
+            m.height,
+            m.duration_seconds AS "durationSeconds",
+            m.date_taken     AS "dateTaken",
+            m.date_created   AS "dateCreated",
+            m.camera_make    AS "cameraMake",
+            m.camera_model   AS "cameraModel"
+          FROM media_files m
+          WHERE m.nas_path = ${nasPath}
+            AND m.quick_fingerprint = ${raw.groupKey}
+            AND m.last_scan_action IS DISTINCT FROM 'DELETED'
+            AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
           LIMIT 10
         `);
       }
@@ -185,15 +202,31 @@ router.get("/cleanup/duplicates", async (req, res) => {
 
 router.get("/cleanup/large-files", async (req, res) => {
   try {
-    const { limit = "50", offset = "0" } = req.query as Record<string, string>;
-    const [{ total }] = await db.select({ total: count() }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
-    const [{ totalBytes }] = await db.select({ totalBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)` }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
-    const files = await db.select().from(indexedFilesTable)
-      .where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD))
-      .orderBy(desc(indexedFilesTable.sizeBytes))
-      .limit(parseInt(limit))
-      .offset(parseInt(offset));
-    res.json({ files, total, totalSizeBytes: Number(totalBytes) });
+    const nasPath = await getConfiguredNasPath();
+    if (!nasPath) { res.json({ files: [], total: 0, totalSizeBytes: 0 }); return; }
+    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
+    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
+    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
+    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const result = await db.execute(sql`
+      SELECT id, nas_path || '/' || relative_path AS path, name AS filename, extension,
+             media_type AS "fileType", size_bytes AS "sizeBytes", modified_at AS "modifiedAt",
+             regexp_replace(relative_path, '[^/]+$', '') AS folder,
+             content_hash AS "contentHash", indexed_at AS "indexedAt"
+        FROM ${mediaFilesTable}
+       WHERE nas_path = ${nasPath} AND size_bytes >= ${LARGE_FILE_THRESHOLD}
+         AND ${ACTIVE_MEDIA}
+       ORDER BY size_bytes DESC
+       LIMIT ${limit} OFFSET ${offset}
+    `);
+    const totals = await db.execute(sql`
+      SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS total_size
+        FROM ${mediaFilesTable}
+       WHERE nas_path = ${nasPath} AND size_bytes >= ${LARGE_FILE_THRESHOLD}
+         AND ${ACTIVE_MEDIA}
+    `);
+    const row = (totals.rows[0] ?? {}) as any;
+    res.json({ files: result.rows, total: Number(row.total ?? 0), totalSizeBytes: Number(row.total_size ?? 0) });
   } catch {
     res.status(500).json({ error: "Failed to get large files" });
   }
@@ -203,16 +236,32 @@ router.get("/cleanup/large-files", async (req, res) => {
 
 router.get("/cleanup/old-files", async (req, res) => {
   try {
-    const { limit = "50", offset = "0" } = req.query as Record<string, string>;
+    const nasPath = await getConfiguredNasPath();
+    if (!nasPath) { res.json({ files: [], total: 0 }); return; }
+    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
+    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
+    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
+    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
-    const [{ total }] = await db.select({ total: count() }).from(indexedFilesTable).where(lte(indexedFilesTable.modifiedAt, cutoff));
-    const files = await db.select().from(indexedFilesTable)
-      .where(lte(indexedFilesTable.modifiedAt, cutoff))
-      .orderBy(indexedFilesTable.modifiedAt)
-      .limit(parseInt(limit))
-      .offset(parseInt(offset));
-    res.json({ files, total });
+    const result = await db.execute(sql`
+      SELECT id, nas_path || '/' || relative_path AS path, name AS filename, extension,
+             media_type AS "fileType", size_bytes AS "sizeBytes", modified_at AS "modifiedAt",
+             regexp_replace(relative_path, '[^/]+$', '') AS folder,
+             content_hash AS "contentHash", indexed_at AS "indexedAt"
+        FROM ${mediaFilesTable}
+       WHERE nas_path = ${nasPath} AND modified_at <= ${cutoff}
+         AND ${ACTIVE_MEDIA}
+       ORDER BY modified_at ASC
+       LIMIT ${limit} OFFSET ${offset}
+    `);
+    const totals = await db.execute(sql`
+      SELECT COUNT(*) AS total
+        FROM ${mediaFilesTable}
+       WHERE nas_path = ${nasPath} AND modified_at <= ${cutoff}
+         AND ${ACTIVE_MEDIA}
+    `);
+    res.json({ files: result.rows, total: Number((totals.rows[0] as any)?.total ?? 0) });
   } catch {
     res.status(500).json({ error: "Failed to get old files" });
   }
@@ -269,29 +318,35 @@ router.get("/cleanup/empty-folders", async (_req, res) => {
 
 router.get("/cleanup/summary", async (_req, res) => {
   try {
+    const nasPath = await getConfiguredNasPath();
+    if (!nasPath) {
+      res.json({ duplicateGroups: 0, duplicateWastedBytes: 0, largeFileCount: 0, largeFilesBytes: 0, oldFileCount: 0, emptyFolderCount: 0 });
+      return;
+    }
     // Exact-hash duplicate groups
     const exactDupResult = await db.execute(sql`
       SELECT COUNT(*) as "dupGroups", COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
         SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted
-        FROM ${indexedFilesTable}
-        WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1
+        FROM ${mediaFilesTable}
+        WHERE nas_path = ${nasPath} AND content_hash IS NOT NULL AND ${ACTIVE_MEDIA}
+        GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
 
     // Perceptual-hash duplicate groups (same fingerprint, not all same content_hash)
     const perceptualDupResult = await db.execute(sql`
       SELECT COUNT(*) as "percGroups", COALESCE(SUM(t.wasted), 0) as "percWasted" FROM (
-        SELECT (COUNT(DISTINCT m.id) - 1) * MAX(i.size_bytes) AS wasted
+        SELECT (COUNT(DISTINCT m.id) - 1) * MAX(m.size_bytes) AS wasted
         FROM ${mediaFilesTable} m
-        JOIN ${indexedFilesTable} i
-          ON REPLACE(i.path, chr(92), '/') =
-             REPLACE(m.nas_path || '/' || m.relative_path, chr(92), '/')
-        WHERE m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
+        WHERE m.nas_path = ${nasPath}
+          AND m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
+          AND m.last_scan_action IS DISTINCT FROM 'DELETED'
+          AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
         GROUP BY m.quick_fingerprint
         HAVING COUNT(DISTINCT m.id) > 1
           AND NOT (
-            COUNT(DISTINCT i.content_hash) = 1
-            AND MIN(i.content_hash) IS NOT NULL
+            COUNT(m.content_hash) = COUNT(*)
+            AND COUNT(DISTINCT m.content_hash) = 1
           )
       ) t
     `);
@@ -306,22 +361,34 @@ router.get("/cleanup/summary", async (_req, res) => {
 
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
-    const [{ largeFiles }] = await db.select({ largeFiles: count() }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
-    const [{ largeBytes }] = await db.select({ largeBytes: sql<number>`COALESCE(SUM(${indexedFilesTable.sizeBytes}), 0)` }).from(indexedFilesTable).where(gte(indexedFilesTable.sizeBytes, LARGE_FILE_THRESHOLD));
-    const [{ oldFiles }] = await db.select({ oldFiles: count() }).from(indexedFilesTable).where(lte(indexedFilesTable.modifiedAt, cutoff));
+    const summaryResult = await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE size_bytes >= ${LARGE_FILE_THRESHOLD}) AS large_files,
+        COALESCE(SUM(size_bytes) FILTER (WHERE size_bytes >= ${LARGE_FILE_THRESHOLD}), 0) AS large_bytes,
+        COUNT(*) FILTER (WHERE modified_at <= ${cutoff}) AS old_files
+        FROM ${mediaFilesTable}
+       WHERE nas_path = ${nasPath} AND ${ACTIVE_MEDIA}
+    `);
+    const summaryRow = (summaryResult.rows[0] ?? {}) as any;
+    const largeFiles = Number(summaryRow.large_files ?? 0);
+    const largeBytes = Number(summaryRow.large_bytes ?? 0);
+    const oldFiles = Number(summaryRow.old_files ?? 0);
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
     let emptyFolderCount = 0;
-    if (nasPath && fs.existsSync(nasPath)) {
-      const distinctFolders = await db.execute(sql`SELECT DISTINCT folder FROM ${indexedFilesTable}`);
+    if (fs.existsSync(nasPath)) {
+      const distinctFolders = await db.execute(sql`
+        SELECT DISTINCT regexp_replace(relative_path, '[^/]+$', '') AS folder
+          FROM ${mediaFilesTable}
+         WHERE nas_path = ${nasPath} AND ${ACTIVE_MEDIA}
+      `);
       for (const row of distinctFolders.rows as any[]) {
-        const folder = row.folder as string;
-        if (folder && fs.existsSync(folder)) {
+        const relativeFolder = String(row.folder ?? "").replace(/^\/+|\/+$/g, "");
+        if (relativeFolder) {
           try {
+            const folder = resolveLibraryPath(nasPath, relativeFolder);
             const entries = fs.readdirSync(folder);
             if (entries.length === 0) emptyFolderCount++;
-          } catch { }
+          } catch { /* stale rows and missing folders are ignored */ }
         }
       }
     }
@@ -330,7 +397,7 @@ router.get("/cleanup/summary", async (_req, res) => {
       duplicateGroups:       dupGroups,
       duplicateWastedBytes:  dupWasted,
       largeFileCount:        largeFiles,
-      largeFilesBytes:       Number(largeBytes),
+      largeFilesBytes:       largeBytes,
       oldFileCount:          oldFiles,
       emptyFolderCount,
     });
@@ -344,13 +411,17 @@ router.get("/cleanup/summary", async (_req, res) => {
 router.post("/cleanup/execute", async (req, res) => {
   try {
     const { deleteFileIds } = req.body as { deleteFileIds?: number[] };
-    if (!Array.isArray(deleteFileIds) || deleteFileIds.length === 0) {
+    if (
+      !Array.isArray(deleteFileIds) ||
+      deleteFileIds.length === 0 ||
+      deleteFileIds.length > 500 ||
+      deleteFileIds.some(id => !Number.isInteger(id) || id <= 0)
+    ) {
       res.status(400).json({ error: "deleteFileIds must be a non-empty array" });
       return;
     }
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = await getConfiguredNasPath();
     if (!nasPath) {
       res.status(409).json({ error: "No library configured" });
       return;
@@ -362,20 +433,29 @@ router.post("/cleanup/execute", async (req, res) => {
     const deletedFiles: Array<{ path: string; sizeBytes: number }> = [];
     const trashTimestamp = String(Date.now());
 
-    for (const fileId of deleteFileIds) {
+    const uniqueFileIds = [...new Set(deleteFileIds)];
+    for (const fileId of uniqueFileIds) {
       try {
         const [file] = await db
           .select()
-          .from(indexedFilesTable)
-          .where(eq(indexedFilesTable.id, fileId))
+          .from(mediaFilesTable)
+          .where(sql`${mediaFilesTable.id} = ${fileId}
+            AND ${mediaFilesTable.nasPath} = ${nasPath}
+            AND ${ACTIVE_MEDIA}`)
           .limit(1);
 
         if (!file) {
-          errors.push(`File ID ${fileId}: not found in index`);
+          errors.push(`File ID ${fileId}: not found in the active library`);
           continue;
         }
 
-        const filePath = file.path;
+        let filePath: string;
+        try {
+          filePath = resolveLibraryPath(nasPath, file.relativePath);
+        } catch {
+          errors.push(`File ID ${fileId}: stored path is outside the configured library`);
+          continue;
+        }
         if (!fs.existsSync(filePath)) {
           errors.push(`File ID ${fileId}: not found on disk (${filePath})`);
           continue;
@@ -397,10 +477,13 @@ router.post("/cleanup/execute", async (req, res) => {
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
-          const trashDir = path.join(nasPath, "WillardAI", ".Trash", trashTimestamp);
+          const trashDir = resolveWithinRoot(
+            path.join(nasPath, "WillardAI", ".Trash", trashTimestamp),
+            getWillardAIDir(nasPath),
+          );
           fs.mkdirSync(trashDir, { recursive: true });
-          const safeBasename = `${fileId}_${file.filename}`;
-          const destPath = path.join(trashDir, safeBasename);
+          const safeBasename = `${fileId}_${path.basename(file.name)}`;
+          const destPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
           fs.renameSync(filePath, destPath);
 
           // Record in trash manifest so user can locate the file later
@@ -420,7 +503,7 @@ router.post("/cleanup/execute", async (req, res) => {
         await db.execute(sql`
           UPDATE media_files
           SET last_scan_action = 'RECYCLED'
-          WHERE REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${filePath}, chr(92), '/')
+          WHERE id = ${fileId} AND nas_path = ${nasPath}
         `);
 
         recycled++;
@@ -516,10 +599,14 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Path constraint: trashPath must resolve under <nasPath>/WillardAI/.Trash ──
-    const trashDir          = path.resolve(path.join(nasPath, "WillardAI", ".Trash"));
-    const resolvedTrashPath = path.resolve(trashPath);
-    if (!resolvedTrashPath.startsWith(trashDir + path.sep) &&
-        resolvedTrashPath !== trashDir) {
+    const trashDir = resolveWithinRoot(
+      path.join(nasPath, "WillardAI", ".Trash"),
+      getWillardAIDir(nasPath),
+    );
+    let resolvedTrashPath: string;
+    try {
+      resolvedTrashPath = resolveWithinRoot(trashPath, trashDir);
+    } catch {
       res.status(400).json({ error: "Invalid trashPath — must be within the .Trash directory" });
       return;
     }
@@ -533,7 +620,14 @@ router.post("/cleanup/restore", async (req, res) => {
 
     const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
     const parsed = lines.map(l => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } });
-    const entry  = parsed.find(e => e && path.resolve(String(e.trashPath ?? "")) === resolvedTrashPath);
+    const entry = parsed.find(e => {
+      if (!e || typeof e.trashPath !== "string") return false;
+      try {
+        return resolveWithinRoot(e.trashPath, trashDir) === resolvedTrashPath;
+      } catch {
+        return false;
+      }
+    });
 
     if (!entry) {
       res.status(404).json({ error: "File not found in trash manifest — it may have already been restored or permanently removed" });
@@ -554,10 +648,10 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── originalPath must resolve under nasPath ───────────────────────────────
-    const resolvedOriginalPath = path.resolve(originalPath);
-    const resolvedNasPath      = path.resolve(nasPath);
-    if (!resolvedOriginalPath.startsWith(resolvedNasPath + path.sep) &&
-        resolvedOriginalPath !== resolvedNasPath) {
+    let resolvedOriginalPath: string;
+    try {
+      resolvedOriginalPath = resolveWithinRoot(originalPath, nasPath);
+    } catch {
       res.status(400).json({ error: "Cannot restore — destination is outside the configured library" });
       return;
     }
@@ -575,15 +669,19 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Ensure destination directory exists ───────────────────────────────────
-    fs.mkdirSync(path.dirname(resolvedOriginalPath), { recursive: true });
+    const destinationDir = resolveWithinRoot(path.dirname(resolvedOriginalPath), nasPath);
+    fs.mkdirSync(destinationDir, { recursive: true });
 
     // ── Move file back ────────────────────────────────────────────────────────
     fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
 
     // ── Remove this entry from the manifest (rewrite without the restored line) ─
     const kept = lines.filter(l => {
-      try { return path.resolve(String((JSON.parse(l) as Record<string, unknown>).trashPath ?? "")) !== resolvedTrashPath; }
-      catch { return true; }
+      try {
+        const manifestTrashPath = (JSON.parse(l) as Record<string, unknown>).trashPath;
+        return typeof manifestTrashPath !== "string" ||
+          resolveWithinRoot(manifestTrashPath, trashDir) !== resolvedTrashPath;
+      } catch { return true; }
     });
     fs.writeFileSync(manifestPath, kept.length ? kept.join("\n") + "\n" : "");
 
@@ -591,7 +689,8 @@ router.post("/cleanup/restore", async (req, res) => {
     await db.execute(sql`
       UPDATE media_files
       SET last_scan_action = NULL
-      WHERE REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${originalPath}, chr(92), '/')
+      WHERE nas_path = ${nasPath}
+        AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${resolvedOriginalPath}, chr(92), '/')
         AND last_scan_action = 'RECYCLED'
     `);
 
