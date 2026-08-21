@@ -31,7 +31,13 @@ async function collectionCount(c: { id: number; kind: string; ruleJson: unknown 
   const [row] = await db
     .select({ total: count() })
     .from(collectionItemsTable)
-    .where(eq(collectionItemsTable.collectionId, c.id));
+    .innerJoin(mediaFilesTable, eq(collectionItemsTable.mediaFileId, mediaFilesTable.id))
+    .where(and(
+      eq(collectionItemsTable.collectionId, c.id),
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    ));
   return Number(row?.total ?? 0);
 }
 
@@ -84,7 +90,12 @@ router.get("/collections", async (_req: Request, res: Response) => {
   const [favRow] = await db
     .select({ total: count() })
     .from(mediaFilesTable)
-    .where(and(eq(mediaFilesTable.nasPath, nasPath), eq(mediaFilesTable.favorite, true)));
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      eq(mediaFilesTable.favorite, true),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    ));
 
   res.json({ collections, favoritesCount: Number(favRow?.total ?? 0) });
 });
@@ -236,12 +247,23 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
   const [totalRow] = await db
     .select({ total: count() })
     .from(collectionItemsTable)
-    .where(eq(collectionItemsTable.collectionId, id));
+    .innerJoin(mediaFilesTable, eq(collectionItemsTable.mediaFileId, mediaFilesTable.id))
+    .where(and(
+      eq(collectionItemsTable.collectionId, id),
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    ));
   const files = await db
     .select({ file: mediaFilesTable })
     .from(collectionItemsTable)
     .innerJoin(mediaFilesTable, eq(collectionItemsTable.mediaFileId, mediaFilesTable.id))
-    .where(eq(collectionItemsTable.collectionId, id))
+    .where(and(
+      eq(collectionItemsTable.collectionId, id),
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    ))
     .orderBy(sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt}) DESC NULLS LAST`)
     .limit(limit)
     .offset(offset);

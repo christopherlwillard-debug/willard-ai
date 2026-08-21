@@ -11,12 +11,22 @@ import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from 
 import { getWatcherSnapshot } from "../lib/library-watcher";
 import { getRecentActivity, recordActivity } from "../lib/library-activity";
 import { SCANNER_VERSION } from "../lib/library-engine/types";
+import { resolveWithinRoot } from "../lib/nas-storage";
 
 const router = Router();
 
 async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  return row?.nasPath ?? null;
+  const nasPath = row?.nasPath?.trim();
+  return nasPath || null;
+}
+
+async function getScopedJob(id: number, nasPath: string) {
+  const [job] = await db.select().from(libraryJobsTable).where(and(
+    eq(libraryJobsTable.id, id),
+    eq(libraryJobsTable.nasPath, nasPath),
+  )).limit(1);
+  return job;
 }
 
 // ── GET /api/library/seq — library sequence counter for incremental UI refresh ─
@@ -205,7 +215,19 @@ router.post("/library/scan", async (req: Request, res: Response) => {
   }
 
   const profile = (req.body?.profile as string) ?? "QUICK";
-  const rootPath = req.body?.rootPath as string | undefined;
+  let rootPath: string | undefined;
+  if (req.body?.rootPath != null) {
+    if (typeof req.body.rootPath !== "string" || !req.body.rootPath.trim()) {
+      res.status(400).json({ error: "rootPath must be a non-empty path" });
+      return;
+    }
+    try {
+      rootPath = resolveWithinRoot(req.body.rootPath, nasPath);
+    } catch {
+      res.status(403).json({ error: "rootPath must remain inside the configured library" });
+      return;
+    }
+  }
 
   const result = await startJob({
     jobType: "SCAN",
@@ -283,8 +305,7 @@ router.get("/library/jobs/active", async (_req: Request, res: Response) => {
 
 router.get("/library/jobs", async (req: Request, res: Response) => {
   const configuredNasPath = await getNasPath();
-  const requestedNasPath = req.query["nasPath"] as string | undefined;
-  const nasPath = requestedNasPath || configuredNasPath;
+  const nasPath = configuredNasPath;
   const type    = req.query["type"] as string | undefined;
   const limit   = Math.min(100, parseInt(req.query["limit"] as string) || 20);
 
@@ -309,14 +330,16 @@ router.get("/library/jobs/:id", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+  const scopedJob = await getScopedJob(id, nasPath);
+  if (!scopedJob) { res.status(404).json({ error: "Job not found" }); return; }
+
   // Check in-memory first for live progress
   const liveProgress = getJobProgress(id);
   if (liveProgress) { res.json({ ...liveProgress, fromMemory: true }); return; }
 
-  const [job] = await db.select().from(libraryJobsTable)
-    .where(eq(libraryJobsTable.id, id)).limit(1);
-  if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-  res.json(job);
+  res.json(scopedJob);
 });
 
 // ── POST /api/library/jobs/:id/pause ─────────────────────────────────────────
@@ -324,6 +347,8 @@ router.get("/library/jobs/:id", async (req: Request, res: Response) => {
 router.post("/library/jobs/:id/pause", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   const ok = requestPause(id);
   res.json({ ok, jobId: id });
 });
@@ -333,6 +358,8 @@ router.post("/library/jobs/:id/pause", async (req: Request, res: Response) => {
 router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   const ok = await resumeJob(id);
   if (!ok) { res.status(400).json({ error: "Job not found or not paused" }); return; }
   res.json({ ok, jobId: id });
@@ -343,6 +370,8 @@ router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
 router.post("/library/jobs/:id/cancel", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   const reason = req.body?.reason ?? "USER_CANCELLED";
   const ok = requestCancel(id, reason);
   res.json({ ok, jobId: id });
@@ -450,6 +479,7 @@ router.post("/library/thumbnails/prioritize", async (req: Request, res: Response
         eq(mediaFilesTable.mediaType, "video"),
         eq(mediaFilesTable.extension, "pdf"),
       ),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
       sql`relative_path LIKE ${folderPrefix + "/%"}`,
     ))
     .limit(500);
@@ -522,8 +552,9 @@ router.get("/library/jobs/:id/files", async (req: Request, res: Response) => {
   }
   const limit = Math.min(500, parseInt(req.query["limit"] as string) || 100);
 
-  const [job] = await db.select().from(libraryJobsTable)
-    .where(eq(libraryJobsTable.id, id)).limit(1);
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+  const job = await getScopedJob(id, nasPath);
   if (!job) { res.status(404).json({ error: "Job not found" }); return; }
 
   const summary = (job.summary ?? {}) as { scanStartedAt?: string };

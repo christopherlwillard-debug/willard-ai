@@ -2,7 +2,8 @@ import * as fs from "fs";
 import { sql } from "drizzle-orm";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { checkNasReachableAsync } from "./nas-storage";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage";
+import * as path from "path";
 import { logger } from "./logger";
 
 /**
@@ -264,7 +265,6 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
       LIMIT $3`,
     [nasPath, AI_VERSION, limit],
   );
-  const path = await import("path");
   return {
     total: rows.length ? Number(rows[0].total) : 0,
     rows: rows.map((r: any) => ({
@@ -273,7 +273,15 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
       relativePath: r.relative_path,
       mediaType: r.media_type,
       thumbnailPath: r.thumbnail_path,
-      fullPath: path.join(nasPath, r.relative_path),
+      fullPath: (() => {
+        try { return resolveLibraryPath(nasPath, r.relative_path); }
+        catch { return ""; }
+      })(),
+      thumbnailPath: (() => {
+        if (!r.thumbnail_path) return null;
+        try { return resolveWithinRoot(r.thumbnail_path, getWillardAIDir(nasPath)); }
+        catch { return null; }
+      })(),
       cameraMake: r.camera_make,
       cameraModel: r.camera_model,
       dateTaken: r.date_taken,

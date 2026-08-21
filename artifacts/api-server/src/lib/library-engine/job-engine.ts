@@ -19,7 +19,7 @@ import {
   type DirCacheEntry, type FileEntry,
 } from "./indexer";
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
-import { getWillardAIDir } from "../nas-storage";
+import { getWillardAIDir, resolveLibraryPath } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
 import { logger } from "../logger";
@@ -2097,7 +2097,7 @@ async function detectDuplicates(state: ActiveJobState): Promise<number> {
     for (const m of members) {
       let hash = m.contentHash;
       if (!hash) {
-        hash = await hashFile(path.join(state.nasPath, m.relativePath));
+        hash = await hashFile(resolveLibraryPath(state.nasPath, m.relativePath));
         if (hash) {
           state.counters.hashed++;
           await db.update(mediaFilesTable).set({ contentHash: hash })
@@ -2174,7 +2174,16 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
       if (rows.length === 0) break;
 
       for (const row of rows) {
-        const fullPath = path.join(state.nasPath, row.relativePath);
+        let fullPath: string;
+        try {
+          fullPath = resolveLibraryPath(state.nasPath, row.relativePath);
+        } catch {
+          await db.update(mediaFilesTable).set({ scannerVersion: SCANNER_VERSION })
+            .where(and(eq(mediaFilesTable.id, row.id), eq(mediaFilesTable.nasPath, state.nasPath)));
+          state.filesProcessed++;
+          recordSkip(state, row.relativePath, "Rejected unsafe library path");
+          continue;
+        }
         state.currentPath = row.relativePath;
         state.currentFileStartedAt = Date.now();
 
@@ -2282,7 +2291,8 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       .from(mediaFilesTable)
       .where(and(
         eq(mediaFilesTable.nasPath, nasPath),
-        isNull(mediaFilesTable.thumbnailPath),
+         isNull(mediaFilesTable.thumbnailPath),
+         sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
         or(
           eq(mediaFilesTable.mediaType, "photo"),
           eq(mediaFilesTable.mediaType, "video"),
@@ -2368,7 +2378,14 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
     // Helper: process a single file
     const processFile = async (file: { id: number; relativePath: string; extension: string }): Promise<void> => {
-      const sourcePath = path.join(nasPath, file.relativePath);
+      let sourcePath: string;
+      try {
+        sourcePath = resolveLibraryPath(nasPath, file.relativePath);
+      } catch {
+        state.counters.thumbnailsFailed++;
+        recordSkip(state, file.relativePath, "Rejected unsafe library path");
+        return;
+      }
       state.currentPath = file.relativePath;
       state.currentFileStartedAt = Date.now();
       tickSpeed(state);
@@ -2378,7 +2395,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
           await db.update(mediaFilesTable).set({
             thumbnailPath:        result.destPath,
             thumbnailGeneratedAt: new Date(),
-          }).where(eq(mediaFilesTable.id, file.id));
+           }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
           state.counters.thumbnails++;
           if (state.counters.thumbnails === 1) {
             logger.info({ jobId, phase: 'thumbnail_first_written', path: file.relativePath },

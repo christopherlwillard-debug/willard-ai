@@ -11,10 +11,24 @@ import * as tar from "tar";
 import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 
 const router: IRouter = Router();
+
+async function getNasPath(): Promise<string | null> {
+  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
+  const nasPath = row?.nasPath?.trim();
+  return nasPath || null;
+}
+
+async function getScopedOrganizationJob(id: number, nasPath: string) {
+  const [job] = await db.select().from(organizationJobsTable).where(and(
+    eq(organizationJobsTable.id, id),
+    eq(organizationJobsTable.nasPath, nasPath),
+  )).limit(1);
+  return job;
+}
 
 const ZIP_EXTS    = new Set(["zip"]);
 const TAR_EXTS    = new Set(["tar","gz","tgz","bz2","tbz2","xz","txz","tar.gz","tar.bz2","tar.xz"]);
@@ -469,6 +483,18 @@ router.post("/organize/jobs", async (req, res) => {
     if (!sourcePath || typeof sourcePath !== "string") {
       res.status(400).json({ error: "sourcePath is required" }); return;
     }
+    const nasPath = await getNasPath();
+    if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+    let canonicalSourcePath: string;
+    try {
+      canonicalSourcePath = resolveWithinRoot(sourcePath, nasPath);
+      const sourceStat = fs.statSync(canonicalSourcePath);
+      if (sourceType === "archive" && !sourceStat.isFile()) throw new Error("archive source must be a file");
+      if (sourceType === "folder" && !sourceStat.isDirectory()) throw new Error("folder source must be a directory");
+    } catch {
+      res.status(403).json({ error: "sourcePath must be an existing path inside the configured library" });
+      return;
+    }
     const resolvedDisposition = sourceType === "archive" ? (archiveDisposition ?? "keep") : "keep";
     if (sourceType === "folder" && archiveDisposition && archiveDisposition !== "keep") {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
@@ -476,7 +502,7 @@ router.post("/organize/jobs", async (req, res) => {
     const validPolicies = ["keep_existing", "replace", "rename", "skip"];
     const resolvedPolicy = validPolicies.includes(conflictPolicy) ? conflictPolicy : "keep_existing";
     const [job] = await db.insert(organizationJobsTable)
-      .values({ sourceType, sourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy })
+      .values({ sourceType, sourcePath: canonicalSourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy, nasPath })
       .returning();
     res.status(201).json(job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }
@@ -492,7 +518,8 @@ router.get("/organize/jobs", async (_req, res) => {
 router.get("/organize/jobs/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
   } catch { res.status(500).json({ error: "Failed to get organize job" }); }
@@ -501,10 +528,11 @@ router.get("/organize/jobs/:id", async (req, res) => {
 router.delete("/organize/jobs/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status === "executing") { res.status(409).json({ error: "Cannot delete a running job" }); return; }
-    await db.delete(organizationJobsTable).where(eq(organizationJobsTable.id, id));
+    await db.delete(organizationJobsTable).where(and(eq(organizationJobsTable.id, id), eq(organizationJobsTable.nasPath, nasPath!)));
     res.json({ ok: true });
   } catch { res.status(500).json({ error: "Failed to delete organize job" }); }
 });
@@ -512,7 +540,8 @@ router.delete("/organize/jobs/:id", async (req, res) => {
 router.post("/organize/jobs/:id/analyze", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPathForJob = await getNasPath();
+    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
 
@@ -525,6 +554,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(eq(organizationJobsTable.id, id));
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
     }
+    try { resolveWithinRoot(job.sourcePath, nasPath); }
+    catch { res.status(403).json({ error: "Job source is outside the configured library" }); return; }
 
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
 

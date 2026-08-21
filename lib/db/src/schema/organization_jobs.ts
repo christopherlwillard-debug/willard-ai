@@ -7,6 +7,7 @@ export const organizationJobsTable = pgTable("organization_jobs", {
   status: text("status").notNull().default("pending"),
   sourceType: text("source_type").notNull(),
   sourcePath: text("source_path").notNull(),
+  nasPath: text("nas_path"),
   archiveId: integer("archive_id"),
   archiveDisposition: text("archive_disposition").notNull().default("keep"),
   conflictPolicy: text("conflict_policy").notNull().default("keep_existing"),

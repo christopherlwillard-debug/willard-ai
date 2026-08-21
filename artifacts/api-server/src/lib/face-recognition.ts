@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { db, pool, appSettingsTable } from "@workspace/db";
-import { checkNasReachableAsync, getWillardAIDir } from "./nas-storage";
+import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage";
 import { logger } from "./logger";
 
 /**
@@ -321,7 +321,19 @@ interface PendingFile {
 
 async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
   try {
-    if (!fs.existsSync(file.thumbnailPath)) {
+    let thumbnailPath: string;
+    try {
+      thumbnailPath = resolveWithinRoot(file.thumbnailPath, getWillardAIDir(nasPath));
+    } catch {
+      await pool.query(
+        `INSERT INTO face_scan_state (media_file_id, face_version, face_count, error)
+         VALUES ($1, $2, 0, 'thumbnail path outside library')
+         ON CONFLICT (media_file_id) DO UPDATE SET face_version = excluded.face_version, scanned_at = now(), error = excluded.error`,
+        [file.id, FACE_VERSION],
+      );
+      return;
+    }
+    if (!fs.existsSync(thumbnailPath)) {
       // Thumbnail not on disk (yet) — record as scanned-with-error so we do
       // not spin on it; thumbnail regeneration bumps will re-enter via version.
       await pool.query(
@@ -332,7 +344,7 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
       );
       return;
     }
-    const buf = fs.readFileSync(file.thumbnailPath);
+    const buf = fs.readFileSync(thumbnailPath);
     const { faces, width, height } = await detectFaces(buf);
 
     // Rebuild this file's faces from scratch (derived data).

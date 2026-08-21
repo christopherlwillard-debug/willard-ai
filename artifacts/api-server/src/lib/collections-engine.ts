@@ -39,7 +39,11 @@ export function validateSmartRule(raw: unknown): { rule: SmartRule } | { error: 
 const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt})`;
 
 export function buildSmartConditions(rule: SmartRule, nasPath: string) {
-  const conditions = [eq(mediaFilesTable.nasPath, nasPath)];
+  const conditions = [
+    eq(mediaFilesTable.nasPath, nasPath),
+    sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+      AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+  ];
   if (rule.mediaTypes && rule.mediaTypes.length > 0) {
     conditions.push(inArray(mediaFilesTable.mediaType, rule.mediaTypes));
   }

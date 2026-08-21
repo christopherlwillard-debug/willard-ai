@@ -302,8 +302,10 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
   const { rows } = await pool.query(
     `SELECT f.content_hash, f.media_type, a.embedding IS NOT NULL AS has_embedding
        FROM media_files f LEFT JOIN media_ai a ON a.media_file_id = f.id
-      WHERE f.id = $1`,
-    [fileId],
+      WHERE f.id = $1
+        AND f.nas_path = $2
+        AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`,
+    [fileId, nasPath],
   );
   if (!rows.length) throw Object.assign(new Error("File not found"), { statusCode: 404 });
   if (!rows[0].has_embedding) throw Object.assign(new Error("This file hasn't been analyzed yet — try again shortly"), { statusCode: 409 });
