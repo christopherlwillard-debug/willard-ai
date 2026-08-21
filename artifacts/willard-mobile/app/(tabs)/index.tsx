@@ -1,6 +1,8 @@
 import {
   useGetDashboard,
   useGetScanStatus,
+  useGetStorageStats,
+  useGetTopFolders,
   useStartScan,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,6 +35,15 @@ function formatCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+function formatTypeLabel(fileType: string): string {
+  if (fileType === "image") return "Images";
+  if (fileType === "video") return "Videos";
+  if (fileType === "document") return "Documents";
+  if (fileType === "audio") return "Audio";
+  if (fileType === "archive") return "Archives";
+  return fileType.charAt(0).toUpperCase() + fileType.slice(1);
 }
 
 function timeAgo(dateStr: string | null): string {
@@ -70,6 +81,8 @@ function StatCard({ label, value, icon, accent }: StatCardProps) {
   );
 }
 
+const breakdownColors = ["#0080ff", "#0dd9a0", "#b060ff", "#f0a020", "#ef6c9b", "#7785ff"];
+
 export default function DashboardScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -77,6 +90,8 @@ export default function DashboardScreen() {
 
   const dashboardQuery = useGetDashboard();
   const scanStatusQuery = useGetScanStatus();
+  const storageQuery = useGetStorageStats();
+  const topFoldersQuery = useGetTopFolders();
   const startScanMutation = useStartScan();
 
   const dashboard = dashboardQuery.data;
@@ -86,7 +101,9 @@ export default function DashboardScreen() {
   const onRefresh = useCallback(() => {
     void dashboardQuery.refetch();
     void scanStatusQuery.refetch();
-  }, [dashboardQuery, scanStatusQuery]);
+    void storageQuery.refetch();
+    void topFoldersQuery.refetch();
+  }, [dashboardQuery, scanStatusQuery, storageQuery, topFoldersQuery]);
 
   const onScanNow = useCallback(async () => {
     if (scanStatus?.isRunning) return;
@@ -186,6 +203,119 @@ export default function DashboardScreen() {
               accent="#b060ff"
             />
           </View>
+
+           <View style={styles.breakdownSection}>
+             <View style={styles.sectionHeading}>
+               <View>
+                 <Text style={[styles.breakdownTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+                   Storage breakdown
+                 </Text>
+                 <Text style={[styles.breakdownSubtitle, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                   See what is using space on your NAS
+                 </Text>
+               </View>
+               {storageQuery.isFetching && <ActivityIndicator size="small" color={colors.primary} />}
+             </View>
+
+             <View style={[styles.chartCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+               <Text style={[styles.chartLabel, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
+                 BY FILE TYPE
+               </Text>
+               {storageQuery.isLoading ? (
+                 <View style={styles.chartLoading}>
+                   <ActivityIndicator color={colors.primary} />
+                 </View>
+               ) : (storageQuery.data?.typeBreakdown.length ?? 0) === 0 ? (
+                 <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                   No file type data yet
+                 </Text>
+               ) : (
+                 <View style={styles.typeList}>
+                   {storageQuery.data!.typeBreakdown
+                     .slice()
+                     .sort((a, b) => b.sizeBytes - a.sizeBytes)
+                     .map((type, index) => (
+                       <View key={type.fileType} style={styles.typeRow}>
+                         <View style={styles.typeRowTop}>
+                           <View style={styles.typeName}>
+                             <View style={[styles.legendDot, { backgroundColor: breakdownColors[index % breakdownColors.length] }]} />
+                             <Text style={[styles.typeText, { color: colors.foreground, fontFamily: "Inter_500Medium" }]}>
+                               {formatTypeLabel(type.fileType)}
+                             </Text>
+                           </View>
+                           <Text style={[styles.typeValue, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                             {formatBytes(type.sizeBytes)} · {type.percentage.toFixed(1)}%
+                           </Text>
+                         </View>
+                         <View style={[styles.barTrack, { backgroundColor: colors.muted }]}>
+                           <View
+                             style={[
+                               styles.barFill,
+                               {
+                                 backgroundColor: breakdownColors[index % breakdownColors.length],
+                                 width: `${Math.max(type.percentage, type.sizeBytes > 0 ? 1 : 0)}%`,
+                               },
+                             ]}
+                           />
+                         </View>
+                       </View>
+                     ))}
+                 </View>
+               )}
+             </View>
+
+             <View style={[styles.chartCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+               <View style={styles.folderHeading}>
+                 <Text style={[styles.chartLabel, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
+                   LARGEST FOLDERS
+                 </Text>
+                 <Text style={[styles.folderCount, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                   Top 10
+                 </Text>
+               </View>
+               {topFoldersQuery.isLoading ? (
+                 <View style={styles.chartLoading}>
+                   <ActivityIndicator color={colors.primary} />
+                 </View>
+               ) : (topFoldersQuery.data?.length ?? 0) === 0 ? (
+                 <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                   No folder data yet
+                 </Text>
+               ) : (
+                 <View style={styles.folderList}>
+                   {topFoldersQuery.data!.slice(0, 10).map((folder, index, folders) => {
+                     const maxSize = folders[0]?.totalSizeBytes || 1;
+                     return (
+                       <View key={folder.folder} style={styles.folderRow}>
+                         <View style={styles.folderRowTop}>
+                           <Text
+                             numberOfLines={1}
+                             style={[styles.folderName, { color: colors.foreground, fontFamily: "Inter_500Medium" }]}
+                           >
+                             {folder.folder}
+                           </Text>
+                           <Text style={[styles.folderSize, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                             {formatBytes(folder.totalSizeBytes)}
+                           </Text>
+                         </View>
+                         <View style={[styles.barTrack, { backgroundColor: colors.muted }]}>
+                           <View
+                             style={[
+                               styles.barFill,
+                               {
+                                 backgroundColor: index === 0 ? colors.primary : colors.primary + "bb",
+                                 width: `${Math.max((folder.totalSizeBytes / maxSize) * 100, 1)}%`,
+                               },
+                             ]}
+                           />
+                         </View>
+                       </View>
+                     );
+                   })}
+                 </View>
+               )}
+             </View>
+           </View>
 
           {/* Duplicates row */}
           {(dashboard?.duplicateCount ?? 0) > 0 && (
@@ -359,6 +489,108 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 10,
     marginBottom: 14,
+  },
+  breakdownSection: {
+    gap: 12,
+    marginBottom: 14,
+  },
+  sectionHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginTop: 4,
+  },
+  breakdownTitle: {
+    fontSize: 18,
+    letterSpacing: -0.2,
+  },
+  breakdownSubtitle: {
+    fontSize: 12,
+    marginTop: 3,
+  },
+  chartCard: {
+    marginHorizontal: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 14,
+  },
+  chartLabel: {
+    fontSize: 11,
+    letterSpacing: 0.8,
+  },
+  chartLoading: {
+    minHeight: 54,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyText: {
+    fontSize: 13,
+  },
+  typeList: {
+    gap: 13,
+  },
+  typeRow: {
+    gap: 7,
+  },
+  typeRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  typeName: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  typeText: {
+    fontSize: 13,
+  },
+  typeValue: {
+    fontSize: 11,
+  },
+  barTrack: {
+    height: 6,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  folderHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  folderCount: {
+    fontSize: 11,
+  },
+  folderList: {
+    gap: 14,
+  },
+  folderRow: {
+    gap: 7,
+  },
+  folderRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  folderName: {
+    flex: 1,
+    fontSize: 13,
+  },
+  folderSize: {
+    fontSize: 11,
   },
   statCard: {
     width: "47%",
