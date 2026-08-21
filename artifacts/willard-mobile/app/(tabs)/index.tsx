@@ -6,6 +6,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
 import React, { useCallback } from "react";
 import {
   ActivityIndicator,
@@ -263,6 +264,24 @@ export default function DashboardScreen() {
               )}
             </Pressable>
           </View>
+          <Pressable
+            onPress={() => router.push("/(tabs)/library")}
+            style={({ pressed }) => [
+              styles.libraryButton,
+              { backgroundColor: colors.secondary, borderColor: colors.border, opacity: pressed ? 0.75 : 1 },
+            ]}
+          >
+            <Feather name="folder" size={17} color={colors.primary} />
+            <View style={styles.libraryButtonCopy}>
+              <Text style={[styles.libraryButtonTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+                Browse your library
+              </Text>
+              <Text style={[styles.libraryButtonSubtitle, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                Explore folders or search indexed files
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </Pressable>
         </>
       )}
     </ScrollView>
@@ -422,5 +441,25 @@ const styles = StyleSheet.create({
   },
   scanButtonText: {
     fontSize: 15,
+  },
+  libraryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 14,
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  libraryButtonCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  libraryButtonTitle: {
+    fontSize: 15,
+  },
+  libraryButtonSubtitle: {
+    fontSize: 12,
   },
 });
