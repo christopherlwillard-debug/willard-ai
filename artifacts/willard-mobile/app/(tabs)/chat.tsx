@@ -6,6 +6,7 @@ import {
 } from "@workspace/api-client-react";
 import type { OpenaiConversation, OpenaiMessage } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { fetch } from "expo/fetch";
@@ -25,6 +26,8 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+
+const ACTIVE_CONVERSATION_STORAGE_KEY = "willard.activeConversationId";
 
 function timeLabel(dateStr: string): string {
   const d = new Date(dateStr);
@@ -91,6 +94,7 @@ export default function ChatScreen() {
   const queryClient = useQueryClient();
 
   const [activeConvId, setActiveConvId] = useState<number | null>(null);
+  const [hasRestoredActiveConv, setHasRestoredActiveConv] = useState(false);
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -110,10 +114,61 @@ export default function ChatScreen() {
   const deleteConvMutation = useDeleteOpenaiConversation();
 
   useEffect(() => {
-    if (!activeConvId && conversations.length > 0) {
+    let isMounted = true;
+
+    void AsyncStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY)
+      .then((storedId) => {
+        if (!isMounted) return;
+
+        const parsedId = storedId === null ? null : Number(storedId);
+        if (parsedId !== null && Number.isInteger(parsedId)) {
+          setActiveConvId(parsedId);
+        }
+        setHasRestoredActiveConv(true);
+      })
+      .catch((error: unknown) => {
+        if (!isMounted) return;
+        console.warn("Unable to restore active conversation:", error);
+        setHasRestoredActiveConv(true);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasRestoredActiveConv || !conversationsQuery.isSuccess) return;
+
+    const savedConversationStillExists =
+      activeConvId !== null && conversations.some((conversation) => conversation.id === activeConvId);
+
+    if (!savedConversationStillExists && conversations.length > 0) {
+      // The API returns conversations newest first, so this is the most recent fallback.
       setActiveConvId(conversations[0].id);
     }
-  }, [conversations, activeConvId]);
+  }, [activeConvId, conversations, conversationsQuery.isSuccess, hasRestoredActiveConv]);
+
+  useEffect(() => {
+    if (!hasRestoredActiveConv) return;
+
+    const persistActiveConversation = async () => {
+      try {
+        if (activeConvId === null) {
+          await AsyncStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+        } else {
+          await AsyncStorage.setItem(
+            ACTIVE_CONVERSATION_STORAGE_KEY,
+            String(activeConvId)
+          );
+        }
+      } catch (error) {
+        console.warn("Unable to persist active conversation:", error);
+      }
+    };
+
+    void persistActiveConversation();
+  }, [activeConvId, hasRestoredActiveConv]);
 
   const activeConv = conversations.find((c) => c.id === activeConvId);
 
