@@ -1099,6 +1099,8 @@ export default function Media() {
   const [page, setPage]               = useState(1);
   const [sort, setSort]               = useState("indexed_desc");
   const [viewMode, setViewMode]       = useState<"grid" | "list">("grid");
+  const mediaScrollRef = useRef<HTMLDivElement>(null);
+  const viewerScrollTop = useRef(0);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const LIMIT = 60;
@@ -1315,6 +1317,21 @@ export default function Media() {
     scanMutation.mutate();
   }, [scanMutation]);
 
+  const openViewer = useCallback((index: number, file: MediaFile) => {
+    viewerScrollTop.current = mediaScrollRef.current?.scrollTop ?? 0;
+    setViewerIndex(index);
+    setSelectedFile(file);
+  }, []);
+
+  const closeViewer = useCallback(() => {
+    setViewerIndex(null);
+    requestAnimationFrame(() => {
+      if (mediaScrollRef.current) {
+        mediaScrollRef.current.scrollTop = viewerScrollTop.current;
+      }
+    });
+  }, []);
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
 
@@ -1502,7 +1519,7 @@ export default function Media() {
         )}
 
         {/* ── Main grid ── */}
-        <div className="flex-1 overflow-y-auto">
+        <div ref={mediaScrollRef} className="flex-1 overflow-y-auto" data-testid="media-library-scroll">
           {filesQuery.isLoading ? (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1550,7 +1567,7 @@ export default function Media() {
                       key={file.id}
                       file={file}
                       selected={selectedFile?.id === file.id}
-                      onClick={() => { setViewerIndex(i); setSelectedFile(file); }}
+                      onClick={() => openViewer(i, file)}
                       onToggleFavorite={(f) => favoriteMutation.mutate({ id: f.id, favorite: !f.favorite })}
                     />
                   ))}
@@ -1571,7 +1588,7 @@ export default function Media() {
                       {files.map((file, i) => (
                         <tr
                           key={file.id}
-                          onClick={() => { setViewerIndex(i); setSelectedFile(file); }}
+                          onClick={() => openViewer(i, file)}
                           className={cn(
                             "cursor-pointer border-b border-border last:border-0 transition-colors",
                             i % 2 === 0 ? "bg-card" : "bg-muted/20",
@@ -1641,7 +1658,7 @@ export default function Media() {
         <MediaViewer
           files={files}
           initialIndex={viewerIndex}
-          onClose={() => setViewerIndex(null)}
+          onClose={closeViewer}
           onFavoriteChange={(id, fav) => {
             favoriteMutation.mutate({ id, favorite: fav });
           }}
