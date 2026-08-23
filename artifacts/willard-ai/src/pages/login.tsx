@@ -39,7 +39,7 @@ function RecoveryKeyDisplay({ recoveryKey, onAcknowledge }: RecoveryKeyDisplayPr
           Save this recovery key now. It will not be shown again. If you lose your password, this is the only way to regain access.
         </p>
         <div className="bg-secondary/80 border border-primary/40 rounded-lg p-4 space-y-3">
-          <div className="text-center font-mono text-xl tracking-[0.3em] text-primary font-bold select-all">
+          <div data-testid="recovery-key" className="text-center font-mono text-xl tracking-[0.3em] text-primary font-bold select-all">
             {recoveryKey}
           </div>
           <Button

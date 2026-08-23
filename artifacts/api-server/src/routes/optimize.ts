@@ -892,7 +892,7 @@ router.get("/optimize/scan", async (req, res) => {
     await Promise.allSettled(enrichPromises);
 
     for (const [ext, { count, bytes, samples }] of groups.entries()) {
-      const rule      = FORMAT_RULES[ext];
+      let rule        = FORMAT_RULES[ext];
 
       // Apply codec override for container video formats
       const detectedCodec = detectedCodecMap.get(ext);

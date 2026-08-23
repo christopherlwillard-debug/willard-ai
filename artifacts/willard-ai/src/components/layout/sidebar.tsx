@@ -117,6 +117,7 @@ export function Sidebar() {
       </div>
       <div className="border-t border-sidebar-border p-2">
         <button
+          aria-label="Logout"
           onClick={() => logoutMutation.mutate()}
           disabled={logoutMutation.isPending}
           className="group flex w-full items-center px-2 py-2 text-sm font-medium rounded-md font-mono transition-colors text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-50"
