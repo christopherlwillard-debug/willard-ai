@@ -27,8 +27,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { getSessionCookie } from "@/context/AuthContext";
-
-const ACTIVE_CONVERSATION_STORAGE_KEY = "willard.activeConversationId";
+import {
+  ACTIVE_CONVERSATION_STORAGE_KEY,
+  parseStoredConversationId,
+  persistConversationId,
+  restoreOrChooseConversation,
+} from "@/lib/chat-conversation-state";
 
 function timeLabel(dateStr: string): string {
   const d = new Date(dateStr);
@@ -121,8 +125,8 @@ export default function ChatScreen() {
       .then((storedId) => {
         if (!isMounted) return;
 
-        const parsedId = storedId === null ? null : Number(storedId);
-        if (parsedId !== null && Number.isInteger(parsedId)) {
+        const parsedId = parseStoredConversationId(storedId);
+        if (parsedId !== null) {
           setActiveConvId(parsedId);
         }
         setHasRestoredActiveConv(true);
@@ -141,12 +145,10 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!hasRestoredActiveConv || !conversationsQuery.isSuccess) return;
 
-    const savedConversationStillExists =
-      activeConvId !== null && conversations.some((conversation) => conversation.id === activeConvId);
-
-    if (!savedConversationStillExists && conversations.length > 0) {
+    const selectedConversationId = restoreOrChooseConversation(activeConvId, conversations);
+    if (selectedConversationId !== activeConvId) {
       // The API returns conversations newest first, so this is the most recent fallback.
-      setActiveConvId(conversations[0].id);
+      setActiveConvId(selectedConversationId);
     }
   }, [activeConvId, conversations, conversationsQuery.isSuccess, hasRestoredActiveConv]);
 
@@ -155,14 +157,7 @@ export default function ChatScreen() {
 
     const persistActiveConversation = async () => {
       try {
-        if (activeConvId === null) {
-          await AsyncStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
-        } else {
-          await AsyncStorage.setItem(
-            ACTIVE_CONVERSATION_STORAGE_KEY,
-            String(activeConvId)
-          );
-        }
+        await persistConversationId(activeConvId, AsyncStorage);
       } catch (error) {
         console.warn("Unable to persist active conversation:", error);
       }

@@ -5,6 +5,7 @@
     "tsBuildInfoFile": ".tsbuildinfo",
     "baseUrl": ".",
     "strict": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": [
         "./*"
