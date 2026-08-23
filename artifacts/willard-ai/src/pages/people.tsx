@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, FileText, Loader2, Pencil, Users, X } from "lucide-react";
+import { ArrowLeft, Check, FileText, Loader2, Pencil, Users, X, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { formatDate } from "@/lib/format";
 
@@ -114,11 +115,37 @@ function NameEditor({ person, onDone }: { person: Person; onDone: () => void }) 
 
 function PersonDetail({ personId }: { personId: number }) {
   const [, navigate] = useLocation();
+  const qc = useQueryClient();
+  const { toast } = useToast();
   const [editing, setEditing] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [targetId, setTargetId] = useState("");
 
   const q = useQuery<{ person: Person; items: PersonItem[] }>({
     queryKey: ["faces-person", personId],
     queryFn: () => apiFetch(`/faces/people/${personId}/files`),
+  });
+  const peopleQ = useQuery<PeopleResponse>({
+    queryKey: ["faces-people"],
+    queryFn: () => apiFetch(`/faces/people`),
+    enabled: mergeOpen,
+  });
+  const merge = useMutation({
+    mutationFn: (targetPersonId: number) =>
+      apiFetch(`/faces/people/${targetPersonId}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ fromPersonId: personId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["faces-people"] });
+      qc.invalidateQueries({ queryKey: ["faces-person", personId] });
+      qc.invalidateQueries({ queryKey: ["faces-person", Number(targetId)] });
+      setMergeOpen(false);
+      setTargetId("");
+      toast({ title: "People merged", description: "The source cluster was merged into the selected person." });
+      navigate("/people");
+    },
+    onError: (e: Error) => toast({ title: "Couldn't merge people", description: e.message, variant: "destructive" }),
   });
 
   if (q.isLoading) {
@@ -166,6 +193,9 @@ function PersonDetail({ personId }: { personId: number }) {
           </p>
         </div>
       </div>
+      <Button variant="outline" size="sm" className="gap-2" onClick={() => setMergeOpen(true)} data-testid="button-merge-person">
+        <GitMerge className="h-4 w-4" /> Merge into…
+      </Button>
 
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6" data-testid="person-items-grid">
         {items.map((it) => (
@@ -195,6 +225,46 @@ function PersonDetail({ personId }: { personId: number }) {
       {items.length === 0 && (
         <p className="text-sm text-muted-foreground">No items for this person yet.</p>
       )}
+
+      <Dialog open={mergeOpen} onOpenChange={(open) => { setMergeOpen(open); if (!open) setTargetId(""); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Merge this person into…</DialogTitle>
+            <DialogDescription>
+              Faces and photos from {person.name ?? "this cluster"} will move into the selected person. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {peopleQ.isLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading people…</div>
+          ) : (
+            <select
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              data-testid="select-merge-target"
+            >
+              <option value="">Choose a target person</option>
+              {(peopleQ.data?.people ?? []).filter((p) => p.id !== personId).map((p) => (
+                <option key={p.id} value={p.id}>{p.name ?? "Unnamed person"} · {p.faceCount} faces</option>
+              ))}
+            </select>
+          )}
+          {peopleQ.data?.people.filter((p) => p.id !== personId).length === 0 && !peopleQ.isLoading && (
+            <p className="text-sm text-muted-foreground">There are no other people clusters to merge with.</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMergeOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!targetId || merge.isPending || peopleQ.isError}
+              onClick={() => merge.mutate(Number(targetId))}
+              data-testid="button-confirm-merge"
+            >
+              {merge.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitMerge className="mr-2 h-4 w-4" />}
+              Merge people
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
