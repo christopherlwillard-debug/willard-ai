@@ -274,6 +274,8 @@ export default function SearchPage() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const similarParam = new URLSearchParams(window.location.search).get("similar");
+  const startedSimilarRef = useRef<string | null>(null);
 
   const status = useQuery({
     queryKey: ["ai-status"],
@@ -332,6 +334,35 @@ export default function SearchPage() {
       setTrail([]);
     },
   });
+
+  useEffect(() => {
+    if (!similarParam || startedSimilarRef.current === similarParam || similar.isPending) return;
+    const sourceId = Number(similarParam);
+    if (!Number.isInteger(sourceId) || sourceId <= 0) return;
+    startedSimilarRef.current = similarParam;
+    void (async () => {
+      try {
+        const detail = await apiFetch(`/media/files/${sourceId}/detail`);
+        similar.mutate({
+          id: sourceId,
+          name: detail.file?.name ?? `File ${sourceId}`,
+          relativePath: detail.file?.relativePath ?? "",
+          mediaType: detail.file?.mediaType ?? "other",
+          sizeBytes: detail.file?.sizeBytes ?? 0,
+          thumbnailPath: null,
+          dateTaken: detail.file?.dateTaken ?? null,
+          favorite: detail.file?.favorite ?? false,
+          description: detail.ai?.description ?? null,
+          confidence: "likely",
+          score: 1,
+          reasons: [],
+        });
+      } catch (error) {
+        startedSimilarRef.current = null;
+        console.error(error);
+      }
+    })();
+  }, [similarParam, similar.isPending]);
 
   const runSaved = useMutation({
     mutationFn: (id: number) => apiFetch(`/search/saved/${id}/run`, { method: "POST" }),

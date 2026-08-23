@@ -33,8 +33,9 @@ import {
   Sparkles,
   History,
   FolderPlus,
+  ScanSearch,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { MediaViewer } from "@/components/media/MediaViewer";
 import type { MediaFile, MediaFilesResponse } from "@/types/media";
@@ -725,6 +726,15 @@ function AddToCollection({ fileId }: { fileId: number }) {
 }
 
 function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
+  const [, navigate] = useLocation();
+  const aiQuery = useQuery({
+    queryKey: ["media-detail-ai", file.id],
+    queryFn: async () => {
+      const response = await fetch(`/api/media/files/${file.id}/detail`, { credentials: "include" });
+      if (!response.ok) throw new Error("Could not load AI details");
+      return response.json() as Promise<{ ai?: { analyzed?: boolean; description?: string | null } }>;
+    },
+  });
   const camera = cameraLabel(file.cameraMake, file.cameraModel);
   const hasGps = file.gpsLatitude != null && file.gpsLongitude != null;
   const mapsUrl = hasGps
@@ -762,6 +772,12 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
         <AddToCollection fileId={file.id} />
+
+        {aiQuery.data?.ai?.description && (
+          <DetailSection title="AI description">
+            <p className="text-sm leading-relaxed text-muted-foreground">{aiQuery.data.ai.description}</p>
+          </DetailSection>
+        )}
 
         {/* ── File info ── */}
         <DetailSection title="File">
@@ -932,6 +948,16 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
 
       {/* Actions */}
       <div className="p-4 border-t border-border space-y-2 shrink-0">
+        <Button
+          variant="secondary"
+          size="sm"
+          className="w-full gap-2 font-mono text-xs"
+          onClick={() => navigate(`/search?similar=${file.id}`)}
+          data-testid="button-find-similar"
+        >
+          <ScanSearch className="w-3.5 h-3.5" />
+          Find Similar Files
+        </Button>
         <Link href={`/media/${file.id}`}>
           <Button variant="default" size="sm" className="w-full gap-2 font-mono text-xs" data-testid="button-open-detail">
             <Sparkles className="w-3.5 h-3.5" />

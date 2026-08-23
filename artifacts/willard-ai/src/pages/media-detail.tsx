@@ -283,7 +283,7 @@ export default function MediaDetail() {
 
       {/* Contextual AI actions */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" size="sm" onClick={scrollToRelated} data-testid="action-find-similar"><ScanSearch className="mr-1 h-4 w-4" />Find Similar</Button>
+        <Button variant="secondary" size="sm" onClick={() => navigate(`/search?similar=${file.id}`)} data-testid="action-find-similar"><ScanSearch className="mr-1 h-4 w-4" />Find Similar</Button>
         {event && <Button variant="secondary" size="sm" onClick={() => navigate(`/collections?open=${event.id}`)} data-testid="action-same-event"><CalendarDays className="mr-1 h-4 w-4" />Show Same Event</Button>}
         {place && <Button variant="secondary" size="sm" onClick={() => navigate(`/collections?open=${place.id}`)} data-testid="action-same-location"><MapPin className="mr-1 h-4 w-4" />Show Same Location</Button>}
         {((ai.people?.length ?? 0) > 0 || (facesQ.data?.faces.length ?? 0) > 0) && <Button variant="secondary" size="sm" onClick={scrollToRelated} data-testid="action-same-person"><Users className="mr-1 h-4 w-4" />Show Same Person</Button>}
