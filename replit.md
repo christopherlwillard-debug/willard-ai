@@ -30,6 +30,12 @@ those paths are unreachable and the library reports "Library Offline".
 - The web artifact is installable as a PWA with a standalone window, shortcuts,
   and an offline static shell. A PWA cannot start PostgreSQL, the API server, or
   access a local/NAS filesystem; local users must start the native launcher first.
+- Windows releases have a thin Inno Setup installer definition in
+  `installer/WillardMediaCenter.iss`. The installed PowerShell launcher uses a
+  bundled Node runtime and a small static/proxy web server, while PostgreSQL
+  remains external and FFmpeg remains optional. Release staging is driven by
+  `scripts/windows/build-release.mjs`; compiling/signing the installer requires
+  a Windows build runner.
 - Copy `.env.example` → `.env` for local configuration. The API server loads the
   root `.env` automatically (via `--env-file-if-exists`); on Replit it is absent
   and the platform supplies env vars instead.

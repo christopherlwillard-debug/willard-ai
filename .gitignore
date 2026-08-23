@@ -63,3 +63,7 @@ test-results/
 .env.local
 .env.*.local
 logs/
+
+# Windows release staging and installer output
+build/windows/
+build/installer/

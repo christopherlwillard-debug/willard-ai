@@ -8,7 +8,24 @@ machine where that drive is a real, local path.
 
 ---
 
-## The easy way: double-click to start
+## The easy way: install once, then use the desktop icon
+
+For a packaged Windows release, run the Willard Media Center installer once.
+It creates a desktop shortcut and a Start Menu entry. From then on, double-click
+**Willard Media Center** to start the local application; the installed native
+launcher checks the release, starts or recovers local services, applies safe
+updates and database migrations, verifies readiness, and opens the web UI.
+
+The installer includes the application, production API dependencies, a private
+Node runtime, and the launcher. It does **not** include PostgreSQL, your media,
+the database, or FFmpeg. PostgreSQL remains an external service because it owns
+your library and authentication data; FFmpeg is optional.
+
+The packaged installer is built by the Windows release pipeline. Inno Setup,
+code signing, and real Windows install/upgrade validation must run on a Windows
+build machine; they cannot be completed inside Replit's Linux environment.
+
+## Developer-folder fallback: double-click to start
 
 Once the one-time prerequisites below are installed, opening Willard Media Center
 uses one normal entry point in the project root:
@@ -16,9 +33,9 @@ uses one normal entry point in the project root:
 | File | What it does |
 |------|--------------|
 | **`Start Willard AI.bat`** | Checks everything, safely updates/repairs what is needed, starts the app, and opens it |
-| **`Stop Willard AI.bat`** | Advanced manual control: cleanly shuts the app down |
-| **`Repair Willard AI.bat`** | Advanced manual control: fixes common problems |
-| **`Update Willard AI.bat`** | Advanced manual control: forces an update outside normal startup |
+| **`Stop Willard AI.bat`** | Advanced manual troubleshooting control: cleanly shuts the app down |
+| **`Repair Willard AI.bat`** | Advanced manual troubleshooting control: fixes common problems |
+| **`Update Willard AI.bat`** | Advanced manual troubleshooting control: forces an update outside normal startup |
 
 **To start:** double-click `Start Willard AI.bat`. It will:
 
@@ -37,14 +54,14 @@ If anything goes wrong, the window stays open and explains what to do in plain
 language. The launcher retries safe failures automatically; use
 `Repair Willard AI.bat` only for advanced manual troubleshooting.
 
-### Installed web app
+### Installed web app (PWA)
 
 The browser may offer **Install Willard Media Center**. The installed PWA gives
 the web interface its own desktop-style window, icon, and shortcuts. It is an
 offline shell only: private media and API responses are never cached, and the
 PWA cannot start PostgreSQL, the API server, or access a local/NAS path. On a
-local Windows install, run `Start Willard AI.bat` first; then open the installed
-app.
+local Windows install, launch the native desktop shortcut first; then open the
+installed app. The PWA is the web UI, not the process manager.
 
 **First time in the app:** set your app password, then Willard will walk you
 through picking your media drive (it detects available drives for you), test
@@ -55,8 +72,10 @@ guides you through the rest.
 
 ## One-time prerequisites
 
-Install these once (the Start script checks all of them and tells you if any
-are missing):
+For the packaged installer, PostgreSQL is the only required software outside
+the installer. The installer includes a private Node runtime and does not
+require Node.js or pnpm on PATH. FFmpeg remains optional. The list below is for
+the developer-folder fallback, where the Start script checks all of them:
 
 | Tool | Why | Install |
 |------|-----|---------|
