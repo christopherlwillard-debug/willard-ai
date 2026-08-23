@@ -18,6 +18,7 @@ import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
+import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
@@ -439,13 +440,11 @@ startFaceRecognition();
 
 // Detect conversion jobs interrupted mid-run (server died while status was "running").
 // Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
-db.update(conversionJobsTable)
-  .set({ status: "failed", error: "Interrupted by server restart — partial backup preserved" })
-  .where(eq(conversionJobsTable.status, "running"))
-  .then(({ rowCount }) => {
-    if (rowCount && rowCount > 0) {
+recoverInterruptedConversionJobs()
+  .then((count) => {
+    if (count > 0) {
       logger.warn(
-        { count: rowCount },
+        { count, error: INTERRUPTED_CONVERSION_ERROR },
         "RECOVERY: Marked interrupted conversion job(s) as failed — visit Optimize Center to retry",
       );
     }
