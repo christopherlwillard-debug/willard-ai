@@ -116,6 +116,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <TooltipProvider>
+          {/* Routing is intentionally centralized on wouter; do not add react-router-dom imports. */}
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <AuthProvider>
               <AuthGate />
