@@ -44,6 +44,14 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -221,11 +229,13 @@ function ThumbnailCard({
   file,
   selected,
   onClick,
+  onToggleSelect,
   onToggleFavorite,
 }: {
   file: MediaFile;
   selected: boolean;
   onClick: () => void;
+  onToggleSelect: () => void;
   onToggleFavorite?: (file: MediaFile) => void;
 }) {
   const [thumbError, setThumbError] = useState(false);
@@ -270,6 +280,20 @@ function ThumbnailCard({
             {formatDuration(file.durationSeconds)}
           </span>
         )}
+        <button
+          type="button"
+          aria-label={selected ? `Deselect ${file.name}` : `Select ${file.name}`}
+          aria-pressed={selected}
+          onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+          className={cn(
+            "absolute top-1.5 left-1.5 flex h-5 w-5 items-center justify-center rounded border text-xs transition-colors",
+            selected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-white/70 bg-black/50 text-transparent opacity-0 group-hover:opacity-100 hover:text-white",
+          )}
+        >
+          ✓
+        </button>
       </div>
       <div className="p-2">
         <p className="text-xs font-mono truncate text-foreground leading-tight" title={file.name}>
@@ -725,6 +749,113 @@ function AddToCollection({ fileId }: { fileId: number }) {
   );
 }
 
+function AddSelectedToAlbumDialog({
+  fileIds,
+  open,
+  onOpenChange,
+  onComplete,
+}: {
+  fileIds: number[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onComplete: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [collectionId, setCollectionId] = useState("");
+  const [newName, setNewName] = useState("");
+  const collectionsQuery = useQuery({
+    queryKey: ["collections"],
+    queryFn: async () => {
+      const r = await fetch("/api/collections");
+      if (!r.ok) throw new Error("Failed to load albums");
+      return r.json() as Promise<{ collections: { id: number; name: string; kind: string }[] }>;
+    },
+    enabled: open,
+  });
+  const addMutation = useMutation({
+    mutationFn: async ({ id, name }: { id?: number; name?: string }) => {
+      let targetId = id;
+      if (!targetId && name?.trim()) {
+        const create = await fetch("/api/collections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), kind: "manual" }),
+        });
+        if (!create.ok) {
+          const body = await create.json().catch(() => ({ error: "Could not create album" }));
+          throw new Error((body as any).error ?? "Could not create album");
+        }
+        const data = await create.json() as { collection: { id: number } };
+        targetId = data.collection.id;
+      }
+      if (!targetId) throw new Error("Choose an album or enter a new album name");
+      const add = await fetch(`/api/collections/${targetId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileIds }),
+      });
+      if (!add.ok) {
+        const body = await add.json().catch(() => ({ error: "Could not add files" }));
+        throw new Error((body as any).error ?? "Could not add files");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["collection-items"] });
+      toast({ title: "Files added to album", description: `${fileIds.length} file${fileIds.length === 1 ? "" : "s"} added.` });
+      setCollectionId("");
+      setNewName("");
+      onOpenChange(false);
+      onComplete();
+    },
+    onError: (err: Error) => toast({ title: "Could not add to album", description: err.message, variant: "destructive" }),
+  });
+  const albums = (collectionsQuery.data?.collections ?? []).filter((c) => c.kind === "manual");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add files to album</DialogTitle>
+          <DialogDescription>Select an existing manual album, or create one without leaving the library.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <select
+            value={collectionId}
+            onChange={(e) => { setCollectionId(e.target.value); if (e.target.value) setNewName(""); }}
+            disabled={addMutation.isPending}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">Choose an existing album…</option>
+            {albums.map((album) => <option key={album.id} value={album.id}>{album.name}</option>)}
+          </select>
+          <div className="flex items-center gap-2">
+            <Input
+              value={newName}
+              onChange={(e) => { setNewName(e.target.value); if (e.target.value) setCollectionId(""); }}
+              placeholder="Or create new album…"
+              disabled={addMutation.isPending}
+            />
+            <span className="text-xs text-muted-foreground shrink-0">new</span>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            disabled={(!collectionId && !newName.trim()) || addMutation.isPending}
+            onClick={() => addMutation.mutate(collectionId
+              ? { id: Number(collectionId) }
+              : { name: newName })}
+          >
+            {addMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : `Add ${fileIds.length} file${fileIds.length === 1 ? "" : "s"}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
   const [, navigate] = useLocation();
   const aiQuery = useQuery({
@@ -1095,6 +1226,8 @@ export default function Media() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
   const [selectedFile, setSelectedFile]       = useState<MediaFile | null>(null);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<number>>(new Set());
+  const [albumDialogOpen, setAlbumDialogOpen] = useState(false);
   const [viewerIndex,  setViewerIndex]        = useState<number | null>(null);
   const [page, setPage]               = useState(1);
   const [sort, setSort]               = useState("indexed_desc");
@@ -1112,6 +1245,17 @@ export default function Media() {
   }, [search]);
 
   useEffect(() => { setPage(1); }, [activeType, debouncedSearch, selectedFolder]);
+
+  const toggleFileSelection = useCallback((fileId: number) => {
+    setSelectedFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+  }, []);
+
+  const clearFileSelection = useCallback(() => setSelectedFileIds(new Set()), []);
 
   // ── Data queries ────────────────────────────────────────────────────────────
 
@@ -1558,6 +1702,22 @@ export default function Media() {
                     Page {page} of {totalPages}
                   </span>
                 )}
+                  {selectedFileIds.size > 0 && (
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-xs font-mono text-primary">{selectedFileIds.size} selected</span>
+                      <Button
+                        size="sm"
+                        onClick={() => setAlbumDialogOpen(true)}
+                        className="h-8 gap-1.5 font-mono text-xs"
+                        data-testid="button-add-selected-to-album"
+                      >
+                        <FolderPlus className="w-3.5 h-3.5" /> Add to album
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={clearFileSelection} className="h-8 px-2 text-xs">
+                        Clear
+                      </Button>
+                    </div>
+                  )}
               </div>
 
               {viewMode === "grid" ? (
@@ -1566,8 +1726,9 @@ export default function Media() {
                     <ThumbnailCard
                       key={file.id}
                       file={file}
-                      selected={selectedFile?.id === file.id}
+                      selected={selectedFileIds.has(file.id)}
                       onClick={() => openViewer(i, file)}
+                      onToggleSelect={() => toggleFileSelection(file.id)}
                       onToggleFavorite={(f) => favoriteMutation.mutate({ id: f.id, favorite: !f.favorite })}
                     />
                   ))}
@@ -1597,6 +1758,20 @@ export default function Media() {
                         >
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2 min-w-0">
+                              <button
+                                type="button"
+                                aria-label={selectedFileIds.has(file.id) ? `Deselect ${file.name}` : `Select ${file.name}`}
+                                aria-pressed={selectedFileIds.has(file.id)}
+                                onClick={(e) => { e.stopPropagation(); toggleFileSelection(file.id); }}
+                                className={cn(
+                                  "flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs",
+                                  selectedFileIds.has(file.id)
+                                    ? "border-primary bg-primary text-primary-foreground"
+                                    : "border-border text-transparent hover:text-muted-foreground",
+                                )}
+                              >
+                                ✓
+                              </button>
                               <MediaTypeIcon type={file.mediaType} className="w-3.5 h-3.5 shrink-0" />
                               <span className="truncate max-w-[200px] sm:max-w-[280px] md:max-w-xs lg:max-w-sm">{file.name}</span>
                             </div>
@@ -1668,6 +1843,12 @@ export default function Media() {
           }}
         />
       )}
+      <AddSelectedToAlbumDialog
+        fileIds={[...selectedFileIds]}
+        open={albumDialogOpen}
+        onOpenChange={setAlbumDialogOpen}
+        onComplete={clearFileSelection}
+      />
     </div>
   );
 }
