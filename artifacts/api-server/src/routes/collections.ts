@@ -275,8 +275,10 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
 router.post("/collections/:id/items", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
   const id = parseInt(req.params["id"] as string, 10);
-  const fileIds = Array.isArray(req.body?.fileIds)
-    ? req.body.fileIds.map((value: unknown) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
+  const fileIds: number[] = Array.isArray(req.body?.fileIds)
+    ? (req.body.fileIds as unknown[])
+      .map((value): number => Number(value))
+      .filter((value: number) => Number.isInteger(value) && value > 0)
     : [];
   if (!nasPath || !Number.isInteger(id) || fileIds.length === 0) {
     res.status(400).json({ error: "Provide a collection id and at least one file id" });
