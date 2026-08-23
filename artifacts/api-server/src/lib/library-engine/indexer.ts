@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
-import { isSystemDir, checkSystemFile, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
+import { isSystemDir, checkSystemFile, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
 
 export { isSystemDir };
 
