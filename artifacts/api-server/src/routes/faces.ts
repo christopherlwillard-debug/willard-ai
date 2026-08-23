@@ -3,10 +3,16 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
+import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
 
 const router: IRouter = Router();
 
-const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`;
+const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
+
+async function getNasPath(): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT nas_path FROM app_settings LIMIT 1`);
+  return rows[0]?.nas_path?.trim() || null;
+}
 
 function personOut(r: any) {
   return {
@@ -25,16 +31,24 @@ router.get("/faces/people", async (req: Request, res: Response) => {
   const _t0 = Date.now();
   try {
     const namedOnly = String(req.query.namedOnly ?? "") === "true";
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.json({ people: [], status: getFaceStatus() });
     const { rows } = await pool.query(
       `SELECT p.id, p.name, p.face_count, p.cover_face_id, p.created_at,
               (SELECT count(DISTINCT fc.media_file_id)
                  FROM faces fc
                  JOIN media_files f ON f.id = fc.media_file_id AND ${NOT_DELETED}
-                WHERE fc.person_id = p.id) AS photo_count
+                 WHERE fc.person_id = p.id AND f.nas_path = $1) AS photo_count
          FROM people p
         WHERE p.hidden = false AND p.face_count > 0
+          AND p.nas_path = $1
+          AND EXISTS (
+            SELECT 1 FROM faces fc JOIN media_files f ON f.id = fc.media_file_id
+             WHERE fc.person_id = p.id AND f.nas_path = $1 AND ${NOT_DELETED}
+          )
           ${namedOnly ? "AND p.name IS NOT NULL" : ""}
         ORDER BY (p.name IS NULL), p.face_count DESC, p.id`,
+      [nasPath],
     );
     const status = getFaceStatus();
     return res.json({ people: rows.map(personOut), status });
@@ -58,6 +72,8 @@ router.patch("/faces/people/:id", async (req: Request, res: Response) => {
     const hasName = typeof body.name === "string" || body.name === null;
     const hasHidden = typeof body.hidden === "boolean";
     if (!hasName && !hasHidden) return res.status(400).json({ error: "Nothing to update" });
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "Person not found" });
 
     const sets: string[] = [];
     const params: unknown[] = [id];
@@ -71,9 +87,9 @@ router.patch("/faces/people/:id", async (req: Request, res: Response) => {
       sets.push(`hidden = $${params.length}`);
     }
     const { rows } = await pool.query(
-      `UPDATE people SET ${sets.join(", ")} WHERE id = $1
+       `UPDATE people SET ${sets.join(", ")} WHERE id = $1 AND nas_path = $${params.length + 1}
        RETURNING id, name, face_count, cover_face_id, created_at`,
-      params,
+       [...params, nasPath],
     );
     if (!rows[0]) return res.status(404).json({ error: "Person not found" });
     return res.json({ ok: true, person: personOut(rows[0]) });
@@ -91,11 +107,18 @@ router.post("/faces/people/:id/merge", async (req: Request, res: Response) => {
     if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(fromId) || fromId <= 0 || fromId === id) {
       return res.status(400).json({ error: "Invalid person ids" });
     }
-    const { rows } = await pool.query(`SELECT id FROM people WHERE id = ANY($1::int[])`, [[id, fromId]]);
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "Person not found" });
+    const { rows } = await pool.query(`SELECT id FROM people WHERE id = ANY($1::int[]) AND nas_path = $2`, [[id, fromId], nasPath]);
     if (rows.length !== 2) return res.status(404).json({ error: "Person not found" });
-    await pool.query(`UPDATE faces SET person_id = $1 WHERE person_id = $2`, [id, fromId]);
-    await pool.query(`DELETE FROM people WHERE id = $1`, [fromId]);
-    await refreshPerson(id);
+    await pool.query(
+      `UPDATE faces fc SET person_id = $1
+        FROM media_files mf
+       WHERE fc.media_file_id = mf.id AND mf.nas_path = $3 AND fc.person_id = $2`,
+      [id, fromId, nasPath],
+    );
+    await pool.query(`DELETE FROM people WHERE id = $1 AND nas_path = $2`, [fromId, nasPath]);
+    await refreshPerson(nasPath, id);
     return res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "merge people failed");
@@ -108,8 +131,10 @@ router.get("/faces/people/:id/files", async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "Person not found" });
     const { rows: pRows } = await pool.query(
-      `SELECT id, name, face_count, cover_face_id, created_at FROM people WHERE id = $1`, [id]);
+      `SELECT id, name, face_count, cover_face_id, created_at FROM people WHERE id = $1 AND nas_path = $2`, [id, nasPath]);
     if (!pRows[0]) return res.status(404).json({ error: "Person not found" });
 
     const { rows } = await pool.query(
@@ -118,9 +143,9 @@ router.get("/faces/people/:id/files", async (req: Request, res: Response) => {
               f.date_taken, f.favorite, f.duration_seconds, fc.id AS face_id
          FROM faces fc
          JOIN media_files f ON f.id = fc.media_file_id AND ${NOT_DELETED}
-        WHERE fc.person_id = $1
+         WHERE fc.person_id = $1 AND f.nas_path = $2
         ORDER BY f.id, fc.score DESC`,
-      [id],
+      [id, nasPath],
     );
     rows.sort((a: any, b: any) => new Date(b.date_taken ?? 0).getTime() - new Date(a.date_taken ?? 0).getTime());
     return res.json({
@@ -149,12 +174,22 @@ router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
   try {
     const faceId = Number(req.params.faceId);
     if (!Number.isInteger(faceId) || faceId <= 0) return res.status(400).json({ error: "Invalid id" });
-    const { rows } = await pool.query(`SELECT crop_path FROM faces WHERE id = $1`, [faceId]);
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "Crop not found" });
+    const { rows } = await pool.query(
+      `SELECT fc.crop_path
+         FROM faces fc JOIN media_files f ON f.id = fc.media_file_id
+        WHERE fc.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`,
+      [faceId, nasPath],
+    );
     const cropPath = rows[0]?.crop_path;
-    if (!cropPath || !fs.existsSync(cropPath)) return res.status(404).json({ error: "Crop not found" });
+    let safeCropPath: string;
+    try { safeCropPath = resolveWithinRoot(cropPath, getWillardAIDir(nasPath)); }
+    catch { return res.status(404).json({ error: "Crop not found" }); }
+    if (!cropPath || !fs.existsSync(safeCropPath)) return res.status(404).json({ error: "Crop not found" });
     res.setHeader("Content-Type", "image/webp");
     res.setHeader("Cache-Control", "private, max-age=86400");
-    return fs.createReadStream(cropPath).pipe(res);
+    return fs.createReadStream(safeCropPath).pipe(res);
   } catch (err) {
     logger.error({ err }, "face crop failed");
     return res.status(500).json({ error: "Failed to load face crop" });
@@ -167,17 +202,23 @@ router.get("/media/files/:id/faces", async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "File not found" });
     const { rows } = await pool.query(
       `SELECT fc.id, fc.person_id, fc.box_x, fc.box_y, fc.box_w, fc.box_h, fc.score,
               (fc.crop_path IS NOT NULL) AS has_crop, p.name AS person_name
          FROM faces fc
-         LEFT JOIN people p ON p.id = fc.person_id
-        WHERE fc.media_file_id = $1
+          LEFT JOIN people p ON p.id = fc.person_id AND p.nas_path = $2
+        JOIN media_files f ON f.id = fc.media_file_id
+        WHERE fc.media_file_id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}
         ORDER BY fc.score DESC`,
-      [id],
+      [id, nasPath],
     );
     const { rows: state } = await pool.query(
-      `SELECT scanned_at FROM face_scan_state WHERE media_file_id = $1`, [id]);
+      `SELECT scanned_at FROM face_scan_state s
+         WHERE s.media_file_id = $1
+           AND EXISTS (SELECT 1 FROM media_files f WHERE f.id = s.media_file_id AND f.nas_path = $2)`,
+      [id, nasPath]);
     return res.json({
       scanned: !!state[0],
       faces: rows.map((r: any) => ({

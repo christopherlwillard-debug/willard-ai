@@ -375,7 +375,10 @@ router.post("/collections/:id/merge", async (req: Request, res: Response) => {
     for (const s of mergeable) {
       await tx.execute(sql`
         INSERT INTO collection_items (collection_id, media_file_id)
-        SELECT ${id}, media_file_id FROM collection_items WHERE collection_id = ${s.id}
+        SELECT ${id}, ci.media_file_id
+          FROM collection_items ci
+          JOIN media_files mf ON mf.id = ci.media_file_id AND mf.nas_path = ${nasPath}
+         WHERE ci.collection_id = ${s.id}
         ON CONFLICT DO NOTHING
       `);
       if (s.kind === "auto") {

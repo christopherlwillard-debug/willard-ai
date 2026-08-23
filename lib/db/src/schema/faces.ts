@@ -18,6 +18,7 @@ const vector512 = customType<{ data: string }>({
  */
 export const peopleTable = pgTable("people", {
   id:          serial("id").primaryKey(),
+  nasPath:     text("nas_path"),
   name:        text("name"),                     // null = not yet named by the user
   coverFaceId: integer("cover_face_id"),         // face used as the avatar
   faceCount:   integer("face_count").notNull().default(0),

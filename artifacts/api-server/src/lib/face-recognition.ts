@@ -269,15 +269,15 @@ async function saveFaceCrop(imageBuffer: Buffer, face: DetectedFace, srcW: numbe
  * per-person centroid), or create a new unnamed person cluster. Updates the
  * running-mean centroid.
  */
-async function assignToPerson(embedding: number[]): Promise<number> {
+async function assignToPerson(nasPath: string, embedding: number[]): Promise<number> {
   const vec = toVec(embedding);
   const { rows } = await pool.query(
     `SELECT id, face_count, 1 - (centroid <=> $1::vector) AS sim
        FROM people
-      WHERE centroid IS NOT NULL
+      WHERE nas_path = $2 AND centroid IS NOT NULL
       ORDER BY centroid <=> $1::vector
       LIMIT 1`,
-    [vec],
+    [vec, nasPath],
   );
   const best = rows[0];
   if (best && Number(best.sim) >= SAME_PERSON_COSINE) {
@@ -286,30 +286,48 @@ async function assignToPerson(embedding: number[]): Promise<number> {
     return Number(best.id);
   }
   const { rows: created } = await pool.query(
-    `INSERT INTO people (name, face_count, centroid) VALUES (NULL, 1, $1::vector) RETURNING id`,
-    [vec],
+    `INSERT INTO people (nas_path, name, face_count, centroid) VALUES ($1, NULL, 1, $2::vector) RETURNING id`,
+    [nasPath, vec],
   );
   return Number(created[0].id);
 }
 
 /** Refresh a person's centroid/count from its member faces (used after merges/deletes). */
-export async function refreshPerson(personId: number): Promise<void> {
+export async function refreshPerson(nasPath: string, personId: number): Promise<void> {
   await pool.query(
     `UPDATE people p
         SET centroid = sub.avg_emb, face_count = COALESCE(sub.cnt, 0)
-       FROM (SELECT avg(embedding) AS avg_emb, count(*) AS cnt FROM faces WHERE person_id = $1 AND embedding IS NOT NULL) sub
-      WHERE p.id = $1`,
-    [personId],
+       FROM (SELECT avg(fc.embedding) AS avg_emb, count(*) AS cnt
+               FROM faces fc
+               JOIN media_files mf ON mf.id = fc.media_file_id
+                AND mf.nas_path = $2
+                AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+              WHERE fc.person_id = $1 AND fc.embedding IS NOT NULL) sub
+      WHERE p.id = $1 AND p.nas_path = $2`,
+    [personId, nasPath],
   );
   // Repair a dangling cover face (e.g. after a rescan deleted the old row).
   await pool.query(
     `UPDATE people p
-        SET cover_face_id = (SELECT id FROM faces WHERE person_id = p.id ORDER BY score DESC LIMIT 1)
-      WHERE p.id = $1
-        AND (p.cover_face_id IS NULL OR NOT EXISTS (SELECT 1 FROM faces WHERE id = p.cover_face_id AND person_id = p.id))`,
-    [personId],
+        SET cover_face_id = (SELECT fc.id
+                               FROM faces fc
+                               JOIN media_files mf ON mf.id = fc.media_file_id
+                                AND mf.nas_path = $2
+                                AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+                              WHERE fc.person_id = p.id
+                              ORDER BY fc.score DESC LIMIT 1)
+      WHERE p.id = $1 AND p.nas_path = $2
+        AND (p.cover_face_id IS NULL OR NOT EXISTS (
+          SELECT 1
+            FROM faces fc
+            JOIN media_files mf ON mf.id = fc.media_file_id
+             AND mf.nas_path = $2
+             AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+           WHERE fc.id = p.cover_face_id AND fc.person_id = p.id
+        ))`,
+    [personId, nasPath],
   );
-  await pool.query(`DELETE FROM people WHERE id = $1 AND face_count = 0`, [personId]);
+  await pool.query(`DELETE FROM people WHERE id = $1 AND nas_path = $2 AND face_count = 0`, [personId, nasPath]);
 }
 
 // ── Per-file scan ─────────────────────────────────────────────────────────────
@@ -348,8 +366,17 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
     const { faces, width, height } = await detectFaces(buf);
 
     // Rebuild this file's faces from scratch (derived data).
-    const { rows: old } = await pool.query(`SELECT DISTINCT person_id FROM faces WHERE media_file_id = $1 AND person_id IS NOT NULL`, [file.id]);
-    await pool.query(`DELETE FROM faces WHERE media_file_id = $1`, [file.id]);
+    const { rows: old } = await pool.query(
+      `SELECT DISTINCT fc.person_id
+         FROM faces fc JOIN media_files mf ON mf.id = fc.media_file_id
+        WHERE fc.media_file_id = $1 AND mf.nas_path = $2 AND fc.person_id IS NOT NULL`,
+      [file.id, nasPath],
+    );
+    await pool.query(
+      `DELETE FROM faces fc USING media_files mf
+        WHERE fc.media_file_id = $1 AND mf.id = fc.media_file_id AND mf.nas_path = $2`,
+      [file.id, nasPath],
+    );
 
     const cropDir = getFaceCropDir(nasPath);
     fs.mkdirSync(cropDir, { recursive: true });
@@ -358,7 +385,7 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
     for (const face of faces) {
       idx++;
       const embedding = await embedFace(buf, face, width, height);
-      const personId = await assignToPerson(embedding);
+      const personId = await assignToPerson(nasPath, embedding);
       const cropPath = resolveWithinRoot(
         path.join(cropDir, `${file.id}-${idx}.webp`),
         getWillardAIDir(nasPath),
@@ -370,14 +397,18 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
         [file.id, personId, face.x, face.y, face.w, face.h, face.score, fs.existsSync(cropPath) ? cropPath : null, toVec(embedding)],
       );
       // First face of a new cluster becomes its cover; keep centroid fresh.
-      await pool.query(`UPDATE people SET cover_face_id = $1 WHERE id = $2 AND cover_face_id IS NULL`, [ins[0].id, personId]);
-      await refreshPerson(personId).catch(() => {});
+      await pool.query(
+        `UPDATE people SET cover_face_id = $1
+          WHERE id = $2 AND nas_path = $3 AND cover_face_id IS NULL`,
+        [ins[0].id, personId, nasPath],
+      );
+      await refreshPerson(nasPath, personId).catch(() => {});
       status.facesFound++;
     }
 
     // Refresh clusters that lost members from the rebuild.
     for (const r of old) {
-      await refreshPerson(Number(r.person_id)).catch(() => {});
+      await refreshPerson(nasPath, Number(r.person_id)).catch(() => {});
     }
 
     await pool.query(

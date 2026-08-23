@@ -209,12 +209,15 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS people (
       id serial PRIMARY KEY,
+      nas_path text,
       name text,
       cover_face_id integer,
       face_count integer NOT NULL DEFAULT 0,
       hidden boolean NOT NULL DEFAULT false,
       created_at timestamp NOT NULL DEFAULT now()
     );
+    ALTER TABLE people ADD COLUMN IF NOT EXISTS nas_path text;
+    CREATE INDEX IF NOT EXISTS people_nas_path_idx ON people (nas_path);
     CREATE TABLE IF NOT EXISTS faces (
       id serial PRIMARY KEY,
       media_file_id integer NOT NULL,

@@ -388,6 +388,7 @@ const SETUP_SQL = [
   // people (face recognition)
   `CREATE TABLE IF NOT EXISTS people (
     id            serial PRIMARY KEY,
+    nas_path      text,
     name          text,
     cover_face_id integer,
     face_count    integer NOT NULL DEFAULT 0,
@@ -395,6 +396,8 @@ const SETUP_SQL = [
     hidden        boolean NOT NULL DEFAULT false,
     created_at    timestamp NOT NULL DEFAULT now()
   )`,
+  `ALTER TABLE people ADD COLUMN IF NOT EXISTS nas_path text`,
+  `CREATE INDEX IF NOT EXISTS people_nas_path_idx ON people (nas_path)`,
 
   // faces
   `CREATE TABLE IF NOT EXISTS faces (

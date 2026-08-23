@@ -43,7 +43,7 @@ function toItem(r: any): RelatedItem {
   };
 }
 
-const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`;
+const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
 
 // ── Full detail for one item ─────────────────────────────────────────────────
 
@@ -65,15 +65,17 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
       [id, nasPath],
     );
     const r = rows[0];
-    if (!r || r.last_scan_action === "DELETED") return res.status(404).json({ error: "File not found" });
+     if (!r || r.last_scan_action === "DELETED" || r.last_scan_action === "RECYCLED") return res.status(404).json({ error: "File not found" });
 
     // Collections this file belongs to (events, places, manual albums).
     const { rows: colls } = await pool.query(
       `SELECT c.id, c.name, c.kind, c.auto_key,
-              (SELECT count(*) FROM collection_items ci2 WHERE ci2.collection_id = c.id) AS item_count
+              (SELECT count(*) FROM collection_items ci2
+                 JOIN media_files mf2 ON mf2.id = ci2.media_file_id AND mf2.nas_path = $2
+                WHERE ci2.collection_id = c.id) AS item_count
          FROM collection_items ci
          JOIN collections c ON c.id = ci.collection_id
-        WHERE ci.media_file_id = $1 AND c.removed_at IS NULL
+         WHERE ci.media_file_id = $1 AND c.nas_path = $2 AND c.removed_at IS NULL
           AND EXISTS (SELECT 1 FROM media_files mf WHERE mf.id = ci.media_file_id AND mf.nas_path = $2)`,
       [id, nasPath],
     );
@@ -196,14 +198,15 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
     const collsPromise = pool.query(
       `SELECT c.id AS collection_id, c.name AS collection_name, c.kind, c.auto_key, ${ITEM_COLS}
          FROM collection_items me
-         JOIN collections c ON c.id = me.collection_id AND c.removed_at IS NULL
+         JOIN collections c ON c.id = me.collection_id AND c.nas_path = $2 AND c.removed_at IS NULL
          JOIN collection_items ci ON ci.collection_id = c.id AND ci.media_file_id <> $1
-         JOIN media_files f ON f.id = ci.media_file_id AND ${NOT_DELETED}
+         JOIN media_files f ON f.id = ci.media_file_id AND f.nas_path = $2 AND ${NOT_DELETED}
          WHERE me.media_file_id = $1
+           AND f.nas_path = $2
            AND EXISTS (
              SELECT 1 FROM media_files src
-              WHERE src.id = me.media_file_id AND src.nas_path = $2
-                AND (src.last_scan_action IS NULL OR src.last_scan_action <> 'DELETED')
+               WHERE src.id = me.media_file_id AND src.nas_path = $2
+                 AND (src.last_scan_action IS NULL OR src.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
            )
         ORDER BY c.id, f.date_taken DESC NULLS LAST`,
       [id, nasPath],
@@ -238,9 +241,11 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
     const samePeoplePromise = (async () => {
       const { rows: myFaces } = await pool.query(
         `SELECT DISTINCT fc.person_id
-           FROM faces fc JOIN media_files mf ON mf.id = fc.media_file_id
+           FROM faces fc
+           JOIN media_files mf ON mf.id = fc.media_file_id
+           JOIN people p ON p.id = fc.person_id AND p.nas_path = $2
           WHERE fc.media_file_id = $1 AND mf.nas_path = $2
-            AND (mf.last_scan_action IS NULL OR mf.last_scan_action <> 'DELETED')`,
+            AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
         [id, nasPath]);
       const personIds = myFaces.map((r: any) => Number(r.person_id));
       if (personIds.length) {
@@ -316,6 +321,8 @@ router.patch("/media/files/:id/ai", async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "File not found" });
 
     const body = req.body ?? {};
     const clean = (v: unknown) => String(v).trim().toLowerCase().slice(0, 60);
@@ -328,7 +335,7 @@ router.patch("/media/files/:id/ai", async (req: Request, res: Response) => {
     }
 
     const { rows: fileRows } = await pool.query(
-      `SELECT id FROM media_files f WHERE f.id = $1 AND ${NOT_DELETED}`, [id]);
+      `SELECT id FROM media_files f WHERE f.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`, [id, nasPath]);
     if (!fileRows[0]) return res.status(404).json({ error: "File not found" });
 
     // Ensure a media_ai row exists (users may annotate before AI runs).
