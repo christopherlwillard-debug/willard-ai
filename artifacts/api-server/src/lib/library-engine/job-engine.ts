@@ -19,7 +19,7 @@ import {
   type DirCacheEntry, type FileEntry,
 } from "./indexer";
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
-import { getWillardAIDir, resolveLibraryPath } from "../nas-storage";
+import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage";
 import { recordActivity, describeChanges } from "../library-activity";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
 import { logger } from "../logger";
@@ -2575,6 +2575,28 @@ export function startThumbnailReconciliation(nasPath: string): void {
         if (cursor > 0 && passResets > 0) {
           console.info(`[thumbnail-reconcile] Pass complete — cleared ${passResets} orphaned thumbnailPath(s)`);
         }
+        // A completed scan has already marked files absent from the NAS as
+        // DELETED. Remove those stale catalog rows automatically, but never
+        // touch RECYCLED rows because restore still needs their metadata.
+        await db.delete(mediaFilesTable).where(and(
+          eq(mediaFilesTable.nasPath, nasPath),
+          eq(mediaFilesTable.lastScanAction, "DELETED"),
+        ));
+        // Remove cache files that no longer have an active catalog owner.
+        try {
+          const activeRows = await db.select({ id: mediaFilesTable.id })
+            .from(mediaFilesTable)
+            .where(and(eq(mediaFilesTable.nasPath, nasPath), sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`, sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`));
+          const activeIds = new Set(activeRows.map(row => row.id));
+          const thumbDir = getThumbnailDir(nasPath);
+          for (const name of fs.readdirSync(thumbDir)) {
+            if (!/^\d+\.webp$/i.test(name)) continue;
+            const id = Number(name.slice(0, -5));
+            if (!activeIds.has(id)) {
+              try { fs.unlinkSync(resolveWithinRoot(path.join(thumbDir, name), getWillardAIDir(nasPath))); } catch { /* changed concurrently */ }
+            }
+          }
+        } catch { /* cache cleanup is best effort */ }
         cursor = 0;
         passResets = 0;
         return;

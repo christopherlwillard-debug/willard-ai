@@ -355,6 +355,9 @@ export default function Dashboard() {
   const completedAt = lastCompleted?.finishedAt ? new Date(lastCompleted.finishedAt).getTime() : (data.lastScanAt ? new Date(data.lastScanAt).getTime() : 0);
   const showScanFailure = !isScanning && lastFailed != null && failedAt > completedAt;
   const scanFailureMessage = lastFailed?.error || "Scan failed";
+  const healthIssueCount = healthData
+    ? (healthData.missingFiles ?? 0) + (healthData.corruptFiles ?? 0)
+    : 0;
 
   const allHealthy = !isScanning && libraryOnline && (healthData?.database ?? true) && (healthData?.thumbnailsOk ?? true) && (healthData?.missingFiles ?? 0) === 0;
 
@@ -464,7 +467,7 @@ export default function Dashboard() {
             )}
             <div>
               <p className={cn("text-sm font-semibold", !libraryOnline ? "text-red-400" : isScanning ? "text-blue-400" : allHealthy ? "text-green-400" : "text-amber-400")}>
-                {!libraryOnline ? "Library Offline" : isScanning ? "Syncing in Background" : allHealthy ? "✓ Library Ready" : "Issues Detected"}
+                 {!libraryOnline ? "Library Offline" : isScanning ? "Syncing in Background" : allHealthy ? "✓ Library Ready" : `Issues Detected${healthIssueCount > 0 ? ` · ${healthIssueCount} found` : ""}`}
               </p>
               <p className="text-xs text-muted-foreground max-w-xs truncate" title={!libraryOnline ? `${libraryMessage}${libraryPath ? ` (${libraryPath})` : ""}` : undefined}>
                 {!libraryOnline

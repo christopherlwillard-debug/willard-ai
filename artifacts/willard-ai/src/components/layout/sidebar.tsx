@@ -16,6 +16,7 @@ import {
   BookImage,
   FolderHeart,
   Users,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout, getGetSettingsLogoUrl } from "@workspace/api-client-react";

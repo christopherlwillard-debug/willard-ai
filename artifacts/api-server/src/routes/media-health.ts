@@ -68,7 +68,7 @@ function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) visit(full, isThumb || path.resolve(dir) === path.resolve(thumbDir));
+      if (entry.isDirectory()) visit(full, isThumb || path.resolve(full) === path.resolve(thumbDir));
       else if (entry.isFile()) {
         if (isThumb) result.orphaned.push(full);
         else {
@@ -214,7 +214,7 @@ router.post("/media/cleanup", async (req, res) => {
   } catch (error) {
     await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, job.id));
     send("error", { message: "Cleanup failed safely; original media was not removed." });
-  } finally { res.end(); }
+  } finally { return res.end(); }
 });
 
 export default router;
