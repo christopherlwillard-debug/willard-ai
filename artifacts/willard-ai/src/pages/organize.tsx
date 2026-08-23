@@ -1440,6 +1440,88 @@ function JobWizardSheet({ jobId, onClose }: { jobId: number; onClose: () => void
   );
 }
 
+function OrganizeJobRow({
+  job,
+  onOpen,
+  onDelete,
+  deletePending,
+}: {
+  job: OrganizationJob;
+  onOpen: () => void;
+  onDelete: () => void;
+  deletePending: boolean;
+}) {
+  const { data: liveJob } = useGetOrganizeJob(job.id, {
+    query: {
+      queryKey: getGetOrganizeJobQueryKey(job.id),
+      enabled: job.status === "executing",
+      refetchInterval: (data) => (data as any)?.status === "executing" ? 2000 : false,
+    },
+  });
+
+  // The detail response is the source of truth while a job is running. The
+  // list response supplies the initial row and keeps non-running jobs cheap.
+  const currentJob = liveJob ?? job;
+  const plan = currentJob.planJson as any;
+  const isExecuting = currentJob.status === "executing";
+  const moved = Array.isArray(currentJob.fileMoves) ? currentJob.fileMoves.length : 0;
+  const total = typeof plan?.totalFiles === "number" ? plan.totalFiles : 0;
+  const progress = total > 0 ? Math.min(100, (moved / total) * 100) : 0;
+
+  return (
+    <TableRow className="cursor-pointer hover:bg-secondary/30" onClick={onOpen}>
+      <TableCell className="font-mono text-xs max-w-[180px] truncate" title={currentJob.sourcePath}>
+        <span className="font-medium">{currentJob.sourcePath.split("/").pop()}</span>
+      </TableCell>
+      <TableCell>
+        <span className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
+          {currentJob.sourceType === "archive" ? <Archive className="w-3.5 h-3.5" /> : <FolderOpen className="w-3.5 h-3.5" />}
+          {currentJob.sourceType}
+        </span>
+      </TableCell>
+      <TableCell>{statusBadge(currentJob.status)}</TableCell>
+      <TableCell className="text-right font-mono text-xs text-muted-foreground">
+        {isExecuting ? (
+          <div className="min-w-[120px] space-y-1 text-left">
+            <div className="flex justify-between gap-2 text-[10px]">
+              <span>{moved.toLocaleString()}/{total.toLocaleString()} files</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
+            <Progress value={progress} className="h-1" />
+          </div>
+        ) : (
+          plan?.totalFiles != null ? plan.totalFiles.toLocaleString() : "—"
+        )}
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">{formatDate(currentJob.createdAt)}</TableCell>
+      <TableCell>
+        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+          {currentJob.status === "completed" || currentJob.status === "rolled_back" ? (
+            <Button
+              variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono text-primary/80 hover:text-primary"
+              onClick={onOpen}
+              title="View Report"
+            >
+              <FileText className="w-3.5 h-3.5 mr-1" /> Report
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpen}>
+              <Eye className="w-3.5 h-3.5" />
+            </Button>
+          )}
+          <Button
+            variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+            disabled={currentJob.status === "executing" || deletePending}
+            onClick={onDelete}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Organize() {
@@ -1558,52 +1640,15 @@ export default function Organize() {
                   </div>
                 </TableCell>
               </TableRow>
-            ) : jobs?.map((job) => {
-              const plan = job.planJson as any;
-              return (
-                <TableRow key={job.id} className="cursor-pointer hover:bg-secondary/30" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
-                  <TableCell className="font-mono text-xs max-w-[180px] truncate" title={job.sourcePath}>
-                    <span className="font-medium">{job.sourcePath.split("/").pop()}</span>
-                  </TableCell>
-                  <TableCell>
-                    <span className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
-                      {job.sourceType === "archive" ? <Archive className="w-3.5 h-3.5" /> : <FolderOpen className="w-3.5 h-3.5" />}
-                      {job.sourceType}
-                    </span>
-                  </TableCell>
-                  <TableCell>{statusBadge(job.status)}</TableCell>
-                  <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                    {plan?.totalFiles != null ? plan.totalFiles.toLocaleString() : "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{formatDate(job.createdAt)}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                      {/* View Report / Open button */}
-                      {job.status === "completed" || job.status === "rolled_back" ? (
-                        <Button
-                          variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono text-primary/80 hover:text-primary"
-                          onClick={() => { setActiveJobId(job.id); setShowNew(false); }}
-                          title="View Report"
-                        >
-                          <FileText className="w-3.5 h-3.5 mr-1" /> Report
-                        </Button>
-                      ) : (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setActiveJobId(job.id); setShowNew(false); }}>
-                          <Eye className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                        disabled={job.status === "executing" || deleteMutation.isPending}
-                        onClick={() => deleteMutation.mutate({ id: job.id })}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+            ) : jobs?.map((job) => (
+              <OrganizeJobRow
+                key={job.id}
+                job={job}
+                onOpen={() => { setActiveJobId(job.id); setShowNew(false); }}
+                onDelete={() => deleteMutation.mutate({ id: job.id })}
+                deletePending={deleteMutation.isPending}
+              />
+            ))}
           </TableBody>
         </Table>
       </div>
