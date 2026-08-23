@@ -22,6 +22,10 @@ args = "organize-helpers-tests"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "optimize-cycle-tests"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "e2e-dashboard-scan"
 
 [[workflows.workflow.tasks]]
@@ -43,6 +47,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd artifacts/api-server && node --experimental-strip-types --test src/__tests__/organize-helpers.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "optimize-cycle-tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/api-server && node --experimental-strip-types --test src/__tests__/optimize-cycle.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
