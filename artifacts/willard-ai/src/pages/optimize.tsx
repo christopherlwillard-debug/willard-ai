@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { Fragment, useState, useRef, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -127,6 +127,7 @@ interface ConversionJob {
   failedFiles:    number;
   skippedFiles:   number;
   error:          string | null;
+  resultJson?:    { files?: ConversionFileResult[]; stagingDir?: string } | null;
   createdAt:      string;
   completedAt:    string | null;
 }
@@ -988,6 +989,168 @@ function RecentJobsPanel({
   );
 }
 
+// ── Conversion history ────────────────────────────────────────────────────────
+
+function ConversionHistoryPanel({
+  jobs,
+  onRetry,
+  retryLoading,
+}: {
+  jobs: ConversionJob[];
+  onRetry: (jobId: number) => void;
+  retryLoading: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  const [expandedJobId, setExpandedJobId] = useState<number | null>(null);
+  const history = jobs.slice(0, 10);
+
+  function savedBytes(job: ConversionJob): number {
+    return (job.resultJson?.files ?? []).reduce((total, file) => {
+      if (typeof file.savedBytes === "number") return total + Math.max(0, file.savedBytes);
+      if (typeof file.originalBytes === "number" && typeof file.convertedBytes === "number") {
+        return total + Math.max(0, file.originalBytes - file.convertedBytes);
+      }
+      return total;
+    }, 0);
+  }
+
+  function statusStyle(status: ConversionJob["status"]): string {
+    if (status === "done") return "text-emerald-400 border-emerald-400/30 bg-emerald-400/10";
+    if (status === "failed") return "text-red-400 border-red-400/30 bg-red-400/10";
+    if (status === "running") return "text-blue-400 border-blue-400/30 bg-blue-400/10";
+    if (status === "awaiting_action") return "text-amber-400 border-amber-400/30 bg-amber-400/10";
+    return "text-muted-foreground border-border bg-secondary/30";
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <button
+          type="button"
+          className="flex items-center justify-between gap-3 text-left w-full"
+          onClick={() => setOpen(value => !value)}
+          aria-expanded={open}
+        >
+          <CardTitle className="flex items-center gap-2 text-base font-mono">
+            {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            Conversion History
+            <span className="text-xs font-normal text-muted-foreground">({history.length})</span>
+          </CardTitle>
+          <Clock className="w-4 h-4 text-muted-foreground" />
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent className={history.length === 0 ? "py-8" : "p-0"}>
+          {history.length === 0 ? (
+            <p className="text-sm text-muted-foreground font-mono text-center">
+              No conversion runs yet. Completed and failed runs will appear here.
+            </p>
+          ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8"></TableHead>
+                  <TableHead className="font-mono">Date</TableHead>
+                  <TableHead className="font-mono">Status</TableHead>
+                  <TableHead className="font-mono text-right">Processed</TableHead>
+                  <TableHead className="font-mono text-right">Space Saved</TableHead>
+                  <TableHead className="font-mono min-w-[220px]">Backup Directory</TableHead>
+                  <TableHead className="font-mono text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {history.map(job => {
+                  const files = job.resultJson?.files ?? [];
+                  const expanded = expandedJobId === job.id;
+                  const canExpand = files.length > 0;
+                  const retryable = job.status === "failed";
+                  return (
+                    <Fragment key={job.id}>
+                      <TableRow className={expanded ? "bg-secondary/20" : ""}>
+                        <TableCell>
+                          {canExpand && (
+                            <button
+                              type="button"
+                              aria-label={`${expanded ? "Collapse" : "Expand"} results for job ${job.id}`}
+                              onClick={() => setExpandedJobId(expanded ? null : job.id)}
+                              className="text-muted-foreground hover:text-foreground"
+                            >
+                              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                            </button>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs whitespace-nowrap">
+                          {new Date(job.completedAt ?? job.createdAt).toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-mono uppercase ${statusStyle(job.status)}`}>
+                            {job.status === "awaiting_action" ? "needs action" : job.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-right whitespace-nowrap">
+                          {job.processedFiles.toLocaleString()}{job.totalFiles > 0 ? ` / ${job.totalFiles.toLocaleString()}` : ""}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-right text-emerald-400 whitespace-nowrap">
+                          {savedBytes(job) > 0 ? formatBytes(savedBytes(job)) : "—"}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground max-w-[280px]">
+                          <span className="block truncate" title={job.backupDir ?? undefined}>{job.backupDir ?? "—"}</span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {retryable && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="font-mono text-xs h-7 gap-1"
+                              onClick={() => onRetry(job.id)}
+                              disabled={retryLoading}
+                            >
+                              <RefreshCw className="w-3 h-3" /> Retry
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {expanded && (
+                        <TableRow key={`${job.id}-results`} className="bg-secondary/20 hover:bg-secondary/20">
+                          <TableCell colSpan={7} className="py-3 pl-10 pr-4">
+                            <div className="space-y-1">
+                              <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
+                                Per-file results
+                              </p>
+                              {files.map((file, index) => (
+                                <div key={`${file.filePath}-${index}`} className="flex items-center gap-2 text-xs font-mono">
+                                  {file.status === "success"
+                                    ? <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                                    : file.status === "failed"
+                                    ? <X className="w-3 h-3 text-red-400 shrink-0" />
+                                    : <SkipForward className="w-3 h-3 text-muted-foreground shrink-0" />}
+                                  <span className="truncate flex-1 text-muted-foreground" title={file.filePath}>
+                                    {file.filePath.split(/[\\/]/).pop() ?? file.filePath}
+                                  </span>
+                                  {file.status === "success" && typeof file.savedBytes === "number" && file.savedBytes > 0 && (
+                                    <span className="text-emerald-400">-{formatBytes(file.savedBytes)}</span>
+                                  )}
+                                  {file.error && <span className="text-red-400 max-w-[260px] truncate" title={file.error}>{file.error}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Optimize() {
@@ -1256,6 +1419,11 @@ export default function Optimize() {
           finalizeLoading={finalizeMutation.isPending}
         />
       )}
+      <ConversionHistoryPanel
+        jobs={recentJobs}
+        onRetry={(jobId) => retryMutation.mutate(jobId)}
+        retryLoading={retryMutation.isPending}
+      />
 
       {/* Pre-scan prompt */}
       {!scanResult && !scanMutation.isPending && (
