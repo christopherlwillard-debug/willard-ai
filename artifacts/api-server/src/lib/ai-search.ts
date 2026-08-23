@@ -1,7 +1,7 @@
 import { pool } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { embedText, toVectorLiteral } from "./ai-enrichment";
-import { logger } from "./logger";
+import { embedText, toVectorLiteral } from "./ai-enrichment.ts";
+import { logger } from "./logger.ts";
 
 /**
  * AI Search — natural-language hybrid search over the canonical library index.
@@ -35,6 +35,21 @@ export function emptyIntent(): SearchIntent {
   return {
     semanticQuery: null, keywords: [], mediaTypes: [], dateFrom: null, dateTo: null,
     objects: [], exclude: [], favoriteOnly: false, docTypes: [], location: null,
+  };
+}
+
+export function mergeRefinedIntent(previous: SearchIntent, refinement: SearchIntent): SearchIntent {
+  return {
+    semanticQuery: refinement.semanticQuery ?? previous.semanticQuery,
+    keywords: [...new Set([...previous.keywords, ...refinement.keywords])],
+    mediaTypes: refinement.mediaTypes.length ? refinement.mediaTypes : previous.mediaTypes,
+    dateFrom: refinement.dateFrom ?? previous.dateFrom,
+    dateTo: refinement.dateTo ?? previous.dateTo,
+    objects: [...new Set([...previous.objects, ...refinement.objects])],
+    exclude: [...new Set([...previous.exclude, ...refinement.exclude])],
+    favoriteOnly: previous.favoriteOnly || refinement.favoriteOnly,
+    docTypes: [...new Set([...previous.docTypes, ...refinement.docTypes])],
+    location: refinement.location ?? previous.location,
   };
 }
 
@@ -84,7 +99,7 @@ export async function parseIntent(
       Array.isArray(v) ? v.map((x) => String(x).toLowerCase().trim()).filter(Boolean).slice(0, 10) : [];
     const dateOrNull = (v: unknown): string | null =>
       typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
-    return {
+    const parsed: SearchIntent = {
       semanticQuery: typeof p.semanticQuery === "string" && p.semanticQuery.trim() ? p.semanticQuery.trim() : null,
       keywords: arr(p.keywords),
       mediaTypes: arr(p.mediaTypes).filter((t) => ["image", "video", "document", "audio", "archive", "other"].includes(t)),
@@ -96,10 +111,12 @@ export async function parseIntent(
       docTypes: arr(p.docTypes),
       location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
     };
+    return previous ? mergeRefinedIntent(previous, parsed) : parsed;
   } catch (err) {
     logger.warn({ err, query }, "Intent parsing failed — falling back to keyword search");
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2).slice(0, 8);
-    return { ...emptyIntent(), semanticQuery: query, keywords: words };
+    const fallback = { ...emptyIntent(), semanticQuery: query, keywords: words };
+    return previous ? mergeRefinedIntent(previous, fallback) : fallback;
   }
 }
 
@@ -120,7 +137,7 @@ export interface SearchResultItem {
   reasons: string[];
 }
 
-interface RawRow {
+export interface RawRow {
   id: number; name: string; relative_path: string; media_type: string;
   size_bytes: string | number; thumbnail_path: string | null;
   date_taken: Date | null; favorite: boolean;
@@ -137,11 +154,21 @@ function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x).toLowerCase()) : [];
 }
 
-export async function executeSearch(
+export function normalizedMediaTypes(mediaTypes: string[]): string[] {
+  return [...new Set(mediaTypes.flatMap((t) => (t === "image" ? ["image", "photo"] : [t])))];
+}
+
+export interface SearchQuery {
+  sql: string;
+  params: unknown[];
+}
+
+export function buildSearchQuery(
   nasPath: string,
   intent: SearchIntent,
   limit = 60,
-): Promise<SearchResultItem[]> {
+  vectorLiteral: string | null = null,
+): SearchQuery {
   const params: unknown[] = [nasPath];
   const where: string[] = [
     `f.nas_path = $1`,
@@ -150,31 +177,18 @@ export async function executeSearch(
   const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
 
   if (intent.mediaTypes.length) {
-    // The library stores photos as "photo"; the intent vocabulary says "image".
-    const types = [...new Set(intent.mediaTypes.flatMap((t) => (t === "image" ? ["image", "photo"] : [t])))];
-    where.push(`f.media_type = ANY(${add(types)})`);
+    where.push(`f.media_type = ANY(${add(normalizedMediaTypes(intent.mediaTypes))})`);
   }
   if (intent.favoriteOnly) where.push(`f.favorite = true`);
   if (intent.dateFrom) where.push(`COALESCE(f.date_taken, f.modified_at) >= ${add(intent.dateFrom)}`);
   if (intent.dateTo) where.push(`COALESCE(f.date_taken, f.modified_at) <= ${add(intent.dateTo + "T23:59:59")}`);
   if (intent.docTypes.length) where.push(`a.doc_type = ANY(${add(intent.docTypes)})`);
 
-  let simSelect = `NULL::float AS similarity`;
-  let orderBy = `f.date_taken DESC NULLS LAST`;
-  if (intent.semanticQuery) {
-    try {
-      const emb = await embedText(intent.semanticQuery);
-      if (emb.length) {
-        const p = add(toVectorLiteral(emb));
-        simSelect = `CASE WHEN a.embedding IS NULL THEN NULL ELSE 1 - (a.embedding <=> ${p}::vector) END AS similarity`;
-        orderBy = `similarity DESC NULLS LAST`;
-      }
-    } catch (err) {
-      logger.warn({ err }, "Query embedding failed — continuing without semantic ranking");
-    }
-  }
-
-  const sql = `
+  const simSelect = vectorLiteral
+    ? `CASE WHEN a.embedding IS NULL THEN NULL ELSE 1 - (a.embedding <=> ${add(vectorLiteral)}::vector) END AS similarity`
+    : `NULL::float AS similarity`;
+  return {
+    sql: `
     SELECT f.id, f.name, f.relative_path, f.media_type, f.size_bytes,
            f.thumbnail_path, f.date_taken, f.favorite,
            f.gps_latitude, f.gps_longitude, f.place_name,
@@ -184,9 +198,29 @@ export async function executeSearch(
       FROM media_files f
       LEFT JOIN media_ai a ON a.media_file_id = f.id
      WHERE ${where.join(" AND ")}
-     ORDER BY ${orderBy}
-     LIMIT ${Math.min(limit * 4, 400)}`;
-  const { rows } = await pool.query(sql, params);
+     ORDER BY ${vectorLiteral ? "similarity DESC NULLS LAST" : "f.date_taken DESC NULLS LAST"}
+     LIMIT ${Math.min(limit * 4, 400)}`,
+    params,
+  };
+}
+
+export async function executeSearch(
+  nasPath: string,
+  intent: SearchIntent,
+  limit = 60,
+): Promise<SearchResultItem[]> {
+  let vectorLiteral: string | null = null;
+  if (intent.semanticQuery) {
+    try {
+      const emb = await embedText(intent.semanticQuery);
+      if (emb.length) vectorLiteral = toVectorLiteral(emb);
+    } catch (err) {
+      logger.warn({ err }, "Query embedding failed — continuing without semantic ranking");
+    }
+  }
+
+  const query = buildSearchQuery(nasPath, intent, limit, vectorLiteral);
+  const { rows } = await pool.query(query.sql, query.params);
 
   const scored = (rows as RawRow[])
     .map((r) => scoreRow(r, intent))
@@ -196,7 +230,7 @@ export async function executeSearch(
   return scored;
 }
 
-function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
+export function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | null {
   // Effective tags: AI tags minus user-hidden ones, plus user-added ones.
   const hidden = new Set(strArr(r.hidden_tags));
   const tags = [...strArr(r.tags).filter((t) => !hidden.has(t)), ...strArr(r.user_tags)];

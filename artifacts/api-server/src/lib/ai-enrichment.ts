@@ -2,9 +2,9 @@ import * as fs from "fs";
 import { sql } from "drizzle-orm";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage";
-import { logger } from "./logger";
-import { extractDocumentText as extractOfficeDocumentText } from "./document-text";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { logger } from "./logger.ts";
+import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
 
 /**
  * AI Enrichment Engine — builds the "understanding" layer on top of the

@@ -6,6 +6,7 @@
     "emitDeclarationOnly": true,
     "outDir": "dist",
     "rootDir": "src",
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["src"]

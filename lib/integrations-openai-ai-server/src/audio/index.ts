@@ -10,4 +10,4 @@ export {
   textToSpeechStream,
   speechToText,
   speechToTextStream,
-} from "./client";
+} from "./client.ts";
