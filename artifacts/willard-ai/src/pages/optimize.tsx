@@ -307,8 +307,7 @@ function RunConversionsDialog({
       const data = JSON.parse(e.data) as ConversionSummary;
       setSummary(data);
       if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
-        setPhase("done");
-        if (!data.cancelled && existingJobId !== undefined && data.succeeded > 0) void handleFinalize(existingJobId);
+        setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
       es.close();
       esRef.current = null;
     });
@@ -384,8 +383,7 @@ function RunConversionsDialog({
         const data = JSON.parse(e.data) as ConversionSummary & { jobId?: number };
         setSummary(data);
         if (data.jobId) setFinalizeJobId(data.jobId);
-        setPhase("done");
-        if (!data.cancelled && data.succeeded > 0) void handleFinalize(job.id);
+        setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
         es.close();
         esRef.current = null;
       });
@@ -407,7 +405,7 @@ function RunConversionsDialog({
   async function handleFinalize(jobId: number) {
     setFinalizing(true);
     try {
-      const resp = await fetch(`/api/optimize/jobs/${jobId}/finalize`, {
+      const resp = await fetch(`/api/optimize/conversion/${jobId}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: selectedAction }),
@@ -475,6 +473,8 @@ function RunConversionsDialog({
               ? "Conversion in progress — cancel stops after the current file finishes."
               : summary?.cancelled
               ? "Conversion cancelled. Completed files remain safely staged; originals were not changed."
+              : summary?.succeeded
+              ? "Conversion verified. Choose what to do with your originals."
               : "Conversion complete. Originals were safely recycled after verification."}
           </DialogDescription>
         </DialogHeader>
