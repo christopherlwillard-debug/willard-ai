@@ -231,6 +231,14 @@ export async function bootstrapSessionTable(): Promise<void> {
   } catch {
     logger.warn("pgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.");
   }
+  try {
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS media_ai_embedding_hnsw_idx
+        ON media_ai USING hnsw (embedding vector_cosine_ops);
+    `);
+  } catch {
+    logger.warn("Unable to create the pgvector HNSW index — AI similarity search will use exact scans.");
+  }
   await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';

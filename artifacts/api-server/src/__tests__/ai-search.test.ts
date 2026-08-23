@@ -41,6 +41,13 @@ test("search query normalizes image intent to the stored photo media type", () =
   assert.deepEqual(query.params, ["/nas", ["image", "photo"]]);
 });
 
+test("semantic search orders by vector distance for ANN index scans", () => {
+  const query = buildSearchQuery("/nas", intent({ semanticQuery: "sunset photos" }), 24, "[0.1,0.2]");
+  assert.match(query.sql, /a\.embedding <=> \$2::vector ASC NULLS LAST/);
+  assert.doesNotMatch(query.sql, /ORDER BY similarity DESC/);
+  assert.deepEqual(query.params, ["/nas", "[0.1,0.2]"]);
+});
+
 test("confidence labels use the documented score thresholds", () => {
   assert.equal(scoreRow(row(null), intent())?.confidence, "possible");
   assert.equal(scoreRow(row(null), intent({ keywords: ["sunset"] }))?.confidence, "possible");

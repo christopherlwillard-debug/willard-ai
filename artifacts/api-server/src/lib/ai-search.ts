@@ -184,8 +184,9 @@ export function buildSearchQuery(
   if (intent.dateTo) where.push(`COALESCE(f.date_taken, f.modified_at) <= ${add(intent.dateTo + "T23:59:59")}`);
   if (intent.docTypes.length) where.push(`a.doc_type = ANY(${add(intent.docTypes)})`);
 
-  const simSelect = vectorLiteral
-    ? `CASE WHEN a.embedding IS NULL THEN NULL ELSE 1 - (a.embedding <=> ${add(vectorLiteral)}::vector) END AS similarity`
+  const vectorParam = vectorLiteral ? add(vectorLiteral) : null;
+  const simSelect = vectorParam
+    ? `CASE WHEN a.embedding IS NULL THEN NULL ELSE 1 - (a.embedding <=> ${vectorParam}::vector) END AS similarity`
     : `NULL::float AS similarity`;
   return {
     sql: `
@@ -198,7 +199,9 @@ export function buildSearchQuery(
       FROM media_files f
       LEFT JOIN media_ai a ON a.media_file_id = f.id
      WHERE ${where.join(" AND ")}
-     ORDER BY ${vectorLiteral ? "similarity DESC NULLS LAST" : "f.date_taken DESC NULLS LAST"}
+      ORDER BY ${vectorParam
+        ? `a.embedding <=> ${vectorParam}::vector ASC NULLS LAST`
+        : "f.date_taken DESC NULLS LAST"}
      LIMIT ${Math.min(limit * 4, 400)}`,
     params,
   };
@@ -335,6 +338,7 @@ export function buildNoResultSuggestions(intent: SearchIntent): string[] {
 export async function findSimilar(nasPath: string, fileId: number, limit = 24): Promise<SearchResultItem[]> {
   const { rows } = await pool.query(
     `SELECT f.content_hash, f.media_type, a.embedding IS NOT NULL AS has_embedding
+            , a.embedding::text AS embedding
        FROM media_files f LEFT JOIN media_ai a ON a.media_file_id = f.id
       WHERE f.id = $1
         AND f.nas_path = $2
@@ -350,7 +354,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
             f.gps_latitude, f.gps_longitude, f.place_name,
             a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
             a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
-            1 - (a.embedding <=> (SELECT embedding FROM media_ai WHERE media_file_id = $2)) AS similarity
+            1 - (a.embedding <=> $2::vector) AS similarity
        FROM media_files f
        JOIN media_ai a ON a.media_file_id = f.id
       WHERE f.nas_path = $1
@@ -359,9 +363,9 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
         AND a.embedding IS NOT NULL
         AND ($3::text IS NULL OR f.content_hash IS NULL OR f.content_hash <> $3)
         AND f.media_type = $4
-      ORDER BY similarity DESC
+      ORDER BY a.embedding <=> $2::vector ASC
       LIMIT $5`,
-    [nasPath, fileId, rows[0].content_hash, rows[0].media_type, limit],
+    [nasPath, rows[0].embedding, rows[0].content_hash, rows[0].media_type, limit],
   );
   return (sims as RawRow[]).map((r) => ({
     id: r.id,
