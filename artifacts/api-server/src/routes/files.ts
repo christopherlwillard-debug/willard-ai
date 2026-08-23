@@ -1,13 +1,22 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { indexedFilesTable } from "@workspace/db";
+import { appSettingsTable, mediaFilesTable } from "@workspace/db";
 import { eq, ilike, gte, lte, and, sql, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { reconcileLegacyCatalog } from "../lib/catalog-reconciliation";
 
 const router: IRouter = Router();
 
+router.post("/files/reconcile-legacy", async (_req, res) => {
+  try {
+    res.json(await reconcileLegacyCatalog());
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : "Legacy catalog reconciliation failed" });
+  }
+});
+
 /**
- * Search local indexed files. Returns a unified result set.
+ * Search the canonical media catalog. Returns a legacy-compatible result set.
  */
 router.get("/files/search", async (req, res) => {
   try {
@@ -16,22 +25,49 @@ router.get("/files/search", async (req, res) => {
     const lim = parseInt(limit);
     const off = parseInt(offset);
 
-    // --- Local DB search ---
+    const [settings] = await db.select({ nasPath: appSettingsTable.nasPath })
+      .from(appSettingsTable).limit(1);
+    const nasPath = settings?.nasPath?.trim();
+    if (!nasPath) {
+      res.json({ files: [], total: 0, offset: off, limit: lim, sources: { local: 0 } });
+      return;
+    }
+
     const conditions: SQL[] = [];
-    if (q) conditions.push(ilike(indexedFilesTable.filename, `%${q}%`));
-    if (fileType && fileType !== "all") conditions.push(eq(indexedFilesTable.fileType, fileType));
-    if (source && source !== "all") conditions.push(eq(indexedFilesTable.source, source));
-    if (minSize) conditions.push(gte(indexedFilesTable.sizeBytes, parseInt(minSize)));
-    if (maxSize) conditions.push(lte(indexedFilesTable.sizeBytes, parseInt(maxSize)));
-    if (after) conditions.push(gte(indexedFilesTable.modifiedAt, new Date(after)));
-    if (before) conditions.push(lte(indexedFilesTable.modifiedAt, new Date(before)));
+    conditions.push(eq(mediaFilesTable.nasPath, nasPath));
+    conditions.push(sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`);
+    conditions.push(sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`);
+    if (q) conditions.push(ilike(mediaFilesTable.name, `%${q}%`));
+    if (fileType && fileType !== "all") {
+      conditions.push(eq(mediaFilesTable.mediaType, fileType === "image" ? "photo" : fileType));
+    }
+    if (source && source !== "all" && source !== "local") {
+      res.json({ files: [], total: 0, offset: off, limit: lim, sources: { local: 0 } });
+      return;
+    }
+    if (minSize) conditions.push(gte(mediaFilesTable.sizeBytes, parseInt(minSize)));
+    if (maxSize) conditions.push(lte(mediaFilesTable.sizeBytes, parseInt(maxSize)));
+    if (after) conditions.push(gte(mediaFilesTable.modifiedAt, new Date(after)));
+    if (before) conditions.push(lte(mediaFilesTable.modifiedAt, new Date(before)));
 
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const where = and(...conditions);
 
-    const [{ total: localTotal }] = await db.select({ total: count() }).from(indexedFilesTable).where(where);
-    const localFiles = await db.select().from(indexedFilesTable)
+    const [{ total: localTotal }] = await db.select({ total: count() }).from(mediaFilesTable).where(where);
+    const localFiles = await db.select({
+      id: mediaFilesTable.id,
+      path: sql<string>`${mediaFilesTable.nasPath} || '/' || ${mediaFilesTable.relativePath}`,
+      filename: mediaFilesTable.name,
+      extension: mediaFilesTable.extension,
+      fileType: sql<string>`CASE WHEN ${mediaFilesTable.mediaType} = 'photo' THEN 'image' ELSE ${mediaFilesTable.mediaType} END`,
+      sizeBytes: mediaFilesTable.sizeBytes,
+      modifiedAt: mediaFilesTable.modifiedAt,
+      folder: sql<string>`regexp_replace(${mediaFilesTable.relativePath}, '[^/]+$', '')`,
+      source: sql<string>`'local'`,
+      contentHash: mediaFilesTable.contentHash,
+      indexedAt: mediaFilesTable.indexedAt,
+    }).from(mediaFilesTable)
       .where(where)
-      .orderBy(desc(indexedFilesTable.modifiedAt))
+      .orderBy(desc(mediaFilesTable.modifiedAt))
       .limit(lim)
       .offset(off);
 
