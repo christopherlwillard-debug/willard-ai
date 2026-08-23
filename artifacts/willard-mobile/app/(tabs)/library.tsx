@@ -61,6 +61,7 @@ export default function LibraryScreen() {
   const [sizeIndex, setSizeIndex] = useState(0);
   const [selectedFile, setSelectedFile] = useState<IndexedFile | FolderEntry | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [returnToSearch, setReturnToSearch] = useState(false);
   const sizeFilter = SIZE_FILTERS[sizeIndex];
   const isSearching = searchQuery.trim().length > 0;
 
@@ -95,6 +96,16 @@ export default function LibraryScreen() {
     setPath(parts.slice(0, -1).join("/"));
   };
   const openFolder = (entry: FolderEntry) => setPath(entry.path);
+  const openContainingFolder = (file: IndexedFile) => {
+    const folder = (file.folder || "").replace(/[\\/]+$/, "");
+    setPath(folder);
+    setSearchQuery("");
+    setReturnToSearch(true);
+  };
+  const resumeSearch = () => {
+    setSearchQuery(searchText);
+    setReturnToSearch(false);
+  };
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 67 : insets.top }]}>
@@ -171,12 +182,18 @@ export default function LibraryScreen() {
         </View>
       )}
 
-      {!isSearching && (
+       {!isSearching && (
         <View style={styles.breadcrumbRow}>
           {!!path && <Pressable onPress={goUp} hitSlop={8}><Feather name="chevron-left" size={18} color={colors.primary} /></Pressable>}
           <Text numberOfLines={1} style={[styles.breadcrumb, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
             {crumbs.join("  /  ")}
           </Text>
+           {returnToSearch && (
+             <Pressable onPress={resumeSearch} style={[styles.searchReturnButton, { borderColor: colors.border, backgroundColor: colors.card }]}>
+               <Feather name="search" size={13} color={colors.primary} />
+               <Text style={[styles.searchReturnText, { color: colors.primary, fontFamily: "Inter_500Medium" }]}>Back to search</Text>
+             </Pressable>
+           )}
         </View>
       )}
 
@@ -212,6 +229,19 @@ export default function LibraryScreen() {
                     {isFolder ? `${(item as FolderEntry).fileCount ?? 0} files` : `${formatBytes((item as IndexedFile).sizeBytes)} · ${(item as IndexedFile).fileType || (item as IndexedFile).extension || "File"}`}
                   </Text>
                 </View>
+                {!isFolder && isSearching && (
+                  <Pressable
+                    accessibilityLabel={`Open containing folder for ${(item as IndexedFile).filename}`}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      openContainingFolder(item as IndexedFile);
+                    }}
+                    hitSlop={8}
+                    style={styles.folderAction}
+                  >
+                    <Feather name="folder" size={17} color={colors.primary} />
+                  </Pressable>
+                )}
                 <Feather name={isFolder ? "chevron-right" : "info"} size={17} color={colors.mutedForeground} />
               </Pressable>
             );
@@ -346,6 +376,9 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 12 },
   breadcrumbRow: { flexDirection: "row", alignItems: "center", gap: 3, marginHorizontal: 20, marginTop: 18, marginBottom: 8 },
   breadcrumb: { flex: 1, fontSize: 12 },
+  searchReturnButton: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1, borderRadius: 14, paddingHorizontal: 9, paddingVertical: 6 },
+  searchReturnText: { fontSize: 11 },
+  folderAction: { padding: 5 },
   list: { padding: 16, gap: 8, paddingBottom: 110 },
   entry: { minHeight: 67, flexDirection: "row", alignItems: "center", gap: 13, paddingHorizontal: 14, borderWidth: 1, borderRadius: 11 },
   entryCopy: { flex: 1, gap: 5 },
