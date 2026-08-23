@@ -271,6 +271,71 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
   res.json({ collection: c, files: files.map((r) => r.file), total: Number(totalRow?.total ?? 0), page, limit });
 });
 
+// ── POST /api/collections/:id/items — add files to a manual album ───────────
+router.post("/collections/:id/items", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const id = parseInt(req.params["id"] as string, 10);
+  const fileIds = Array.isArray(req.body?.fileIds)
+    ? req.body.fileIds.map((value: unknown) => Number(value)).filter((value: number) => Number.isInteger(value) && value > 0)
+    : [];
+  if (!nasPath || !Number.isInteger(id) || fileIds.length === 0) {
+    res.status(400).json({ error: "Provide a collection id and at least one file id" });
+    return;
+  }
+  const collection = await loadCollection(id, nasPath);
+  if (!collection || collection.removedAt) {
+    res.status(404).json({ error: "Collection not found" });
+    return;
+  }
+  if (collection.kind !== "manual") {
+    res.status(400).json({ error: "Files can only be added to manual albums" });
+    return;
+  }
+  const uniqueFileIds = [...new Set(fileIds)];
+  const files = await db
+    .select({ id: mediaFilesTable.id })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      inArray(mediaFilesTable.id, uniqueFileIds),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
+        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    ));
+  if (files.length !== uniqueFileIds.length) {
+    res.status(400).json({ error: "One or more files are not active members of this library" });
+    return;
+  }
+  await db.insert(collectionItemsTable)
+    .values(uniqueFileIds.map((mediaFileId) => ({ collectionId: id, mediaFileId })))
+    .onConflictDoNothing();
+  res.status(201).json({ added: uniqueFileIds.length });
+});
+
+// ── DELETE /api/collections/:id/items/:fileId — remove a file from an album
+router.delete("/collections/:id/items/:fileId", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const id = parseInt(req.params["id"] as string, 10);
+  const fileId = parseInt(req.params["fileId"] as string, 10);
+  if (!nasPath || !Number.isInteger(id) || !Number.isInteger(fileId)) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+  const collection = await loadCollection(id, nasPath);
+  if (!collection || collection.removedAt) {
+    res.status(404).json({ error: "Collection not found" });
+    return;
+  }
+  if (collection.kind !== "manual") {
+    res.status(400).json({ error: "Files can only be removed from manual albums" });
+    return;
+  }
+  await db.delete(collectionItemsTable).where(and(
+    eq(collectionItemsTable.collectionId, id),
+    eq(collectionItemsTable.mediaFileId, fileId),
+  ));
+  res.json({ ok: true });
+});
+
 // ── POST /api/collections/:id/merge — merge source albums into target ───────
 
 router.post("/collections/:id/merge", async (req: Request, res: Response) => {

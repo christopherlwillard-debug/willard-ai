@@ -32,6 +32,7 @@ import {
   Heart,
   Sparkles,
   History,
+  FolderPlus,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -667,6 +668,62 @@ function cameraLabel(make: string | null, model: string | null): string | null {
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 
+function AddToCollection({ fileId }: { fileId: number }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [collectionId, setCollectionId] = useState("");
+  const collectionsQuery = useQuery({
+    queryKey: ["collections"],
+    queryFn: async () => {
+      const r = await fetch("/api/collections");
+      if (!r.ok) throw new Error("Failed to load albums");
+      return r.json() as Promise<{ collections: { id: number; name: string; kind: string }[] }>;
+    },
+  });
+  const addMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/collections/${id}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileIds: [fileId] }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ error: "Could not add file" }));
+        throw new Error((body as any).error ?? "Could not add file");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      queryClient.invalidateQueries({ queryKey: ["collection-items"] });
+      toast({ title: "Added to album" });
+      setCollectionId("");
+    },
+    onError: (err: Error) => toast({ title: "Could not add to album", description: err.message, variant: "destructive" }),
+  });
+  const albums = (collectionsQuery.data?.collections ?? []).filter((c) => c.kind === "manual");
+  if (albums.length === 0) return null;
+  return (
+    <DetailSection title="Albums">
+      <div className="flex items-center gap-2">
+        <FolderPlus className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+        <select
+          value={collectionId}
+          onChange={(e) => {
+            const value = e.target.value;
+            setCollectionId(value);
+            if (value) addMutation.mutate(Number(value));
+          }}
+          disabled={addMutation.isPending}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+        >
+          <option value="">Add to album…</option>
+          {albums.map((album) => <option key={album.id} value={album.id}>{album.name}</option>)}
+        </select>
+      </div>
+    </DetailSection>
+  );
+}
+
 function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
   const camera = cameraLabel(file.cameraMake, file.cameraModel);
   const hasGps = file.gpsLatitude != null && file.gpsLongitude != null;
@@ -703,6 +760,8 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+        <AddToCollection fileId={file.id} />
 
         {/* ── File info ── */}
         <DetailSection title="File">

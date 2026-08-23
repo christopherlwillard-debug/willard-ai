@@ -19,6 +19,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderPlus,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,10 +87,12 @@ function FileGrid({
   files,
   onOpen,
   onToggleFavorite,
+  onRemove,
 }: {
   files: MediaFile[];
   onOpen: (index: number) => void;
   onToggleFavorite: (file: MediaFile) => void;
+  onRemove?: (file: MediaFile) => void;
 }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3">
@@ -123,6 +126,15 @@ function FileGrid({
           >
             <Heart className={cn("w-3.5 h-3.5", file.favorite ? "text-red-400 fill-red-400" : "text-white")} />
           </button>
+          {onRemove && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemove(file); }}
+              title="Remove from album"
+              className="absolute bottom-9 right-1.5 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -269,10 +281,12 @@ function CollectionDetail({
   collection,
   onBack,
   onToggleFavorite,
+  onRemove,
 }: {
   collection: Collection;
   onBack: () => void;
   onToggleFavorite: (file: MediaFile) => void;
+  onRemove?: (file: MediaFile) => void;
 }) {
   const [page, setPage] = useState(1);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -309,7 +323,7 @@ function CollectionDetail({
         <p className="text-sm text-muted-foreground py-16 text-center">This collection is empty.</p>
       ) : (
         <>
-          <FileGrid files={files} onOpen={setViewerIndex} onToggleFavorite={onToggleFavorite} />
+          <FileGrid files={files} onOpen={setViewerIndex} onToggleFavorite={onToggleFavorite} onRemove={onRemove} />
           <Pager page={page} totalPages={totalPages} onPage={setPage} />
         </>
       )}
@@ -519,6 +533,8 @@ export default function Collections() {
   const [smartEditTarget, setSmartEditTarget] = useState<Collection | null>(null);
   const [smartName, setSmartName] = useState("");
   const [smartRule, setSmartRule] = useState<SmartRule>({});
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
 
   const collectionsQuery = useQuery({
     queryKey: ["collections"],
@@ -555,6 +571,40 @@ export default function Collections() {
   const toggleFavorite = (file: MediaFile) => {
     favoriteMutation.mutate({ id: file.id, favorite: !file.favorite });
   };
+
+  const manualCreateMutation = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: manualName.trim(), kind: "manual" }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ error: "Failed to create album" }));
+        throw new Error((body as any).error ?? "Failed to create album");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      invalidateAll();
+      setManualOpen(false);
+      setManualName("");
+      toast({ title: "Album created" });
+    },
+    onError: (err: Error) => toast({ title: "Album creation failed", description: err.message, variant: "destructive" }),
+  });
+
+  const removeItemMutation = useMutation({
+    mutationFn: async ({ collectionId, fileId }: { collectionId: number; fileId: number }) => {
+      const r = await fetch(`/api/collections/${collectionId}/items/${fileId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Failed to remove file from album");
+    },
+    onSuccess: () => {
+      invalidateAll();
+      toast({ title: "Removed from album" });
+    },
+    onError: (err: Error) => toast({ title: "Remove failed", description: err.message, variant: "destructive" }),
+  });
 
   const rebuildMutation = useMutation({
     mutationFn: async () => {
@@ -765,6 +815,9 @@ export default function Collections() {
         <div className="flex-1" />
         {tab === "collections" && (
           <>
+            <Button variant="outline" size="sm" onClick={() => setManualOpen(true)} className="gap-1.5 font-mono text-xs">
+              <Plus className="w-3.5 h-3.5" />New Album
+            </Button>
             <Button variant="outline" size="sm" onClick={openSmartCreate} className="gap-1.5 font-mono text-xs">
               <FolderPlus className="w-3.5 h-3.5" />New Smart Folder
             </Button>
@@ -795,6 +848,9 @@ export default function Collections() {
             collection={view.collection}
             onBack={() => setView({ kind: "list" })}
             onToggleFavorite={toggleFavorite}
+            onRemove={view.collection.kind === "manual"
+              ? (file) => removeItemMutation.mutate({ collectionId: view.collection.id, fileId: file.id })
+              : undefined}
           />
         ) : collectionsQuery.isLoading ? (
           <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
@@ -846,6 +902,23 @@ export default function Collections() {
           </div>
         )}
       </div>
+
+      {/* Rename dialog */}
+      <Dialog open={manualOpen} onOpenChange={(open) => { if (!open) { setManualOpen(false); setManualName(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New album</DialogTitle>
+            <DialogDescription>Create a manual album and add files to it from your library.</DialogDescription>
+          </DialogHeader>
+          <Input value={manualName} onChange={(e) => setManualName(e.target.value)} placeholder="e.g. Summer vacation" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setManualOpen(false)}>Cancel</Button>
+            <Button disabled={!manualName.trim() || manualCreateMutation.isPending} onClick={() => manualCreateMutation.mutate()}>
+              {manualCreateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Create album"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Rename dialog */}
       <Dialog open={renameTarget !== null} onOpenChange={(open) => { if (!open) setRenameTarget(null); }}>
