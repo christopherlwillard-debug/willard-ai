@@ -16,6 +16,8 @@ tags:
     description: NAS scanning operations
   - name: files
     description: File index operations
+  - name: media
+    description: Media preview operations
   - name: explorer
     description: NAS folder explorer
   - name: archives
@@ -38,6 +40,39 @@ tags:
     description: Smart library health and indexing controls
 
 paths:
+  /media/file/{id}/stream:
+    get:
+      operationId: streamMediaFile
+      tags: [media]
+      summary: Stream an indexed file for in-app preview
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: File contents
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial file contents
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: File or NAS not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
   /healthz:
     get:
       operationId: healthCheck

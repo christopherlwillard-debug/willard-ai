@@ -54,5 +54,9 @@
     "typescript": "~5.9.2",
     "zod": "catalog:",
     "zod-validation-error": "^3.4.0"
+  },
+  "dependencies": {
+    "expo-video": "^57.0.2",
+    "react-native-webview": "^14.0.1"
   }
 }
