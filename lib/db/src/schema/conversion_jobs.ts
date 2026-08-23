@@ -13,6 +13,7 @@ export const conversionJobsTable = pgTable("conversion_jobs", {
   skippedFiles:    integer("skipped_files").notNull().default(0),
   resultJson:      jsonb("result_json"),
   error:           text("error"),
+  cancelledAt:     timestamp("cancelled_at"),
   createdAt:       timestamp("created_at").notNull().defaultNow(),
   completedAt:     timestamp("completed_at"),
 });

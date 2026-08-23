@@ -111,13 +111,14 @@ interface ConversionSummary {
   totalSavedBytes: number;
   stagingDir?:     string;
   results:         ConversionFileResult[];
+  cancelled?:      boolean;
 }
 
 type FinalizeAction = "recycle" | "replace" | "keep-both" | "archive";
 
 interface ConversionJob {
   id:             number;
-  status:         "pending" | "running" | "awaiting_action" | "done" | "failed";
+  status:         "pending" | "running" | "awaiting_action" | "cancelled" | "done" | "failed";
   approvedExts:   string[];
   backupDir:      string | null;
   nasPath:        string;
@@ -275,6 +276,7 @@ function RunConversionsDialog({
   const [selectedAction, setSelectedAction] = useState<FinalizeAction>("recycle");
   const [finalizing, setFinalizing]         = useState(false);
   const [finalizeJobId, setFinalizeJobId]   = useState<number | null>(null);
+  const [cancelling, setCancelling]         = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   const approved = groups.filter(g => approvedExts.has(g.extension));
@@ -305,8 +307,8 @@ function RunConversionsDialog({
       const data = JSON.parse(e.data) as ConversionSummary;
       setSummary(data);
       if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
-       setPhase("done");
-       if (existingJobId !== undefined && data.succeeded > 0) void handleFinalize(existingJobId);
+        setPhase("done");
+        if (!data.cancelled && existingJobId !== undefined && data.succeeded > 0) void handleFinalize(existingJobId);
       es.close();
       esRef.current = null;
     });
@@ -383,7 +385,7 @@ function RunConversionsDialog({
         setSummary(data);
         if (data.jobId) setFinalizeJobId(data.jobId);
         setPhase("done");
-        if (data.succeeded > 0) void handleFinalize(job.id);
+        if (!data.cancelled && data.succeeded > 0) void handleFinalize(job.id);
         es.close();
         esRef.current = null;
       });
@@ -424,6 +426,25 @@ function RunConversionsDialog({
     }
   }
 
+  async function handleCancel() {
+    const jobId = finalizeJobId;
+    if (!jobId || cancelling) return;
+    setCancelling(true);
+    try {
+      const resp = await fetch(`/api/optimize/jobs/${jobId}/cancel`, { method: "POST" });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error((body as any).error ?? "Failed to cancel conversion");
+      toast({
+        title: "Cancellation requested",
+        description: "The current file will finish, then conversion will stop.",
+      });
+    } catch (err: any) {
+      toast({ title: "Cancellation failed", description: err.message, variant: "destructive" });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   useEffect(() => {
     return () => { esRef.current?.close(); };
   }, []);
@@ -451,7 +472,9 @@ function RunConversionsDialog({
               : phase === "config"
               ? "Originals are kept untouched during conversion. Converted files are staged for your review."
               : phase === "running"
-              ? "Conversion in progress — do not close this window."
+              ? "Conversion in progress — cancel stops after the current file finishes."
+              : summary?.cancelled
+              ? "Conversion cancelled. Completed files remain safely staged; originals were not changed."
               : "Conversion complete. Originals were safely recycled after verification."}
           </DialogDescription>
         </DialogHeader>
@@ -681,9 +704,20 @@ function RunConversionsDialog({
             </>
           )}
           {phase === "running" && (
-            <Button variant="outline" size="sm" className="font-mono" disabled>
-              Running…
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="font-mono gap-1.5"
+                onClick={handleCancel}
+                disabled={cancelling || !finalizeJobId}
+              >
+                <X className="w-4 h-4" /> {cancelling ? "Cancelling…" : "Cancel"}
+              </Button>
+              <Button variant="outline" size="sm" className="font-mono" disabled>
+                Running…
+              </Button>
+            </>
           )}
           {isAwaitingAction && finalizeJobId && (
             <>
@@ -1017,6 +1051,7 @@ function ConversionHistoryPanel({
   function statusStyle(status: ConversionJob["status"]): string {
     if (status === "done") return "text-emerald-400 border-emerald-400/30 bg-emerald-400/10";
     if (status === "failed") return "text-red-400 border-red-400/30 bg-red-400/10";
+    if (status === "cancelled") return "text-amber-400 border-amber-400/30 bg-amber-400/10";
     if (status === "running") return "text-blue-400 border-blue-400/30 bg-blue-400/10";
     if (status === "awaiting_action") return "text-amber-400 border-amber-400/30 bg-amber-400/10";
     return "text-muted-foreground border-border bg-secondary/30";

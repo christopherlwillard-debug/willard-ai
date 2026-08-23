@@ -1118,12 +1118,32 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
     }
     const [updated] = await db
       .update(conversionJobsTable)
-      .set({ status: "pending", error: null, totalFiles: 0, processedFiles: 0, succeededFiles: 0, failedFiles: 0, skippedFiles: 0, resultJson: null, completedAt: null })
+      .set({ status: "pending", error: null, cancelledAt: null, totalFiles: 0, processedFiles: 0, succeededFiles: 0, failedFiles: 0, skippedFiles: 0, resultJson: null, completedAt: null })
       .where(eq(conversionJobsTable.id, id))
       .returning();
     res.json(updated);
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Failed to retry job" });
+  }
+});
+
+router.post("/optimize/jobs/:id/cancel", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (job.status !== "running") {
+      res.status(409).json({ error: `Cannot cancel a job with status '${job.status}'` });
+      return;
+    }
+    const [updated] = await db.update(conversionJobsTable)
+      .set({ cancelledAt: new Date() })
+      .where(eq(conversionJobsTable.id, id))
+      .returning();
+    res.json({ id, status: updated?.status ?? job.status, cancellationRequested: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Failed to cancel conversion job" });
   }
 });
 
@@ -1316,7 +1336,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
     if (job.status === "running") { send("error", { message: "Job is already running" }); res.end(); return; }
-    if (job.status === "done" || job.status === "failed") {
+    if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
       send("error", { message: `Job already ${job.status}` }); res.end(); return;
     }
 
@@ -1336,7 +1356,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     const execFileDecisions = (execCachedScan?.fileDecisions as
       Record<string, { convert: boolean; targetExt: string; reasons: string[] }> | undefined) ?? {};
 
-    await db.update(conversionJobsTable).set({ status: "running" }).where(eq(conversionJobsTable.id, id));
+    await db.update(conversionJobsTable).set({ status: "running", cancelledAt: null, error: null }).where(eq(conversionJobsTable.id, id));
     send("status", { stage: "scanning", message: "Scanning NAS for files to convert…", progress: 2 });
 
     const skipDirs = new Set<string>([
@@ -1379,6 +1399,9 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     }> = [];
 
     for (let i = 0; i < filesToConvert.length; i++) {
+      const [currentJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
+        .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+      if (currentJob?.cancelledAt) break;
       const { fullPath, ext } = filesToConvert[i];
 
       // Use per-file decision from scan cache when available; fall back to extension-level rule.
@@ -1517,19 +1540,36 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         processed: i + 1,
         total: totalFiles,
       });
+
+      // Cancellation is intentionally checked after the current file has fully
+      // converted and verified, preserving all completed staged files.
+      const [afterFileJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
+        .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+      if (afterFileJob?.cancelledAt) break;
     }
 
     const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
     const resultJson = { files: results, totalSaved, stagingDir };
+    const [finishedJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
+      .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const wasCancelled = Boolean(finishedJob?.cancelledAt);
 
     // Stage 4: Await user action — originals are untouched; staged files ready for user decision.
     await db.update(conversionJobsTable).set({
-      status: "awaiting_action", processedFiles: totalFiles, succeededFiles: succeeded, failedFiles: failed,
+      status: wasCancelled ? "cancelled" : "awaiting_action", processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
       skippedFiles: skipped, completedAt: new Date(), resultJson,
     }).where(eq(conversionJobsTable.id, id));
 
-    send("status", { stage: "awaiting_action", message: "Conversions staged — choose what to do with your originals", progress: 100 });
-    send("summary", { totalFiles, succeeded, failed, skipped, totalSavedBytes: totalSaved, stagingDir, results: results.slice(0, 200) });
+    send("status", {
+      stage: wasCancelled ? "cancelled" : "awaiting_action",
+      message: wasCancelled
+        ? `Conversion cancelled after ${results.length} of ${totalFiles} files — staged files are preserved`
+        : "Conversions staged — choose what to do with your originals",
+      progress: wasCancelled ? Math.round(5 + (results.length / totalFiles) * 90) : 100,
+      processed: results.length,
+      total: totalFiles,
+    });
+    send("summary", { totalFiles, succeeded, failed, skipped, totalSavedBytes: totalSaved, stagingDir, cancelled: wasCancelled, results: results.slice(0, 200) });
     res.end();
   } catch (e: any) {
     try {

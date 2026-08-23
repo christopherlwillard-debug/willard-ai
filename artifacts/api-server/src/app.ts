@@ -75,6 +75,8 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS nas_path text;
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS logo_path text;
+    ALTER TABLE conversion_jobs
+      ADD COLUMN IF NOT EXISTS cancelled_at timestamp;
   `);
   await pool.query(`
     ALTER TABLE app_settings
