@@ -1,8 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool, appSettingsTable } from "@workspace/db";
-import { findSimilar } from "../lib/ai-search";
-import { recomputeEmbedding } from "../lib/ai-enrichment";
-import { logger } from "../lib/logger";
+import { findSimilar } from "../lib/ai-search.ts";
+import { recomputeEmbedding } from "../lib/ai-enrichment.ts";
+import { logger } from "../lib/logger.ts";
 
 const router: IRouter = Router();
 
@@ -55,13 +55,11 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
     const { rows } = await pool.query(
-      `SELECT f.*, a.description AS ai_description, a.tags AS ai_tags, a.objects, a.ocr_text,
-              a.doc_type, a.scene, a.people, a.user_tags, a.hidden_tags,
-              a.user_description, a.notes, a.analyzed_at, a.ai_version,
-              (a.embedding IS NOT NULL) AS has_embedding
+      `SELECT f.nas_path, f.date_taken, f.gps_latitude, f.gps_longitude, f.media_type,
+              a.people, (a.embedding IS NOT NULL) AS has_embedding
          FROM media_files f
          LEFT JOIN media_ai a ON a.media_file_id = f.id
-        WHERE f.id = $1 AND f.nas_path = $2`,
+        WHERE f.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`,
       [id, nasPath],
     );
     const r = rows[0];
@@ -105,8 +103,8 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
       next = n[0] ? toItem(n[0]) : null;
     }
 
-    const hidden = new Set(strArr(r.hidden_tags).map((t) => t.toLowerCase()));
-    const aiTags = strArr(r.ai_tags);
+    const hidden = new Set(strArr(o.hidden_tags).map((t: string) => t.toLowerCase()));
+    const aiTags = new Set(strArr(cur.tags).map((t) => t.toLowerCase()));
 
     return res.json({
       file: {

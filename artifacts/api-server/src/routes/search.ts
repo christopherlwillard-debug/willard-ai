@@ -3,9 +3,9 @@ import { db, pool, appSettingsTable } from "@workspace/db";
 import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
   buildNoResultSuggestions, emptyIntent, type SearchIntent,
-} from "../lib/ai-search";
-import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment";
-import { logger } from "../lib/logger";
+} from "../lib/ai-search.ts";
+import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
+import { logger } from "../lib/logger.ts";
 
 const router: IRouter = Router();
 
