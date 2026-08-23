@@ -79,6 +79,25 @@ export async function bootstrapSessionTable(): Promise<void> {
       ADD COLUMN IF NOT EXISTS cancelled_at timestamp;
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS cleanup_operations (
+      operation_id text PRIMARY KEY,
+      nas_path text NOT NULL,
+      media_file_id integer NOT NULL,
+      operation_type text NOT NULL DEFAULT 'CLEANUP',
+      source_path text NOT NULL,
+      trash_path text,
+      size_bytes bigint NOT NULL DEFAULT 0,
+      status text NOT NULL,
+      error text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS cleanup_operations_status_idx
+      ON cleanup_operations (nas_path, status);
+    ALTER TABLE cleanup_operations
+      ADD COLUMN IF NOT EXISTS operation_type text NOT NULL DEFAULT 'CLEANUP';
+  `);
+  await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS logo_path text;
     ALTER TABLE app_settings

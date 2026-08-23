@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
+import { randomUUID } from "crypto";
 import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 
 const router: IRouter = Router();
@@ -462,8 +463,17 @@ router.post("/cleanup/execute", async (req, res) => {
         }
 
         const sizeBytes = file.sizeBytes ?? 0;
+        const operationId = randomUUID();
+        let trashPath: string | null = null;
+        await db.execute(sql`
+          INSERT INTO cleanup_operations
+            (operation_id, nas_path, media_file_id, source_path, size_bytes, status)
+          VALUES
+            (${operationId}, ${nasPath}, ${fileId}, ${filePath}, ${sizeBytes}, 'PREPARED')
+        `);
 
         if (process.platform === "win32") {
+          await db.execute(sql`UPDATE cleanup_operations SET status = 'MOVING', updated_at = NOW() WHERE operation_id = ${operationId}`);
           // Windows: move to OS Recycle Bin via PowerShell (recoverable)
           const psResult = spawnSync("powershell", [
             "-NoProfile", "-Command",
@@ -471,9 +481,11 @@ router.post("/cleanup/execute", async (req, res) => {
           ], { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
 
           if (psResult.status !== 0) {
+            await db.execute(sql`UPDATE cleanup_operations SET status = 'FAILED', error = ${(psResult.stderr ?? "").slice(0, 500)}, updated_at = NOW() WHERE operation_id = ${operationId}`);
             errors.push(`File ID ${fileId}: Recycle Bin failed: ${(psResult.stderr ?? "").slice(0, 200)}`);
             continue;
           }
+          await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
@@ -483,8 +495,14 @@ router.post("/cleanup/execute", async (req, res) => {
           );
           fs.mkdirSync(trashDir, { recursive: true });
           const safeBasename = `${fileId}_${path.basename(file.name)}`;
-          const destPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
-          fs.renameSync(filePath, destPath);
+          trashPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
+          await db.execute(sql`
+            UPDATE cleanup_operations
+            SET status = 'MOVING', trash_path = ${trashPath}, updated_at = NOW()
+            WHERE operation_id = ${operationId}
+          `);
+          fs.renameSync(filePath, trashPath);
+          await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
           // Record in trash manifest so user can locate the file later
           const manifestPath = trashManifestPath(nasPath);
@@ -492,10 +510,11 @@ router.post("/cleanup/execute", async (req, res) => {
           fs.appendFileSync(manifestPath, JSON.stringify({
             ts:           new Date().toISOString(),
             originalPath: filePath,
-            trashPath:    destPath,
+            trashPath,
             sizeBytes,
             expiresAt:    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           }) + "\n");
+          await db.execute(sql`UPDATE cleanup_operations SET status = 'MANIFESTED', updated_at = NOW() WHERE operation_id = ${operationId}`);
         }
 
         // Mark media_files row as RECYCLED (soft-delete marker)
@@ -505,11 +524,14 @@ router.post("/cleanup/execute", async (req, res) => {
           SET last_scan_action = 'RECYCLED'
           WHERE id = ${fileId} AND nas_path = ${nasPath}
         `);
+        await db.execute(sql`UPDATE cleanup_operations SET status = 'RECORDED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
         recycled++;
         recoveredBytes += sizeBytes;
         deletedFiles.push({ path: filePath, sizeBytes });
       } catch (err: any) {
+        // The operation id is deliberately not reused across retries. Any
+        // PREPARED/MOVING record remains available for startup reconciliation.
         errors.push(`File ID ${fileId}: ${err.message ?? "unknown error"}`);
       }
     }
@@ -668,12 +690,33 @@ router.post("/cleanup/restore", async (req, res) => {
       return;
     }
 
+    const operationId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO cleanup_operations
+        (operation_id, nas_path, media_file_id, operation_type, source_path, trash_path, size_bytes, status)
+      SELECT ${operationId}, ${nasPath}, id, 'RESTORE', ${resolvedTrashPath}, ${resolvedOriginalPath},
+             size_bytes, 'PREPARED'
+      FROM media_files
+      WHERE nas_path = ${nasPath}
+        AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
+            REPLACE(${resolvedOriginalPath}, chr(92), '/')
+      LIMIT 1
+    `);
+    await db.execute(sql`
+      UPDATE cleanup_operations SET status = 'MOVING', updated_at = NOW()
+      WHERE operation_id = ${operationId}
+    `);
+
     // ── Ensure destination directory exists ───────────────────────────────────
     const destinationDir = resolveWithinRoot(path.dirname(resolvedOriginalPath), nasPath);
     fs.mkdirSync(destinationDir, { recursive: true });
 
     // ── Move file back ────────────────────────────────────────────────────────
     fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
+    await db.execute(sql`
+      UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW()
+      WHERE operation_id = ${operationId}
+    `);
 
     // ── Remove this entry from the manifest (rewrite without the restored line) ─
     const kept = lines.filter(l => {
@@ -692,6 +735,10 @@ router.post("/cleanup/restore", async (req, res) => {
       WHERE nas_path = ${nasPath}
         AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${resolvedOriginalPath}, chr(92), '/')
         AND last_scan_action = 'RECYCLED'
+    `);
+    await db.execute(sql`
+      UPDATE cleanup_operations SET status = 'RECORDED', updated_at = NOW()
+      WHERE operation_id = ${operationId}
     `);
 
     res.json({ restored: true });
