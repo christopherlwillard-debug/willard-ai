@@ -1,6 +1,9 @@
-import { useListFolder, useSearchFiles } from "@workspace/api-client-react";
+import { getStreamMediaFileUrl, useListFolder, useSearchFiles } from "@workspace/api-client-react";
 import type { FolderEntry, IndexedFile } from "@workspace/api-client-react";
 import { Feather } from "@expo/vector-icons";
+import { VideoView, useVideoPlayer } from "expo-video";
+import { Image } from "expo-image";
+import { WebView } from "react-native-webview";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
@@ -17,6 +20,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { getSessionCookie } from "@/context/AuthContext";
 
 const TYPE_FILTERS = [
   { label: "All types", value: "" },
@@ -56,6 +60,7 @@ export default function LibraryScreen() {
   const [fileType, setFileType] = useState("");
   const [sizeIndex, setSizeIndex] = useState(0);
   const [selectedFile, setSelectedFile] = useState<IndexedFile | FolderEntry | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const sizeFilter = SIZE_FILTERS[sizeIndex];
   const isSearching = searchQuery.trim().length > 0;
 
@@ -192,7 +197,10 @@ export default function LibraryScreen() {
             const isFolder = "isDirectory" in item && item.isDirectory;
             return (
               <Pressable
-                onPress={() => isFolder ? openFolder(item as FolderEntry) : setSelectedFile(item as IndexedFile | FolderEntry)}
+                onPress={() => {
+                  setPreviewError(null);
+                  isFolder ? openFolder(item as FolderEntry) : setSelectedFile(item as IndexedFile | FolderEntry);
+                }}
                 style={({ pressed }) => [styles.entry, { backgroundColor: colors.card, borderColor: colors.border, opacity: pressed ? 0.72 : 1 }]}
               >
                 <FileIcon entry={item as FolderEntry | IndexedFile} color={colors.primary} />
@@ -230,15 +238,84 @@ export default function LibraryScreen() {
               <Pressable onPress={() => setSelectedFile(null)} hitSlop={8}><Feather name="x" size={20} color={colors.mutedForeground} /></Pressable>
             </View>
             {selectedFile && (
+              <View style={styles.previewArea}>
+                {"id" in selectedFile && isPreviewable(selectedFile) ? (
+                  <FilePreview file={selectedFile} onError={setPreviewError} />
+                ) : (
+                  <View style={[styles.unsupportedPreview, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                    <Feather name="file-text" size={28} color={colors.mutedForeground} />
+                    <Text style={[styles.previewHint, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                      Preview is not available for this format. File details are still available below.
+                    </Text>
+                  </View>
+                )}
+                {previewError && (
+                  <Text style={[styles.previewError, { color: colors.destructive, fontFamily: "Inter_400Regular" }]}>
+                    {previewError} File details are still available below.
+                  </Text>
+                )}
               <View style={styles.detailRows}>
                 <DetailRow label="Size" value={formatBytes("sizeBytes" in selectedFile ? selectedFile.sizeBytes : null)} colors={colors} />
                 <DetailRow label="Type" value={"fileType" in selectedFile ? selectedFile.fileType || selectedFile.extension : "File"} colors={colors} />
                 <DetailRow label="Path" value={selectedFile.path} colors={colors} />
               </View>
+              </View>
             )}
           </Pressable>
         </Pressable>
       </Modal>
+    </View>
+  );
+}
+
+function isPreviewable(file: IndexedFile): boolean {
+  return ["image", "video", "document"].includes((file.fileType || "").toLowerCase());
+}
+
+function FilePreview({ file, onError }: { file: IndexedFile; onError: (message: string) => void }) {
+  const colors = useColors();
+  const source = {
+    uri: getStreamMediaFileUrl(file.id),
+    headers: getSessionCookie() ? { Cookie: getSessionCookie() as string } : undefined,
+  };
+  const kind = (file.fileType || "").toLowerCase();
+  const player = useVideoPlayer(kind === "video" ? source : null);
+
+  if (kind === "image") {
+    return (
+      <Image
+        source={source}
+        contentFit="contain"
+        style={styles.imagePreview}
+        onError={() => onError("This image could not be loaded.")}
+      />
+    );
+  }
+  if (kind === "video") {
+    return (
+      <VideoView
+        player={player}
+        style={styles.videoPreview}
+        nativeControls
+        onFirstFrameRender={() => undefined}
+      />
+    );
+  }
+  return (
+    <View style={styles.documentPreview}>
+      <WebView
+        source={source}
+        style={styles.webView}
+        originWhitelist={["*"]}
+        onError={() => onError("This document could not be previewed on this device.")}
+        startInLoadingState
+        renderError={() => (
+          <View style={styles.documentError}>
+            <Feather name="file-text" size={28} color={colors.mutedForeground} />
+            <Text style={[styles.previewHint, { color: colors.mutedForeground }]}>Document preview unavailable</Text>
+          </View>
+        )}
+      />
     </View>
   );
 }
@@ -284,6 +361,15 @@ const styles = StyleSheet.create({
   detailsTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   detailsTitle: { flex: 1, fontSize: 17, lineHeight: 23 },
   detailRows: { gap: 14 },
+  previewArea: { gap: 10 },
+  imagePreview: { width: "100%", height: 220, borderRadius: 12, backgroundColor: "#111318" },
+  videoPreview: { width: "100%", height: 220, borderRadius: 12, backgroundColor: "#111318" },
+  documentPreview: { width: "100%", height: 220, overflow: "hidden", borderRadius: 12, backgroundColor: "#f4f5f7" },
+  webView: { flex: 1, backgroundColor: "transparent" },
+  unsupportedPreview: { minHeight: 110, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", padding: 18, gap: 9 },
+  documentError: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
+  previewHint: { textAlign: "center", fontSize: 13, lineHeight: 19 },
+  previewError: { fontSize: 12, lineHeight: 17 },
   detailRow: { gap: 4 },
   detailLabel: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.7 },
   detailValue: { fontSize: 14, lineHeight: 19 },

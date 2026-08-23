@@ -9,6 +9,16 @@ import * as zod from 'zod';
 
 
 /**
+ * @summary Stream an indexed file for in-app preview
+ */
+export const StreamMediaFileParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const StreamMediaFileResponse = zod.unknown()
+
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({

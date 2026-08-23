@@ -112,6 +112,83 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   return result;
 };
 
+export const getStreamMediaFileUrl = (id: number,) => {
+
+
+
+
+  return `/api/media/file/${id}/stream`
+}
+
+/**
+ * @summary Stream an indexed file for in-app preview
+ */
+export const streamMediaFile = async (id: number, options?: RequestInit): Promise<Blob> => {
+
+  return customFetch<Blob>(getStreamMediaFileUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getStreamMediaFileQueryKey = (id: number,) => {
+    return [
+    `/api/media/file/${id}/stream`
+    ] as const;
+    }
+
+
+export const getStreamMediaFileQueryOptions = <TData = Awaited<ReturnType<typeof streamMediaFile>>, TError = ErrorType<ErrorResult>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamMediaFile>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getStreamMediaFileQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof streamMediaFile>>> = ({ signal }) => streamMediaFile(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof streamMediaFile>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type StreamMediaFileQueryResult = NonNullable<Awaited<ReturnType<typeof streamMediaFile>>>
+export type StreamMediaFileQueryError = ErrorType<ErrorResult>
+
+
+/**
+ * @summary Stream an indexed file for in-app preview
+ */
+
+export function useStreamMediaFile<TData = Awaited<ReturnType<typeof streamMediaFile>>, TError = ErrorType<ErrorResult>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof streamMediaFile>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getStreamMediaFileQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
 export const getHealthCheckUrl = () => {
 
 
