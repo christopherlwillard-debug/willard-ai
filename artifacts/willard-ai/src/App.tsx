@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Redirect, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,7 +19,6 @@ import MediaDetail from "@/pages/media-detail";
 import Library from "@/pages/library";
 import Collections from "@/pages/collections";
 import People from "@/pages/people";
-import Explorer from "@/pages/explorer";
 import Archives from "@/pages/archives";
 import Documents from "@/pages/documents";
 import Organize from "@/pages/organize";
@@ -72,7 +71,9 @@ function ProtectedRoutes() {
         <Route path="/collections" component={Collections} />
         <Route path="/people" component={People} />
         <Route path="/people/:id" component={People} />
-        <Route path="/explorer" component={Explorer} />
+        <Route path="/explorer">
+          <Redirect to="/library" />
+        </Route>
         <Route path="/archives" component={Archives} />
         <Route path="/documents" component={Documents} />
         <Route path="/organize" component={Organize} />
