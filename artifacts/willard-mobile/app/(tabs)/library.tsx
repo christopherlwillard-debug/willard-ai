@@ -103,6 +103,14 @@ export default function LibraryScreen() {
             Browse and search your NAS
           </Text>
         </View>
+        <Pressable
+          onPress={() => router.push("/collections")}
+          style={[styles.collectionsButton, { borderColor: colors.border, backgroundColor: colors.card }]}
+          hitSlop={6}
+        >
+          <Feather name="heart" size={16} color={colors.primary} />
+          <Text style={[styles.collectionsButtonText, { color: colors.primary, fontFamily: "Inter_500Medium" }]}>Albums</Text>
+        </Pressable>
       </View>
 
       <View style={[styles.searchBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -249,6 +257,8 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: 13, paddingHorizontal: 20, paddingTop: 15, paddingBottom: 18 },
   backButton: { width: 30, alignItems: "flex-start" },
   headerCopy: { gap: 3 },
+  collectionsButton: { flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderRadius: 18, paddingHorizontal: 11, paddingVertical: 8 },
+  collectionsButtonText: { fontSize: 12 },
   title: { fontSize: 23, letterSpacing: -0.4 },
   subtitle: { fontSize: 12 },
   searchBox: { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 16, paddingHorizontal: 13, height: 48, borderWidth: 1, borderRadius: 11 },
