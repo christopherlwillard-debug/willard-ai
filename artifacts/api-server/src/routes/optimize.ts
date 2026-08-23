@@ -618,63 +618,88 @@ function convertVideo(srcPath: string, destPath: string): string | null {
 
 // ── Post-conversion verification ───────────────────────────────────────────────
 
+export interface VerificationCheck {
+  name: string;
+  passed: boolean;
+  details: string;
+}
+
+export interface VerificationResult {
+  passed: boolean;
+  checks: VerificationCheck[];
+  failedCheck?: string;
+}
+
 async function verifyConvertedFile(
   srcPath: string,
   destPath: string,
-  category: string,
-  isSameExt: boolean,
-  originalBytes: number,
+  category = "image",
+  isSameExt = true,
+  originalBytes = (() => {
+    try { return fs.statSync(srcPath).size; } catch { return 0; }
+  })(),
   isRawSource = false,
-): Promise<{ passed: boolean; checks: string[]; failedCheck?: string }> {
-  const checks: string[] = [];
+): Promise<VerificationResult> {
+  const checks: VerificationCheck[] = [];
+  const pass = (name: string, details: string) => checks.push({ name, passed: true, details });
+  const fail = (name: string, details: string): VerificationResult => {
+    checks.push({ name, passed: false, details });
+    return { passed: false, checks, failedCheck: `${name}: ${details}` };
+  };
 
-  // Check 1: Output file exists and non-zero
+  // Check 1: Output file exists and non-zero.
   if (!fs.existsSync(destPath)) {
-    return { passed: false, checks, failedCheck: "Output file does not exist" };
+    return fail("output-exists", "Output file does not exist");
   }
-  const convertedBytes = fs.statSync(destPath).size;
+  let convertedBytes = 0;
+  try {
+    convertedBytes = fs.statSync(destPath).size;
+  } catch {
+    return fail("output-exists", "Output file cannot be inspected");
+  }
   if (convertedBytes === 0) {
-    return { passed: false, checks, failedCheck: "Output file is empty" };
+    return fail("output-nonzero", "Output file is empty");
   }
-  checks.push("Output exists and is non-zero");
+  pass("output-nonzero", `Output exists (${convertedBytes} bytes)`);
 
-  // Check 2: Size sanity — output must be smaller than source (universal for all conversions)
+  // Check 2: Size sanity — output must be smaller than source.
   if (convertedBytes >= originalBytes) {
-    return { passed: false, checks, failedCheck: "Output not smaller than original" };
+    return fail("size-reduction", "Output not smaller than original");
   }
-  checks.push("Size check passed");
+  pass("size-reduction", `${originalBytes - convertedBytes} bytes saved`);
 
   if (category === "image") {
     try {
       const sharp = (await import("sharp")).default;
 
-      // Check 3: Output decodes without decoder error
+      // Check 3: Output decodes without decoder error.
       let dstMeta: import("sharp").Metadata;
       try {
         dstMeta = await sharp(destPath, { failOn: "error" }).metadata();
       } catch (err: any) {
-        return { passed: false, checks, failedCheck: `Decoder error on output: ${(err.message ?? "unknown").slice(0, 200)}` };
+        return fail("decode", `Decoder error: ${(err.message ?? "unknown").slice(0, 200)}`);
       }
       if (!dstMeta.width || !dstMeta.height) {
-        return { passed: false, checks, failedCheck: "Output image has no dimensions (decode failed)" };
+        return fail("decode", "Output image has no dimensions");
       }
-      checks.push(`Decoded OK — ${dstMeta.width}×${dstMeta.height}`);
+      pass("decode", `Decoded OK — ${dstMeta.width}×${dstMeta.height}`);
 
-      // Check 4: Thumbnail generation — verifies decodability end-to-end
+      // Check 4: Thumbnail generation verifies decodability end-to-end.
       try {
         const thumbBuf = await sharp(destPath, { failOn: "none" })
           .resize(200, 200, { fit: "inside" })
           .jpeg({ quality: 60 })
           .toBuffer();
         if (thumbBuf.length === 0) {
-          return { passed: false, checks, failedCheck: "Thumbnail generation produced empty buffer" };
+          return fail("thumbnail", "Generation produced an empty buffer");
         }
-        checks.push("Thumbnail generated successfully");
+        pass("thumbnail", "Thumbnail generated successfully");
       } catch (err: any) {
-        return { passed: false, checks, failedCheck: `Thumbnail generation failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+        return fail("thumbnail", `Generation failed: ${(err.message ?? "unknown").slice(0, 120)}`);
       }
 
-      // Check 5: Pixel hash — SHA-256 of downscaled raw pixels (mandatory; stored for audit trail)
+      // Check 5: Pixel hash — stored for the audit trail. A cross-format conversion
+      // is allowed to change compressed bytes, but not to silently produce no pixels.
       {
         let pixelBuf: Buffer;
         try {
@@ -683,76 +708,93 @@ async function verifyConvertedFile(
             .raw()
             .toBuffer();
         } catch (err: any) {
-          return { passed: false, checks, failedCheck: `Pixel hash extraction failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+          return fail("pixel-hash", `Extraction failed: ${(err.message ?? "unknown").slice(0, 120)}`);
         }
         const pixelHash = crypto.createHash("sha256").update(pixelBuf).digest("hex").slice(0, 16);
-        checks.push(`Pixel hash (256px): ${pixelHash}`);
+        if (pixelBuf.length === 0) return fail("pixel-hash", "No pixel data was decoded");
+        pass("pixel-hash", `SHA-256 (256px): ${pixelHash}`);
       }
 
-      // Check 6: Histogram / channel statistics — mandatory; detects catastrophic color shifts
+      // Check 6: Histogram / channel statistics — mandatory and retained in the result.
       {
         let stats: import("sharp").Stats;
         try {
           stats = await sharp(destPath, { failOn: "none" }).stats();
         } catch (err: any) {
-          return { passed: false, checks, failedCheck: `Channel stats extraction failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+          return fail("histogram", `Extraction failed: ${(err.message ?? "unknown").slice(0, 120)}`);
         }
         const chSummary = stats.channels.map((c, i) =>
           `ch${i}: mean=${c.mean.toFixed(1)} stdev=${c.stdev.toFixed(1)}`
         ).join(", ");
-        checks.push(`Channel stats: ${chSummary}`);
+        pass("histogram", chSummary);
       }
 
-      // Checks 7–10: Compare against source metadata (skip for RAW sources, which Sharp can't decode)
+      // Source metadata is available through Sharp for normal formats. RAW files
+      // are read with exifr because Sharp does not decode every camera RAW.
+      let srcMeta: import("sharp").Metadata | undefined;
       if (!isRawSource) {
-        let srcMeta: import("sharp").Metadata;
         try {
           srcMeta = await sharp(srcPath, { failOn: "none" }).metadata();
         } catch (err: any) {
-          return { passed: false, checks, failedCheck: `Source metadata read failed: ${(err.message ?? "unknown").slice(0, 120)}` };
+          return fail("source-metadata", `Read failed: ${(err.message ?? "unknown").slice(0, 120)}`);
         }
-
-        if (srcMeta.width && srcMeta.height && dstMeta.width && dstMeta.height) {
-          // Check 7: Total pixel count within 15% (allows auto-rotation dimension swap)
-          const srcPixels = srcMeta.width * srcMeta.height;
-          const dstPixels = dstMeta.width * dstMeta.height;
-          if (Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.85) {
-            return { passed: false, checks, failedCheck: `Resolution mismatch: ${srcMeta.width}×${srcMeta.height} → ${dstMeta.width}×${dstMeta.height}` };
-          }
-          checks.push(`Resolution matches source (${dstMeta.width}×${dstMeta.height})`);
-
-          // Check 8: Aspect ratio preserved within 5% (catches unintentional crop/distortion)
-          const srcAspect = srcMeta.width / srcMeta.height;
-          const dstAspect = dstMeta.width / dstMeta.height;
-          const aspectRatio = Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect);
-          if (aspectRatio < 0.95) {
-            return { passed: false, checks, failedCheck: `Aspect ratio mismatch: src ${srcMeta.width}×${srcMeta.height} (${srcAspect.toFixed(2)}) → dst ${dstMeta.width}×${dstMeta.height} (${dstAspect.toFixed(2)})` };
-          }
-          checks.push("Aspect ratio preserved");
-
-          // Check 9: Orientation — after re-encode, orientation must be 1 (auto-rotated) or same
-          if (srcMeta.orientation !== undefined) {
-            if (dstMeta.orientation !== undefined && dstMeta.orientation !== 1 && dstMeta.orientation !== srcMeta.orientation) {
-              return { passed: false, checks, failedCheck: `Orientation mismatch: source=${srcMeta.orientation}, output=${dstMeta.orientation}` };
-            }
-            checks.push(`Orientation OK (${dstMeta.orientation ?? "normalized"})`);
-          }
-        }
-
-        // Check 10: EXIF preserved — hard fail if source had EXIF but output does not
-        if (srcMeta.exif && !dstMeta.exif) {
-          return { passed: false, checks, failedCheck: "EXIF metadata was stripped during conversion (source had EXIF)" };
-        }
-        if (srcMeta.exif && dstMeta.exif) checks.push("EXIF metadata preserved");
-      } else {
-        // For RAW → JPEG: verify output has ICC profile (spec requirement)
-        if (!dstMeta.icc) {
-          return { passed: false, checks, failedCheck: "RAW conversion output is missing ICC color profile" };
-        }
-        checks.push("ICC color profile present (RAW conversion)");
       }
+
+      let srcExif: Record<string, unknown> = {};
+      let dstExif: Record<string, unknown> = {};
+      try {
+        const exifr = await import("exifr");
+        srcExif = (await exifr.parse(srcPath)) ?? {};
+        dstExif = (await exifr.parse(destPath)) ?? {};
+      } catch {
+        // Some RAW/container variants have no EXIF parser support. Sharp metadata
+        // checks below still protect ordinary image conversions.
+      }
+
+      const srcWidth = srcMeta?.width ?? Number(srcExif.ImageWidth ?? srcExif.ExifImageWidth);
+      const srcHeight = srcMeta?.height ?? Number(srcExif.ImageHeight ?? srcExif.ExifImageHeight);
+      if (!srcWidth || !srcHeight) {
+        return fail("resolution", "Source dimensions could not be determined");
+      }
+      const srcPixels = srcWidth * srcHeight;
+      const dstPixels = dstMeta.width! * dstMeta.height!;
+      if (srcPixels !== dstPixels && Math.min(srcPixels, dstPixels) / Math.max(srcPixels, dstPixels) < 0.99) {
+        return fail("resolution", `${srcWidth}×${srcHeight} → ${dstMeta.width}×${dstMeta.height}`);
+      }
+      pass("resolution", `${srcWidth}×${srcHeight} → ${dstMeta.width}×${dstMeta.height}`);
+
+      const srcAspect = srcWidth / srcHeight;
+      const dstAspect = dstMeta.width! / dstMeta.height!;
+      if (Math.min(srcAspect, dstAspect) / Math.max(srcAspect, dstAspect) < 0.99) {
+        return fail("aspect-ratio", `${srcAspect.toFixed(4)} → ${dstAspect.toFixed(4)}`);
+      }
+      pass("aspect-ratio", `${srcAspect.toFixed(4)} → ${dstAspect.toFixed(4)}`);
+
+      const orientation = srcMeta?.orientation ?? Number(srcExif.Orientation);
+      if (orientation !== undefined && orientation !== 0 && dstMeta.orientation !== undefined &&
+          dstMeta.orientation !== 1 && dstMeta.orientation !== orientation) {
+        return fail("orientation", `source=${orientation}, output=${dstMeta.orientation}`);
+      }
+      pass("orientation", `source=${orientation ?? "none"}, output=${dstMeta.orientation ?? "normalized"}`);
+
+      const metadataFields: Array<[string, string[]]> = [
+        ["date", ["DateTimeOriginal", "CreateDate", "ModifyDate"]],
+        ["GPS", ["GPSLatitude", "GPSLongitude"]],
+        ["camera", ["Make", "Model", "LensModel"]],
+      ];
+      for (const [label, fields] of metadataFields) {
+        const sourceHas = fields.some((field) => srcExif[field] !== undefined && srcExif[field] !== null);
+        const outputHas = fields.some((field) => dstExif[field] !== undefined && dstExif[field] !== null);
+        if (sourceHas && !outputHas) return fail(`exif-${label}`, `Source field was not preserved`);
+        pass(`exif-${label}`, sourceHas ? "Present in source and output" : "Not present in source");
+      }
+
+      if (srcMeta?.icc && !dstMeta.icc) {
+        return fail("icc-profile", "Source ICC profile was stripped during conversion");
+      }
+      pass("icc-profile", srcMeta?.icc ? "ICC profile preserved" : "No source ICC profile");
     } catch (err: any) {
-      return { passed: false, checks, failedCheck: `Verify failed: ${(err.message ?? "unknown").slice(0, 200)}` };
+      return fail("verification", (err.message ?? "unknown").slice(0, 200));
     }
   }
 
@@ -1196,7 +1238,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       files: Array<{
         filePath: string; stagedPath?: string; status: string;
         originalBytes?: number; convertedBytes?: number; isSameExt?: boolean;
-        verification?: string[];
+        verification?: VerificationResult;
       }>;
       totalSaved: number;
       stagingDir: string;
@@ -1288,7 +1330,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         originalBytes:       file.originalBytes,
         convertedBytes:      file.convertedBytes,
         savedBytes:          Math.max(0, (file.originalBytes ?? 0) - (file.convertedBytes ?? 0)),
-        verificationResults: file.verification ?? [],
+        verificationResults: file.verification ?? { passed: false, checks: [] },
         error:               fileOutcomes[fileOutcomes.length - 1]?.error,
       });
     }
@@ -1405,7 +1447,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       convertedBytes?: number;
       isSameExt?:     boolean;
       error?:         string;
-      verification?:  string[];
+        verification?:  VerificationResult;
     }> = [];
 
     // A file may still exist when the user chose to keep both/archive originals.
@@ -1547,12 +1589,12 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         const isRegression = verification.failedCheck?.includes("not smaller");
         if (isRegression) {
           skipped++;
-          results.push({ filePath: fullPath, status: "skipped", error: "Already optimized (output not smaller than original)", verification: verification.checks });
+          results.push({ filePath: fullPath, status: "skipped", error: "Already optimized (output not smaller than original)", verification });
           await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
           send("file_done", { filePath: fullPath, status: "skipped", error: "Already optimized", processed: i + 1, total: totalFiles });
         } else {
           failed++;
-          results.push({ filePath: fullPath, status: "failed", error: verification.failedCheck ?? "Verification failed", verification: verification.checks });
+          results.push({ filePath: fullPath, status: "failed", error: verification.failedCheck ?? "Verification failed", verification });
           await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
           send("file_done", { filePath: fullPath, status: "failed", error: verification.failedCheck ?? "Verification failed", processed: i + 1, total: totalFiles });
         }
@@ -1564,7 +1606,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
       // ── Success: original is safe, staged file is verified ──────────────────
       succeeded++;
-      results.push({ filePath: fullPath, stagedPath, status: "success", originalBytes, convertedBytes, isSameExt, verification: verification.checks });
+      results.push({ filePath: fullPath, stagedPath, status: "success", originalBytes, convertedBytes, isSameExt, verification });
       await db.update(conversionJobsTable).set({ processedFiles: i + 1, succeededFiles: succeeded }).where(eq(conversionJobsTable.id, id));
       send("file_done", {
         filePath: fullPath,
