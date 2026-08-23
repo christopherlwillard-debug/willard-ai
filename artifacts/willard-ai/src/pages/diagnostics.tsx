@@ -315,6 +315,27 @@ export default function Diagnostics() {
         <p className="text-muted-foreground mt-1 text-sm">Per-scan performance metrics and benchmark mode</p>
       </div>
 
+      <Card className="border-amber-400/30 bg-amber-400/5">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <AlertTriangle className="w-4 h-4 text-amber-300" />
+            Advanced local startup controls
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p>
+            The normal Windows launch path checks updates, repairs safe dependencies,
+            prepares the database, starts both services, and retries recoverable failures automatically.
+          </p>
+          <p>
+            For manual maintenance, use <code className="rounded bg-secondary px-1.5 py-0.5 text-foreground">Stop Willard AI.bat</code>,
+            <code className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-foreground">Repair Willard AI.bat</code>, or
+            <code className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-foreground">Update Willard AI.bat</code>
+            from the application folder. The installed web app cannot start or repair local services.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* ── Benchmark ─────────────────────────────────────────────────────── */}
       <Card>
         <CardHeader>

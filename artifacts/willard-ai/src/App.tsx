@@ -31,6 +31,7 @@ import LoginPage from "@/pages/login";
 import NotFound from "@/pages/not-found";
 import Diagnostics from "@/pages/diagnostics";
 import Health from "@/pages/health";
+import { ServiceAvailability } from "@/components/service-availability";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,19 +114,21 @@ function AuthGate() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider>
-          {/* Routing is intentionally centralized on wouter; do not add react-router-dom imports. */}
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <AuthProvider>
-              <AuthGate />
-            </AuthProvider>
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <ServiceAvailability>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <TooltipProvider>
+            {/* Routing is intentionally centralized on wouter; do not add react-router-dom imports. */}
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <AuthProvider>
+                <AuthGate />
+              </AuthProvider>
+            </WouterRouter>
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </ServiceAvailability>
   );
 }
 

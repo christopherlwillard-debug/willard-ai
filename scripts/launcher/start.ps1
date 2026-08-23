@@ -1,4 +1,5 @@
-# Start Willard AI - friendly media-center style launcher.
+# Launch Willard AI - one automatic path for first launch, restart, update,
+# dependency repair, and recoverable startup failures.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -7,119 +8,159 @@ Ensure-LogDir
 
 Write-Banner "Preparing your media library..."
 
-# -- Already running? ---------------------------------------------------------
+function Stop-And-Exit($friendly, $technical, $code = 1) {
+    Show-Failure $friendly $technical
+    Pause-BeforeClose
+    exit $code
+}
+
+function Invoke-LoggedCommand($label, $logPath, [scriptblock]$command) {
+    Write-Info $label
+    $savedPref = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    & $command *> $logPath
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $savedPref
+    return $exitCode
+}
+
+# -- Existing state -------------------------------------------------------------
 $tracked = Read-TrackedPids
 if ($tracked -and (Test-ProcessAlive $tracked.api) -and (Test-ProcessAlive $tracked.web)) {
     Write-Ok "Willard AI is already running."
-    $answer = Read-Host "  Open it in your browser (O), restart it (R), or do nothing (Enter)?"
-    if ($answer -match '^[Oo]') { Start-Process $AppUrl; exit 0 }
-    if ($answer -match '^[Rr]') {
-        Write-Info "Restarting Willard AI..."
-        Stop-TrackedProcesses | Out-Null
-        Start-Sleep -Seconds 2
-    } else { exit 0 }
-} elseif ($tracked) {
-    # Stale state from a crashed previous run - clear it silently.
+    Start-Process $AppUrl
+    exit 0
+}
+if ($tracked) {
+    Write-Info "Recovering from an interrupted launch..."
     Stop-TrackedProcesses | Out-Null
+    Start-Sleep -Seconds 1
 }
 
-# -- Required helper programs -------------------------------------------------
+# -- Required helpers -----------------------------------------------------------
 if (-not (Test-Command "node")) {
-    Show-Failure "Willard AI needs one more program before it can start: Node.js." `
-        "Node.js was not found on PATH."
-    Write-Host "  Please install it from:  https://nodejs.org  (choose the LTS version)" -ForegroundColor White
-    Write-Host "  Then double-click 'Start Willard AI.bat' again." -ForegroundColor White
-    Pause-BeforeClose; exit 1
+    Stop-And-Exit "Willard AI needs Node.js before it can open." `
+        "Node.js was not found on PATH. Install the LTS version from https://nodejs.org."
 }
+
 if (-not (Test-Command "pnpm")) {
-    Show-Failure "Willard AI needs one more small helper before it can start." `
-        "pnpm was not found on PATH."
-    Write-Host "  Open a command window and run:   npm install -g pnpm" -ForegroundColor White
-    Write-Host "  Then double-click 'Start Willard AI.bat' again." -ForegroundColor White
-    Pause-BeforeClose; exit 1
+    if (Test-Command "npm") {
+        Write-Info "Installing a small package helper..."
+        & npm install -g pnpm *> (Join-Path $LogDir "repair.log")
+    }
+    if (-not (Test-Command "pnpm")) {
+        Stop-And-Exit "Willard AI couldn't install its package helper." `
+            "pnpm was not found and automatic installation failed. Run: npm install -g pnpm"
+    }
+    Write-Ok "Package helper ready"
 }
 
-# -- Optional media component (warn only) -------------------------------------
-$ffmpegOk = Test-Command "ffmpeg"
-
-# -- Configuration ------------------------------------------------------------
-if (Ensure-EnvFile) {
-    Write-Ok "Created your settings file automatically."
+# -- Configuration --------------------------------------------------------------
+if (Ensure-EnvFile) { Write-Ok "Created your settings file automatically." }
+if (-not (Test-Path (Join-Path $Root ".env"))) {
+    Stop-And-Exit "Willard AI couldn't find its settings file." `
+        "Neither .env nor .env.example is available in the application folder."
 }
 
-# -- Packages -----------------------------------------------------------------
-# Always run pnpm install so platform-specific native binaries (e.g. the
-# Windows Rollup binary) are present even after a git pull that overwrote
-# the lockfile.  pnpm is fast when nothing has changed (~1-2s).
-Write-Info "Checking packages..."
+# -- Safe update and dependency repair -----------------------------------------
+$apiSourceChanged = $false
+$updateLog = Join-Path $LogDir "update.log"
+if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
+    Write-Info "Checking for safe updates..."
+    $savedPref = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $prevHead = (& git -C $Root rev-parse HEAD 2>$null)
+    & git -C $Root pull --ff-only origin $GithubBranch *>> $updateLog
+    $pullOk = ($LASTEXITCODE -eq 0)
+    $newHead = (& git -C $Root rev-parse HEAD 2>$null)
+    if ($pullOk -and $prevHead -and $newHead -and ($prevHead -ne $newHead)) {
+        $changedFiles = (& git -C $Root diff --name-only $prevHead $newHead 2>$null)
+        $apiSourceChanged = [bool]($changedFiles -match "artifacts[/\\]api-server[/\\]src")
+        Write-Ok "Safe updates applied"
+    } elseif ($pullOk) {
+        Write-Ok "Already up to date"
+    } else {
+        Write-Warn "Update check was unavailable; continuing with this copy"
+        Add-Content $updateLog "[launcher] git pull failed; current files were left unchanged."
+    }
+    $ErrorActionPreference = $savedPref
+}
+
 $installLog = Join-Path $LogDir "setup.log"
-& pnpm install --ignore-scripts --silent *> $installLog
-if ($LASTEXITCODE -ne 0) {
-    Show-Failure "Willard AI couldn't finish setting itself up." `
-        ("pnpm install failed - see " + $installLog)
-    Pause-BeforeClose; exit 1
+$installCode = Invoke-LoggedCommand "Checking application components..." $installLog {
+    & pnpm install --ignore-scripts --silent
 }
-Write-Ok "Packages ready"
+if ($installCode -ne 0) {
+    Write-Warn "The first package check needs another try..."
+    $installCode = Invoke-LoggedCommand "Repairing application components..." $installLog {
+        & pnpm install --force --ignore-scripts --silent
+    }
+}
+if ($installCode -ne 0) {
+    Stop-And-Exit "Willard AI couldn't finish setting itself up." `
+        ("Package repair failed. Details are in " + $installLog)
+}
+Write-Ok "Application components ready"
 
-# -- First-run check ----------------------------------------------------------
+# -- Build when first-run or after an API update -------------------------------
 $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
-if (-not (Test-Path $apiDist)) {
-    Show-Failure "Willard AI hasn't been set up yet on this computer." `
-        ("API dist not found at: " + $apiDist)
-    Write-Host ""
-    Write-Host "  Please double-click 'Setup Willard AI.bat' first." -ForegroundColor White
-    Pause-BeforeClose; exit 1
+if ($apiSourceChanged -or -not (Test-Path $apiDist)) {
+    $buildLog = Join-Path $LogDir "startup-build.log"
+    $buildCode = Invoke-LoggedCommand "Preparing the library service..." $buildLog {
+        & pnpm --filter @workspace/api-server run build
+    }
+    if ($buildCode -ne 0 -or -not (Test-Path $apiDist)) {
+        Stop-And-Exit "Willard AI couldn't prepare its library service." `
+            ("The service build failed. Details are in " + $buildLog)
+    }
 }
+Write-Ok "Library service ready"
 
-# -- Database -----------------------------------------------------------------
-Write-Info "Checking database..."
-if (-not (Test-DatabaseConnection)) {
-    Show-Failure "Willard AI couldn't start. The media database isn't available." `
-        ("Could not connect to PostgreSQL. Is it running? Check DATABASE_URL in .env. See " + $ApiLog)
-    Write-Host "  If this is a fresh install, run 'Setup Willard AI.bat' first." -ForegroundColor White
-    Pause-BeforeClose; exit 1
-}
+# -- Database bootstrap and additive migrations --------------------------------
+Write-Info "Checking your media database..."
 $env:DATABASE_URL = Get-EnvValue "DATABASE_URL"
-$dbMigrateLog = Join-Path $LogDir "db-migrate.log"
-& node (Join-Path $Root "setup-db.cjs") *> $dbMigrateLog
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Schema migration had warnings - see db-migrate.log (app may still work)"
+if (-not (Test-DatabaseConnection)) {
+    Write-Info "Attempting to reconnect the media database..."
+    Ensure-AppDatabase | Out-Null
 }
-Write-Ok "Database Ready"
+if (-not (Test-DatabaseConnection)) {
+    Stop-And-Exit "Willard AI couldn't reach the media database." `
+        ("PostgreSQL is unavailable or DATABASE_URL is incorrect. Details are in " + $ApiLog)
+}
+$dbMigrateLog = Join-Path $LogDir "db-migrate.log"
+$migrationCode = Invoke-LoggedCommand "Applying safe database updates..." $dbMigrateLog {
+    & node (Join-Path $Root "setup-db.cjs")
+}
+if ($migrationCode -ne 0) {
+    Stop-And-Exit "Willard AI couldn't finish a safe database update." `
+        ("No services were started. Details are in " + $dbMigrateLog)
+}
+Write-Ok "Database ready"
 
-# -- Ports --------------------------------------------------------------------
+# -- Ports ----------------------------------------------------------------------
 foreach ($port in 8080, 5000) {
     if (-not (Test-PortFree $port)) {
         $ownerPid = Get-PortOwnerPid $port
         $ownerName = ""
         try { $ownerName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName } catch { }
-        Show-Failure "Another program is blocking Willard AI from starting." `
-            ("Port " + $port + " is in use by process " + $ownerPid + " (" + $ownerName + "). Close that program or restart, then try again.")
-        Pause-BeforeClose; exit 1
+        Stop-And-Exit "Another program is using a Willard AI connection." `
+            ("Port " + $port + " is in use by process " + $ownerPid + " (" + $ownerName + "). Close that program, then launch again.")
     }
 }
 
-# -- Optional update check (only if this copy is a Git clone) -----------------
-if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
-    $answer = Read-Host "  Check for updates before starting? (y/N)"
-    if ($answer -match '^[Yy]') {
-        Write-Info "Checking for updates..."
-        & git -C $Root pull --ff-only *> (Join-Path $LogDir "update.log")
-        if ($LASTEXITCODE -eq 0) { Write-Ok "Up to date." } else { Write-Warn "Couldn't check for updates right now (that's fine)." }
-    }
+# -- Start both services --------------------------------------------------------
+function Start-WillardServices {
+    Write-Info "Opening the library service and Media Center..."
+    $apiProc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
+        -WorkingDirectory $Root -WindowStyle Minimized -PassThru
+    $webProc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList "/c", "title Willard AI - App && pnpm --filter @workspace/willard-ai run dev >> `"$WebLog`" 2>&1" `
+        -WorkingDirectory $Root -WindowStyle Minimized -PassThru
+    Save-TrackedPids $apiProc.Id $webProc.Id
 }
 
-# -- Start both parts of the app ----------------------------------------------
-Write-Info "Starting Willard AI..."
-
-$apiProc = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
-    -WorkingDirectory $Root -WindowStyle Minimized -PassThru
-$webProc = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "title Willard AI - App && pnpm --filter @workspace/willard-ai run dev >> `"$WebLog`" 2>&1" `
-    -WorkingDirectory $Root -WindowStyle Minimized -PassThru
-
-Save-TrackedPids $apiProc.Id $webProc.Id
+Start-WillardServices
 
 function Fail-And-CleanUp($friendly, $technical) {
     Stop-TrackedProcesses | Out-Null
@@ -128,34 +169,36 @@ function Fail-And-CleanUp($friendly, $technical) {
     exit 1
 }
 
-# -- Wait for readiness (no fixed sleeps; up to 60s each) ---------------------
-if (-not (Wait-ForUrl $ApiUrl "your library" 60)) {
-    Fail-And-CleanUp "Willard AI couldn't start. The library service never became ready." `
-        ("The API did not respond on port 8080 within 60 seconds. See " + $ApiLog)
+# -- Readiness with one safe restart -------------------------------------------
+if (-not (Wait-ForUrl $ApiUrl "your library service" 60)) {
+    Write-Warn "The library service needs one automatic restart..."
+    Stop-TrackedProcesses | Out-Null
+    Start-Sleep -Seconds 1
+    Start-WillardServices
+    if (-not (Wait-ForUrl $ApiUrl "your library service" 60)) {
+        Fail-And-CleanUp "Willard AI couldn't start its library service." `
+            ("The API did not respond after an automatic retry. See " + $ApiLog)
+    }
 }
-Write-Ok "Media Library Ready"
+Write-Ok "Media library ready"
 
-if (-not (Wait-ForUrl $WebUrl "the app" 60)) {
-    Fail-And-CleanUp "Willard AI couldn't start. The app never became ready." `
-        ("The web app did not respond on port 5000 within 60 seconds. See " + $WebLog)
+if (-not (Wait-ForUrl $WebUrl "Media Center" 60)) {
+    Fail-And-CleanUp "Willard AI couldn't open the Media Center." `
+        ("The web app did not respond within 60 seconds. See " + $WebLog)
 }
-Write-Ok "App Ready"
+Write-Ok "Media Center ready"
 
-if (-not $ffmpegOk) {
-    Write-Warn "Thumbnails are off until FFmpeg is installed (winget install Gyan.FFmpeg)."
+if (-not (Test-Command "ffmpeg")) {
+    Write-Warn "Media previews are limited until FFmpeg is installed."
 }
 
-# -- Open browser -------------------------------------------------------------
 Write-Host ""
-Write-Host "  Opening Willard AI..." -ForegroundColor Cyan
+Write-Host "  Opening Willard Media Center..." -ForegroundColor Cyan
 Start-Process $AppUrl
-
 Write-Host ""
-Write-Host "  Willard AI is running." -ForegroundColor Green
-Write-Host ("    App:   " + $AppUrl) -ForegroundColor White
-Write-Host ("    Logs:  " + $LogDir) -ForegroundColor Gray
-Write-Host "    Stop:  close the two minimized 'Willard AI' windows," -ForegroundColor Gray
-Write-Host "           or double-click 'Stop Willard AI.bat'." -ForegroundColor Gray
+Write-Host "  Willard Media Center is ready." -ForegroundColor Green
+Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
+Write-Host "  The app will keep running in its minimized service windows." -ForegroundColor Gray
 Write-Host ""
-Read-Host "  You can close this window now (Willard AI keeps running). Press Enter" | Out-Null
+Read-Host "  Press Enter to close this launcher window" | Out-Null
 exit 0

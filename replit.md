@@ -20,11 +20,16 @@ The server reads files directly from disk, so it can only see a user's local
 drive (e.g. a Windows `Z:`) when it runs on that machine — on Replit's cloud
 those paths are unreachable and the library reports "Library Offline".
 
-- Full Windows/local setup guide: **`LOCAL_SETUP.md`** — the easy path is the
-  root-level launcher scripts (`Start Willard AI.bat`, `Stop Willard AI.bat`,
-  `Repair Willard AI.bat`, backed by `scripts/launcher/*.ps1`). They are
-  Windows-only and exit immediately on Replit/non-Windows. Launcher logs go to
-  the git-ignored `logs/` folder.
+- Full Windows/local setup guide: **`LOCAL_SETUP.md`** — the normal path is
+  `Start Willard AI.bat`, backed by `scripts/launcher/start.ps1`. It safely
+  checks for updates, repairs prerequisites, applies database migrations, starts
+  both local services, waits for readiness, and retries one recoverable failure.
+  `Stop`, `Repair`, and `Update` launchers remain available as advanced manual
+  controls. All are Windows-only and exit immediately on Replit/non-Windows.
+  Launcher logs go to the git-ignored `logs/` folder.
+- The web artifact is installable as a PWA with a standalone window, shortcuts,
+  and an offline static shell. A PWA cannot start PostgreSQL, the API server, or
+  access a local/NAS filesystem; local users must start the native launcher first.
 - Copy `.env.example` → `.env` for local configuration. The API server loads the
   root `.env` automatically (via `--env-file-if-exists`); on Replit it is absent
   and the platform supplies env vars instead.

@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { useLogout, getGetSettingsLogoUrl } from "@workspace/api-client-react";
 import { useAuth } from "@/context/auth-context";
 import { useQueryClient } from "@tanstack/react-query";
+import { PwaInstallButton } from "@/components/pwa-install-button";
 
 function SidebarBrand() {
   const [logoVersion, setLogoVersion] = useState(0);
@@ -116,6 +117,7 @@ export function Sidebar() {
         </nav>
       </div>
       <div className="border-t border-sidebar-border p-2">
+        <PwaInstallButton />
         <button
           aria-label="Logout"
           onClick={() => logoutMutation.mutate()}

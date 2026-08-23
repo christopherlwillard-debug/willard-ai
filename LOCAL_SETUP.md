@@ -10,28 +10,41 @@ machine where that drive is a real, local path.
 
 ## The easy way: double-click to start
 
-Once the one-time prerequisites below are installed, running Willard AI is
-three files in the project root:
+Once the one-time prerequisites below are installed, opening Willard Media Center
+uses one normal entry point in the project root:
 
 | File | What it does |
 |------|--------------|
-| **`Start Willard AI.bat`** | Checks everything, starts the app, and opens it in your browser |
-| **`Stop Willard AI.bat`** | Cleanly shuts the app down |
-| **`Repair Willard AI.bat`** | Fixes common problems (reinstalls dependencies, clears stuck processes, re-checks the database) |
+| **`Start Willard AI.bat`** | Checks everything, safely updates/repairs what is needed, starts the app, and opens it |
+| **`Stop Willard AI.bat`** | Advanced manual control: cleanly shuts the app down |
+| **`Repair Willard AI.bat`** | Advanced manual control: fixes common problems |
+| **`Update Willard AI.bat`** | Advanced manual control: forces an update outside normal startup |
 
 **To start:** double-click `Start Willard AI.bat`. It will:
 
 1. Check that Node.js, pnpm, and PostgreSQL are installed (and tell you exactly
    what to install if something is missing).
-2. Check your `.env` file exists and the database is reachable.
-3. Install dependencies if needed.
-4. Start the API server and web app in the background (logs go to the `logs/`
+2. Safely check for updates and refresh dependencies when needed.
+3. Check your `.env` file exists and the database is reachable, then apply safe
+   database migrations.
+4. Start or recover the API server and web app in the background (logs go to the `logs/`
    folder).
-5. Wait until the app is ready, then open **http://localhost:5000** in your
+5. Wait until both services are ready, retrying one recoverable service failure,
+   then open **http://localhost:5000** in your
    browser.
 
 If anything goes wrong, the window stays open and explains what to do in plain
-language. Run `Repair Willard AI.bat` for automatic fixes.
+language. The launcher retries safe failures automatically; use
+`Repair Willard AI.bat` only for advanced manual troubleshooting.
+
+### Installed web app
+
+The browser may offer **Install Willard Media Center**. The installed PWA gives
+the web interface its own desktop-style window, icon, and shortcuts. It is an
+offline shell only: private media and API responses are never cached, and the
+PWA cannot start PostgreSQL, the API server, or access a local/NAS path. On a
+local Windows install, run `Start Willard AI.bat` first; then open the installed
+app.
 
 **First time in the app:** set your app password, then Willard will walk you
 through picking your media drive (it detects available drives for you), test
@@ -133,8 +146,8 @@ You can change the library location any time in **Settings → Libraries**.
 ## Troubleshooting
 
 - **Something's broken and you're not sure what** — run
-  `Repair Willard AI.bat`. It clears stuck processes, re-checks your database
-  connection, and reinstalls dependencies.
+  `Repair Willard AI.bat` as an advanced repair tool. The normal Start entry
+  already retries recoverable failures and performs safe setup.
 - **"Library not found" or still Offline** — confirm the drive letter/path is
   correct and that the account running Node can access it. Network drives must
   be mapped and available to the current user. Use **Settings → Libraries →
