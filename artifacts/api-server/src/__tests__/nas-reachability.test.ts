@@ -205,3 +205,37 @@ test("on win32: accessible local dir is online (platform gate allows POSIX paths
     try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }
   }
 });
+
+test("async on win32: drive letter reaches the Worker filesystem check", async () => {
+  const restore = spoofPlatform("win32");
+  try {
+    const r = await checkNasReachableAsync("Z:\\", 8000);
+    assert.ok(!/drive letter/i.test(r.message), `Platform gate must not fire — got: "${r.message}"`);
+    assert.ok(
+      !/not reachable from this server/i.test(r.message),
+      `OS-rejection message must not appear — got: "${r.message}"`,
+    );
+    assert.ok(
+      /Library not found|unreachable|not responding|accessible/i.test(r.message),
+      `Expected a Worker filesystem result, got: "${r.message}"`,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("async on win32: Worker timeout is not short-circuited by the platform gate", async () => {
+  const restore = spoofPlatform("win32");
+  try {
+    const r = await checkNasReachableAsync("Z:\\", 0);
+    assert.equal(r.online, false);
+    assert.ok(!/drive letter/i.test(r.message), `Platform gate must not fire — got: "${r.message}"`);
+    assert.ok(
+      !/not reachable from this server/i.test(r.message),
+      `OS-rejection message must not appear — got: "${r.message}"`,
+    );
+    assert.match(r.message, /not responding|timeout|drive/i);
+  } finally {
+    restore();
+  }
+});
