@@ -17,6 +17,7 @@ import {
   FolderHeart,
   Users,
   ShieldCheck,
+  MapPinned,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogout, getGetSettingsLogoUrl } from "@workspace/api-client-react";
@@ -55,6 +56,7 @@ function SidebarBrand() {
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Media", href: "/media", icon: ImageIcon },
+  { name: "Memory Map", href: "/map", icon: MapPinned },
   { name: "Library", href: "/library", icon: BookImage },
   { name: "Collections", href: "/collections", icon: FolderHeart },
   { name: "People", href: "/people", icon: Users },
@@ -102,6 +104,7 @@ export function Sidebar() {
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 )}
+                data-testid={`link-nav-${item.name.toLowerCase().replace(/\s+/g, "-")}`}
               >
                 <item.icon
                   className={cn(

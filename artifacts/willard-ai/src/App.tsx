@@ -16,6 +16,7 @@ import { Loader2 } from "lucide-react";
 import Dashboard from "@/pages/dashboard";
 import Media from "@/pages/media";
 import MediaDetail from "@/pages/media-detail";
+import MapPage from "@/pages/map";
 import Library from "@/pages/library";
 import Collections from "@/pages/collections";
 import People from "@/pages/people";
@@ -68,6 +69,7 @@ function ProtectedRoutes() {
         <Route path="/" component={Dashboard} />
         <Route path="/media" component={Media} />
         <Route path="/media/:id" component={MediaDetail} />
+        <Route path="/map" component={MapPage} />
         <Route path="/library" component={Library} />
         <Route path="/collections" component={Collections} />
         <Route path="/people" component={People} />

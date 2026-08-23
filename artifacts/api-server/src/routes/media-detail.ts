@@ -45,6 +45,42 @@ function toItem(r: any): RelatedItem {
 
 const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
 
+// ── Library-wide GPS map ─────────────────────────────────────────────────────
+
+router.get("/media/map", async (_req: Request, res: Response) => {
+  try {
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(409).json({ error: "No library configured" });
+
+    const { rows } = await pool.query(
+      `SELECT f.id, f.name, f.media_type, f.gps_latitude, f.gps_longitude, f.place_name
+         FROM media_files f
+        WHERE f.nas_path = $1
+          AND ${NOT_DELETED}
+          AND f.gps_latitude IS NOT NULL
+          AND f.gps_longitude IS NOT NULL
+          AND f.gps_latitude BETWEEN -90 AND 90
+          AND f.gps_longitude BETWEEN -180 AND 180
+        ORDER BY f.id`,
+      [nasPath],
+    );
+
+    return res.json({
+      items: rows.map((row: any) => ({
+        id: Number(row.id),
+        name: row.name,
+        mediaType: row.media_type,
+        latitude: Number(row.gps_latitude),
+        longitude: Number(row.gps_longitude),
+        placeName: row.place_name ?? null,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err }, "media map failed");
+    return res.status(500).json({ error: "Failed to load map data" });
+  }
+});
+
 // ── Full detail for one item ─────────────────────────────────────────────────
 
 router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
@@ -55,8 +91,10 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
     const { rows } = await pool.query(
-      `SELECT f.nas_path, f.date_taken, f.gps_latitude, f.gps_longitude, f.media_type,
-              a.people, (a.embedding IS NOT NULL) AS has_embedding
+      `SELECT f.*, a.description AS ai_description, a.tags, a.objects, a.ocr_text,
+              a.doc_type, a.scene, a.people, a.user_tags, a.hidden_tags,
+              a.user_description, a.notes, a.analyzed_at,
+              (a.embedding IS NOT NULL) AS has_embedding
          FROM media_files f
          LEFT JOIN media_ai a ON a.media_file_id = f.id
         WHERE f.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`,
@@ -103,8 +141,8 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
       next = n[0] ? toItem(n[0]) : null;
     }
 
-    const hidden = new Set(strArr(o.hidden_tags).map((t: string) => t.toLowerCase()));
-    const aiTags = new Set(strArr(cur.tags).map((t) => t.toLowerCase()));
+    const hidden = new Set(strArr(r.hidden_tags).map((t: string) => t.toLowerCase()));
+    const aiTags = strArr(r.tags).map((t) => t.toLowerCase());
 
     return res.json({
       file: {
@@ -144,7 +182,7 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
         description: r.user_description ?? r.ai_description,
         descriptionEdited: r.user_description != null,
         tags: [
-          ...aiTags.filter((t) => !hidden.has(t.toLowerCase())).map((t) => ({ tag: t, source: "ai" as const })),
+         ...aiTags.filter((t) => !hidden.has(t.toLowerCase())).map((t) => ({ tag: t, source: "ai" as const })),
           ...strArr(r.user_tags).map((t) => ({ tag: t, source: "user" as const })),
         ],
         // …with the originals preserved underneath.

@@ -144,3 +144,20 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
+@layer components {
+  .map-grid {
+    background-image:
+      linear-gradient(rgba(192, 205, 219, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(192, 205, 219, 0.07) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .map-tile {
+    filter: saturate(.55) brightness(.64) contrast(1.08);
+  }
+
+  .map-marker {
+    transform: translate(-50%, -100%);
+  }
+}
