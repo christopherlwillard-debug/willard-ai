@@ -15,6 +15,10 @@ import {
   Activity, Play, RefreshCw, Cpu, Database, Clock, TrendingUp,
   AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown,
 } from "lucide-react";
+import {
+  CartesianGrid, Legend, Line, LineChart, ResponsiveContainer,
+  Tooltip, XAxis, YAxis,
+} from "recharts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -76,6 +80,13 @@ function fmtNum(n: number, decimals = 1): string {
   return n.toFixed(decimals);
 }
 
+function fmtBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 function scanDurationMs(scan: ScanRecord): number {
   if (!scan.startedAt || !scan.finishedAt) {
     const summary = scan.summary as any;
@@ -87,6 +98,127 @@ function scanDurationMs(scan: ScanRecord): number {
 function cacheHitRate(d: ScanDiagnostics): number {
   const total = d.dirCacheHits + d.dirCacheMisses;
   return total === 0 ? 0 : Math.round((d.dirCacheHits / total) * 100);
+}
+
+function scanSizeBytes(scan: ScanRecord): number {
+  const summarySize = scan.summary?.totalSizeBytes;
+  return scan.diagnostics?.totalSizeBytes
+    ?? (typeof summarySize === "number" ? summarySize : 0);
+}
+
+interface TrendPoint {
+  id: number;
+  date: string;
+  profile: string;
+  files: number;
+  sizeBytes: number;
+  filesPerSec: number;
+  mbPerSec: number;
+}
+
+function ScanTrendTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: TrendPoint }>;
+}) {
+  if (!active || !payload?.[0]?.payload) return null;
+  const point = payload[0].payload;
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-2 shadow-lg">
+      <p className="text-xs font-mono font-semibold text-foreground">{point.date}</p>
+      <p className="text-[11px] font-mono text-muted-foreground mt-1">
+        {point.profile} · {fmtBytes(point.sizeBytes)} · {point.files.toLocaleString()} files
+      </p>
+      <div className="mt-1.5 space-y-0.5 text-xs font-mono">
+        <p className="text-blue-400">Files/sec: {fmtNum(point.filesPerSec)}</p>
+        <p className="text-emerald-400">MB/sec: {fmtNum(point.mbPerSec, 2)}</p>
+      </div>
+    </div>
+  );
+}
+
+function ScanTrendChart({ scans }: { scans: ScanRecord[] }) {
+  const points: TrendPoint[] = scans
+    .filter((scan) => scan.diagnostics && scan.startedAt)
+    .sort((a, b) => new Date(a.startedAt!).getTime() - new Date(b.startedAt!).getTime())
+    .slice(-20)
+    .map((scan) => ({
+      id: scan.id,
+      date: new Date(scan.startedAt!).toLocaleString(undefined, {
+        month: "short", day: "numeric", year: "numeric",
+      }),
+      profile: scan.profile ?? "SCAN",
+      files: scan.processedFiles,
+      sizeBytes: scanSizeBytes(scan),
+      filesPerSec: scan.diagnostics!.throughputFilesPerSec,
+      mbPerSec: scan.diagnostics!.throughputMBPerSec,
+    }));
+
+  if (points.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <TrendingUp className="w-5 h-5" /> Throughput Trend
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Files/sec and MB/sec across the last {points.length} completed scans
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="h-64 w-full" data-testid="scan-throughput-chart">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={points} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={24} />
+              <YAxis
+                yAxisId="files"
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                width={42}
+                label={{ value: "files/s", angle: -90, position: "insideLeft", fontSize: 10 }}
+              />
+              <YAxis
+                yAxisId="mb"
+                orientation="right"
+                tick={{ fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                width={42}
+                label={{ value: "MB/s", angle: 90, position: "insideRight", fontSize: 10 }}
+              />
+              <Tooltip content={<ScanTrendTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, fontFamily: "monospace" }} />
+              <Line
+                yAxisId="files"
+                type="monotone"
+                dataKey="filesPerSec"
+                name="Files/sec"
+                stroke="#60a5fa"
+                strokeWidth={2}
+                dot={{ r: 3, fill: "#60a5fa" }}
+                activeDot={{ r: 5 }}
+              />
+              <Line
+                yAxisId="mb"
+                type="monotone"
+                dataKey="mbPerSec"
+                name="MB/sec"
+                stroke="#34d399"
+                strokeWidth={2}
+                dot={{ r: 3, fill: "#34d399" }}
+                activeDot={{ r: 5 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function sortScans(scans: ScanRecord[], key: SortKey, dir: SortDir): ScanRecord[] {
@@ -235,6 +367,8 @@ export default function Diagnostics() {
           )}
         </CardContent>
       </Card>
+
+      <ScanTrendChart scans={rawScans} />
 
       {/* ── Scan History with Diagnostics ────────────────────────────────── */}
       <Card>
