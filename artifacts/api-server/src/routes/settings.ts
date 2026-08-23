@@ -271,7 +271,7 @@ router.get("/settings/scanner", async (_req, res) => {
       ignoreEmptyFolders:          settings.ignoreEmptyFolders ?? false,
       followSymlinks:              settings.followSymlinks     ?? false,
       indexOtherFiles:             settings.indexOtherFiles    ?? true,
-      watcherPollIntervalSeconds:  settings.watcherPollIntervalSeconds ?? 300,
+      watcherPollIntervalSeconds:  settings.watcherPollIntervalSeconds ?? 60,
     });
   } catch {
     res.status(500).json({ error: "Failed to load scanner settings" });
@@ -329,7 +329,7 @@ router.put("/settings/scanner", async (req, res) => {
       ignoreEmptyFolders:          updated.ignoreEmptyFolders ?? false,
       followSymlinks:              updated.followSymlinks     ?? false,
       indexOtherFiles:             updated.indexOtherFiles    ?? true,
-      watcherPollIntervalSeconds:  updated.watcherPollIntervalSeconds ?? 300,
+      watcherPollIntervalSeconds:  updated.watcherPollIntervalSeconds ?? 60,
     });
   } catch {
     res.status(500).json({ error: "Failed to update scanner settings" });

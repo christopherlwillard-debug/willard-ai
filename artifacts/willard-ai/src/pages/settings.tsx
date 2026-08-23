@@ -573,7 +573,7 @@ const SCANNER_DEFAULTS: ScannerSettings = {
   ignoreHiddenFiles: true, ignoreSystemFiles: true,
   ignoreTempFiles: true, ignoreSidecarFiles: true,
   ignoreEmptyFolders: false, followSymlinks: false,
-  indexOtherFiles: true, watcherPollIntervalSeconds: 300,
+  indexOtherFiles: true, watcherPollIntervalSeconds: 60,
 };
 
 function ScannerSettingsSection() {
@@ -592,7 +592,7 @@ function ScannerSettingsSection() {
       .then(r => r.json())
       .then(data => {
         setSettings(data);
-        setPollInput(String(data.watcherPollIntervalSeconds ?? 300));
+        setPollInput(String(data.watcherPollIntervalSeconds ?? 60));
         setLoading(false);
       })
       .catch(() => setLoading(false));

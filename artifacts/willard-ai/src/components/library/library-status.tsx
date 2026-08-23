@@ -57,6 +57,10 @@ export function LibraryStatusIndicator() {
   const job = health.activeJob as { filesProcessed?: number; filesTotal?: number | null; stage?: string } | null | undefined;
   const indexing = job != null;
   const pct = indexing && job?.filesTotal ? Math.min(100, Math.round(((job.filesProcessed ?? 0) / job.filesTotal) * 100)) : null;
+  const watcher = (health as unknown as {
+    watcher?: { lastChangeAt?: string | null; mechanism?: string; sweepIntervalSeconds?: number };
+    lastScanAt?: string | null;
+  }).watcher;
 
   let icon;
   let text;
@@ -74,15 +78,16 @@ export function LibraryStatusIndicator() {
     text = pct != null ? `Indexing ${pct}%` : `Indexing… ${(job?.filesProcessed ?? 0).toLocaleString()} files`;
     tone = "text-blue-400 border-blue-500/30 bg-blue-500/10";
   } else {
-    icon = <CheckCircle2 className="w-3.5 h-3.5" />;
-    text = health.watching ? "Connected • Watching" : "Connected";
+    const sweepMode = watcher?.mechanism === "sweep";
+    icon = sweepMode
+      ? <RefreshCw className="w-3.5 h-3.5" />
+      : <CheckCircle2 className="w-3.5 h-3.5" />;
+    text = sweepMode
+      ? `Connected • Sweep watching (${watcher?.sweepIntervalSeconds ?? 60}s)`
+      : health.watching ? "Connected • Watching" : "Connected";
     tone = "text-green-400 border-green-500/30 bg-green-500/10";
   }
 
-  const watcher = (health as unknown as {
-    watcher?: { lastChangeAt?: string | null; mechanism?: string };
-    lastScanAt?: string | null;
-  }).watcher;
   const lastScanAt = (health as unknown as { lastScanAt?: string | null }).lastScanAt;
   const tooltip = [
     `Library: ${health.path || "not configured"}`,
