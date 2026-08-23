@@ -451,7 +451,10 @@ export default function Cleanup() {
     executeCleanup({ data: { deleteFileIds: allDeleteIds } }, {
       onSuccess: (result) => {
         setExecuteResult(result);
-        setQueue([]);
+        // A 200 response can still contain only per-file failures (for example
+        // when the NAS went offline after staging). Keep the queue so the user
+        // can retry instead of losing their staged cleanup decisions.
+        if (result.recycled > 0) setQueue([]);
         qc.invalidateQueries({ queryKey: getGetCleanupHistoryQueryKey() });
         qc.invalidateQueries({ queryKey: getGetCleanupSummaryQueryKey() });
         qc.invalidateQueries({ queryKey: getGetDuplicateFilesQueryKey({ limit: 20 }) });

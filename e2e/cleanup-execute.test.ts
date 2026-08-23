@@ -394,7 +394,23 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 5: execute with unknown ID returns graceful error ────────────────
+  // ── Test 5: missing NAS returns a retryable conflict ──────────────────────
+
+  test("execute with an empty NAS path returns 409 without consuming the queue", async () => {
+    const clearNas = await apiPut("/settings", { nasPath: "" });
+    assert.strictEqual(clearNas.status, 200);
+    try {
+      const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });
+      const { status, body } = await readJson<{ error?: string }>(res);
+      assert.strictEqual(status, 409);
+      assert.match(body.error ?? "", /No library configured/i);
+    } finally {
+      const restoreNas = await apiPut("/settings", { nasPath: tempNasDir });
+      assert.strictEqual(restoreNas.status, 200);
+    }
+  });
+
+  // ── Test 6: execute with unknown ID returns graceful error ────────────────
 
   test("execute with a non-existent file ID returns error entry and recycled=0", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [999_999_999] });
@@ -405,14 +421,14 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(body.errors.length > 0, "errors array should have an entry for the unknown ID");
   });
 
-  // ── Test 6: execute with empty array returns 400 ──────────────────────────
+  // ── Test 7: execute with empty array returns 400 ──────────────────────────
 
   test("execute with an empty deleteFileIds array returns 400", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [] });
     assert.strictEqual(res.status, 400, "Empty deleteFileIds should return 400");
   });
 
-  // ── Test 7: second execute on already-moved file reports missing-on-disk ──
+  // ── Test 8: second execute on already-moved file reports missing-on-disk ──
 
   test("executing the same file ID again reports file-not-found error", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });

@@ -22,3 +22,4 @@
 - [Node 24 DB test imports](node24-db-test-imports.md) — strip-types tests need explicit .ts imports in the shared DB package and matching TS compiler support
 - [Node 24 local test imports](node24-local-test-imports.md) — directly run strip-types tests need explicit .ts suffixes through every imported local module
 - [Recycled scan state](recycled-scan-state.md) — preserve RECYCLED across rescans so cleanup actions remain excluded and distinguishable from filesystem deletions
+- [Cleanup queue retry behavior](cleanup-queue-retry.md) — clear staged decisions only when at least one file is actually recycled

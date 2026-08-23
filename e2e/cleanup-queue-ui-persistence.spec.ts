@@ -172,9 +172,9 @@ test.describe("Cleanup queue UI persistence", () => {
     expect(parsed[0].groupHash).toBe(MOCK_ENTRY.groupHash);
   });
 
-  // ── 3. Execute cleanup clears the queue key ─────────────────────────────────
+  // ── 3. Failed execute preserves the queue key ───────────────────────────────
 
-  test("executing cleanup removes the queue key so stale entries cannot reappear", async ({ page, request }) => {
+  test("executing cleanup with unavailable files preserves the queue for retry", async ({ page, request }) => {
     // Seed the queue directly in localStorage on the Cleanup page
     await page.goto("/cleanup");
     await loginThroughUI(page);
@@ -203,8 +203,8 @@ test.describe("Cleanup queue UI persistence", () => {
     await expect(confirmBtn).toBeVisible({ timeout: 5_000 });
     await confirmBtn.click();
 
-    // After execute, the queue should be cleared from the UI (badge gone)
-    await expect(queueTab.locator("span").filter({ hasText: "1" })).not.toBeVisible({ timeout: 15_000 });
+    // A 200 with recycled=0 means every file failed. The queue must remain.
+    await expect(queueTab.locator("span").filter({ hasText: "1" })).toBeVisible({ timeout: 15_000 });
 
     // Reload and verify the queue key no longer causes entries to reappear
     await page.reload();
@@ -212,11 +212,11 @@ test.describe("Cleanup queue UI persistence", () => {
     await expect(page.getByText("CLEANUP_SUGGESTIONS")).toBeVisible({ timeout: 20_000 });
 
     const badgeAfterReload = queueTab.locator("span").filter({ hasText: "1" });
-    await expect(badgeAfterReload).not.toBeVisible({ timeout: 5_000 });
+    await expect(badgeAfterReload).toBeVisible({ timeout: 5_000 });
 
     // Also verify localStorage key is absent or empty
     const raw = await readQueueFromBrowser(page);
     const parsed = raw ? JSON.parse(raw) : [];
-    expect(parsed, "Queue key must be empty or absent after execute").toHaveLength(0);
+    expect(parsed, "Queue key must survive a failed execute").toHaveLength(1);
   });
 });
