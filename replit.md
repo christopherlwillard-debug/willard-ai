@@ -69,7 +69,7 @@ _Describe the high-level user-facing capabilities of this app once they exist._
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Willard Media Center is a desktop/web-only product. Do not propose, build, publish, or prioritize phone apps or mobile features unless the user explicitly reverses this decision.
 
 ## Gotchas
 
