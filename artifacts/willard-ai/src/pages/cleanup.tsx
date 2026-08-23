@@ -16,7 +16,7 @@ import {
 } from "@workspace/api-client-react";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
-import { readQueue, writeQueue, type CleanupQueueEntry } from "@/lib/cleanup-queue";
+import { readQueue, writeQueue, type CleanupQueueEntry } from "@workspace/cleanup-queue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";

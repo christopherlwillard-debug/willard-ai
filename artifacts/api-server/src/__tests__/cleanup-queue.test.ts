@@ -1,5 +1,5 @@
 /**
- * Unit tests for cleanup-queue helpers (artifacts/willard-ai/src/lib/cleanup-queue.ts).
+ * Unit tests for the shared cleanup-queue helpers.
  *
  * Imports the ACTUAL shared module rather than re-implementing its logic, so
  * test drift is impossible — any change to readQueue/writeQueue/stageEntry is
@@ -39,7 +39,7 @@ import {
   QUEUE_KEY,
   type CleanupQueueEntry,
   type StorageLike,
-} from "../../../willard-ai/src/lib/cleanup-queue.ts";
+} from "@workspace/cleanup-queue";
 
 // ─── Test storage factory ──────────────────────────────────────────────────────
 //
