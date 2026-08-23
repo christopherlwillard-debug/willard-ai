@@ -347,7 +347,7 @@ interface SampleFile { path: string; sizeBytes: number; }
 
 // `paths` holds ALL file paths for formats requiring per-file analysis (JPEG, container video).
 // `samples` holds the top-3 by size for UI display only.
-const PER_FILE_EXTS = new Set(["jpg","jpeg","mp4","m4v","mov","mkv"]);
+const PER_FILE_EXTS = new Set(["jpg","jpeg","png","mp4","m4v","mov","mkv"]);
 const MAX_PER_FILE_PATHS = 5_000; // cap to avoid memory blowout on huge libraries
 
 interface ExtGroup   { count: number; bytes: number; samples: SampleFile[]; paths: string[]; }
@@ -817,6 +817,7 @@ router.get("/optimize/scan", async (req, res) => {
     const enrichPromises: Promise<void>[] = [];
     const jpegIssuesMap    = new Map<string, string[]>();  // ext → issues (for explainer text)
     const detectedCodecMap = new Map<string, string>();    // ext → codec (for group-level override)
+    const pngAttentionMap  = new Map<string, string>();
 
     // fileDecisions: per-file convert/skip decision, persisted in scan cache.
     // The execute loop reads this to decide whether to convert each individual file.
@@ -845,6 +846,19 @@ router.get("/optimize/scan", async (req, res) => {
                 jpegIssuesMap.set(ext, issues);
               }
             }
+          }
+        })());
+      }
+
+      if (ext === "png") {
+        enrichPromises.push((async () => {
+          const sharp = (await import("sharp")).default;
+          for (const p of paths.slice(0, JPEG_ANALYZE_LIMIT)) {
+            try {
+              const meta = await sharp(p, { failOn: "none" }).metadata();
+              if (meta.hasAlpha) { pngAttentionMap.set(ext, "Transparent PNG — converting to JPEG would lose the alpha channel."); break; }
+              if (meta.depth && !["uchar", "char"].includes(meta.depth)) { pngAttentionMap.set(ext, "HDR / high-bit-depth PNG — preserve the original dynamic range."); break; }
+            } catch { /* individual metadata failures are non-fatal */ }
           }
         })());
       }
@@ -899,9 +913,11 @@ router.get("/optimize/scan", async (req, res) => {
 
       const jpegIssues = jpegIssuesMap.get(ext) ?? [];
       const status: FormatStatus = rule.status ?? "skip";
+      const pngAttention = ext === "png" ? pngAttentionMap.get(ext) : undefined;
+      const effectiveStatus: FormatStatus = pngAttention ? "protected" : status;
       const category: MediaCategory = rule.category ?? "other";
       const savings = rule.estimatedSavingsRatio ? Math.round(bytes * rule.estimatedSavingsRatio) : 0;
-      if (status === "convert") totalSavingsBytes += savings;
+       if (effectiveStatus === "convert") totalSavingsBytes += savings;
 
       const sampleFiles = samples.map(s => ({
         path:                s.path,
@@ -918,7 +934,8 @@ router.get("/optimize/scan", async (req, res) => {
         fileCount:             count,
         totalBytes:            bytes,
         category,
-        status,
+         status: effectiveStatus,
+         classification: effectiveStatus === "convert" ? "safe" : effectiveStatus === "protected" ? "attention" : "skip",
         method:                rule.method ?? null,
         targetFormat:          rule.targetFormat ?? null,
         targetExt:             rule.targetExt ?? null,
@@ -928,7 +945,7 @@ router.get("/optimize/scan", async (req, res) => {
         compatibilityLabel:    rule.compatibilityLabel ?? null,
         estimatedSavingsBytes: savings,
         estimatedSavingsRatio: rule.estimatedSavingsRatio ?? null,
-        reason:                rule.reason,
+         reason:                pngAttention ?? rule.reason,
         explainerText,
         jpegIssues:            jpegIssues.length > 0 ? jpegIssues : undefined,
         detectedCodec:         detectedCodec ?? undefined,
