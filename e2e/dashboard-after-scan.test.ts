@@ -22,7 +22,7 @@
  *   node --experimental-strip-types --test e2e/dashboard-after-scan.test.ts
  */
 
-import { describe, test, before } from "node:test";
+import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
@@ -42,6 +42,8 @@ const TEST_PASSWORD = "willard123";
 // ─── Cookie-aware HTTP helpers ──────────────────────────────────────────────
 
 let sessionCookie = "";
+let originalNasPath = "";
+let settingsSnapshotTaken = false;
 
 function authHeaders(): Record<string, string> {
   return sessionCookie ? { Cookie: sessionCookie } : {};
@@ -181,22 +183,33 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
 
     assert.ok(sessionCookie, "Session cookie should be set after authentication");
 
-    // ── 2. Configure NAS path to the test-media directory ─────────────────
-    const settingsRes = await apiPut("/settings", { nasPath: NAS_PATH });
-    if (!settingsRes.ok) {
-      const body = (await settingsRes.json()) as { error?: string };
-      const msg = body?.error ?? `HTTP ${settingsRes.status}`;
-      console.warn(`[setup] Could not set NAS path to "${NAS_PATH}": ${msg}. Continuing with existing path.`);
-    }
+    // ── 2. Snapshot the configured library location before test mutation ───
+    const originalSettingsRes = await apiGet("/settings");
+    const originalSettingsBody = await originalSettingsRes.text();
+    assert.ok(
+      originalSettingsRes.ok,
+      `Could not read settings before the test: ${originalSettingsBody}`,
+    );
+    const originalSettings = JSON.parse(originalSettingsBody) as { nasPath?: string | null };
+    originalNasPath = originalSettings.nasPath ?? "";
+    settingsSnapshotTaken = true;
 
-    // ── 3. Trigger a scan ─────────────────────────────────────────────────
+    // ── 3. Configure NAS path to the test-media directory ─────────────────
+    const settingsRes = await apiPut("/settings", { nasPath: NAS_PATH });
+    const settingsBody = await settingsRes.text();
+    assert.ok(
+      settingsRes.ok,
+      `Could not set NAS path to "${NAS_PATH}": ${settingsBody}`,
+    );
+
+    // ── 4. Trigger a scan ─────────────────────────────────────────────────
     const scanRes = await apiPost("/scan", {});
     assert.ok(
       scanRes.status === 202 || scanRes.status === 200,
       `Scan trigger returned unexpected status ${scanRes.status}: ${await scanRes.text()}`,
     );
 
-    // ── 4. Wait for the scan to complete (polling, no fixed sleeps) ────────
+    // ── 5. Wait for the scan to complete (polling, no fixed sleeps) ────────
     await pollUntil<ScanStatusResponse>(
       async () => {
         const r = await apiGet("/scan/status");
@@ -205,6 +218,15 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       },
       (s) => !s.isRunning,
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
+    );
+  });
+
+  after(async () => {
+    if (!settingsSnapshotTaken) return;
+    const restoreRes = await apiPut("/settings", { nasPath: originalNasPath });
+    assert.ok(
+      restoreRes.ok,
+      `Could not restore the original NAS path "${originalNasPath}": ${await restoreRes.text()}`,
     );
   });
 
@@ -320,9 +342,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       "Thumbnail health check must pass (dashboard shows green checkmark for Thumbnails)",
     );
     assert.strictEqual(
-      health.missingFiles,
+      health.missingFiles ?? 0,
       0,
-      `missingFiles should be 0 after a clean scan, got: ${health.missingFiles}`,
+      `missingFiles should be 0 after a clean scan, got: ${health.missingFiles ?? 0}`,
     );
     assert.strictEqual(
       health.corruptFiles,

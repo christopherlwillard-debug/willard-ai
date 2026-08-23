@@ -32,6 +32,9 @@ const STAT_CARD_LABELS = [
   "Incoming",
 ] as const;
 
+let originalNasPath = "";
+let settingsSnapshotTaken = false;
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Authenticate via the API and store the session cookie in the browser context. */
@@ -52,8 +55,15 @@ async function authenticate(request: APIRequestContext): Promise<void> {
 
 /** Configure the NAS path and trigger a scan via the API, then poll until complete. */
 async function runScan(request: APIRequestContext): Promise<void> {
-  // Set NAS path to the test-media directory
-  await request.put("/api/settings", { data: { nasPath: NAS_PATH } });
+  // Snapshot the user's library location before changing it for this test.
+  const originalSettingsRes = await request.get("/api/settings");
+  expect(originalSettingsRes.ok()).toBeTruthy();
+  const originalSettings = await originalSettingsRes.json() as { nasPath?: string | null };
+  originalNasPath = originalSettings.nasPath ?? "";
+  settingsSnapshotTaken = true;
+
+  const settingsRes = await request.put("/api/settings", { data: { nasPath: NAS_PATH } });
+  expect(settingsRes.ok()).toBeTruthy();
 
   // Trigger the scan
   const scanRes = await request.post("/api/scan");
@@ -86,6 +96,16 @@ test.describe("Dashboard after scan", () => {
   test.beforeAll(async ({ request }) => {
     await authenticate(request);
     await runScan(request);
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (!settingsSnapshotTaken) return;
+    await authenticate(request);
+    const restoreRes = await request.put("/api/settings", { data: { nasPath: originalNasPath } });
+    expect(
+      restoreRes.ok(),
+      `Could not restore the original NAS path "${originalNasPath}"`,
+    ).toBeTruthy();
   });
 
   test("all 6 stat cards render with non-empty numeric values", async ({ page }) => {
