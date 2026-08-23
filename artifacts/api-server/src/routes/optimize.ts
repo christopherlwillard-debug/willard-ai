@@ -775,7 +775,7 @@ router.get("/optimize/scan", async (req, res) => {
   try {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
-    const nasPath        = job.nasPath;
+    const nasPath        = settings.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
@@ -901,7 +901,7 @@ router.get("/optimize/scan", async (req, res) => {
         if (override) rule = { ...rule, ...override };
       }
 
-        const jpegIssues = await analyzeJpegFile(fullPath);
+      const jpegIssues = jpegIssuesMap.get(ext) ?? [];
       const status: FormatStatus = rule.status ?? "skip";
       const pngAttention = ext === "png" ? pngAttentionMap.get(ext) : undefined;
       const effectiveStatus: FormatStatus = pngAttention ? "protected" : status;
@@ -1033,7 +1033,7 @@ router.post("/optimize/run", async (req, res) => {
 
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
-    const nasPath        = job.nasPath;
+    const nasPath: string | null | undefined = settings.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
@@ -1072,13 +1072,23 @@ router.post("/optimize/run", async (req, res) => {
       }
     }
 
-    const resolvedBackupDir = backupDir?.trim()
+    const resolvedBackupDir: string = backupDir?.trim()
       || path.join(nasPath, "WillardAI", "ConversionBackups", new Date().toISOString().slice(0, 19).replace(/:/g, "-"));
 
     try { assertWithinRoot(path.resolve(resolvedBackupDir), path.resolve(nasPath)); }
     catch { res.status(400).json({ error: "Backup directory must be within the NAS root" }); return; }
 
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const [job] = await db.insert(conversionJobsTable).values({
+      status: "pending",
+      approvedExts: approvedExts.map(ext => ext.toLowerCase()),
+      backupDir: resolvedBackupDir,
+      nasPath,
+      totalFiles: 0,
+      processedFiles: 0,
+      succeededFiles: 0,
+      failedFiles: 0,
+      skippedFiles: 0,
+    }).returning();
 
     res.status(201).json(job);
   } catch (e: any) {
@@ -1398,11 +1408,37 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       verification?:  string[];
     }> = [];
 
+    // A file may still exist when the user chose to keep both/archive originals.
+    // Read the recorded per-file results so a later run does not convert it again.
+    // This deliberately includes cancelled/awaiting-action jobs: a successful staged
+    // conversion is still a successful conversion, even if the run did not finish.
+    const priorJobs = await db.select({ resultJson: conversionJobsTable.resultJson })
+      .from(conversionJobsTable)
+      .where(eq(conversionJobsTable.nasPath, nasPath));
+    const previouslyConverted = new Set<string>();
+    for (const priorJob of priorJobs) {
+      const files = (priorJob.resultJson as { files?: Array<{ filePath?: string; status?: string }> } | null)?.files;
+      for (const file of files ?? []) {
+        if (file.status === "success" && file.filePath) {
+          previouslyConverted.add(path.resolve(file.filePath));
+        }
+      }
+    }
+
     for (let i = 0; i < filesToConvert.length; i++) {
       const [currentJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
       if (currentJob?.cancelledAt) break;
       const { fullPath, ext } = filesToConvert[i];
+
+      if (previouslyConverted.has(path.resolve(fullPath))) {
+        skipped++;
+        const skipReason = "Previously converted in an earlier conversion job";
+        results.push({ filePath: fullPath, status: "skipped", error: skipReason });
+        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
+        continue;
+      }
 
       // Use per-file decision from scan cache when available; fall back to extension-level rule.
       const perFileDecision = execFileDecisions[fullPath];
@@ -1415,7 +1451,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const CODEC_SENSITIVE = new Set(["mp4", "m4v", "mov", "mkv"]);
       if (CODEC_SENSITIVE.has(ext) && !perFileDecision) {
         skipped++;
-        const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
+        const skipReason = "Per-file analysis: already optimal";
         results.push({ filePath: fullPath, status: "skipped", error: skipReason });
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
@@ -1429,7 +1465,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         const jpegIssues = await analyzeJpegFile(fullPath);
         if (jpegIssues.length === 0) {
           skipped++;
-        const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
+          const skipReason = "Per-file analysis: already optimal";
           results.push({ filePath: fullPath, status: "skipped", error: skipReason });
           await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
           send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
