@@ -40,6 +40,7 @@ function configuredAppOrigins(): Set<string> {
   };
   for (const value of (process.env["REPLIT_DOMAINS"] ?? "").split(",")) addOrigin(value);
   if (process.env["REPLIT_DEV_DOMAIN"]) addOrigin(process.env["REPLIT_DEV_DOMAIN"]);
+  if (process.env["REPLIT_EXPO_DEV_DOMAIN"]) addOrigin(process.env["REPLIT_EXPO_DEV_DOMAIN"]);
   for (const value of (process.env["WILLARD_ALLOWED_ORIGINS"] ?? "").split(",")) addOrigin(value);
   return origins;
 }

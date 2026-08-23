@@ -26,6 +26,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { getSessionCookie } from "@/context/AuthContext";
 
 const ACTIVE_CONVERSATION_STORAGE_KEY = "willard.activeConversationId";
 
@@ -106,7 +107,7 @@ export default function ChatScreen() {
   const conversations = conversationsQuery.data ?? [];
 
   const messagesQuery = useListOpenaiMessages(activeConvId!, {
-    query: { enabled: !!activeConvId },
+    query: { queryKey: ["/openai/conversations", activeConvId, "messages"], enabled: !!activeConvId },
   });
   const messages: OpenaiMessage[] = messagesQuery.data ?? [];
 
@@ -175,7 +176,7 @@ export default function ChatScreen() {
   const createConversation = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     createConvMutation.mutate(
-      { title: `Chat ${new Date().toLocaleDateString()}` },
+      { data: { title: `Chat ${new Date().toLocaleDateString()}` } },
       {
         onSuccess: (conv) => {
           void queryClient.invalidateQueries({ queryKey: ["/openai/conversations"] });
@@ -221,7 +222,10 @@ export default function ChatScreen() {
         `https://${process.env.EXPO_PUBLIC_DOMAIN}/api/openai/conversations/${activeConvId}/messages`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(Platform.OS !== "web" && getSessionCookie() ? { Cookie: getSessionCookie() as string } : {}),
+          },
           body: JSON.stringify({ content: text }),
         }
       );

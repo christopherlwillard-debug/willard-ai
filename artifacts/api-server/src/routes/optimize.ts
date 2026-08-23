@@ -775,16 +775,14 @@ router.get("/optimize/scan", async (req, res) => {
   try {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
-    const nasPath = (settings.nasPath ?? "").trim();
+    const nasPath        = job.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
 
-    assertWithinRoot(path.resolve(nasPath), path.resolve(nasPath));
-
-    const profile: OptimizeProfile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
-    const rawConversionEnabled = settings.rawConversionEnabled ?? false;
+    const profile: OptimizeProfile = (settingsRows[0]?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settingsRows[0]?.rawConversionEnabled ?? false;
     const force = req.query.force === "true";
 
     if (!force) {
@@ -894,7 +892,7 @@ router.get("/optimize/scan", async (req, res) => {
     await Promise.allSettled(enrichPromises);
 
     for (const [ext, { count, bytes, samples }] of groups.entries()) {
-      let rule: FormatRule = FORMAT_RULES[ext] ?? { status: "skip" as FormatStatus, category: "other" as MediaCategory, reason: "Unknown format — no conversion recommendation available" };
+      const rule      = FORMAT_RULES[ext];
 
       // Apply codec override for container video formats
       const detectedCodec = detectedCodecMap.get(ext);
@@ -903,11 +901,11 @@ router.get("/optimize/scan", async (req, res) => {
         if (override) rule = { ...rule, ...override };
       }
 
-      const jpegIssues = jpegIssuesMap.get(ext) ?? [];
+        const jpegIssues = await analyzeJpegFile(fullPath);
       const status: FormatStatus = rule.status ?? "skip";
       const pngAttention = ext === "png" ? pngAttentionMap.get(ext) : undefined;
       const effectiveStatus: FormatStatus = pngAttention ? "protected" : status;
-      const category: MediaCategory = rule.category ?? "other";
+      const category  = rule?.category ?? "other";
       const savings = rule.estimatedSavingsRatio ? Math.round(bytes * rule.estimatedSavingsRatio) : 0;
        if (effectiveStatus === "convert") totalSavingsBytes += savings;
 
@@ -1035,14 +1033,14 @@ router.post("/optimize/run", async (req, res) => {
 
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
     const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
-    const nasPath = (settings.nasPath ?? "").trim();
+    const nasPath        = job.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
 
-    const profile: OptimizeProfile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
-    const rawConversionEnabled = settings.rawConversionEnabled ?? false;
+    const profile: OptimizeProfile = (settingsRows[0]?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settingsRows[0]?.rawConversionEnabled ?? false;
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
 
     // Load scan cache to check per-file decisions for codec-detected formats.
@@ -1053,7 +1051,7 @@ router.post("/optimize/run", async (req, res) => {
 
     for (const ext of approvedExts) {
       const lext = ext.toLowerCase();
-      const rule  = FORMAT_RULES[lext];
+      const rule      = FORMAT_RULES[ext];
 
       // For codec-detected container formats, accept if any scanned file is marked convert
       if (PER_FILE_EXTS.has(lext) && (lext === "mp4" || lext === "m4v" || lext === "mov" || lext === "mkv")) {
@@ -1080,13 +1078,7 @@ router.post("/optimize/run", async (req, res) => {
     try { assertWithinRoot(path.resolve(resolvedBackupDir), path.resolve(nasPath)); }
     catch { res.status(400).json({ error: "Backup directory must be within the NAS root" }); return; }
 
-    const [job] = await db.insert(conversionJobsTable).values({
-      status:       "pending",
-      approvedExts: approvedExts.map(e => e.toLowerCase()),
-      backupDir:    resolvedBackupDir,
-      nasPath,
-      totalFiles:   0,
-    }).returning();
+    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
 
     res.status(201).json(job);
   } catch (e: any) {
@@ -1107,7 +1099,7 @@ router.get("/optimize/jobs", async (_req, res) => {
 
 router.post("/optimize/jobs/:id/retry", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
     const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
@@ -1293,7 +1285,7 @@ router.post("/optimize/jobs/:id/finalize", finalizeHandlerImpl);
 
 router.get("/optimize/jobs/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+  const id = parseInt(req.params.id);
     const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
@@ -1400,7 +1392,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const CODEC_SENSITIVE = new Set(["mp4", "m4v", "mov", "mkv"]);
       if (CODEC_SENSITIVE.has(ext) && !perFileDecision) {
         skipped++;
-        const skipReason = "No per-file codec analysis found — run a fresh scan to detect codec";
+        const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
         results.push({ filePath: fullPath, status: "skipped", error: skipReason });
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
@@ -1414,7 +1406,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         const jpegIssues = await analyzeJpegFile(fullPath);
         if (jpegIssues.length === 0) {
           skipped++;
-          const skipReason = "JPEG already optimal — progressive, well-compressed, reasonable metadata";
+        const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
           results.push({ filePath: fullPath, status: "skipped", error: skipReason });
           await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
           send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });

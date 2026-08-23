@@ -20,6 +20,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/context/AuthContext";
 
 type FieldProps = {
   label: string;
@@ -67,6 +68,7 @@ export default function SettingsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+  const { logout } = useAuth();
 
   const settingsQuery = useGetSettings();
   const updateMutation = useUpdateSettings();
@@ -84,7 +86,7 @@ export default function SettingsScreen() {
     const input: SettingsInput = {
       nasPath,
     };
-    updateMutation.mutate(input, {
+    updateMutation.mutate({ data: input }, {
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: ["/settings"] });
         setSaved(true);
@@ -200,6 +202,17 @@ export default function SettingsScreen() {
           </Pressable>
         </>
       )}
+      <Pressable
+        onPress={() => {
+          void queryClient.clear();
+          void logout();
+        }}
+        style={[styles.logoutButton, { borderColor: colors.border }]}
+        testID="mobile-logout-button"
+      >
+        <Feather name="log-out" size={16} color={colors.destructive} />
+        <Text style={[styles.logoutText, { color: colors.destructive, fontFamily: "Inter_600SemiBold" }]}>Log out</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -319,4 +332,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#fff",
   },
+  logoutButton: {
+    marginHorizontal: 16,
+    height: 48,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 2,
+  },
+  logoutText: { fontSize: 14 },
 });
