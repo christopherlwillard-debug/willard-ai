@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable, archivesTable, indexedFilesTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { assertWithinRoot } from "../lib/nas-storage";
+import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
 
 const router: IRouter = Router();
 
@@ -84,14 +85,7 @@ router.get("/explorer", async (req, res) => {
       .from(indexedFilesTable)
       .where(sql`${indexedFilesTable.folder} = ${targetPath} OR ${indexedFilesTable.folder} LIKE ${targetPath + path.sep + "%"}`)
       .groupBy(indexedFilesTable.folder);
-    const folderSizes = new Map<string, number>();
-    for (const row of indexedFolderSizes) {
-      const relativeFolder = path.relative(targetPath, row.folder);
-      const topLevelFolder = relativeFolder.split(/[\\/]/, 1)[0];
-      if (topLevelFolder) {
-        folderSizes.set(topLevelFolder, (folderSizes.get(topLevelFolder) ?? 0) + Number(row.totalSizeBytes));
-      }
-    }
+    const folderSizes = aggregateFolderSizes(targetPath, indexedFolderSizes);
 
     const result = await Promise.all(entries.map(async (entry) => {
       const fullPath = path.join(targetPath, entry.name);
