@@ -59,7 +59,10 @@ const SIDECAR_EXTS = new Set([
 // are provided.  When settings are omitted (legacy callers) original default
 // behaviour is preserved: all hidden/@/# dirs and SYSTEM_DIR_NAMES are skipped.
 
-const ALWAYS_SKIP_DIR_NAMES = new Set(["WillardAI"]);
+// The application data directory is always private. Keep its recycle bin
+// explicitly protected as well so scans rooted below WillardAI cannot re-index
+// recycled files even when hidden-directory filtering is disabled.
+const ALWAYS_SKIP_DIR_NAMES = new Set(["WillardAI", ".Trash"]);
 
 const SYSTEM_DIR_NAMES = new Set([
   "$RECYCLE.BIN", "System Volume Information", "RECYCLER", "Recycle Bin",
