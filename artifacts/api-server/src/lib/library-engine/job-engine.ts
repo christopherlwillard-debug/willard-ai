@@ -171,6 +171,13 @@ export function getJobProgress(jobId: number): ProgressEvent | null {
   };
 }
 
+/** A stable snapshot for global task surfaces (sidebar, dashboard, etc.). */
+export function getAllJobProgress(): ProgressEvent[] {
+  return [...activeJobs.keys()]
+    .map((jobId) => getJobProgress(jobId))
+    .filter((job): job is ProgressEvent => job !== null);
+}
+
 // ── Rolling ETA (last 2000 file timestamps) ───────────────────────────────────
 
 const WINDOW_SIZE = 2000;

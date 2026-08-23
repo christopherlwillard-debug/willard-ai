@@ -4,7 +4,7 @@ import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/
 import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
-  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq,
+  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq, getAllJobProgress,
 } from "../lib/library-engine";
 import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
@@ -299,6 +299,36 @@ router.get("/library/jobs/active", async (_req: Request, res: Response) => {
   }
   const progress = getJobProgress(activeId);
   res.json(progress);
+});
+
+// ── GET /api/library/jobs/events — server-pushed live task snapshots ─────────
+// This is intentionally SSE rather than a polling endpoint. A snapshot is
+// pushed once on connect and whenever the stream heartbeat fires; clients can
+// stay on any page while long-running work continues.
+router.get("/library/jobs/events", async (_req: Request, res: Response) => {
+  res.status(200);
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+
+  const send = () => {
+    if (res.writableEnded) return;
+    const jobs = getAllJobProgress();
+    res.write(`event: jobs\ndata: ${JSON.stringify({ jobs, lastCompleted: jobs.length === 0 ? getLastCompletedProgress() : null })}\n\n`);
+  };
+  send();
+  const timer = setInterval(send, 1000);
+  _req.on("close", () => clearInterval(timer));
+});
+
+// Convenient aggregate for task-center consumers that need a one-shot
+// snapshot (for example after an action completes).
+router.get("/library/jobs/background", async (_req: Request, res: Response) => {
+  res.json({ jobs: getAllJobProgress() });
 });
 
 // ── GET /api/library/jobs — paginated job history ────────────────────────────

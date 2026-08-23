@@ -5,6 +5,7 @@ export {
   getActiveJobProfile,
   getActiveJobType,
   getJobProgress,
+  getAllJobProgress,
   getLastCompletedProgress,
   requestPause,
   requestCancel,

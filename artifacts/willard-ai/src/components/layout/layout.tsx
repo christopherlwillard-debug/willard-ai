@@ -9,11 +9,15 @@ import {
   getGetDashboardQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { BackgroundTasksButton, BackgroundTasksPanel } from "@/components/library/background-tasks";
+import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
 
 function TopBar() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [scanTriggered, setScanTriggered] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const { jobs } = useLibraryJobStream();
 
   const { data } = useGetDashboard({
     query: {
@@ -79,6 +83,7 @@ function TopBar() {
         <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
           <Bell className="w-4 h-4" />
         </button>
+        <BackgroundTasksButton onClick={() => setTasksOpen(true)} count={jobs.length} />
 
         <Link href="/settings">
           <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
@@ -102,6 +107,7 @@ function TopBar() {
           {isScanning ? "Scanning…" : "Full Rescan"}
         </Button>
       </div>
+      <BackgroundTasksPanel open={tasksOpen} onOpenChange={setTasksOpen} />
     </div>
   );
 }

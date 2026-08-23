@@ -41,6 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1052,6 +1053,7 @@ export default function Media() {
   // ── Library job progress (active job) ──────────────────────────────────────
 
   const [dismissedProgress, setDismissedProgress] = useState<boolean>(false);
+  const { jobs: streamedJobs, lastCompleted: streamedLastCompleted } = useLibraryJobStream();
 
   const activeJobQuery = useQuery({
     queryKey: ["library-active-job"],
@@ -1064,9 +1066,14 @@ export default function Media() {
       const status = query.state.data?.status;
       // Fast poll while a job is running; slow-poll while idle so we pick up
       // auto-started follow-up jobs (e.g. thumbnail backfill after scan).
-      return status === "RUNNING" || status === "PAUSED" ? 1000 : 5000;
+      return false;
     },
   });
+
+  useEffect(() => {
+    const streamed = streamedJobs.find((job) => job.jobType === "SCAN" || job.jobType === "THUMBNAILS");
+    queryClient.setQueryData(["library-active-job"], streamed ?? streamedLastCompleted ?? null);
+  }, [streamedJobs, streamedLastCompleted, queryClient]);
 
   const historyQuery = useQuery({
     queryKey: ["library-jobs", "SCAN"],
