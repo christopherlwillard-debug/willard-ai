@@ -416,7 +416,82 @@ function InfoSection({ title, children }: { title: string; children: React.React
   );
 }
 
-function InfoPanel({ file }: { file: MediaFile }) {
+function tileX(lon: number, zoom: number) {
+  return ((lon + 180) / 360) * 2 ** zoom;
+}
+
+function tileY(lat: number, zoom: number) {
+  const latitude = clamp(lat, -85.05112878, 85.05112878) * Math.PI / 180;
+  return (1 - Math.asinh(Math.tan(latitude)) / Math.PI) / 2 * 2 ** zoom;
+}
+
+function LocationMap({
+  latitude,
+  longitude,
+  href,
+  mapRef,
+}: {
+  latitude: number;
+  longitude: number;
+  href: string;
+  mapRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const zoom = 13;
+  const x = tileX(longitude, zoom);
+  const y = tileY(latitude, zoom);
+  const centerX = x * 256;
+  const centerY = y * 256;
+  const tiles = [];
+
+  for (let row = -2; row <= 2; row += 1) {
+    for (let column = -2; column <= 2; column += 1) {
+      const tileColumn = Math.floor(x) + column;
+      const tileRow = Math.floor(y) + row;
+      const wrappedColumn = ((tileColumn % 2 ** zoom) + 2 ** zoom) % 2 ** zoom;
+      tiles.push({
+        key: `${wrappedColumn}-${tileRow}`,
+        left: tileColumn * 256 - centerX,
+        top: tileRow * 256 - centerY,
+        src: `https://tile.openstreetmap.org/${zoom}/${wrappedColumn}/${tileRow}.png`,
+      });
+    }
+  }
+
+  return (
+    <div ref={mapRef} className="mt-2 overflow-hidden rounded border border-border bg-muted" data-testid="location-map">
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open this location in Google Maps"
+        aria-label="Open this photo location in Google Maps"
+        className="relative block h-48 w-full focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset"
+      >
+        <div className="absolute left-1/2 top-1/2 h-0 w-0">
+          {tiles.map((tile) => (
+            <img
+              key={tile.key}
+              src={tile.src}
+              alt=""
+              aria-hidden="true"
+              className="absolute h-64 w-64 max-w-none"
+              style={{ left: tile.left, top: tile.top }}
+            />
+          ))}
+        </div>
+        <MapPin
+          className="absolute left-1/2 top-1/2 z-10 h-7 w-7 -translate-x-1/2 -translate-y-full fill-primary text-primary-foreground drop-shadow-md"
+          aria-label="Photo location"
+        />
+        <span className="absolute bottom-1 right-1 z-10 rounded bg-black/65 px-1 text-[9px] text-white/80">
+          © OpenStreetMap contributors
+        </span>
+      </a>
+    </div>
+  );
+}
+
+function InfoPanel({ file, mapRef }: { file: MediaFile; mapRef: React.RefObject<HTMLDivElement | null> }) {
   const camera = camLabel(file.cameraMake, file.cameraModel);
   const hasGps = file.gpsLatitude != null && file.gpsLongitude != null;
   const mapsUrl = hasGps ? `https://www.google.com/maps?q=${file.gpsLatitude},${file.gpsLongitude}` : null;
@@ -457,6 +532,12 @@ function InfoPanel({ file }: { file: MediaFile }) {
           {hasGps && (
             <InfoRow label="Location">
               {(file as any).placeName && <p className="font-medium text-foreground mb-0.5">{(file as any).placeName}</p>}
+              <LocationMap
+                latitude={file.gpsLatitude!}
+                longitude={file.gpsLongitude!}
+                href={mapsUrl!}
+                mapRef={mapRef}
+              />
               <a href={mapsUrl!} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1 text-primary hover:underline text-[11px]">
                 <MapPin className="w-3 h-3 shrink-0" />
@@ -641,10 +722,12 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
   const [showRename,   setShowRename]   = useState(false);
   const [showDelete,   setShowDelete]   = useState(false);
   const [entered,      setEntered]      = useState(false);
+  const [focusMapRequested, setFocusMapRequested] = useState(false);
 
   const videoRef      = useRef<HTMLVideoElement>(null);
   const hideTimer     = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const containerRef  = useRef<HTMLDivElement>(null);
+  const mapRef        = useRef<HTMLDivElement>(null);
 
   const file    = files[idx];
   const hasPrev = idx > 0;
@@ -669,6 +752,15 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
     else showControls();
     return () => clearTimeout(hideTimer.current);
   }, [isPhoto, showControls]);
+
+  useEffect(() => {
+    if (!showInfo || !focusMapRequested) return;
+    const frame = requestAnimationFrame(() => {
+      mapRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setFocusMapRequested(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showInfo, focusMapRequested]);
 
   const goPrev = useCallback(() => { if (hasPrev) setIdx((i) => i - 1); }, [hasPrev]);
   const goNext = useCallback(() => { if (hasNext) setIdx((i) => i + 1); }, [hasNext]);
@@ -797,14 +889,16 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             </Link>
             {/* Map */}
             {file.gpsLatitude != null && (
-              <a
-                href={`https://www.google.com/maps?q=${file.gpsLatitude},${file.gpsLongitude}`}
-                target="_blank" rel="noopener noreferrer"
+              <button
+                onClick={() => {
+                  setShowInfo(true);
+                  setFocusMapRequested(true);
+                }}
                 title="Show on map"
                 className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
               >
                 <MapPin className="w-4 h-4" />
-              </a>
+              </button>
             )}
             {/* Download */}
             <a
@@ -915,7 +1009,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <InfoPanel file={file} />
+              <InfoPanel file={file} mapRef={mapRef} />
             </div>
           )}
         </div>
