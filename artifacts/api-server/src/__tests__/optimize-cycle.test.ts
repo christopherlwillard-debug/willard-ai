@@ -135,7 +135,7 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
       status: string;
       resultJson: {
         stagingDir: string;
-        files: Array<{ filePath: string; stagedPath?: string; status: string; verification?: { passed: boolean; checks: unknown[] } }>;
+        files: Array<{ filePath: string; stagedPath?: string; status: string; error?: string; verification?: { passed: boolean; checks: unknown[] } }>;
       };
     };
     assert.equal(jobBeforeAction.status, "awaiting_action");

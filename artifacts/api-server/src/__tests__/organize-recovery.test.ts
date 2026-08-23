@@ -131,7 +131,7 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
     const persistedMoves: FileMoveRecord[] = [];
     for (let i = 0; i < 2; i++) {
       const staged = path.join(stagedDir, path.basename(sourceFiles[i]!));
-      writeFile(staged, fs.readFileSync(sourceFiles[i]!));
+      writeFile(staged, fs.readFileSync(sourceFiles[i]!, "utf8"));
       const record = await verifiedMove(
         staged,
         path.join(destination, path.basename(sourceFiles[i]!)),
