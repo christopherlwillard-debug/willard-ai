@@ -1,5 +1,5 @@
 import pino from "pino";
-import { nasLogStream } from "./nas-storage";
+import { nasLogStream } from "./nas-storage.ts";
 
 const isProduction = process.env.NODE_ENV === "production";
 

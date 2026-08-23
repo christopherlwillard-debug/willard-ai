@@ -2,8 +2,8 @@ import { db } from "@workspace/db";
 import { collectionsTable, collectionItemsTable, mediaFilesTable } from "@workspace/db";
 import { and, eq, sql, inArray, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
-import { logger } from "./logger";
-import { backfillPlaceNames, getCachedPlaceNames, placeGridCoordinate } from "./geocode";
+import { logger } from "./logger.ts";
+import { backfillPlaceNames, getCachedPlaceNames, placeGridCoordinate } from "./geocode.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Smart folder rules — evaluated at query time, never materialized.

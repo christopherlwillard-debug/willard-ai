@@ -1,5 +1,5 @@
 import { pool } from "@workspace/db";
-import { logger } from "./logger";
+import { logger } from "./logger.ts";
 
 /**
  * Reverse geocoding for GPS-tagged media.

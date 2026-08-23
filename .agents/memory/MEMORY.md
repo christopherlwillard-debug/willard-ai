@@ -20,3 +20,4 @@
 - [Thumbnail cursor bug + monitor cancel rule](thumbnail-cursor-bug.md) — cursor must only resume from restart-interrupted FAILED jobs; monitor must cancel (not pause) thumbnail jobs when NAS goes offline
 - [Canonical duplicate fingerprints](full-scan-fingerprints.md) — FULL scans must fingerprint first-seen files or clean-library duplicate discovery stays empty
 - [Node 24 DB test imports](node24-db-test-imports.md) — strip-types tests need explicit .ts imports in the shared DB package and matching TS compiler support
+- [Node 24 local test imports](node24-local-test-imports.md) — directly run strip-types tests need explicit .ts suffixes through every imported local module
