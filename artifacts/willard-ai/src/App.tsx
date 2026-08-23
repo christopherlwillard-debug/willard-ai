@@ -31,6 +31,7 @@ import Settings from "@/pages/settings";
 import LoginPage from "@/pages/login";
 import NotFound from "@/pages/not-found";
 import Diagnostics from "@/pages/diagnostics";
+import Health from "@/pages/health";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -77,6 +78,7 @@ function ProtectedRoutes() {
         <Route path="/organize" component={Organize} />
         <Route path="/optimize" component={Optimize} />
         <Route path="/cleanup" component={Cleanup} />
+        <Route path="/health" component={Health} />
         <Route path="/search" component={Search} />
         <Route path="/chat" component={Chat} />
         <Route path="/settings" component={Settings} />

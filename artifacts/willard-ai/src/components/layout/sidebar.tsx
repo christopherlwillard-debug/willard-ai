@@ -61,6 +61,7 @@ const navigation = [
   { name: "Operations", href: "/organize", icon: Boxes },
   { name: "Optimize", href: "/optimize", icon: Zap },
   { name: "Cleanup", href: "/cleanup", icon: Trash2 },
+  { name: "Health Center", href: "/health", icon: ShieldCheck },
   { name: "Search", href: "/search", icon: Search },
   { name: "AI Chat", href: "/chat", icon: MessageSquare },
   { name: "Settings", href: "/settings", icon: Settings },

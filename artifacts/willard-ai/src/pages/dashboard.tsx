@@ -372,7 +372,7 @@ export default function Dashboard() {
     { label: "Find Duplicates", sub: "Locate duplicate files", icon: Copy, href: "/cleanup" },
     { label: "Optimize Library", sub: "Free up space", icon: Maximize2, href: "/optimize" },
     { label: "Open Library", sub: "Browse all media", icon: FolderOpen, href: "/library" },
-    { label: "Health Center", sub: "Check library health", icon: HeartPulse, href: "/cleanup" },
+    { label: "Health Center", sub: "Check library health", icon: HeartPulse, href: "/health" },
   ];
 
   const chartData = data.typeBreakdown
