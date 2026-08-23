@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, index, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, index, uniqueIndex, jsonb, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { mediaFilesTable } from "./media_files.ts";
@@ -39,6 +39,17 @@ export const collectionItemsTable = pgTable("collection_items", {
 }, (t) => [
   uniqueIndex("collection_items_unique").on(t.collectionId, t.mediaFileId),
   index("collection_items_file_idx").on(t.mediaFileId),
+]);
+
+// One reverse-geocoded name per rounded GPS grid cell. Keeping unresolved cells
+// in this cache prevents repeated requests when a location has no address.
+export const geoPlaceCacheTable = pgTable("geo_place_cache", {
+  lat10:      integer("lat10").notNull(),
+  lon10:      integer("lon10").notNull(),
+  name:       text("name").notNull(),
+  resolvedAt: timestamp("resolved_at").notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.lat10, t.lon10], name: "geo_place_cache_pkey" }),
 ]);
 
 export const insertCollectionSchema = createInsertSchema(collectionsTable).omit({ id: true, createdAt: true, updatedAt: true });

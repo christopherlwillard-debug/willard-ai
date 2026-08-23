@@ -21,6 +21,11 @@ const UNRESOLVED_RETRY_INTERVAL = "30 days";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Return the integer key used for a coordinate's ~11 km place grid cell. */
+export function placeGridCoordinate(value: number): number {
+  return Math.round(value * 10);
+}
+
 /** Resolve one grid cell to "Locality, Country" via Nominatim. Throws on network/HTTP errors. */
 export async function reverseGeocodeCell(lat10: number, lon10: number): Promise<string | null> {
   const lat = lat10 / 10;

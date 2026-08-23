@@ -3,7 +3,7 @@ import { collectionsTable, collectionItemsTable, mediaFilesTable } from "@worksp
 import { and, eq, sql, inArray, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { logger } from "./logger";
-import { backfillPlaceNames, getCachedPlaceNames } from "./geocode";
+import { backfillPlaceNames, getCachedPlaceNames, placeGridCoordinate } from "./geocode";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Smart folder rules — evaluated at query time, never materialized.
@@ -168,8 +168,8 @@ async function computeAutoGroups(nasPath: string): Promise<AutoGroup[]> {
     ));
   const cellNames = await getCachedPlaceNames().catch(() => new Map<string, string>());
   for (const row of placeRows) {
-    const lat10 = Math.round((row.lat as number) * 10);
-    const lon10 = Math.round((row.lon as number) * 10);
+    const lat10 = placeGridCoordinate(row.lat as number);
+    const lon10 = placeGridCoordinate(row.lon as number);
     const lat = lat10 / 10;
     const lon = lon10 / 10;
     const ns = lat >= 0 ? "N" : "S";
