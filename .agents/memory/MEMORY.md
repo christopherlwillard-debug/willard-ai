@@ -24,3 +24,4 @@
 - [Recycled scan state](recycled-scan-state.md) — preserve RECYCLED across rescans so cleanup actions remain excluded and distinguishable from filesystem deletions
 - [Cleanup queue retry behavior](cleanup-queue-retry.md) — clear staged decisions only when at least one file is actually recycled
 - [Canonical catalog scope](canonical-catalog-scope.md) — media_files plus active nas_path is authoritative; legacy reconciliation is insert-only and reports conflicts
+- [Place grid rounding parity](place-grid-rounding.md) — normalize JavaScript negative zero so exact southern/western half-cell keys match PostgreSQL

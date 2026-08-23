@@ -21,12 +21,14 @@ import {
   rebuildAutoCollections,
   validateSmartRule,
 } from "../lib/collections-engine.ts";
+import { placeGridCoordinate } from "../lib/geocode.ts";
 
 const nasPath = `/tmp/willard-collections-engine-${process.pid}-${Date.now()}`;
 const placeCells = [
   { lat10: 891, lon10: 1791, name: "Test City, North Pole" },
   { lat10: 881, lon10: 1781, name: "Other City, North Pole" },
 ];
+const southernPlaceCell = { lat10: -469, lon10: 0, name: "Ushuaia, Argentina" };
 let mediaIds: number[] = [];
 
 async function addMedia(values: Partial<typeof mediaFilesTable.$inferInsert> = {}) {
@@ -80,7 +82,62 @@ after(async () => {
       eq(geoPlaceCacheTable.lon10, placeCells[1]!.lon10),
     ),
   );
+  await db.delete(geoPlaceCacheTable).where(
+    and(
+      eq(geoPlaceCacheTable.lat10, southernPlaceCell.lat10),
+      eq(geoPlaceCacheTable.lon10, southernPlaceCell.lon10),
+    ),
+  );
   await pool.end();
+});
+
+describe("place grid bucketing", { concurrency: false }, () => {
+  test("matches the SQL backfill formula across hemispheres and half-values", async () => {
+    const coordinates = [-46.95, -0.05, 46.95, 0.05];
+    for (const coordinate of coordinates) {
+      const jsCell = placeGridCoordinate(coordinate);
+      const { rows } = await pool.query(
+        "SELECT floor($1::numeric * 10 + 0.5)::int AS cell",
+        [coordinate],
+      );
+      assert.equal(Number(rows[0]!.cell), jsCell, `bucket mismatch for ${coordinate}`);
+    }
+  });
+
+  test("backfill names a southern-hemisphere place collection", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      address: { city: "Ushuaia", country: "Argentina" },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+
+    try {
+      await Promise.all(
+        [0, 1, 2].map((i) => addMedia({
+          relativePath: `southern/${i}.jpg`,
+          name: `southern-${i}.jpg`,
+          extension: "jpg",
+          mimeType: "image/jpeg",
+          mediaType: "photo",
+          gpsLatitude: -46.95,
+          gpsLongitude: -0.05,
+        })),
+      );
+
+      const result = await rebuildAutoCollections(nasPath);
+      assert.equal(result.collections, 1);
+      const [album] = await autoCollections();
+      assert.ok(album);
+      assert.equal(album.name, southernPlaceCell.name);
+      assert.equal(album.autoKey, "place:-46.9,0");
+      assert.equal(
+        (await db.select().from(collectionItemsTable)
+          .where(eq(collectionItemsTable.collectionId, album.id))).length,
+        3,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("auto-album rebuilds", { concurrency: false }, () => {

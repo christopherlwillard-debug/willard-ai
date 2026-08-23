@@ -23,7 +23,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Return the integer key used for a coordinate's ~11 km place grid cell. */
 export function placeGridCoordinate(value: number): number {
-  return Math.round(value * 10);
+  // Math.round(-0.5) is -0, while PostgreSQL's integer cast produces 0.
+  // Normalize it so JS and SQL use the same integer representation at exact
+  // half-cell boundaries in the western/southern hemispheres.
+  const cell = Math.round(value * 10);
+  return cell === 0 ? 0 : cell;
 }
 
 /** Resolve one grid cell to "Locality, Country" via Nominatim. Throws on network/HTTP errors. */
