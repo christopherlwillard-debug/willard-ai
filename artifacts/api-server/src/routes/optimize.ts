@@ -84,22 +84,14 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
     reason: "Archive profile is lossless-only. JPEG re-encoding always alters pixel values, even at quality 95. Switch to Balanced to re-compress at quality 92 with imperceptible quality change.",
   };
 
-  const pngRule: FormatRule = isMaximum ? {
+  const pngRule: FormatRule = {
     status: "convert", category: "image",
-    method: "Convert to WebP",
-    targetFormat: "WebP", targetExt: "webp",
-    qualityLoss: "minimal", qualityStars: 4, qualityLabel: "Minimal visible difference",
-    compatibilityLabel: "Good",
-    estimatedSavingsRatio: 0.30,
-    reason: "WebP provides 25–35% better compression than PNG with near-identical visual quality",
-  } : {
-    status: "convert", category: "image",
-    method: "Lossless re-compress",
-    targetFormat: "PNG Optimized", targetExt: "png",
-    qualityLoss: "none", qualityStars: 5, qualityLabel: "Visually identical",
+    method: "Convert to JPEG (quality 98)",
+    targetFormat: "JPEG", targetExt: "jpg",
+    qualityLoss: "minimal", qualityStars: 5, qualityLabel: "Highest practical quality",
     compatibilityLabel: "Excellent",
-    estimatedSavingsRatio: 0.15,
-    reason: "Re-compressing PNG with adaptive filtering and maximum DEFLATE compression saves 10–20% with zero quality loss",
+    estimatedSavingsRatio: 0.35,
+    reason: "Opaque PNG pixels can be stored as high-quality JPEG for broad compatibility and lower storage use. Transparent or HDR PNGs are protected separately.",
   };
 
   return {
@@ -135,7 +127,7 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
     // ── Already-optimal image formats ─────────────────────────────────────────
     webp: { status: "optimal", category: "image", reason: "WebP — modern efficient format with excellent quality/size ratio, no action needed" },
     avif: { status: "optimal", category: "image", reason: "AVIF — best-in-class compression, no action needed" },
-    heic: { status: "optimal", category: "image", reason: "HEIC — modern Apple format with excellent quality/size ratio. Already highly compressed; re-encoding would waste space." },
+     heic: { status: "convert", category: "image", method: "Convert to JPEG (quality 98)", targetFormat: "JPEG", targetExt: "jpg", qualityLoss: "minimal", qualityStars: 5, qualityLabel: "Highest practical quality", compatibilityLabel: "Excellent", estimatedSavingsRatio: 0.12, reason: "HEIC converted to a high-quality JPEG for maximum compatibility." },
     heif: { status: "optimal", category: "image", reason: "HEIF — modern format with excellent quality/size ratio, no action needed" },
     jxl:  { status: "optimal", category: "image", reason: "JPEG XL — next-generation format, no action needed" },
 
@@ -301,7 +293,7 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
 
 // ── Optimize scan cache ────────────────────────────────────────────────────────
 
-const CACHE_VERSION    = 5; // bump when scan result shape changes
+const CACHE_VERSION    = 6; // bump when scan result shape or safety classification changes
 const CACHE_TTL_MS     = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_FILENAME   = "optimize-scan.json";
 

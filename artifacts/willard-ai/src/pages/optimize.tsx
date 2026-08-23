@@ -44,6 +44,7 @@ interface FormatGroup {
   totalBytes:            number;
   category:              MediaCategory;
   status:                FormatStatus;
+  classification?:       "safe" | "attention" | "skip";
   method:                string | null;
   targetFormat:          string | null;
   targetExt:             string | null;
@@ -299,11 +300,12 @@ function RunConversionsDialog({
       setFileResults(prev => [data, ...prev].slice(0, 200));
       setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
     });
-    es.addEventListener("summary", (e) => {
+     es.addEventListener("summary", (e) => {
       const data = JSON.parse(e.data) as ConversionSummary;
       setSummary(data);
       if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
-      setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
+       setPhase("done");
+       if (existingJobId !== undefined && data.succeeded > 0) void handleFinalize(existingJobId);
       es.close();
       esRef.current = null;
     });
@@ -320,6 +322,14 @@ function RunConversionsDialog({
     return () => { es.close(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, existingJobId]);
+
+  // New runs are intentionally one click: this dialog is progress/results only.
+  useEffect(() => {
+    if (!open || isRetry || phase !== "config") return;
+    setPhase("running");
+    void startConversion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isRetry]);
 
   function handleClose() {
     if (phase === "running") return; // prevent closing while running
@@ -371,7 +381,8 @@ function RunConversionsDialog({
         const data = JSON.parse(e.data) as ConversionSummary & { jobId?: number };
         setSummary(data);
         if (data.jobId) setFinalizeJobId(data.jobId);
-        setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
+        setPhase("done");
+        if (data.succeeded > 0) void handleFinalize(job.id);
         es.close();
         esRef.current = null;
       });
@@ -440,9 +451,7 @@ function RunConversionsDialog({
               ? "Originals are kept untouched during conversion. Converted files are staged for your review."
               : phase === "running"
               ? "Conversion in progress — do not close this window."
-              : isAwaitingAction
-              ? "Conversions staged. Your originals are untouched — choose what to do with them."
-              : "Conversion complete. Review the results below."}
+              : "Conversion complete. Originals were safely recycled after verification."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1008,8 +1017,10 @@ export default function Optimize() {
     },
     onSuccess: (data) => {
       setScanResult(data);
+      // Safe candidates are selected by the analyzer; users never need to
+      // approve routine conversions one format at a time.
+      setApprovedExts(new Set(data.groups.filter(g => g.status === "convert").map(g => g.extension)));
       if (!data.fromCache) {
-        setApprovedExts(new Set());
         setSkippedExts(new Set());
         setAiSummary(null);
         fetchAiSummary(data);
@@ -1179,9 +1190,13 @@ export default function Optimize() {
   // ── Derived stats ─────────────────────────────────────────────────────────
   const convertibleGroups = scanResult?.groups.filter(g => g.status === "convert") ?? [];
   const protectedGroups   = scanResult?.groups.filter(g => g.status === "protected") ?? [];
-  const approvedSavings   = scanResult?.groups
-    .filter(g => approvedExts.has(g.extension))
-    .reduce((s, g) => s + g.estimatedSavingsBytes, 0) ?? 0;
+  const safeFiles = convertibleGroups.reduce((sum, group) => sum + group.fileCount, 0);
+  const attentionGroups = protectedGroups;
+  const skippedFiles = (scanResult?.groups.filter(g => g.status === "optimal" || g.status === "skip") ?? [])
+    .reduce((sum, group) => sum + group.fileCount, 0);
+  const optimizedFiles = scanResult?.groups.filter(g => g.status === "optimal")
+    .reduce((sum, group) => sum + group.fileCount, 0) ?? 0;
+  const estimatedMinutes = Math.max(1, Math.ceil(safeFiles * 8 / 60));
 
   return (
     <div className="space-y-6">
@@ -1200,25 +1215,14 @@ export default function Optimize() {
             </Button>
           )}
           {approvedExts.size > 0 && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="font-mono gap-2"
-                onClick={() => setConfirmOpen(true)}
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                Review ({approvedExts.size})
-              </Button>
               <Button
                 size="sm"
                 className="font-mono gap-2 bg-emerald-600 hover:bg-emerald-700"
                 onClick={() => setRunOpen(true)}
               >
                 <Play className="w-4 h-4" />
-                Run Conversions ({approvedExts.size})
+                Optimize Library ({approvedExts.size})
               </Button>
-            </>
           )}
           <div className="flex flex-col items-end gap-0.5">
             {scanResult?.fromCache && !scanMutation.isPending && (
@@ -1313,57 +1317,50 @@ export default function Optimize() {
           </Card>
 
           {/* Stat row */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+             <StatCard label="Already Optimized" value={optimizedFiles.toLocaleString()} sub="No action needed" icon={<CheckCircle2 className="w-5 h-5 text-emerald-400" />} />
             <StatCard
-              label="Files Scanned"
-              value={scanResult.totalFiles.toLocaleString()}
-              sub={formatBytes(scanResult.totalBytes) + " total"}
-              icon={<ScanLine className="w-5 h-5" />}
-            />
-            <StatCard
-              label="Potential Savings"
-              value={formatBytes(scanResult.totalSavingsBytes)}
-              sub={`${convertibleGroups.length} format${convertibleGroups.length !== 1 ? "s" : ""} with savings`}
+               label="Can Be Optimized"
+               value={safeFiles.toLocaleString()}
+               sub="Safe conversions selected"
               icon={<TrendingDown className="w-5 h-5 text-emerald-400" />}
             />
             <StatCard
-              label="Protected Formats"
-              value={protectedGroups.length.toString()}
-              sub="RAW / professional — never convert"
-              icon={<Shield className="w-5 h-5 text-red-400" />}
+               label="Videos to Optimize"
+               value={convertibleGroups.filter(g => g.category === "video").reduce((s, g) => s + g.fileCount, 0).toLocaleString()}
+               sub="Safe video conversions"
+               icon={<Play className="w-5 h-5 text-blue-400" />}
             />
             <StatCard
-              label="Approved Savings"
-              value={approvedExts.size > 0 ? formatBytes(approvedSavings) : "—"}
-              sub={approvedExts.size > 0 ? `${approvedExts.size} format${approvedExts.size !== 1 ? "s" : ""} approved` : "Approve formats below"}
-              icon={<CheckCircle2 className="w-5 h-5 text-blue-400" />}
+               label="Already Skipped"
+               value={skippedFiles.toLocaleString()}
+               sub={`${attentionGroups.length} attention group${attentionGroups.length === 1 ? "" : "s"} protected`}
+               icon={<SkipForward className="w-5 h-5 text-muted-foreground" />}
             />
+             <StatCard label="Estimated Savings" value={formatBytes(scanResult.totalSavingsBytes)} sub="Based on analyzed formats" icon={<TrendingDown className="w-5 h-5 text-emerald-400" />} />
+             <StatCard label="Estimated Time" value={`${estimatedMinutes} min`} sub="Varies by NAS speed and file size" icon={<Clock className="w-5 h-5 text-blue-400" />} />
           </div>
+
+           <Card className="border-amber-500/30 bg-amber-500/5">
+             <CardHeader className="pb-3"><CardTitle className="text-base font-mono flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400" /> Attention Needed</CardTitle></CardHeader>
+             <CardContent>
+               {attentionGroups.length === 0 ? <p className="text-sm text-muted-foreground font-mono">No edge-case files require a decision.</p> :
+                 <div className="grid gap-2 sm:grid-cols-2">{attentionGroups.map(group => <div key={group.extension} className="rounded border border-amber-500/20 p-3"><div className="flex justify-between gap-3"><span className="font-mono text-sm font-semibold">.{group.extension.toUpperCase()}</span><span className="font-mono text-amber-400">{group.fileCount.toLocaleString()} files</span></div><p className="text-xs text-muted-foreground mt-1">{group.reason}</p></div>)}</div>}
+             </CardContent>
+           </Card>
 
           {/* Batch controls */}
           {convertibleGroups.length > 0 && (
             <div className="flex gap-2 items-center flex-wrap">
               <span className="text-xs font-mono text-muted-foreground">Batch:</span>
-              <Button size="sm" variant="outline" className="font-mono text-xs h-7 gap-1" onClick={approveAll}>
-                <CheckCircle2 className="w-3 h-3" /> Approve All Convertible
-              </Button>
-              {approvedExts.size > 0 && (
-                <>
-                  <Button size="sm" variant="outline" className="font-mono text-xs h-7 gap-1" onClick={() => setConfirmOpen(true)}>
-                    <CheckCircle2 className="w-3 h-3" /> Review ({approvedExts.size})
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="font-mono text-xs h-7 gap-1 bg-emerald-600 hover:bg-emerald-700"
-                    onClick={() => setRunOpen(true)}
-                  >
-                    <Play className="w-3 h-3" /> Run Conversions
-                  </Button>
-                </>
-              )}
-              <Button size="sm" variant="ghost" className="font-mono text-xs h-7 gap-1" onClick={clearSelections}>
-                <RotateCcw className="w-3 h-3" /> Clear
-              </Button>
+               <Button size="sm" className="font-mono text-xs h-7 gap-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => setRunOpen(true)} disabled={approvedExts.size === 0}>
+                 <Play className="w-3 h-3" /> Optimize Library ({approvedExts.size})
+               </Button>
+               {approvedExts.size > 0 && (
+                 <>
+                   <span className="text-xs font-mono text-emerald-400">Safe conversions selected automatically</span>
+                 </>
+               )}
             </div>
           )}
 
@@ -1453,26 +1450,9 @@ export default function Optimize() {
                           </TableCell>
                           <TableCell className="text-center">
                             {group.status === "convert" ? (
-                              <div className="flex gap-1.5 justify-center">
-                                <Button
-                                  size="sm"
-                                  variant={isApproved ? "default" : "outline"}
-                                  className="h-6 px-2 text-[10px] font-mono gap-0.5"
-                                  onClick={() => toggleApprove(group.extension)}
-                                >
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  {isApproved ? "Approved" : "Approve"}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-6 px-2 text-[10px] font-mono text-muted-foreground gap-0.5"
-                                  onClick={() => toggleSkip(group.extension)}
-                                >
-                                  <SkipForward className="w-3 h-3" />
-                                  Skip
-                                </Button>
-                              </div>
+                              <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1 justify-center">
+                                <CheckCircle2 className="w-3 h-3" /> Safe — included
+                              </span>
                             ) : group.status === "protected" ? (
                               <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1 justify-center">
                                 <Shield className="w-3 h-3 text-red-400" /> Protected
@@ -1566,15 +1546,6 @@ export default function Optimize() {
           </p>
         </>
       )}
-
-      {/* Confirm Selections dialog */}
-      <ConfirmDialog
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        groups={scanResult?.groups ?? []}
-        approvedExts={approvedExts}
-        onRunConversions={() => setRunOpen(true)}
-      />
 
       {/* Run Conversions dialog */}
       <RunConversionsDialog
