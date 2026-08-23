@@ -1,9 +1,9 @@
 import * as fs from "fs";
 import { db, appSettingsTable } from "@workspace/db";
-import { checkNasReachableAsync } from "./nas-storage";
-import { getActiveJobId, getActiveJobProfile, startJob, waitForUiConnected } from "./library-engine";
-import { recordActivity } from "./library-activity";
-import { logger } from "./logger";
+import { checkNasReachableAsync } from "./nas-storage.ts";
+import { getActiveJobId, getActiveJobProfile, startJob, waitForUiConnected } from "./library-engine/index.ts";
+import { recordActivity } from "./library-activity.ts";
+import { logger } from "./logger.ts";
 
 /**
  * Continuous Library Watcher — the live "brains" that keeps the index in sync
@@ -89,6 +89,7 @@ let debounceTimer: NodeJS.Timeout | null = null;
 export interface WatcherSnapshot {
   state:             WatcherPublicState;
   mechanism:         WatchMechanism;
+  watchedPath:       string | null;
   lastChangeAt:      string | null;
   lastScanTriggerAt: string | null;
   pendingChanges:    number;
@@ -105,6 +106,7 @@ export function getWatcherSnapshot(): WatcherSnapshot {
   return {
     state: publicState,
     mechanism: state.mechanism,
+    watchedPath: state.watchedPath,
     lastChangeAt: state.lastChangeAt?.toISOString() ?? null,
     lastScanTriggerAt: state.lastScanTriggerAt?.toISOString() ?? null,
     pendingChanges: state.pendingChanges,
