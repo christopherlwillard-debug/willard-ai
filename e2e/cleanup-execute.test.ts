@@ -280,7 +280,36 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(body.recoveredBytes >= 0, "recoveredBytes should be non-negative");
   });
 
-  // ── Test 2: file is physically in .Trash with collision-safe name ─────────
+  // ── Test 2: a rescan must not re-index the recycled file ───────────────────
+  test("rescan does not bring the recycled file back into duplicate groups", async () => {
+    const scanRes = await apiPost("/library/scan", { profile: "FULL" });
+    const scanText = await scanRes.text();
+    assert.ok(scanRes.status === 202 || scanRes.status === 200, scanText);
+    const scanJob = JSON.parse(scanText) as { jobId?: number };
+    assert.ok(scanJob.jobId, "Rescan should return a job id");
+
+    const finished = await pollUntil(
+      async () => (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as { status: string },
+      (job) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(job.status),
+      { timeoutMs: 90_000, intervalMs: 2_000, description: "rescan to finish" },
+    );
+    assert.ok(!["FAILED", "CANCELLED"].includes(finished.status), `Rescan failed: ${finished.status}`);
+
+    const dupRes = await apiGet("/cleanup/duplicates?limit=100");
+    assert.strictEqual(dupRes.status, 200);
+    const dupData = (await dupRes.json()) as {
+      groups: Array<{ files: Array<{ path: string }> }>;
+    };
+    const recycledPath = deletedFilePath.replace(/\\/g, "/");
+    assert.ok(
+      !dupData.groups.some((group) =>
+        group.files.some((file) => file.path?.replace(/\\/g, "/") === recycledPath),
+      ),
+      `Recycled path was re-indexed into duplicate groups: ${recycledPath}`,
+    );
+  });
+
+  // ── Test 3: file is physically in .Trash with collision-safe name ─────────
 
   test("file is moved to .Trash with fileId-prefixed basename (no collision)", () => {
     const trashRoot = path.join(tempNasDir, "WillardAI", ".Trash");
@@ -307,7 +336,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 3: history records the session ───────────────────────────────────
+  // ── Test 4: history records the session ───────────────────────────────────
 
   test("GET /cleanup/history returns the session from the execute call", async () => {
     const res = await apiGet("/cleanup/history");

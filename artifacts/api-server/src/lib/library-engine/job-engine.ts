@@ -1865,6 +1865,7 @@ async function runScanJob(
           eq(mediaFilesTable.nasPath, state.nasPath),
           inArray(mediaFilesTable.relativePath, deletedPaths.slice(i, i + 500)),
           ne(mediaFilesTable.lastScanAction, "DELETED" as ScanAction),
+          ne(mediaFilesTable.lastScanAction, "RECYCLED" as ScanAction),
         ))
         .returning({ id: mediaFilesTable.id });
       state.counters.deleted += result.length;

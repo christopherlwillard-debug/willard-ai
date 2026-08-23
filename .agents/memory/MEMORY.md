@@ -21,3 +21,4 @@
 - [Canonical duplicate fingerprints](full-scan-fingerprints.md) — FULL scans must fingerprint first-seen files or clean-library duplicate discovery stays empty
 - [Node 24 DB test imports](node24-db-test-imports.md) — strip-types tests need explicit .ts imports in the shared DB package and matching TS compiler support
 - [Node 24 local test imports](node24-local-test-imports.md) — directly run strip-types tests need explicit .ts suffixes through every imported local module
+- [Recycled scan state](recycled-scan-state.md) — preserve RECYCLED across rescans so cleanup actions remain excluded and distinguishable from filesystem deletions
