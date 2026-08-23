@@ -436,7 +436,7 @@ export default function SearchPage() {
         {totalCount > 0 && (
           <Badge variant="outline" className="text-xs" data-testid="badge-ai-coverage">
             {pending > 0 ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-            {analyzedCount}/{totalCount} files AI-analyzed
+            {analyzedCount}/{totalCount} files searchable by AI
           </Badge>
         )}
       </div>

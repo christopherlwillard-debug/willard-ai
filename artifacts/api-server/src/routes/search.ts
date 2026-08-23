@@ -4,7 +4,7 @@ import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
   buildNoResultSuggestions, emptyIntent, type SearchIntent,
 } from "../lib/ai-search";
-import { getEnrichmentStatus } from "../lib/ai-enrichment";
+import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -200,9 +200,9 @@ router.get("/search/ai-status", async (_req, res) => {
       `SELECT count(*) FILTER (WHERE a.id IS NOT NULL AND a.analyzed_at IS NOT NULL) AS analyzed,
               count(*) AS total
          FROM media_files f
-         LEFT JOIN media_ai a ON a.media_file_id = f.id
+         LEFT JOIN media_ai a ON a.media_file_id = f.id AND a.ai_version >= $2
         WHERE f.nas_path = $1 AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`,
-      [nasPath],
+      [nasPath, AI_VERSION],
     );
     analyzedCount = Number(rows[0].analyzed);
     totalCount = Number(rows[0].total);

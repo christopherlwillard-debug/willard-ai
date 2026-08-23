@@ -4,6 +4,7 @@ import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage";
 import { logger } from "./logger";
+import { extractDocumentText as extractOfficeDocumentText } from "./document-text";
 
 /**
  * AI Enrichment Engine — builds the "understanding" layer on top of the
@@ -23,7 +24,7 @@ import { logger } from "./logger";
 
 const TICK_MS = 20_000;
 const BATCH_PER_TICK = 3;
-const AI_VERSION = 2; // v2: adds people descriptors
+export const AI_VERSION = 3; // v3: indexes Office document text and image OCR
 const CHAT_MODEL = "gpt-5.4";
 
 const MAX_DOC_TEXT = 6_000;
@@ -301,7 +302,7 @@ async function enrichOne(file: PendingFile): Promise<void> {
     } else if (file.mediaType === "document") {
       const text = file.fullPath.toLowerCase().endsWith(".pdf")
         ? await extractPdfText(file.fullPath)
-        : readPlainText(file.fullPath);
+        : await extractOfficeDocumentText(file.fullPath);
       analysis = await analyzeDocument(file.name, text);
     } else {
       // No visual/text content available (yet) — index name & metadata only.
@@ -343,16 +344,6 @@ async function enrichOne(file: PendingFile): Promise<void> {
        ON CONFLICT (media_file_id) DO UPDATE SET error = excluded.error`,
       [file.id, String(err instanceof Error ? err.message : err).slice(0, 500)],
     ).catch(() => {});
-  }
-}
-
-function readPlainText(fullPath: string): string | null {
-  try {
-    const ext = fullPath.toLowerCase();
-    if (!/\.(txt|md|csv|log|json)$/.test(ext)) return null;
-    return fs.readFileSync(fullPath, "utf8").slice(0, MAX_DOC_TEXT);
-  } catch {
-    return null;
   }
 }
 
