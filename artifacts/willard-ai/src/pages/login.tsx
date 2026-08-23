@@ -123,11 +123,16 @@ export default function LoginPage() {
   const recoverMutation = useRecoverAuth({
     mutation: {
       onSuccess: () => invalidate(),
-      onError: (err: any) => toast({
-        title: "Recovery failed",
-        description: err?.response?.data?.error ?? "Invalid recovery key.",
-        variant: "destructive"
-      }),
+      onError: (err: any) => {
+        const rateLimited = err?.response?.status === 429;
+        toast({
+          title: rateLimited ? "Too many recovery attempts" : "Recovery failed",
+          description: rateLimited
+            ? "Please wait 15 minutes before trying again."
+            : err?.response?.data?.error ?? "Invalid recovery key.",
+          variant: "destructive"
+        });
+      },
     },
   });
 
