@@ -23,6 +23,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import {
+  folderBarWidth,
+  getStorageChartState,
+  topFolders,
+  typeBarWidth,
+} from "@/lib/storage-chart";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`;
@@ -93,6 +99,14 @@ export default function DashboardScreen() {
   const storageQuery = useGetStorageStats();
   const topFoldersQuery = useGetTopFolders();
   const startScanMutation = useStartScan();
+  const typeChartState = getStorageChartState(
+    storageQuery,
+    (data) => (data?.typeBreakdown.length ?? 0) > 0,
+  );
+  const folderChartState = getStorageChartState(
+    topFoldersQuery,
+    (data) => (data?.length ?? 0) > 0,
+  );
 
   const dashboard = dashboardQuery.data;
   const scanStatus = scanStatusQuery.data;
@@ -221,11 +235,15 @@ export default function DashboardScreen() {
                <Text style={[styles.chartLabel, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
                  BY FILE TYPE
                </Text>
-               {storageQuery.isLoading ? (
+                {typeChartState === "loading" ? (
                  <View style={styles.chartLoading}>
                    <ActivityIndicator color={colors.primary} />
                  </View>
-               ) : (storageQuery.data?.typeBreakdown.length ?? 0) === 0 ? (
+                ) : typeChartState === "unavailable" ? (
+                  <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                    Storage data is temporarily unavailable
+                  </Text>
+                ) : typeChartState === "empty" ? (
                  <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
                    No file type data yet
                  </Text>
@@ -253,7 +271,7 @@ export default function DashboardScreen() {
                                styles.barFill,
                                {
                                  backgroundColor: breakdownColors[index % breakdownColors.length],
-                                 width: `${Math.max(type.percentage, type.sizeBytes > 0 ? 1 : 0)}%`,
+                                  width: `${typeBarWidth(type.percentage, type.sizeBytes)}%`,
                                },
                              ]}
                            />
@@ -273,17 +291,21 @@ export default function DashboardScreen() {
                    Top 10
                  </Text>
                </View>
-               {topFoldersQuery.isLoading ? (
+                {folderChartState === "loading" ? (
                  <View style={styles.chartLoading}>
                    <ActivityIndicator color={colors.primary} />
                  </View>
-               ) : (topFoldersQuery.data?.length ?? 0) === 0 ? (
+                ) : folderChartState === "unavailable" ? (
+                  <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                    Folder data is temporarily unavailable
+                  </Text>
+                ) : folderChartState === "empty" ? (
                  <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
                    No folder data yet
                  </Text>
                ) : (
                  <View style={styles.folderList}>
-                   {topFoldersQuery.data!.slice(0, 10).map((folder, index, folders) => {
+                    {topFolders(topFoldersQuery.data!, 10).map((folder, index, folders) => {
                      const maxSize = folders[0]?.totalSizeBytes || 1;
                      return (
                        <View key={folder.folder} style={styles.folderRow}>
@@ -304,7 +326,7 @@ export default function DashboardScreen() {
                                styles.barFill,
                                {
                                  backgroundColor: index === 0 ? colors.primary : colors.primary + "bb",
-                                 width: `${Math.max((folder.totalSizeBytes / maxSize) * 100, 1)}%`,
+                                  width: `${folderBarWidth(folder.totalSizeBytes, maxSize)}%`,
                                },
                              ]}
                            />
