@@ -210,7 +210,9 @@ export async function recomputeEmbedding(fileId: number): Promise<void> {
             a.user_tags, a.user_description, a.notes
        FROM media_files f
        JOIN media_ai a ON a.media_file_id = f.id
-      WHERE f.id = $1`,
+       WHERE f.id = $1
+         AND f.nas_path = (SELECT nas_path FROM app_settings LIMIT 1)
+         AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
     [fileId],
   );
   const r = rows[0];
@@ -258,8 +260,8 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
        FROM media_files f
        LEFT JOIN media_ai u ON u.media_file_id = f.id
        LEFT JOIN media_ai a ON a.media_file_id = f.id AND a.ai_version >= $2
-      WHERE f.nas_path = $1
-        AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')
+       WHERE f.nas_path = $1
+         AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
         AND a.id IS NULL
       ORDER BY f.id
       LIMIT $3`,
@@ -296,6 +298,9 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
 async function enrichOne(file: PendingFile): Promise<void> {
   let analysis: AiAnalysis;
   try {
+    if (!file.fullPath || !fs.existsSync(file.fullPath) || !fs.statSync(file.fullPath).isFile()) {
+      throw new Error("Source file is missing or outside the active library");
+    }
     if ((file.mediaType === "image" || file.mediaType === "photo" || file.mediaType === "video") &&
         file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
       analysis = await analyzeImage(file.thumbnailPath);

@@ -523,8 +523,8 @@ async function resolveSkippedDirs(
       ));
 
     for (const row of rows) {
-      const fullPath = path.join(nasPath, row.relativePath.replace(/\//g, path.sep));
       try {
+         const fullPath = resolveLibraryPath(nasPath, row.relativePath);
         const stat = await fs.promises.stat(fullPath);
         seenPaths.add(row.relativePath);
 
@@ -1200,6 +1200,12 @@ async function runScanJob(
 
     const processOneFile = async (f: { fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }): Promise<FileResult> => {
       const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
+      let safeFullPath: string;
+      try {
+        safeFullPath = resolveLibraryPath(state.nasPath, relativePath);
+      } catch {
+        return { action: "SKIP", relativePath, name: f.name, skipReason: "Rejected unsafe library path" };
+      }
       state.currentPath = relativePath;
       state.currentFileStartedAt = Date.now();
 
@@ -1231,7 +1237,7 @@ async function runScanJob(
           sdbg('fingerprint_start', { relativePath, context: 'new_file' });
           let _fpNewTimedOut = false;
           try {
-            quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
+            quickFingerprint = await withTimeout(computeQuickFingerprint(safeFullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           } catch (e) {
             const _code = (e as { code?: string }).code;
             if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
@@ -1261,7 +1267,7 @@ async function runScanJob(
 
             // Stage 2: legacy full-hash rows (rows without fingerprints from before v2)
             if (legacySizes.has(f.sizeBytes)) {
-              contentHash = await hashFile(f.fullPath);
+              contentHash = await hashFile(safeFullPath);
               state.counters.hashed++;
               const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
               if (legacyId !== undefined) {
@@ -1309,7 +1315,7 @@ async function runScanJob(
         sdbg('fingerprint_start', { relativePath, context: 'modified_file' });
         let _fpModTimedOut = false;
         try {
-          quickFingerprint = await withTimeout(computeQuickFingerprint(f.fullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
+          quickFingerprint = await withTimeout(computeQuickFingerprint(safeFullPath, f.sizeBytes), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
         } catch (e) {
           const _code = (e as { code?: string }).code;
           if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
@@ -1355,17 +1361,17 @@ async function runScanJob(
 
       const extractAll = async (): Promise<void> => {
         if (mediaType === "photo") {
-          const meta = await extractPhotoMeta(f.fullPath, f.ext);
+          const meta = await extractPhotoMeta(safeFullPath, f.ext);
           ({ width, height, orientation, dateTaken, cameraMake, cameraModel, lens,
              iso, aperture, exposure, focalLength, flash, colorProfile,
              gpsLatitude, gpsLongitude, exifJson } = meta);
           metaError = meta.error;
         } else if (VIDEO_META_EXTS.has(f.ext)) {
-          const meta = extractVideoMeta(f.fullPath);
+          const meta = extractVideoMeta(safeFullPath);
           ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
           metaError = meta.error;
         } else if (f.ext === "pdf") {
-          const meta = await extractPdfMeta(f.fullPath);
+          const meta = await extractPdfMeta(safeFullPath);
           ({ pageCount, pdfAuthor, pdfTitle, pdfSubject, pdfKeywords } = meta);
           metaError = meta.error;
         }
@@ -1397,7 +1403,7 @@ async function runScanJob(
         let _restatTimedOut = false;
         let after: import("fs").Stats | null = null;
         try {
-          after = await withTimeout(fs.promises.stat(f.fullPath), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
+            after = await withTimeout(fs.promises.stat(safeFullPath), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           sdbg('restat_end', { relativePath, elapsedMs: Date.now() - _restatT0, timedOut: false });
         } catch (e) {
           const _code = (e as { code?: string }).code;
@@ -1414,7 +1420,7 @@ async function runScanJob(
           sdbg('fingerprint_start', { relativePath, context: 'conflict_reread' });
           let _rfpResult: string | null = null;
           try {
-            _rfpResult = await withTimeout(computeQuickFingerprint(f.fullPath, currentSize), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
+            _rfpResult = await withTimeout(computeQuickFingerprint(safeFullPath, currentSize), FINGERPRINT_TIMEOUT_MS, () => state.cancelRequested);
           } catch (e) {
             const _code = (e as { code?: string }).code;
             if (_code === 'operation_timeout' || _code === 'operation_cancelled') {
@@ -1546,11 +1552,19 @@ async function runScanJob(
       // already-peeked archives keep their content metadata.
       if (discoveredArchives.length > 0) {
         for (let ai = 0; ai < discoveredArchives.length; ai += 100) {
-          const chunk = discoveredArchives.slice(ai, ai + 100).map(f => ({
-            path: f.fullPath, filename: f.name,
-            sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
-            folder: path.dirname(f.fullPath), category: "General", peekStatus: "pending",
-          }));
+          const chunk = discoveredArchives.slice(ai, ai + 100).flatMap(f => {
+            try {
+              const safePath = resolveWithinRoot(f.fullPath, state.nasPath);
+              return [{
+                path: safePath, filename: f.name,
+                sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
+                folder: path.dirname(safePath), category: "General", peekStatus: "pending",
+              }];
+            } catch {
+              return [];
+            }
+          });
+          if (chunk.length === 0) continue;
           await db.insert(archivesTable).values(chunk).onConflictDoUpdate({
             target: archivesTable.path,
             set: {
@@ -1640,6 +1654,12 @@ async function runScanJob(
             // We already hold this file — complete its processing (drain semantics).
             // Do NOT discard it, even if pause/cancel was set while we were waiting.
             const relativePath = path.relative(state.nasPath, f.fullPath).replace(/\\/g, "/");
+            try {
+              resolveLibraryPath(state.nasPath, relativePath);
+            } catch {
+              recordSkip(state, relativePath, "Rejected unsafe library path");
+              continue;
+            }
             sdbg('worker_file_start', { relativePath, workerCount: activeWorkerCount });
             seenPaths.add(relativePath);
 
@@ -2400,10 +2420,11 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       try {
         const result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality);
         if (!result.error && result.destPath) {
+          const safeThumbnailPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
           await db.update(mediaFilesTable).set({
-            thumbnailPath:        result.destPath,
+            thumbnailPath: safeThumbnailPath,
             thumbnailGeneratedAt: new Date(),
-           }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
+          }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
           state.counters.thumbnails++;
           if (state.counters.thumbnails === 1) {
             logger.info({ jobId, phase: 'thumbnail_first_written', path: file.relativePath },
@@ -2611,9 +2632,15 @@ export function startThumbnailReconciliation(nasPath: string): void {
       }
 
       cursor = rows[rows.length - 1]!.id;
-      const missingFlags = await Promise.all(rows.map(r => r.thumbnailPath
-        ? fs.promises.access(r.thumbnailPath).then(() => false, () => true)
-        : Promise.resolve(false)));
+      const missingFlags = await Promise.all(rows.map(r => {
+        if (!r.thumbnailPath) return Promise.resolve(false);
+        try {
+          const safePath = resolveWithinRoot(r.thumbnailPath, getWillardAIDir(nasPath));
+          return fs.promises.access(safePath).then(() => false, () => true);
+        } catch {
+          return Promise.resolve(true);
+        }
+      }));
       const missing = rows.filter((_, i) => missingFlags[i]);
       if (missing.length > 0) {
         await db.update(mediaFilesTable)

@@ -359,7 +359,10 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
       idx++;
       const embedding = await embedFace(buf, face, width, height);
       const personId = await assignToPerson(embedding);
-      const cropPath = path.join(cropDir, `${file.id}-${idx}.webp`);
+      const cropPath = resolveWithinRoot(
+        path.join(cropDir, `${file.id}-${idx}.webp`),
+        getWillardAIDir(nasPath),
+      );
       try { await saveFaceCrop(buf, face, width, height, cropPath); } catch { /* crop optional */ }
       const { rows: ins } = await pool.query(
         `INSERT INTO faces (media_file_id, person_id, box_x, box_y, box_w, box_h, score, crop_path, embedding)
@@ -427,7 +430,7 @@ export async function runFaceTick(): Promise<void> {
          FROM media_files f
          LEFT JOIN face_scan_state s ON s.media_file_id = f.id AND s.face_version >= $2
         WHERE f.nas_path = $1
-          AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')
+           AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
           AND f.media_type IN ('image', 'photo', 'video')
           AND f.thumbnail_path IS NOT NULL
           AND s.media_file_id IS NULL

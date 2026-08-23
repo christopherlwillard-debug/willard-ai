@@ -23,7 +23,7 @@ NODE_ENV can't distinguish these because a local run is also "development".
   REPL_ID set or NODE_ENV=production — otherwise express-rate-limit warns about
   a permissive trust-proxy setting on a bare local run.
 - API `start` script loads the root `.env` via Node's
-  `--env-file-if-exists=../../.env` (Node 24+). On Replit there is no root
+  `--env-file=../../.env` (Node 20.6+). On Replit there is no root
   `.env`, so platform env vars apply unchanged; locally users copy
   `.env.example` → `.env`. Web app does NOT read this `.env` (it would grab the
   API's PORT=8080 and collide) — it uses local defaults instead.

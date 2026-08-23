@@ -4,7 +4,7 @@ import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
 import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { getWillardAIDir } from "./nas-storage";
+import { getWillardAIDir, resolveWithinRoot } from "./nas-storage";
 import { getThumbnailDir, thumbnailFilename } from "./thumbnail-engine";
 import { isSystemDir, isSystemFile, isInIgnoredFolder, DEFAULT_SCANNER_SETTINGS, type ScannerSettings } from "./system-filter";
 
@@ -354,7 +354,8 @@ export async function runMediaScan(nasPath: string): Promise<number> {
   // Run async without blocking
   void (async () => {
     try {
-      const willardDir = path.resolve(getWillardAIDir(nasPath));
+      const libraryRoot = resolveWithinRoot(path.resolve(nasPath), nasPath);
+      const willardDir = resolveWithinRoot(path.resolve(getWillardAIDir(nasPath)), libraryRoot);
       const skipDirs = new Set([willardDir]);
 
       // Load user scanner settings from DB (fall back to defaults if not set)
@@ -388,7 +389,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
 
       // Collect all files
       const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
-      walkNas(path.resolve(nasPath), skipDirs, files, scannerSettings, path.resolve(nasPath));
+      walkNas(libraryRoot, skipDirs, files, scannerSettings, libraryRoot);
 
       await db.update(mediaScanJobsTable)
         .set({ totalFiles: files.length })
@@ -402,7 +403,13 @@ export async function runMediaScan(nasPath: string): Promise<number> {
         const batch = files.slice(i, i + BATCH);
 
         for (const f of batch) {
-          const relativePath = path.relative(nasPath, f.fullPath).replace(/\\/g, "/");
+          let safePath: string;
+          try {
+            safePath = resolveWithinRoot(f.fullPath, libraryRoot);
+          } catch {
+            continue;
+          }
+          const relativePath = path.relative(libraryRoot, safePath).replace(/\\/g, "/");
           const mediaType    = classifyMediaType(f.ext);
           const mimeType     = guessMimeType(f.ext);
 
@@ -461,7 +468,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
             let pdfKeywords:     string | null = null;
 
             if (mediaType === "photo") {
-              const meta = await extractPhotoMeta(f.fullPath, f.ext);
+              const meta = await extractPhotoMeta(safePath, f.ext);
               width        = meta.width;
               height       = meta.height;
               orientation  = meta.orientation;
@@ -479,7 +486,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
               gpsLongitude = meta.gpsLongitude;
               exifJson     = meta.exifJson;
             } else if (VIDEO_META_EXTS.has(f.ext)) {
-              const meta = extractVideoMeta(f.fullPath);
+              const meta = extractVideoMeta(safePath);
               width           = meta.width;
               height          = meta.height;
               durationSeconds = meta.durationSeconds;
@@ -489,7 +496,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
               audioCodec      = meta.audioCodec;
               dateCreated     = meta.dateCreated;
             } else if (f.ext === "pdf") {
-              const meta = await extractPdfMeta(f.fullPath);
+              const meta = await extractPdfMeta(safePath);
               pageCount   = meta.pageCount;
               pdfAuthor   = meta.pdfAuthor;
               pdfTitle    = meta.pdfTitle;

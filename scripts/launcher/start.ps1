@@ -113,7 +113,7 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
 Write-Info "Starting Willard AI..."
 
 $apiProc = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file-if-exists=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
+    -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
     -WorkingDirectory $Root -WindowStyle Minimized -PassThru
 $webProc = Start-Process -FilePath "cmd.exe" `
     -ArgumentList "/c", "title Willard AI - App && pnpm --filter @workspace/willard-ai run dev >> `"$WebLog`" 2>&1" `
