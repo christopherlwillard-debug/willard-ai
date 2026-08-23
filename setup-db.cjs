@@ -399,6 +399,23 @@ const SETUP_SQL = [
   `ALTER TABLE people ADD COLUMN IF NOT EXISTS nas_path text`,
   `CREATE INDEX IF NOT EXISTS people_nas_path_idx ON people (nas_path)`,
 
+  // user tags
+  `CREATE TABLE IF NOT EXISTS media_tags (
+    id serial PRIMARY KEY,
+    nas_path text NOT NULL,
+    name text NOT NULL,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS media_tags_nas_name_unique ON media_tags (nas_path, name)`,
+  `CREATE INDEX IF NOT EXISTS media_tags_nas_path_idx ON media_tags (nas_path)`,
+  `CREATE TABLE IF NOT EXISTS media_file_tags (
+    media_file_id integer NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    tag_id integer NOT NULL REFERENCES media_tags(id) ON DELETE CASCADE,
+    created_at timestamp NOT NULL DEFAULT now(),
+    PRIMARY KEY (media_file_id, tag_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS media_file_tags_tag_idx ON media_file_tags (tag_id)`,
+
   // faces
   `CREATE TABLE IF NOT EXISTS faces (
     id            serial PRIMARY KEY,

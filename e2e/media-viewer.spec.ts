@@ -60,6 +60,7 @@ function mediaFile(id: number, name: string, favorite = false) {
     pdfKeywords: null,
     favorite,
     favoritedAt: favorite ? "2026-01-02T00:00:00.000Z" : null,
+    tags: [],
   };
 }
 
@@ -77,6 +78,9 @@ async function mockLibrary(page: Page): Promise<void> {
 
   await page.route("**/api/media/folders", (route) =>
     route.fulfill({ json: { tree: [] } }),
+  );
+  await page.route("**/api/media/tags", (route) =>
+    route.fulfill({ json: { tags: [] } }),
   );
   await page.route("**/api/media/files?*", (route) =>
     route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } }),

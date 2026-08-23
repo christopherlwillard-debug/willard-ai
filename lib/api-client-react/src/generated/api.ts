@@ -57,6 +57,9 @@ import type {
   ListDocumentsParams,
   ListFolderParams,
   LogoUpload,
+  MediaFileTags,
+  MediaTagList,
+  MediaTagsInput,
   NasDirStatus,
   NasTestInput,
   NasTestResult,
@@ -188,6 +191,154 @@ export function useStreamMediaFile<TData = Awaited<ReturnType<typeof streamMedia
 
 
 
+
+export const getListMediaTagsUrl = () => {
+
+
+
+
+  return `/api/media/tags`
+}
+
+/**
+ * @summary List user tags in the active library
+ */
+export const listMediaTags = async ( options?: RequestInit): Promise<MediaTagList> => {
+
+  return customFetch<MediaTagList>(getListMediaTagsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListMediaTagsQueryKey = () => {
+    return [
+    `/api/media/tags`
+    ] as const;
+    }
+
+
+export const getListMediaTagsQueryOptions = <TData = Awaited<ReturnType<typeof listMediaTags>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMediaTags>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMediaTagsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMediaTags>>> = ({ signal }) => listMediaTags({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMediaTags>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListMediaTagsQueryResult = NonNullable<Awaited<ReturnType<typeof listMediaTags>>>
+export type ListMediaTagsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List user tags in the active library
+ */
+
+export function useListMediaTags<TData = Awaited<ReturnType<typeof listMediaTags>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMediaTags>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListMediaTagsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getReplaceMediaFileTagsUrl = (id: number,) => {
+
+
+
+
+  return `/api/media/files/${id}/tags`
+}
+
+/**
+ * @summary Replace the user tags on an indexed file
+ */
+export const replaceMediaFileTags = async (id: number,
+    mediaTagsInput: MediaTagsInput, options?: RequestInit): Promise<MediaFileTags> => {
+
+  return customFetch<MediaFileTags>(getReplaceMediaFileTagsUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(mediaTagsInput)
+  }
+);}
+
+
+
+
+export const getReplaceMediaFileTagsMutationOptions = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replaceMediaFileTags>>, TError,{id: number;data: BodyType<MediaTagsInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof replaceMediaFileTags>>, TError,{id: number;data: BodyType<MediaTagsInput>}, TContext> => {
+
+const mutationKey = ['replaceMediaFileTags'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof replaceMediaFileTags>>, {id: number;data: BodyType<MediaTagsInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  replaceMediaFileTags(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReplaceMediaFileTagsMutationResult = NonNullable<Awaited<ReturnType<typeof replaceMediaFileTags>>>
+    export type ReplaceMediaFileTagsMutationBody = BodyType<MediaTagsInput>
+    export type ReplaceMediaFileTagsMutationError = ErrorType<ErrorResult>
+
+    /**
+ * @summary Replace the user tags on an indexed file
+ */
+export const useReplaceMediaFileTags = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replaceMediaFileTags>>, TError,{id: number;data: BodyType<MediaTagsInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof replaceMediaFileTags>>,
+        TError,
+        {id: number;data: BodyType<MediaTagsInput>},
+        TContext
+      > => {
+      return useMutation(getReplaceMediaFileTagsMutationOptions(options));
+    }
 
 export const getHealthCheckUrl = () => {
 

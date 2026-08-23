@@ -141,6 +141,21 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS collections_nas_auto_key_unique ON collections (nas_path, auto_key);
     CREATE INDEX IF NOT EXISTS collections_nas_kind_idx ON collections (nas_path, kind);
+    CREATE TABLE IF NOT EXISTS media_tags (
+      id serial PRIMARY KEY,
+      nas_path text NOT NULL,
+      name text NOT NULL,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS media_tags_nas_name_unique ON media_tags (nas_path, name);
+    CREATE INDEX IF NOT EXISTS media_tags_nas_path_idx ON media_tags (nas_path);
+    CREATE TABLE IF NOT EXISTS media_file_tags (
+      media_file_id integer NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+      tag_id integer NOT NULL REFERENCES media_tags(id) ON DELETE CASCADE,
+      created_at timestamp NOT NULL DEFAULT now(),
+      PRIMARY KEY (media_file_id, tag_id)
+    );
+    CREATE INDEX IF NOT EXISTS media_file_tags_tag_idx ON media_file_tags (tag_id);
     CREATE TABLE IF NOT EXISTS collection_items (
       id serial PRIMARY KEY,
       collection_id integer NOT NULL REFERENCES collections(id) ON DELETE CASCADE,

@@ -5,6 +5,29 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+export interface MediaTag {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface MediaTagList {
+  tags: MediaTag[];
+}
+
+export interface MediaTagsInput {
+  /**
+     * @maxItems 50
+     * @items.maxLength 64
+     */
+  tags: string[];
+}
+
+export interface MediaFileTags {
+  id: number;
+  tags: string[];
+}
+
 export interface SystemEnvironment {
   isReplit: boolean;
   isLocal: boolean;

@@ -8,7 +8,7 @@ import {
   Music, FileText, File, ImageIcon, MapPin, Camera, Calendar, Aperture,
   ZoomIn, ZoomOut, RotateCw, Heart, Maximize2, Minimize2, Trash2,
   PencilLine, FolderOpen, ChevronDown, ChevronUp, Play, Pause, Loader2,
-  AlertTriangle,
+  AlertTriangle, Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MediaFile } from "@/types/media";
@@ -61,6 +61,14 @@ async function rename(id: number, name: string) {
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Rename failed"); }
   return r.json();
+}
+async function updateTags(id: number, tags: string[]) {
+  const r = await fetch(`${API}/media/files/${id}/tags`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Tag update failed"); }
+  return r.json() as Promise<{ id: number; tags: string[] }>;
 }
 
 // ─── Photo view ──────────────────────────────────────────────────────────────
@@ -505,6 +513,13 @@ function InfoPanel({ file, mapRef }: { file: MediaFile; mapRef: React.RefObject<
           <InfoRow label="Size">{fmt(file.sizeBytes)}</InfoRow>
           <InfoRow label="Format"><span className="font-mono uppercase">.{file.extension || "—"}</span></InfoRow>
         </div>
+        {(file.tags?.length ?? 0) > 0 && (
+          <InfoRow label="Tags">
+            <div className="flex flex-wrap gap-1">
+              {file.tags.map((tag) => <span key={tag} className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{tag}</span>)}
+            </div>
+          </InfoRow>
+        )}
       </InfoSection>
 
       {file.mediaType === "photo" && (
@@ -710,9 +725,50 @@ export interface MediaViewerProps {
   onClose: () => void;
   onFavoriteChange?: (id: number, fav: boolean) => void;
   onDelete?: (id: number) => void;
+  onTagsChange?: (id: number, tags: string[]) => void;
 }
 
-export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete }: MediaViewerProps) {
+function TagEditor({ file, onDone, onCancel }: {
+  file: MediaFile; onDone: (tags: string[]) => void; onCancel: () => void;
+}) {
+  const [tags, setTags] = useState<string[]>(file.tags ?? []);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const add = () => {
+    const tag = value.trim().toLocaleLowerCase();
+    if (tag && !tags.includes(tag) && tag.length <= 64 && tags.length < 50) setTags((current) => [...current, tag]);
+    setValue("");
+  };
+  const save = async () => {
+    setBusy(true); setError("");
+    try { const result = await updateTags(file.id, tags); onDone(result.tags); }
+    catch (e: any) { setError(e.message ?? "Could not save tags"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onCancel}>
+      <div className="w-80 space-y-4 rounded-lg border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2"><Tag className="h-4 w-4 text-primary" /><p className="text-sm font-semibold">Tag file</p></div>
+        <div className="flex flex-wrap gap-1.5 min-h-6">
+          {tags.map((tag) => <button key={tag} onClick={() => setTags((current) => current.filter((item) => item !== tag))} className="rounded bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-destructive/10 hover:text-destructive" title="Remove tag">{tag} ×</button>)}
+          {tags.length === 0 && <span className="text-xs text-muted-foreground">No tags yet</span>}
+        </div>
+        <div className="flex gap-2">
+          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder="Add a tag…" className="min-w-0 flex-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" maxLength={64} />
+          <button onClick={add} disabled={!value.trim()} className="rounded bg-secondary px-3 text-xs font-medium disabled:opacity-50">Add</button>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel} disabled={busy} className="rounded px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted">Cancel</button>
+          <button onClick={save} disabled={busy} className="flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">{busy && <Loader2 className="h-3 w-3 animate-spin" />}Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete, onTagsChange }: MediaViewerProps) {
   const [idx,          setIdx]          = useState(() => clamp(initialIndex, 0, files.length - 1));
   const [showInfo,     setShowInfo]     = useState(false);
   const [showFilm,     setShowFilm]     = useState(files.length > 1);
@@ -721,6 +777,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
   const [favPending,   setFavPending]   = useState(false);
   const [showRename,   setShowRename]   = useState(false);
   const [showDelete,   setShowDelete]   = useState(false);
+  const [showTags,     setShowTags]     = useState(false);
   const [entered,      setEntered]      = useState(false);
   const [focusMapRequested, setFocusMapRequested] = useState(false);
 
@@ -872,6 +929,14 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
           </span>
 
           <div className="flex items-center gap-0.5 shrink-0">
+            {/* Favorite */}
+            <button
+              onClick={() => setShowTags(true)}
+              title="Edit tags"
+              className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <Tag className="w-4 h-4" />
+            </button>
             {/* Favorite */}
             <button
               onClick={handleFavorite}
@@ -1056,6 +1121,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
       {/* Rename/Delete overlays */}
       {showRename && <RenameDialog file={file} onDone={handleRenameDone} onCancel={() => setShowRename(false)} />}
       {showDelete && <DeleteConfirm file={file} onConfirm={handleDeleteDone} onCancel={() => setShowDelete(false)} />}
+      {showTags && <TagEditor file={file} onDone={(tags) => { (file as any).tags = tags; onTagsChange?.(file.id, tags); setShowTags(false); }} onCancel={() => setShowTags(false)} />}
     </>,
     document.body,
   );

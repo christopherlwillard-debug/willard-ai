@@ -2,8 +2,8 @@ import { Router, type Request, type Response } from "express";
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { mediaFilesTable, appSettingsTable } from "@workspace/db";
-import { eq, and, like, desc, asc, sql, count, isNotNull } from "drizzle-orm";
+import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
+import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 
@@ -33,6 +33,49 @@ async function getNasPath(): Promise<string | null> {
 export function invalidateNasPathCache(): void {
   _nasPathCached = undefined;
 }
+
+function normalizeTags(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toLocaleLowerCase())
+    .filter((value) => value.length > 0 && value.length <= 64))]
+    .slice(0, 50);
+}
+
+async function addTagsToFiles<T extends { id: number }>(files: T[], nasPath: string) {
+  if (files.length === 0) return files.map((file) => ({ ...file, tags: [] as string[] }));
+  const rows = await db
+    .select({ mediaFileId: mediaFileTagsTable.mediaFileId, name: mediaTagsTable.name })
+    .from(mediaFileTagsTable)
+    .innerJoin(mediaTagsTable, eq(mediaTagsTable.id, mediaFileTagsTable.tagId))
+    .where(and(
+      eq(mediaTagsTable.nasPath, nasPath),
+      inArray(mediaFileTagsTable.mediaFileId, files.map((file) => file.id)),
+    ));
+  const byFile = new Map<number, string[]>();
+  for (const row of rows) byFile.set(row.mediaFileId, [...(byFile.get(row.mediaFileId) ?? []), row.name]);
+  return files.map((file) => ({ ...file, tags: byFile.get(file.id) ?? [] }));
+}
+
+// ── GET /api/media/tags — tags in the active library, with active-file counts ──
+router.get("/media/tags", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.json({ tags: [] }); return; }
+  const rows = await db
+    .select({ id: mediaTagsTable.id, name: mediaTagsTable.name, count: count(mediaFileTagsTable.mediaFileId) })
+    .from(mediaTagsTable)
+    .leftJoin(mediaFileTagsTable, eq(mediaTagsTable.id, mediaFileTagsTable.tagId))
+    .leftJoin(mediaFilesTable, and(
+      eq(mediaFilesTable.id, mediaFileTagsTable.mediaFileId),
+      eq(mediaFilesTable.nasPath, nasPath),
+      ACTIVE_MEDIA,
+    ))
+    .where(eq(mediaTagsTable.nasPath, nasPath))
+    .groupBy(mediaTagsTable.id, mediaTagsTable.name)
+    .orderBy(asc(mediaTagsTable.name));
+  res.json({ tags: rows.map((row) => ({ ...row, count: Number(row.count) })) });
+});
 
 // ── Thumbnail path in-memory cache ────────────────────────────────────────────
 // Maps file id → confirmed absolute path on disk.
@@ -77,12 +120,13 @@ router.get("/media/files", async (req: Request, res: Response) => {
   const favorites = req.query["favorites"] as string | undefined;
   const folder    = req.query["folder"]    as string | undefined;
   const search    = req.query["search"]    as string | undefined;
+  const tags = normalizeTags(typeof req.query["tags"] === "string" ? (req.query["tags"] as string).split(",") : req.query["tags"]);
   const sort      = (req.query["sort"]     as string) || "indexed_desc";
   const page      = Math.max(1, parseInt(req.query["page"] as string) || 1);
   const limit     = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
   const offset    = (page - 1) * limit;
 
-  const conditions = [eq(mediaFilesTable.nasPath, nasPath)];
+  const conditions = [eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA];
   if (mediaType && mediaType !== "all") {
     conditions.push(eq(mediaFilesTable.mediaType, mediaType));
   }
@@ -97,6 +141,15 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
   if (favorites === "true") {
     conditions.push(eq(mediaFilesTable.favorite, true));
+  }
+  for (const tag of tags) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM media_file_tags mft
+      INNER JOIN media_tags mt ON mt.id = mft.tag_id
+      WHERE mft.media_file_id = ${mediaFilesTable.id}
+        AND mt.nas_path = ${nasPath}
+        AND mt.name = ${tag}
+    )`);
   }
 
   const where = conditions.length === 1 ? conditions[0] : and(...conditions);
@@ -126,7 +179,37 @@ router.get("/media/files", async (req: Request, res: Response) => {
     .limit(limit)
     .offset(offset);
 
-  res.json({ files, total, page, limit });
+  res.json({ files: await addTagsToFiles(files, nasPath), total, page, limit });
+});
+
+// ── PUT /api/media/files/:id/tags — replace a file's user tags ────────────────
+router.put("/media/files/:id/tags", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+  const [file] = await db.select({ id: mediaFilesTable.id })
+    .from(mediaFilesTable)
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+    .limit(1);
+  if (!file) { res.status(404).json({ error: "File not found" }); return; }
+  const tags = normalizeTags(req.body?.tags);
+  await db.transaction(async (tx) => {
+    await tx.delete(mediaFileTagsTable).where(eq(mediaFileTagsTable.mediaFileId, id));
+    if (tags.length === 0) return;
+    const tagRows = await Promise.all(tags.map(async (name) => {
+      const [row] = await tx.insert(mediaTagsTable)
+        .values({ nasPath, name })
+        .onConflictDoNothing({ target: [mediaTagsTable.nasPath, mediaTagsTable.name] })
+        .returning({ id: mediaTagsTable.id });
+      if (row) return row;
+      const [existing] = await tx.select({ id: mediaTagsTable.id }).from(mediaTagsTable)
+        .where(and(eq(mediaTagsTable.nasPath, nasPath), eq(mediaTagsTable.name, name))).limit(1);
+      return existing;
+    }));
+    await tx.insert(mediaFileTagsTable).values(tagRows.filter((row): row is { id: number } => !!row).map((row) => ({ mediaFileId: id, tagId: row.id })));
+  });
+  res.json({ id, tags });
 });
 
 // ── GET /api/media/folders — hierarchical folder tree ────────────────────────

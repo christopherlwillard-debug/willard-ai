@@ -34,11 +34,12 @@ import {
   History,
   FolderPlus,
   ScanSearch,
+  Tag,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { MediaViewer } from "@/components/media/MediaViewer";
-import type { MediaFile, MediaFilesResponse } from "@/types/media";
+import type { MediaFile, MediaFilesResponse, MediaTag } from "@/types/media";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -1225,6 +1226,7 @@ export default function Media() {
   const [search, setSearch]           = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
+  const [selectedTags, setSelectedTags]       = useState<string[]>([]);
   const [selectedFile, setSelectedFile]       = useState<MediaFile | null>(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<number>>(new Set());
   const [albumDialogOpen, setAlbumDialogOpen] = useState(false);
@@ -1244,7 +1246,7 @@ export default function Media() {
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   }, [search]);
 
-  useEffect(() => { setPage(1); }, [activeType, debouncedSearch, selectedFolder]);
+  useEffect(() => { setPage(1); }, [activeType, debouncedSearch, selectedFolder, selectedTags]);
 
   const toggleFileSelection = useCallback((fileId: number) => {
     setSelectedFileIds((current) => {
@@ -1267,19 +1269,29 @@ export default function Media() {
       return r.json() as Promise<{ tree: FolderNode[] }>;
     },
   });
+  const tagsQuery = useQuery({
+    queryKey: ["media-tags"],
+    queryFn: async () => {
+      const r = await fetch("/api/media/tags");
+      if (!r.ok) throw new Error("Failed to load tags");
+      return r.json() as Promise<{ tags: MediaTag[] }>;
+    },
+  });
 
   const filesQuery = useQuery({
-    queryKey: ["media-files", activeType, debouncedSearch, selectedFolder, page, sort],
+    queryKey: ["media-files", activeType, debouncedSearch, selectedFolder, selectedTags, page, sort],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(LIMIT), page: String(page), sort });
       if (activeType !== "all") params.set("mediaType", activeType);
       if (debouncedSearch)      params.set("search", debouncedSearch);
       if (selectedFolder)       params.set("folder", selectedFolder);
+      if (selectedTags.length)  params.set("tags", selectedTags.join(","));
       const r = await fetch(`/api/media/files?${params}`);
       if (!r.ok) throw new Error("Failed to load media files");
       return r.json() as Promise<MediaFilesResponse>;
     },
   });
+  const availableTags = tagsQuery.data?.tags ?? [];
 
   // ── Library job progress (active job) ──────────────────────────────────────
 
@@ -1506,6 +1518,19 @@ export default function Media() {
           )}
         </div>
 
+        {/* Tag filters */}
+        {availableTags.length > 0 && (
+          <div className="flex max-w-[26rem] flex-wrap items-center gap-1">
+            <Tag className="h-3.5 w-3.5 text-muted-foreground" />
+            {availableTags.map((tag) => (
+              <button key={tag.id} onClick={() => setSelectedTags((current) => current.includes(tag.name) ? current.filter((name) => name !== tag.name) : [...current, tag.name])}
+                className={cn("rounded-full border px-2 py-1 text-[10px] font-mono transition-colors", selectedTags.includes(tag.name) ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}
+                title={`${tag.count} file${tag.count === 1 ? "" : "s"}`}
+              >{tag.name}</button>
+            ))}
+          </div>
+        )}
+
         {/* Sort */}
         <select
           value={sort}
@@ -1668,17 +1693,17 @@ export default function Media() {
             <div className="flex items-center justify-center h-full">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
             </div>
-          ) : files.length === 0 && total === 0 && !debouncedSearch && activeType === "all" && !selectedFolder ? (
+          ) : files.length === 0 && total === 0 && !debouncedSearch && activeType === "all" && !selectedFolder && selectedTags.length === 0 ? (
             <EmptyState onScan={handleScan} isScanning={isScanning} />
           ) : files.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-20">
               <Search className="w-8 h-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground font-mono">No files match your filters.</p>
+               <p className="text-sm text-muted-foreground font-mono">No files match your filters.</p>
               <Button
                 variant="ghost"
                 size="sm"
                 className="font-mono text-xs"
-                onClick={() => { setSearch(""); setActiveType("all"); setSelectedFolder(null); }}
+                 onClick={() => { setSearch(""); setActiveType("all"); setSelectedFolder(null); setSelectedTags([]); }}
               >
                 Clear Filters
               </Button>
@@ -1837,6 +1862,11 @@ export default function Media() {
           onFavoriteChange={(id, fav) => {
             favoriteMutation.mutate({ id, favorite: fav });
           }}
+           onTagsChange={(id, tags) => {
+             queryClient.setQueriesData<MediaFilesResponse>({ queryKey: ["media-files"] }, (data) => data ? { ...data, files: data.files.map((item) => item.id === id ? { ...item, tags } : item) } : data);
+             queryClient.invalidateQueries({ queryKey: ["media-tags"] });
+             queryClient.invalidateQueries({ queryKey: ["media-files"] });
+           }}
           onDelete={() => {
             queryClient.invalidateQueries({ queryKey: ["media-files"] });
             setViewerIndex(null);

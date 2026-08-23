@@ -14,3 +14,4 @@ export * from "./collections.ts";
 export * from "./library_activity.ts";
 export * from "./media_ai.ts";
 export * from "./faces.ts";
+export * from "./media_tags.ts";

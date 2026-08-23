@@ -73,6 +73,50 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResult"
 
+  /media/tags:
+    get:
+      operationId: listMediaTags
+      tags: [media]
+      summary: List user tags in the active library
+      responses:
+        "200":
+          description: Tags with active file counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaTagList"
+
+  /media/files/{id}/tags:
+    put:
+      operationId: replaceMediaFileTags
+      tags: [media]
+      summary: Replace the user tags on an indexed file
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaTagsInput"
+      responses:
+        "200":
+          description: Updated tags
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaFileTags"
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
   /healthz:
     get:
       operationId: healthCheck
@@ -1366,6 +1410,48 @@ paths:
 
 components:
   schemas:
+    MediaTag:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        count:
+          type: integer
+      required: [id, name, count]
+
+    MediaTagList:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaTag"
+      required: [tags]
+
+    MediaTagsInput:
+      type: object
+      properties:
+        tags:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            maxLength: 64
+      required: [tags]
+
+    MediaFileTags:
+      type: object
+      properties:
+        id:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string
+      required: [id, tags]
+
     SystemEnvironment:
       type: object
       properties:

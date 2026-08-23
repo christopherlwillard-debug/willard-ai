@@ -39,6 +39,7 @@ export interface MediaFile {
   pdfKeywords: string | null;
   favorite: boolean;
   favoritedAt: string | null;
+  tags: string[];
 }
 
 export interface MediaFilesResponse {
@@ -46,4 +47,10 @@ export interface MediaFilesResponse {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface MediaTag {
+  id: number;
+  name: string;
+  count: number;
 }

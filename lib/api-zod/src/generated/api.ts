@@ -19,6 +19,41 @@ export const StreamMediaFileResponse = zod.unknown()
 
 
 /**
+ * @summary List user tags in the active library
+ */
+export const ListMediaTagsResponse = zod.object({
+  "tags": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "count": zod.number()
+}))
+})
+
+
+/**
+ * @summary Replace the user tags on an indexed file
+ */
+export const ReplaceMediaFileTagsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const replaceMediaFileTagsBodyTagsItemMax = 64;
+
+export const replaceMediaFileTagsBodyTagsMax = 50;
+
+
+
+export const ReplaceMediaFileTagsBody = zod.object({
+  "tags": zod.array(zod.string().max(replaceMediaFileTagsBodyTagsItemMax)).max(replaceMediaFileTagsBodyTagsMax)
+})
+
+export const ReplaceMediaFileTagsResponse = zod.object({
+  "id": zod.number(),
+  "tags": zod.array(zod.string())
+})
+
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
