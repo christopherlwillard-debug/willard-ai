@@ -1,0 +1,103 @@
+name: Windows release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional semantic version (defaults to 0.1.<run number>)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "24.13.1"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.12.4 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download the bundled Windows Node runtime
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE "build\node-runtime"
+          $zip = Join-Path $env:RUNNER_TEMP "node-runtime.zip"
+          $url = "https://nodejs.org/dist/v$env:NODE_VERSION/node-v$env:NODE_VERSION-win-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP\node-runtime -Force
+          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\node-runtime\node-v$env:NODE_VERSION-win-x64\*" $runtimeRoot -Recurse -Force
+          if (-not (Test-Path (Join-Path $runtimeRoot "node.exe"))) {
+            throw "The bundled Windows Node runtime did not contain node.exe."
+          }
+          "WILLARD_NODE_RUNTIME=$runtimeRoot" >> $env:GITHUB_ENV
+
+      - name: Choose release version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if (-not $version) { $version = "0.1.${{ github.run_number }}" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
+            throw "Release version must use MAJOR.MINOR.PATCH format."
+          }
+          "WILLARD_VERSION=$version" >> $env:GITHUB_ENV
+          "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+
+      - name: Stage and validate the packaged payload
+        shell: pwsh
+        run: |
+          node scripts/windows/build-release.mjs
+          node scripts/windows/validate-release.mjs
+
+      - name: Create update ZIP and release manifest
+        shell: pwsh
+        env:
+          WILLARD_ARTIFACT_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
+        run: .\scripts\windows\make-release.ps1
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Compile the Windows installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$env:WILLARD_VERSION" `
+            "installer\WillardMediaCenter.iss"
+          $setup = "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "Inno Setup did not produce $setup." }
+
+      - name: Publish installer, update ZIP, and manifest
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Willard Media Center ${{ env.WILLARD_VERSION }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            build/installer/WillardMediaCenter-${{ env.WILLARD_VERSION }}-Setup.exe
+            build/release/WillardMediaCenter-${{ env.WILLARD_VERSION }}-windows-x64.zip
+            build/release/release-manifest.json

@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
 const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
 const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
+const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
+const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
@@ -30,4 +32,21 @@ test("release helper produces a checksum-bearing update artifact", () => {
   assert.match(releaseBuilder, /Compress-Archive/);
   assert.match(releaseBuilder, /Get-FileHash .*SHA256/);
   assert.match(releaseBuilder, /release-manifest\.json/);
+});
+
+test("Windows release workflow builds and publishes the versioned package", () => {
+  assert.match(workflow, /runs-on: windows-latest/);
+  assert.match(workflow, /build-release\.mjs/);
+  assert.match(workflow, /validate-release\.mjs/);
+  assert.match(workflow, /WILLARD_NODE_RUNTIME/);
+  assert.match(workflow, /MyAppVersion=\$env:WILLARD_VERSION/);
+  assert.match(workflow, /release-manifest\.json/);
+  assert.match(workflow, /WillardMediaCenter-.*-Setup\.exe/);
+});
+
+test("release payload validation requires the bundled runtime and app entrypoints", () => {
+  assert.match(releaseValidator, /runtime\/node\.exe/);
+  assert.match(releaseValidator, /api-runtime\/dist\/index\.mjs/);
+  assert.match(releaseValidator, /api-runtime\/setup-db\.cjs/);
+  assert.match(releaseValidator, /web\/index\.html/);
 });

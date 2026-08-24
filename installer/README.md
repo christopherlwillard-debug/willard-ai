@@ -2,7 +2,22 @@
 
 This directory contains the Inno Setup definition for the supported install
 experience. It is deliberately a thin installer around a staged application
-release:
+release. The normal release path is the Windows GitHub Action:
+
+1. Push to `main`.
+2. The Windows runner builds the web/API payload, downloads the private Node
+   runtime, validates the payload, creates the update ZIP and checksum
+   manifest, compiles Setup.exe, and publishes all three assets to a GitHub
+   release.
+3. Download the generated Setup.exe from that release and run it on a Windows
+   PC for the first installation test.
+
+For a local pre-publication build, run
+`powershell -ExecutionPolicy Bypass -File .\scripts\windows\build-installer.ps1`
+from a Windows checkout. It creates Setup.exe but does not publish an update
+manifest, so it is not an update source for installed copies.
+
+The manual release steps performed by the action are:
 
 1. On a Windows build runner, install the supported Node runtime for the
    release pipeline and set `WILLARD_NODE_RUNTIME` to the directory containing
@@ -23,6 +38,8 @@ PostgreSQL, user media, the database, or FFmpeg. PostgreSQL remains a required
 external service because it stores the user's library and authentication data;
 FFmpeg remains optional.
 
-Inno Setup is not available in the current Linux/Replit environment, so
-compiling, signing, installing, upgrading, and uninstalling the final `.exe`
-must be validated on a Windows build runner before release.
+The single remaining Windows-side action for the first real test is to run the
+published Setup.exe on Windows and verify installation, both shortcuts, startup,
+database setup, and one update from a newer published release. Inno Setup,
+code signing, and real Windows install/upgrade validation cannot be completed
+inside Replit's Linux environment.
