@@ -65,6 +65,8 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /schema-ready\.json/);
   assert.match(developerLauncher, /Get-FileHash/);
   assert.match(developerLauncher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.match(developerLauncher, /dependencies-ready\.json/);
+  assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
   assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
   assert.match(developerLauncher, /\$launcherChanged = \[bool\]/);

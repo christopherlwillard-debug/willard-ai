@@ -117,20 +117,46 @@ if ($launcherChanged) {
 }
 
 $installLog = Join-Path $LogDir "setup.log"
-$installCode = Invoke-LoggedCommand "Checking application components..." $installLog {
-    & pnpm install --ignore-scripts --silent
+$dependencyMarkerPath = Join-Path $LogDir "dependencies-ready.json"
+$dependencySources = @(
+    (Join-Path $Root "package.json"),
+    (Join-Path $Root "pnpm-lock.yaml")
+) + @(Get-ChildItem (Join-Path $Root "artifacts") -Filter "package.json" -File -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty FullName)
+$dependencyFingerprint = (($dependencySources | ForEach-Object {
+    if (Test-Path $_) { (Get-FileHash $_ -Algorithm SHA256).Hash }
+}) -join ":")
+$dependenciesReady = $false
+if ($dependencyFingerprint -and (Test-Path $dependencyMarkerPath) -and (Test-Path (Join-Path $Root "node_modules"))) {
+    try {
+        $dependencyMarker = Get-Content $dependencyMarkerPath -Raw | ConvertFrom-Json
+        $dependenciesReady = ($dependencyMarker.version -eq 1 -and
+            $dependencyMarker.fingerprint -eq $dependencyFingerprint)
+    } catch { $dependenciesReady = $false }
 }
-if ($installCode -ne 0) {
-    Write-Warn "The first package check needs another try..."
-    $installCode = Invoke-LoggedCommand "Repairing application components..." $installLog {
-        & pnpm install --force --ignore-scripts --silent
+if ($dependenciesReady) {
+    Write-Ok "Application components already ready"
+} else {
+    $installCode = Invoke-LoggedCommand "Checking application components..." $installLog {
+        & pnpm install --ignore-scripts --silent
     }
+    if ($installCode -ne 0) {
+        Write-Warn "The first package check needs another try..."
+        $installCode = Invoke-LoggedCommand "Repairing application components..." $installLog {
+            & pnpm install --force --ignore-scripts --silent
+        }
+    }
+    if ($installCode -ne 0) {
+        Stop-And-Exit "Willard AI couldn't finish setting itself up." `
+            ("Package repair failed. Details are in " + $installLog)
+    }
+    @{
+        version = 1
+        fingerprint = $dependencyFingerprint
+        completedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content $dependencyMarkerPath
+    Write-Ok "Application components ready"
 }
-if ($installCode -ne 0) {
-    Stop-And-Exit "Willard AI couldn't finish setting itself up." `
-        ("Package repair failed. Details are in " + $installLog)
-}
-Write-Ok "Application components ready"
 
 # -- Build when first-run or after an API update -------------------------------
 $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
