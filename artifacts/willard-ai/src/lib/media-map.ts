@@ -2,6 +2,7 @@ export interface MediaMapItem {
   id: number;
   name: string;
   mediaType: string;
+  dateTaken: string | null;
   latitude: number;
   longitude: number;
   placeName: string | null;

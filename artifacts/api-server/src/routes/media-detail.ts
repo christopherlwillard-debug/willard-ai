@@ -54,7 +54,7 @@ router.get("/media/map", async (_req: Request, res: Response) => {
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
     const { rows } = await pool.query(
-      `SELECT f.id, f.name, f.media_type, f.gps_latitude, f.gps_longitude, f.place_name
+      `SELECT f.id, f.name, f.media_type, f.date_taken, f.gps_latitude, f.gps_longitude, f.place_name
          FROM media_files f
         WHERE f.nas_path = $1
           AND ${NOT_DELETED}
@@ -71,6 +71,7 @@ router.get("/media/map", async (_req: Request, res: Response) => {
         id: Number(row.id),
         name: row.name,
         mediaType: row.media_type,
+        dateTaken: row.date_taken ? new Date(row.date_taken).toISOString() : null,
         latitude: Number(row.gps_latitude),
         longitude: Number(row.gps_longitude),
         placeName: row.place_name ?? null,

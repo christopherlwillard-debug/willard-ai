@@ -21,6 +21,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { fetchMediaMap, type MediaMapItem } from "@/lib/media-map";
 
 const TILE_SIZE = 256;
@@ -179,6 +182,9 @@ export default function MapPage() {
   const [center, setCenter] = useState<Coordinate>({ lat: 20, lon: 0 });
   const [zoom, setZoom] = useState(2);
   const [popupId, setPopupId] = useState<number | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [mediaType, setMediaType] = useState("all");
 
   const mapQuery = useQuery({
     queryKey: ["media-map"],
@@ -186,6 +192,18 @@ export default function MapPage() {
     staleTime: 30_000,
   });
   const items = useMemo(() => mapQuery.data?.items ?? [], [mapQuery.data]);
+  const mediaTypes = useMemo(
+    () => Array.from(new Set(items.map((item) => item.mediaType))).sort(),
+    [items],
+  );
+  const filteredItems = useMemo(() => items.filter((item) => {
+    const date = item.dateTaken?.slice(0, 10);
+    return (
+      (!dateFrom || (date != null && date >= dateFrom)) &&
+      (!dateTo || (date != null && date <= dateTo)) &&
+      (mediaType === "all" || item.mediaType === mediaType)
+    );
+  }), [dateFrom, dateTo, items, mediaType]);
 
   useEffect(() => {
     const element = mapRef.current;
@@ -209,17 +227,21 @@ export default function MapPage() {
     }
   }, [items, viewport]);
 
+  useEffect(() => {
+    if (popupId != null && !filteredItems.some((item) => item.id === popupId)) setPopupId(null);
+  }, [filteredItems, popupId]);
+
   const projectedItems = useMemo(() => {
     const centerWorld = project(center, zoom);
     const worldSize = TILE_SIZE * 2 ** zoom;
-    return items.map((item) => {
+    return filteredItems.map((item) => {
       const point = project({ lat: item.latitude, lon: item.longitude }, zoom);
       let dx = point.x - centerWorld.x;
       if (dx > worldSize / 2) dx -= worldSize;
       if (dx < -worldSize / 2) dx += worldSize;
       return { ...item, x: viewport.width / 2 + dx, y: viewport.height / 2 + point.y - centerWorld.y };
     });
-  }, [center, items, viewport.height, viewport.width, zoom]);
+  }, [center, filteredItems, viewport.height, viewport.width, zoom]);
 
   const clusters = useMemo(() => {
     const remaining = new Set(projectedItems.map((_, index) => index));
@@ -245,10 +267,16 @@ export default function MapPage() {
     return result;
   }, [projectedItems]);
 
-  const selectedItem = popupId == null ? null : items.find((item) => item.id === popupId) ?? null;
-  const placeCount = useMemo(() => new Set(items.map((item) => item.placeName).filter(Boolean)).size, [items]);
-  const northCount = items.filter((item) => item.latitude >= 0).length;
-  const southCount = items.length - northCount;
+  const selectedItem = popupId == null ? null : filteredItems.find((item) => item.id === popupId) ?? null;
+  const placeCount = useMemo(() => new Set(filteredItems.map((item) => item.placeName).filter(Boolean)).size, [filteredItems]);
+  const northCount = filteredItems.filter((item) => item.latitude >= 0).length;
+  const southCount = filteredItems.length - northCount;
+  const hasFilters = Boolean(dateFrom || dateTo || mediaType !== "all");
+  const clearFilters = () => {
+    setDateFrom("");
+    setDateTo("");
+    setMediaType("all");
+  };
 
   const zoomIn = () => setZoom((value) => Math.min(MAX_ZOOM, value + 1));
   const zoomOut = () => setZoom((value) => Math.max(MIN_ZOOM, value - 1));
@@ -339,7 +367,35 @@ export default function MapPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="space-y-4">
+            <Card data-testid="card-map-filters">
+              <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end">
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor="map-date-from" className="text-xs text-muted-foreground">From date</Label>
+                  <Input id="map-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} data-testid="input-map-date-from" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor="map-date-to" className="text-xs text-muted-foreground">To date</Label>
+                  <Input id="map-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} data-testid="input-map-date-to" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor="map-media-type" className="text-xs text-muted-foreground">Media type</Label>
+                  <Select value={mediaType} onValueChange={setMediaType}>
+                    <SelectTrigger id="map-media-type" data-testid="select-map-media-type"><SelectValue placeholder="All media" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All media</SelectItem>
+                      {mediaTypes.map((type) => <SelectItem key={type} value={type}>{type.charAt(0).toUpperCase() + type.slice(1)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {hasFilters && (
+                  <Button type="button" variant="ghost" size="sm" onClick={clearFilters} data-testid="button-clear-map-filters">
+                    <X /> Clear filters
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
             <section className="relative overflow-hidden rounded-xl border border-border/80 bg-[#18232d] shadow-2xl shadow-black/20" data-testid="map-canvas">
               <div ref={mapRef} className="relative h-[calc(100dvh-250px)] min-h-[510px] max-h-[760px] w-full overflow-hidden">
                 <MapTiles center={center} zoom={zoom} width={viewport.width} height={viewport.height} />
@@ -405,7 +461,7 @@ export default function MapPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <p className="font-mono text-3xl font-medium tracking-[-0.05em] text-foreground" data-testid="text-mapped-count">{formatCount(items.length)}</p>
+                     <p className="font-mono text-3xl font-medium tracking-[-0.05em] text-foreground" data-testid="text-mapped-count">{formatCount(filteredItems.length)}</p>
                     <p className="mt-1 text-xs text-muted-foreground">mapped memories</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3 border-t border-border/70 pt-3">
@@ -451,9 +507,9 @@ export default function MapPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-label="Latitude distribution">
-                    <span className="bg-[#7fa8bc]" style={{ width: `${items.length ? (northCount / items.length) * 100 : 0}%` }} />
-                    <span className="bg-[#d88a4b]" style={{ width: `${items.length ? (southCount / items.length) * 100 : 0}%` }} />
-                  </div>
+                     <span className="bg-[#7fa8bc]" style={{ width: `${filteredItems.length ? (northCount / filteredItems.length) * 100 : 0}%` }} />
+                     <span className="bg-[#d88a4b]" style={{ width: `${filteredItems.length ? (southCount / filteredItems.length) * 100 : 0}%` }} />
+                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-3 text-[10px]">
                     <div><span className="mb-1 block h-1.5 w-1.5 rounded-full bg-[#7fa8bc]" /><span className="font-mono text-foreground">{formatCount(northCount)}</span> north</div>
                     <div><span className="mb-1 block h-1.5 w-1.5 rounded-full bg-[#d88a4b]" /><span className="font-mono text-foreground">{formatCount(southCount)}</span> south</div>
@@ -466,9 +522,10 @@ export default function MapPage() {
                 CENTER {center.lat.toFixed(2)}°, {center.lon.toFixed(2)}°
               </div>
             </aside>
+            </div>
           </div>
         )}
-      </div>
+    </div>
     </div>
   );
 }
