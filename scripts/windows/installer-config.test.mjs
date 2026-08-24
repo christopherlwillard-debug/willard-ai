@@ -58,6 +58,9 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /--env-file=\$envFile/);
   assert.match(developerLauncher, /-FilePath \$nodeCommand/);
   assert.match(developerLauncher, /\$env:PORT = "8080"/);
+  assert.match(developerLauncher, /schema-ready\.json/);
+  assert.match(developerLauncher, /Get-FileHash/);
+  assert.match(developerLauncher, /\$env:WILLARD_SCHEMA_READY = "1"/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
   assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
   assert.match(developerLauncher, /\$launcherChanged = \[bool\]/);

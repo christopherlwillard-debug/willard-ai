@@ -443,6 +443,40 @@ const SETUP_SQL = [
     scanned_at    timestamp NOT NULL DEFAULT now(),
     error         text
   )`,
+
+  // Additive migrations also applied by the API bootstrap path. Keeping them
+  // here lets the Windows launcher verify the complete schema once and avoid
+  // repeating the same round trips when the API starts.
+  `ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS cancelled_at timestamp`,
+  `CREATE TABLE IF NOT EXISTS cleanup_operations (
+    operation_id text PRIMARY KEY,
+    nas_path text NOT NULL,
+    media_file_id integer NOT NULL,
+    operation_type text NOT NULL DEFAULT 'CLEANUP',
+    source_path text NOT NULL,
+    trash_path text,
+    size_bytes bigint NOT NULL DEFAULT 0,
+    status text NOT NULL,
+    error text,
+    created_at timestamp NOT NULL DEFAULT now(),
+    updated_at timestamp NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS cleanup_operations_status_idx ON cleanup_operations (nas_path, status)`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS optimize_profile text NOT NULL DEFAULT 'ARCHIVE'`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS raw_conversion_enabled boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignored_folders text[] NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignored_extensions text[] NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_hidden_files boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_system_files boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_temp_files boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_sidecar_files boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_empty_folders boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS follow_symlinks boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS index_other_files boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE library_jobs ADD COLUMN IF NOT EXISTS diagnostics jsonb`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS watcher_poll_interval_seconds integer NOT NULL DEFAULT 60`,
+  `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS fingerprint_status text`,
+  `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS metadata_status text`,
 ];
 
 // -- 6. Run everything --------------------------------------------------------

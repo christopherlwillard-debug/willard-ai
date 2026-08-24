@@ -158,14 +158,39 @@ if (-not (Wait-ForDatabase 10)) {
         ("PostgreSQL is unavailable or DATABASE_URL is incorrect. Details are in " + $ApiLog)
 }
 $dbMigrateLog = Join-Path $LogDir "db-migrate.log"
-$migrationCode = Invoke-LoggedCommand "Applying safe database updates..." $dbMigrateLog {
-    & node (Join-Path $Root "setup-db.cjs")
+$schemaSources = @(
+    (Join-Path $Root "setup-db.cjs"),
+    (Join-Path $Root "artifacts\api-server\src\app.ts")
+)
+$schemaFingerprint = (($schemaSources | ForEach-Object {
+    if (Test-Path $_) { (Get-FileHash $_ -Algorithm SHA256).Hash }
+}) -join ":")
+$schemaMarkerPath = Join-Path $LogDir "schema-ready.json"
+$schemaReady = $false
+if ($schemaFingerprint -and (Test-Path $schemaMarkerPath)) {
+    try {
+        $schemaMarker = Get-Content $schemaMarkerPath -Raw | ConvertFrom-Json
+        $schemaReady = ($schemaMarker.version -eq 1 -and $schemaMarker.fingerprint -eq $schemaFingerprint)
+    } catch { $schemaReady = $false }
 }
-if ($migrationCode -ne 0) {
-    Stop-And-Exit "Willard AI couldn't finish a safe database update." `
-        ("No services were started. Details are in " + $dbMigrateLog)
+if ($schemaReady) {
+    Write-Ok "Database schema already ready"
+} else {
+    $migrationCode = Invoke-LoggedCommand "Applying safe database updates..." $dbMigrateLog {
+        & node (Join-Path $Root "setup-db.cjs")
+    }
+    if ($migrationCode -ne 0) {
+        Stop-And-Exit "Willard AI couldn't finish a safe database update." `
+            ("No services were started. Details are in " + $dbMigrateLog)
+    }
+    @{
+        version = 1
+        fingerprint = $schemaFingerprint
+        completedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content $schemaMarkerPath
 }
 Write-Ok "Database ready"
+$env:WILLARD_SCHEMA_READY = "1"
 
 # -- Ports ----------------------------------------------------------------------
 foreach ($port in 8080, 5000) {

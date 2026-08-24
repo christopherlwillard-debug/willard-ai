@@ -16,7 +16,10 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-bootstrapSessionTable()
+const schemaReady = process.env["WILLARD_SCHEMA_READY"] === "1";
+const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTable();
+
+startupMigrations
   .then(() => {
     reconcileCleanupOperations().catch((err) => {
       logger.error({ err }, "Cleanup operation reconciliation failed");
