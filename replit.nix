@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.chromium
     pkgs.got
     pkgs.exiftool
     pkgs.wayland

@@ -4,6 +4,10 @@
  *
  * Run:
  *   npx playwright test e2e/routed-workflows.spec.ts
+ *
+ * On NixOS/Replit, replit.nix provides a compatible system Chromium and
+ * playwright.config.ts selects it automatically. No LD_LIBRARY_PATH setup is
+ * required. Set PLAYWRIGHT_EXECUTABLE_PATH only when using another browser.
  */
 import { test, expect, type Page } from "@playwright/test";
 

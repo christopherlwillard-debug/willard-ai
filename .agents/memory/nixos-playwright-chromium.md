@@ -19,11 +19,16 @@ Setting `LD_LIBRARY_PATH` manually works for `libudev`, but `libgbm` has no matc
 
 **Why:** The Playwright-downloaded Chrome headless shell is built for standard glibc Ubuntu, not NixOS.
 
-## What to do instead
+## Supported local path
 
-Use the `runTest()` testing subagent — it has a pre-configured browser environment that works in this Nix container. All Playwright browser verifications should go through `runTest()`.
+Use the Nix-provided `chromium` package and configure Playwright to launch the
+executable found on `PATH`. This is the supported local path for interactive
+browser checks in this workspace; it avoids depending on the Ubuntu-targeted
+Playwright download and does not require `LD_LIBRARY_PATH`.
 
-The spec file (`e2e/dashboard-after-scan.spec.ts`) can be committed and run in any standard CI environment (GitHub Actions, etc.). Only the in-container `npx playwright test` invocation is broken.
+The Playwright config keeps the bundled browser as a fallback for standard CI
+environments where a native Chromium is not installed. `PLAYWRIGHT_EXECUTABLE_PATH`
+can be used to select a different browser explicitly.
 
 ## Rate-limiter gotcha
 

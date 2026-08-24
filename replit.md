@@ -47,6 +47,12 @@ those paths are unreachable and the library reports "Library Offline".
 - FFmpeg (`ffmpeg`/`ffprobe`) must be on PATH for thumbnails, video metadata, and
   media conversion; if missing the server logs a clear warning at startup instead
   of crashing. 7-Zip support is bundled (`7zip-bin`).
+- Local browser validation on NixOS uses the `pkgs.chromium` browser from
+  `replit.nix`; Playwright selects it automatically, avoiding the missing
+  libraries in its downloaded Chromium. With the web app running, run
+  `npx playwright test e2e/routed-workflows.spec.ts`. To use a different
+  browser explicitly, set `PLAYWRIGHT_EXECUTABLE_PATH`; no `LD_LIBRARY_PATH`
+  workaround is needed.
 
 ## Stack
 
