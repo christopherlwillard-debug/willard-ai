@@ -178,7 +178,18 @@ function Start-WillardServices {
         -RedirectStandardOutput $ApiLog -RedirectStandardError (Join-Path $LogDir "api-error.log") `
         -WindowStyle Minimized -PassThru
     $env:PORT = "5000"
-    $pnpmCommand = (Get-Command pnpm -ErrorAction SilentlyContinue).Source
+    $pnpmCommand = $null
+    foreach ($candidate in @("pnpm.cmd", "pnpm.exe")) {
+        $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($resolved) {
+            $pnpmCommand = $resolved.Source
+            break
+        }
+    }
+    if (-not $pnpmCommand) {
+        Stop-And-Exit "Willard AI couldn't locate pnpm." `
+            "The package helper was found but no Windows executable wrapper (pnpm.cmd or pnpm.exe) was available."
+    }
     $webProc = Start-Process -FilePath $pnpmCommand `
         -ArgumentList @("--filter", "@workspace/willard-ai", "run", "dev") `
         -WorkingDirectory $Root -RedirectStandardOutput $WebLog `
