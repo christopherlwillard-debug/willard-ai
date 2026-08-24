@@ -4,6 +4,7 @@ import * as path from "path";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
+import { isVectorAvailable } from "./vector-capability.ts";
 
 /**
  * Face Recognition Engine — privacy-first, fully local.
@@ -337,6 +338,7 @@ async function assignToPerson(nasPath: string, embedding: number[]): Promise<num
 
 /** Refresh a person's centroid/count from its member faces (used after merges/deletes). */
 export async function refreshPerson(nasPath: string, personId: number): Promise<void> {
+  if (!isVectorAvailable()) return;
   await pool.query(
     `UPDATE people p
         SET centroid = sub.avg_emb, face_count = COALESCE(sub.cnt, 0)
@@ -482,6 +484,7 @@ let ticking = false;
 
 export async function runFaceTick(): Promise<void> {
   if (ticking) return;
+  if (!isVectorAvailable()) return;
   ticking = true;
   status.running = true;
   try {

@@ -5,6 +5,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
 import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
+import { isVectorAvailable } from "./vector-capability.ts";
 
 /**
  * AI Enrichment Engine — builds the "understanding" layer on top of the
@@ -204,6 +205,7 @@ function buildEmbeddingText(file: PendingFile, a: AiAnalysis): string {
  * correction immediately. Fully local — nothing leaves the machine.
  */
 export async function recomputeEmbedding(fileId: number): Promise<void> {
+  if (!isVectorAvailable()) return;
   const { rows } = await pool.query(
     `SELECT f.name, f.relative_path, f.camera_make, f.camera_model, f.date_taken,
             a.description, a.tags, a.objects, a.people, a.scene, a.doc_type, a.ocr_text,
@@ -229,7 +231,7 @@ export async function recomputeEmbedding(fileId: number): Promise<void> {
     ocrText: r.ocr_text, docType: r.doc_type, scene: r.scene, people: arr(r.people),
   };
   const embedding = await embedText(buildEmbeddingText(file, analysis));
-  if (embedding.length) {
+  if (isVectorAvailable() && embedding.length) {
     await pool.query(`UPDATE media_ai SET embedding = $1 WHERE media_file_id = $2`, [toVectorLiteral(embedding), fileId]);
   }
 }
@@ -314,28 +316,35 @@ async function enrichOne(file: PendingFile): Promise<void> {
       analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null, people: [] };
     }
 
-    const embedding = await embedText(buildEmbeddingText(file, analysis));
+    const embedding = isVectorAvailable() ? await embedText(buildEmbeddingText(file, analysis)) : [];
+    const columns = [
+      "media_file_id", "description", "tags", "objects", "ocr_text", "doc_type",
+      "scene", "people", ...(isVectorAvailable() ? ["embedding"] : []),
+      "ai_version", "analyzed_at", "error",
+    ];
+    const values = [
+      "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8",
+      ...(isVectorAvailable() ? ["$9"] : []),
+      isVectorAvailable() ? "$10" : "$9", "now()", "NULL",
+    ];
+    const updates = [
+      "description = excluded.description", "tags = excluded.tags",
+      "objects = excluded.objects", "ocr_text = excluded.ocr_text",
+      "doc_type = excluded.doc_type", "scene = excluded.scene",
+      "people = excluded.people",
+      ...(isVectorAvailable() ? ["embedding = excluded.embedding"] : []),
+      "ai_version = excluded.ai_version", "analyzed_at = now()", "error = NULL",
+    ];
     await pool.query(
-      `INSERT INTO media_ai (media_file_id, description, tags, objects, ocr_text, doc_type, scene, people, embedding, ai_version, analyzed_at, error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),NULL)
-       ON CONFLICT (media_file_id) DO UPDATE SET
-         description = excluded.description,
-         tags        = excluded.tags,
-         objects     = excluded.objects,
-         ocr_text    = excluded.ocr_text,
-         doc_type    = excluded.doc_type,
-         scene       = excluded.scene,
-         people      = excluded.people,
-         embedding   = excluded.embedding,
-         ai_version  = excluded.ai_version,
-         analyzed_at = now(),
-         error       = NULL`,
+      `INSERT INTO media_ai (${columns.join(", ")})
+       VALUES (${values.join(", ")})
+       ON CONFLICT (media_file_id) DO UPDATE SET ${updates.join(", ")}`,
       [
         file.id, analysis.description,
         JSON.stringify(analysis.tags), JSON.stringify(analysis.objects),
         analysis.ocrText, analysis.docType, analysis.scene,
         JSON.stringify(analysis.people),
-        embedding.length ? toVectorLiteral(embedding) : null,
+        ...(isVectorAvailable() ? [embedding.length ? toVectorLiteral(embedding) : null] : []),
         AI_VERSION,
       ],
     );

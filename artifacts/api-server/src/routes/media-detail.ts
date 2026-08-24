@@ -3,6 +3,7 @@ import { db, pool, appSettingsTable } from "@workspace/db";
 import { findSimilar } from "../lib/ai-search.ts";
 import { recomputeEmbedding } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
+import { isVectorAvailable } from "../lib/vector-capability.ts";
 
 const router: IRouter = Router();
 
@@ -89,12 +90,15 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
+    const embeddingAvailability = isVectorAvailable()
+      ? "(a.embedding IS NOT NULL) AS has_embedding"
+      : "false AS has_embedding";
 
     const { rows } = await pool.query(
       `SELECT f.*, a.description AS ai_description, a.tags, a.objects, a.ocr_text,
               a.doc_type, a.scene, a.people, a.user_tags, a.hidden_tags,
               a.user_description, a.notes, a.analyzed_at,
-              (a.embedding IS NOT NULL) AS has_embedding
+              ${embeddingAvailability}
          FROM media_files f
          LEFT JOIN media_ai a ON a.media_file_id = f.id
         WHERE f.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`,
@@ -219,7 +223,7 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
 
     const { rows } = await pool.query(
       `SELECT f.nas_path, f.date_taken, f.gps_latitude, f.gps_longitude, f.media_type,
-              a.people, (a.embedding IS NOT NULL) AS has_embedding
+              a.people, ${isVectorAvailable() ? "(a.embedding IS NOT NULL)" : "false"} AS has_embedding
          FROM media_files f
          LEFT JOIN media_ai a ON a.media_file_id = f.id
         WHERE f.id = $1 AND f.nas_path = $2 AND ${NOT_DELETED}`,
@@ -315,7 +319,7 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
     })();
 
     // Visually/semantically similar (embedding space).
-    const similarPromise = src.has_embedding
+    const similarPromise = isVectorAvailable() && src.has_embedding
       ? findSimilar(nasPath, id, LIM).catch(() => [])
       : Promise.resolve([]);
 

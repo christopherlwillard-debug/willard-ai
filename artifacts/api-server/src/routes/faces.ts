@@ -4,6 +4,7 @@ import { pool } from "@workspace/db";
 import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
 import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
+import { isVectorAvailable } from "../lib/vector-capability";
 
 const router: IRouter = Router();
 
@@ -102,6 +103,9 @@ router.patch("/faces/people/:id", async (req: Request, res: Response) => {
 // Move one detected face to an existing person or a new named person.
 router.post("/faces/:faceId/reassign", async (req: Request, res: Response) => {
   try {
+    if (!isVectorAvailable()) {
+      return res.status(409).json({ error: "Face recognition requires pgvector" });
+    }
     const faceId = Number(req.params.faceId);
     if (!Number.isInteger(faceId) || faceId <= 0) {
       return res.status(400).json({ error: "Invalid face id" });

@@ -2,6 +2,7 @@ import { pool } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { embedText, toVectorLiteral } from "./ai-enrichment.ts";
 import { logger } from "./logger.ts";
+import { isVectorAvailable } from "./vector-capability.ts";
 
 /**
  * AI Search — natural-language hybrid search over the canonical library index.
@@ -238,7 +239,7 @@ export async function executeSearch(
   limit = 60,
 ): Promise<SearchResultItem[]> {
   let vectorLiteral: string | null = null;
-  if (intent.semanticQuery) {
+  if (intent.semanticQuery && isVectorAvailable()) {
     try {
       const emb = await embedText(intent.semanticQuery);
       if (emb.length) vectorLiteral = toVectorLiteral(emb);
@@ -369,6 +370,7 @@ export function buildNoResultSuggestions(intent: SearchIntent): string[] {
 // ── Find Similar ──────────────────────────────────────────────────────────────
 
 export async function findSimilar(nasPath: string, fileId: number, limit = 24): Promise<SearchResultItem[]> {
+  if (!isVectorAvailable()) return [];
   const { rows } = await pool.query(
     `SELECT f.content_hash, f.media_type, a.embedding IS NOT NULL AS has_embedding
             , a.embedding::text AS embedding

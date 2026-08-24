@@ -1,4 +1,4 @@
-import app, { bootstrapSessionTable } from "./app";
+import app, { bootstrapSessionTable, initializeVectorCapability } from "./app";
 import { logger } from "./lib/logger";
 import { reconcileCleanupOperations } from "./lib/cleanup-recovery";
 
@@ -20,7 +20,8 @@ const schemaReady = process.env["WILLARD_SCHEMA_READY"] === "1";
 const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTable();
 
 startupMigrations
-  .then(() => {
+  .then(async () => {
+    if (schemaReady) await initializeVectorCapability();
     reconcileCleanupOperations().catch((err) => {
       logger.error({ err }, "Cleanup operation reconciliation failed");
     });

@@ -19,6 +19,7 @@ import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
 import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
+import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
@@ -51,6 +52,31 @@ function isAllowedAppOrigin(origin: string): boolean {
     return allowedAppOrigins.has(new URL(origin).origin);
   } catch {
     return false;
+  }
+}
+
+export async function initializeVectorCapability(): Promise<void> {
+  try {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await pool.query(`
+      ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS embedding vector(384);
+      ALTER TABLE people    ADD COLUMN IF NOT EXISTS centroid  vector(512);
+      ALTER TABLE faces     ADD COLUMN IF NOT EXISTS embedding vector(512);
+    `);
+    setVectorAvailable(true);
+  } catch {
+    setVectorAvailable(false);
+    logger.warn("pgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.");
+  }
+  if (isVectorAvailable()) {
+    try {
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS media_ai_embedding_hnsw_idx
+          ON media_ai USING hnsw (embedding vector_cosine_ops);
+      `);
+    } catch {
+      logger.warn("Unable to create the pgvector HNSW index — AI similarity search will use exact scans.");
+    }
   }
 }
 
@@ -258,26 +284,8 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
   `);
 
-  // pgvector extension + vector columns — optional, gracefully skipped if not installed.
-  // Install pgvector to enable AI similarity search and face recognition embeddings.
-  try {
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
-    await pool.query(`
-      ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS embedding vector(384);
-      ALTER TABLE people    ADD COLUMN IF NOT EXISTS centroid  vector(512);
-      ALTER TABLE faces     ADD COLUMN IF NOT EXISTS embedding vector(512);
-    `);
-  } catch {
-    logger.warn("pgvector extension not available — AI similarity search and face recognition embeddings are disabled. Install pgvector to enable them.");
-  }
-  try {
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS media_ai_embedding_hnsw_idx
-        ON media_ai USING hnsw (embedding vector_cosine_ops);
-    `);
-  } catch {
-    logger.warn("Unable to create the pgvector HNSW index — AI similarity search will use exact scans.");
-  }
+  // pgvector is optional; probe it after the base schema exists.
+  await initializeVectorCapability();
   await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';
