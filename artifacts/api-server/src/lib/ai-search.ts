@@ -29,12 +29,13 @@ export interface SearchIntent {
   favoriteOnly: boolean;
   docTypes: string[];             // receipt, invoice…
   location: string | null;        // place words (matched against text signals)
+  personNames: string[];          // named face clusters matched directly
 }
 
 export function emptyIntent(): SearchIntent {
   return {
     semanticQuery: null, keywords: [], mediaTypes: [], dateFrom: null, dateTo: null,
-    objects: [], exclude: [], favoriteOnly: false, docTypes: [], location: null,
+    objects: [], exclude: [], favoriteOnly: false, docTypes: [], location: null, personNames: [],
   };
 }
 
@@ -50,6 +51,7 @@ export function mergeRefinedIntent(previous: SearchIntent, refinement: SearchInt
     favoriteOnly: previous.favoriteOnly || refinement.favoriteOnly,
     docTypes: [...new Set([...previous.docTypes, ...refinement.docTypes])],
     location: refinement.location ?? previous.location,
+    personNames: [...new Set([...previous.personNames, ...refinement.personNames])],
   };
 }
 
@@ -110,6 +112,7 @@ export async function parseIntent(
       favoriteOnly: p.favoriteOnly === true,
       docTypes: arr(p.docTypes),
       location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
+      personNames: [],
     };
     return previous ? mergeRefinedIntent(previous, parsed) : parsed;
   } catch (err) {
@@ -144,6 +147,7 @@ export interface RawRow {
   description: string | null; tags: unknown; objects: unknown;
   ocr_text: string | null; doc_type: string | null; scene: string | null;
   people: unknown; user_tags: unknown; hidden_tags: unknown;
+  person_names?: unknown;
   user_description: string | null; notes: string | null;
   gps_latitude: number | null; gps_longitude: number | null;
   place_name: string | null;
@@ -183,6 +187,18 @@ export function buildSearchQuery(
   if (intent.dateFrom) where.push(`COALESCE(f.date_taken, f.modified_at) >= ${add(intent.dateFrom)}`);
   if (intent.dateTo) where.push(`COALESCE(f.date_taken, f.modified_at) <= ${add(intent.dateTo + "T23:59:59")}`);
   if (intent.docTypes.length) where.push(`a.doc_type = ANY(${add(intent.docTypes)})`);
+  if (intent.personNames.length) {
+    const personNames = add(intent.personNames.map((name) => name.toLowerCase()));
+    where.push(`EXISTS (
+      SELECT 1
+        FROM faces face_match
+        JOIN people person_match ON person_match.id = face_match.person_id
+       WHERE face_match.media_file_id = f.id
+         AND person_match.nas_path = $1
+         AND person_match.hidden = false
+         AND lower(person_match.name) = ANY(${personNames}::text[])
+    )`);
+  }
 
   const vectorParam = vectorLiteral ? add(vectorLiteral) : null;
   const simSelect = vectorParam
@@ -195,6 +211,15 @@ export function buildSearchQuery(
            f.gps_latitude, f.gps_longitude, f.place_name,
            a.description, a.tags, a.objects, a.ocr_text, a.doc_type, a.scene,
            a.people, a.user_tags, a.hidden_tags, a.user_description, a.notes,
+            COALESCE((
+              SELECT array_agg(DISTINCT lower(pm.name))
+                FROM faces fm
+                JOIN people pm ON pm.id = fm.person_id
+               WHERE fm.media_file_id = f.id
+                 AND pm.nas_path = f.nas_path
+                 AND pm.hidden = false
+                 AND pm.name IS NOT NULL
+            ), ARRAY[]::text[]) AS person_names,
            ${simSelect}
       FROM media_files f
       LEFT JOIN media_ai a ON a.media_file_id = f.id
@@ -239,10 +264,11 @@ export function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | nu
   const tags = [...strArr(r.tags).filter((t) => !hidden.has(t)), ...strArr(r.user_tags)];
   const objects = strArr(r.objects);
   const people = strArr(r.people);
+  const personNames = strArr(r.person_names);
   const haystack = [
     r.name, r.relative_path, r.user_description ?? r.description, r.notes,
     r.ocr_text, r.doc_type, r.scene, r.place_name,
-    ...tags, ...objects, ...people,
+    ...tags, ...objects, ...people, ...personNames,
   ].filter(Boolean).join(" ").toLowerCase();
 
   // Exclusions are hard filters.
@@ -277,6 +303,13 @@ export function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | nu
     else if (haystack.includes(kw)) { score += 0.4; }
   }
 
+  for (const personName of intent.personNames) {
+    if (personNames.includes(personName.toLowerCase())) {
+      score += 2;
+      reasons.push(`Person: ${cap(personName)}`);
+    }
+  }
+
   if (intent.location) {
     const loc = intent.location.toLowerCase();
     if (r.place_name && r.place_name.toLowerCase().includes(loc)) { score += 1.5; reasons.push(`Taken in ${r.place_name}`); }
@@ -293,7 +326,7 @@ export function scoreRow(r: RawRow, intent: SearchIntent): SearchResultItem | nu
   if (intent.favoriteOnly && r.favorite) reasons.push("Favorite");
 
   // If the intent has active signals but this row matched none of them, drop it.
-  const hasSignals = !!(intent.semanticQuery || intent.objects.length || intent.keywords.length || intent.location || intent.docTypes.length);
+  const hasSignals = !!(intent.semanticQuery || intent.objects.length || intent.keywords.length || intent.location || intent.docTypes.length || intent.personNames.length);
   if (hasSignals && score <= 0.05) return null;
   // Semantic-only floor: keep clearly-unrelated rows out.
   if (intent.semanticQuery && sim != null && sim < 0.15 && score < 1) return null;
@@ -413,6 +446,9 @@ export async function getSuggestions(nasPath: string, prefix: string | null): Pr
         WHERE f.nas_path = $1 AND a.doc_type IS NOT NULL
        UNION
        SELECT lower(f.name) FROM media_files f WHERE f.nas_path = $1
+       UNION
+       SELECT lower(p.name) FROM people p
+        WHERE p.nas_path = $1 AND p.hidden = false AND p.name IS NOT NULL
      ) t WHERE term LIKE $2 ORDER BY term LIMIT 8`,
     [nasPath, like],
   );

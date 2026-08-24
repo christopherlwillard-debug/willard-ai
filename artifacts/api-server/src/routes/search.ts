@@ -32,7 +32,26 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
     favoriteOnly: o.favoriteOnly === true,
     docTypes: arr(o.docTypes),
     location: typeof o.location === "string" ? o.location : null,
+    personNames: arr(o.personNames),
   };
+}
+
+async function findNamedPeople(nasPath: string, query: string): Promise<string[]> {
+  const terms = [...new Set(
+    query.toLowerCase().split(/[^a-z0-9]+/).map((term) => term.trim()).filter((term) => term.length >= 2),
+  )].slice(0, 12);
+  if (!terms.length) return [];
+  const patterns = terms.map((term) => `%${term}%`);
+  const { rows } = await pool.query(
+    `SELECT DISTINCT lower(name) AS name
+       FROM people
+      WHERE nas_path = $1 AND hidden = false AND name IS NOT NULL
+        AND lower(name) LIKE ANY($2::text[])
+      ORDER BY name
+      LIMIT 12`,
+    [nasPath, patterns],
+  );
+  return rows.map((row: { name: string }) => row.name);
 }
 
 // ── Conversational hybrid search ──────────────────────────────────────────────
@@ -48,6 +67,10 @@ router.post("/search/ai", async (req, res) => {
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
     const intent = await parseIntent(query, refine ? previousIntent : null);
+    const namedPeople = await findNamedPeople(nasPath, query);
+    if (namedPeople.length) {
+      intent.personNames = [...new Set([...(intent.personNames ?? []), ...namedPeople])];
+    }
 
     // Conventional filters cooperate with natural language: explicit UI
     // filters override whatever the language parse inferred.

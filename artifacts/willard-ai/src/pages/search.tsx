@@ -46,6 +46,7 @@ interface SearchIntent {
   favoriteOnly: boolean;
   docTypes: string[];
   location: string | null;
+  personNames: string[];
 }
 
 interface ResultItem {
@@ -123,6 +124,7 @@ function intentChips(intent: SearchIntent): string[] {
   for (const e of intent.exclude ?? []) chips.push(`no ${e}`);
   for (const d of intent.docTypes ?? []) chips.push(d);
   if (intent.location) chips.push(`near ${intent.location}`);
+  for (const person of intent.personNames ?? []) chips.push(`Person: ${person}`);
   if (intent.favoriteOnly) chips.push("favorites");
   return chips;
 }

@@ -48,6 +48,20 @@ test("semantic search orders by vector distance for ANN index scans", () => {
   assert.deepEqual(query.params, ["/nas", "[0.1,0.2]"]);
 });
 
+test("named people search filters to visible face assignments in the active library", () => {
+  const query = buildSearchQuery("/nas", intent({ personNames: ["grandma"] }));
+  assert.match(query.sql, /EXISTS \(\s*SELECT 1\s+FROM faces face_match/);
+  assert.match(query.sql, /lower\(person_match\.name\) = ANY\(\$2::text\[\]\)/);
+  assert.deepEqual(query.params, ["/nas", ["grandma"]]);
+});
+
+test("named people matches explain the person identity", () => {
+  const namedRow = { ...row(null), person_names: ["grandma"] };
+  const result = scoreRow(namedRow, intent({ personNames: ["grandma"] }));
+  assert.equal(result?.confidence, "likely");
+  assert.deepEqual(result?.reasons, ["Person: Grandma"]);
+});
+
 test("confidence labels use the documented score thresholds", () => {
   assert.equal(scoreRow(row(null), intent())?.confidence, "possible");
   assert.equal(scoreRow(row(null), intent({ keywords: ["sunset"] }))?.confidence, "possible");
