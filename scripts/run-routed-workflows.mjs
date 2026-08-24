@@ -137,14 +137,38 @@ export async function checkService(
   );
 }
 
+export async function checkRoutedServices(
+  base,
+  {
+    timeoutMs = 120_000,
+    logPaths = serviceLogPaths,
+    check = checkService,
+  } = {},
+) {
+  const checks = [
+    ["Web app", `${base}/`, logPaths["Web app"]],
+    ["API server", `${base}/api/healthz`, logPaths["API server"]],
+  ];
+  const results = await Promise.allSettled(
+    checks.map(([name, url, paths]) =>
+      check(name, url, timeoutMs, { logPaths: paths }),
+    ),
+  );
+  const failures = results
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason instanceof Error
+      ? result.reason.message
+      : String(result.reason));
+  if (failures.length > 0) {
+    throw new Error(failures.join("\n"));
+  }
+}
+
 export async function runRoutedWorkflows() {
   if (appURL) {
     const base = appURL.replace(/\/+$/, "");
     try {
-      await Promise.all([
-        checkService("Web app", `${base}/`),
-        checkService("API server", `${base}/api/healthz`),
-      ]);
+      await checkRoutedServices(base);
     } catch (error) {
       console.error(
         `[routed-browser-checks] ${error instanceof Error ? error.message : error}`,

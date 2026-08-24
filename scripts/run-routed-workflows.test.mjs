@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { checkService, recentStartupOutput } from "./run-routed-workflows.mjs";
+import {
+  checkRoutedServices,
+  checkService,
+  recentStartupOutput,
+} from "./run-routed-workflows.mjs";
 
 async function failingServer() {
   const server = createServer((_request, response) => {
@@ -16,6 +20,51 @@ async function failingServer() {
   const { port } = server.address();
   return { server, url: `http://127.0.0.1:${port}/healthz` };
 }
+
+test("reports simultaneous web and API readiness failures with isolated logs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "routed-workflows-"));
+  const webLogPath = join(directory, "web.log");
+  const apiLogPath = join(directory, "api.log");
+  await writeFile(webLogPath, "web bind failure\n");
+  await writeFile(apiLogPath, "api database failure\n");
+
+  const web = await failingServer();
+  const api = await failingServer();
+  try {
+    await assert.rejects(
+      checkRoutedServices("http://unused", {
+        timeoutMs: 10,
+        logPaths: {
+          "Web app": [webLogPath],
+          "API server": [apiLogPath],
+        },
+        check: (name, _url, timeoutMs, options) =>
+          checkService(
+            name,
+            name === "Web app" ? web.url : api.url,
+            timeoutMs,
+            options,
+          ),
+      }),
+      (error) => {
+        assert.match(error.message, /Web app readiness failed/);
+        assert.match(error.message, /web bind failure/);
+        assert.match(error.message, /API server readiness failed/);
+        assert.match(error.message, /api database failure/);
+        const apiSection = error.message.indexOf("API server readiness failed");
+        assert.ok(apiSection > 0);
+        assert.doesNotMatch(error.message.slice(0, apiSection), /api database failure/);
+        assert.doesNotMatch(error.message.slice(apiSection), /web bind failure/);
+        return true;
+      },
+    );
+  } finally {
+    await Promise.all([
+      new Promise((resolve) => web.server.close(resolve)),
+      new Promise((resolve) => api.server.close(resolve)),
+    ]);
+  }
+});
 
 test("includes the configured service log tail in readiness failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "routed-workflows-"));
