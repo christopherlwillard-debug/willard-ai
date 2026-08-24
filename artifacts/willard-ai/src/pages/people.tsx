@@ -201,9 +201,14 @@ function PersonDetail({ personId }: { personId: number }) {
 
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6" data-testid="person-items-grid">
         {items.map((it) => (
-          <button
+          <div
             key={it.id}
             onClick={() => navigate(`/media/${it.id}`)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") navigate(`/media/${it.id}`);
+            }}
+            role="button"
+            tabIndex={0}
             className="group relative aspect-square overflow-hidden rounded-md border bg-muted transition hover:ring-2 hover:ring-primary"
             title={it.name}
             data-testid={`person-item-${it.id}`}
@@ -233,7 +238,7 @@ function PersonDetail({ personId }: { personId: number }) {
                 {formatDate(it.dateTaken)}
               </span>
             )}
-          </button>
+          </div>
         ))}
       </div>
       {items.length === 0 && (

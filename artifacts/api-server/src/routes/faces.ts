@@ -128,7 +128,8 @@ router.post("/faces/:faceId/reassign", async (req: Request, res: Response) => {
       `SELECT fc.id, fc.person_id, fc.embedding
          FROM faces fc
          JOIN media_files mf ON mf.id = fc.media_file_id
-        WHERE fc.id = $1 AND mf.nas_path = $2 AND ${NOT_DELETED}`,
+        WHERE fc.id = $1 AND mf.nas_path = $2
+          AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
       [faceId, nasPath],
     );
     const face = faceRows[0];
