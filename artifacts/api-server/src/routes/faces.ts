@@ -99,6 +99,76 @@ router.patch("/faces/people/:id", async (req: Request, res: Response) => {
   }
 });
 
+// Move one detected face to an existing person or a new named person.
+router.post("/faces/:faceId/reassign", async (req: Request, res: Response) => {
+  try {
+    const faceId = Number(req.params.faceId);
+    if (!Number.isInteger(faceId) || faceId <= 0) {
+      return res.status(400).json({ error: "Invalid face id" });
+    }
+
+    const targetId = req.body?.personId == null ? null : Number(req.body.personId);
+    const newName = typeof req.body?.newPersonName === "string"
+      ? req.body.newPersonName.trim().slice(0, 80)
+      : "";
+    if ((targetId == null || !Number.isInteger(targetId) || targetId <= 0) && !newName) {
+      return res.status(400).json({ error: "Choose an existing person or enter a new person name" });
+    }
+    if (targetId != null && (!Number.isInteger(targetId) || targetId <= 0)) {
+      return res.status(400).json({ error: "Invalid target person id" });
+    }
+    if (targetId != null && newName) {
+      return res.status(400).json({ error: "Choose one reassignment target" });
+    }
+
+    const nasPath = await getNasPath();
+    if (!nasPath) return res.status(404).json({ error: "Face not found" });
+
+    const { rows: faceRows } = await pool.query(
+      `SELECT fc.id, fc.person_id, fc.embedding
+         FROM faces fc
+         JOIN media_files mf ON mf.id = fc.media_file_id
+        WHERE fc.id = $1 AND mf.nas_path = $2 AND ${NOT_DELETED}`,
+      [faceId, nasPath],
+    );
+    const face = faceRows[0];
+    if (!face) return res.status(404).json({ error: "Face not found" });
+
+    let nextPersonId = targetId;
+    if (newName) {
+      const { rows } = await pool.query(
+        `INSERT INTO people (nas_path, name, face_count, centroid)
+         VALUES ($1, $2, 0, $3::vector)
+         RETURNING id`,
+        [nasPath, newName, face.embedding ?? null],
+      );
+      nextPersonId = Number(rows[0].id);
+    } else {
+      const { rows } = await pool.query(
+        `SELECT id FROM people WHERE id = $1 AND nas_path = $2`,
+        [nextPersonId, nasPath],
+      );
+      if (!rows[0]) return res.status(404).json({ error: "Target person not found" });
+    }
+
+    const previousPersonId = face.person_id == null ? null : Number(face.person_id);
+    if (previousPersonId === nextPersonId) {
+      return res.json({ ok: true, personId: nextPersonId, previousPersonId });
+    }
+
+    await pool.query(
+      `UPDATE faces SET person_id = $1, manual_assignment = true WHERE id = $2`,
+      [nextPersonId, faceId],
+    );
+    if (previousPersonId != null) await refreshPerson(nasPath, previousPersonId);
+    await refreshPerson(nasPath, nextPersonId!);
+    return res.json({ ok: true, personId: nextPersonId, previousPersonId });
+  } catch (err) {
+    logger.error({ err }, "reassign face failed");
+    return res.status(500).json({ error: "Failed to reassign face" });
+  }
+});
+
 // Merge person B into person A (same real-world identity split by the clusterer).
 router.post("/faces/people/:id/merge", async (req: Request, res: Response) => {
   try {

@@ -421,6 +421,7 @@ const SETUP_SQL = [
     id            serial PRIMARY KEY,
     media_file_id integer NOT NULL,
     person_id     integer,
+    manual_assignment boolean NOT NULL DEFAULT false,
     box_x         real NOT NULL,
     box_y         real NOT NULL,
     box_w         real NOT NULL,
@@ -430,6 +431,7 @@ const SETUP_SQL = [
     embedding     vector(512),
     created_at    timestamp NOT NULL DEFAULT now()
   )`,
+  `ALTER TABLE faces ADD COLUMN IF NOT EXISTS manual_assignment boolean NOT NULL DEFAULT false`,
   `CREATE INDEX IF NOT EXISTS faces_file_idx ON faces (media_file_id)`,
   `CREATE INDEX IF NOT EXISTS faces_person_idx ON faces (person_id)`,
 

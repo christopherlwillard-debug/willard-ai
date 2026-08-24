@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { formatDate } from "@/lib/format";
+import { ReassignFaceDialog } from "@/components/reassign-face-dialog";
 
 const API = `${import.meta.env.BASE_URL}api`;
 
@@ -120,6 +121,7 @@ function PersonDetail({ personId }: { personId: number }) {
   const [editing, setEditing] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [targetId, setTargetId] = useState("");
+  const [reassignFaceId, setReassignFaceId] = useState<number | null>(null);
 
   const q = useQuery<{ person: Person; items: PersonItem[] }>({
     queryKey: ["faces-person", personId],
@@ -214,6 +216,18 @@ function PersonDetail({ personId }: { personId: number }) {
                 <span className="w-full truncate text-center text-[10px]">{it.name}</span>
               </span>
             )}
+            <span className="absolute inset-x-0 top-1 flex justify-end px-1 opacity-0 transition group-hover:opacity-100">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 px-2 text-[10px]"
+                onClick={(event) => { event.stopPropagation(); setReassignFaceId(it.faceId); }}
+                data-testid={`button-reassign-face-${it.faceId}`}
+              >
+                Move face
+              </Button>
+            </span>
             {it.dateTaken && (
               <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100">
                 {formatDate(it.dateTaken)}
@@ -225,6 +239,12 @@ function PersonDetail({ personId }: { personId: number }) {
       {items.length === 0 && (
         <p className="text-sm text-muted-foreground">No items for this person yet.</p>
       )}
+      <ReassignFaceDialog
+        faceId={reassignFaceId}
+        open={reassignFaceId != null}
+        onOpenChange={(open) => { if (!open) setReassignFaceId(null); }}
+        invalidateKeys={() => { void q.refetch(); }}
+      />
 
       <Dialog open={mergeOpen} onOpenChange={(open) => { setMergeOpen(open); if (!open) setTargetId(""); }}>
         <DialogContent>

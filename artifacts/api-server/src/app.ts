@@ -237,6 +237,7 @@ export async function bootstrapSessionTable(): Promise<void> {
       id serial PRIMARY KEY,
       media_file_id integer NOT NULL,
       person_id integer,
+      manual_assignment boolean NOT NULL DEFAULT false,
       box_x real NOT NULL,
       box_y real NOT NULL,
       box_w real NOT NULL,
@@ -247,6 +248,7 @@ export async function bootstrapSessionTable(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS faces_file_idx ON faces (media_file_id);
     CREATE INDEX IF NOT EXISTS faces_person_idx ON faces (person_id);
+    ALTER TABLE faces ADD COLUMN IF NOT EXISTS manual_assignment boolean NOT NULL DEFAULT false;
     CREATE TABLE IF NOT EXISTS face_scan_state (
       media_file_id integer PRIMARY KEY,
       face_version integer NOT NULL DEFAULT 1,

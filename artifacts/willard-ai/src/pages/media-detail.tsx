@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
+import { ReassignFaceDialog } from "@/components/reassign-face-dialog";
 
 const API = `${import.meta.env.BASE_URL}api`;
 
@@ -204,6 +205,7 @@ export default function MediaDetail() {
   const [tagDraft, setTagDraft] = useState("");
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
+  const [reassignFaceId, setReassignFaceId] = useState<number | null>(null);
 
   if (!Number.isFinite(id) || id <= 0) return <div className="p-6">Invalid media item.</div>;
 
@@ -398,13 +400,12 @@ export default function MediaDetail() {
                   {(facesQ.data?.faces.length ?? 0) > 0 && (
                     <div className="mb-2 flex flex-wrap gap-2">
                       {facesQ.data!.faces.map((f) => (
-                        <button
-                          key={f.id}
-                          onClick={() => f.personId != null && navigate(`/people/${f.personId}`)}
-                          className="flex items-center gap-2 rounded-full border bg-muted/40 py-1 pl-1 pr-3 text-sm transition hover:ring-2 hover:ring-primary"
-                          title={f.personName ? `View ${f.personName}` : "View this person"}
-                          data-testid={`face-chip-${f.id}`}
-                        >
+                          <div key={f.id} className="flex items-center gap-1 rounded-full border bg-muted/40 py-1 pl-1 pr-1 text-sm transition hover:ring-2 hover:ring-primary" data-testid={`face-chip-${f.id}`}>
+                            <button
+                              onClick={() => f.personId != null && navigate(`/people/${f.personId}`)}
+                              className="flex items-center gap-2 pr-1"
+                              title={f.personName ? `View ${f.personName}` : "View this person"}
+                            >
                           {f.hasCrop ? (
                             <img src={`/api/faces/${f.id}/crop`} alt={f.personName ?? "Detected face"} className="h-8 w-8 rounded-full object-cover" />
                           ) : (
@@ -413,10 +414,31 @@ export default function MediaDetail() {
                           <span className={f.personName ? "font-medium" : "text-muted-foreground"}>
                             {f.personName ?? "Unnamed person"}
                           </span>
-                        </button>
+                            </button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setReassignFaceId(f.id)}
+                              data-testid={`button-reassign-face-${f.id}`}
+                            >
+                              Move
+                            </Button>
+                          </div>
                       ))}
                     </div>
                   )}
+                  <ReassignFaceDialog
+                    faceId={reassignFaceId}
+                    open={reassignFaceId != null}
+                    onOpenChange={(open) => { if (!open) setReassignFaceId(null); }}
+                    invalidateKeys={() => {
+                      void facesQ.refetch();
+                      void relatedQ.refetch();
+                      void detailQ.refetch();
+                    }}
+                  />
                   {(facesQ.data?.faces.length ?? 0) > 0 && (
                     <p className="mb-2 text-xs text-muted-foreground">
                       Faces recognized locally — click a face to browse this person, or name them on the People page.
