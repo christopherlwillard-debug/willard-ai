@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useSearchParams } from "wouter";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -24,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fetchMediaMap, type MediaMapItem } from "@/lib/media-map";
+import { fetchMediaMap, parseMediaMapFilters, type MediaMapFilters, type MediaMapItem } from "@/lib/media-map";
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 1;
@@ -176,15 +176,28 @@ function MapCluster({
 
 export default function MapPage() {
   const [, navigate] = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const mapRef = useRef<HTMLDivElement>(null);
   const hasFitRef = useRef(false);
   const [viewport, setViewport] = useState({ width: 960, height: 570 });
   const [center, setCenter] = useState<Coordinate>({ lat: 20, lon: 0 });
   const [zoom, setZoom] = useState(2);
   const [popupId, setPopupId] = useState<number | null>(null);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [mediaType, setMediaType] = useState("all");
+  const { dateFrom, dateTo, mediaType } = parseMediaMapFilters(searchParams.toString());
+
+  const updateFilters = (updates: Partial<MediaMapFilters>) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      const filters = { ...parseMediaMapFilters(next.toString()), ...updates };
+      if (filters.dateFrom) next.set("dateFrom", filters.dateFrom);
+      else next.delete("dateFrom");
+      if (filters.dateTo) next.set("dateTo", filters.dateTo);
+      else next.delete("dateTo");
+      if (filters.mediaType && filters.mediaType !== "all") next.set("mediaType", filters.mediaType);
+      else next.delete("mediaType");
+      return next;
+    }, { replace: true });
+  };
 
   const mapQuery = useQuery({
     queryKey: ["media-map"],
@@ -273,9 +286,7 @@ export default function MapPage() {
   const southCount = filteredItems.length - northCount;
   const hasFilters = Boolean(dateFrom || dateTo || mediaType !== "all");
   const clearFilters = () => {
-    setDateFrom("");
-    setDateTo("");
-    setMediaType("all");
+    updateFilters({ dateFrom: "", dateTo: "", mediaType: "all" });
   };
 
   const zoomIn = () => setZoom((value) => Math.min(MAX_ZOOM, value + 1));
@@ -372,15 +383,15 @@ export default function MapPage() {
               <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-end">
                 <div className="flex-1 space-y-2">
                   <Label htmlFor="map-date-from" className="text-xs text-muted-foreground">From date</Label>
-                  <Input id="map-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} data-testid="input-map-date-from" />
+                  <Input id="map-date-from" type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => updateFilters({ dateFrom: event.target.value })} data-testid="input-map-date-from" />
                 </div>
                 <div className="flex-1 space-y-2">
                   <Label htmlFor="map-date-to" className="text-xs text-muted-foreground">To date</Label>
-                  <Input id="map-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} data-testid="input-map-date-to" />
+                  <Input id="map-date-to" type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => updateFilters({ dateTo: event.target.value })} data-testid="input-map-date-to" />
                 </div>
                 <div className="flex-1 space-y-2">
                   <Label htmlFor="map-media-type" className="text-xs text-muted-foreground">Media type</Label>
-                  <Select value={mediaType} onValueChange={setMediaType}>
+                  <Select value={mediaType} onValueChange={(value) => updateFilters({ mediaType: value })}>
                     <SelectTrigger id="map-media-type" data-testid="select-map-media-type"><SelectValue placeholder="All media" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All media</SelectItem>
