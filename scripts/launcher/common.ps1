@@ -82,6 +82,43 @@ function Ensure-EnvFile {
     return $false
 }
 
+function New-WillardShortcut {
+    param(
+        [Parameter(Mandatory = $true)][string]$ShortcutPath,
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [string]$IconPath
+    )
+
+    $shortcutDirectory = Split-Path -Parent $ShortcutPath
+    if (-not (Test-Path $shortcutDirectory)) {
+        New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
+    }
+
+    # Target cmd.exe rather than the batch file itself so Windows honors the
+    # working directory consistently, even when the shortcut is launched from
+    # Explorer, Start, or a different current directory.
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\cmd.exe"
+        $shortcut.Arguments = '/d /c ""' + $TargetPath + '""'
+        $shortcut.WorkingDirectory = $WorkingDirectory
+        $shortcut.Description = "Start your local Willard Media Center"
+        if ($IconPath -and (Test-Path $IconPath)) {
+            $shortcut.IconLocation = $IconPath + ",0"
+        }
+        $shortcut.Save()
+    } finally {
+        if ($shortcut) {
+            [Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
+        }
+        if ($shell) {
+            [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+    }
+}
+
 function Get-EnvValue($key) {
     $envPath = Join-Path $Root ".env"
     if (-not (Test-Path $envPath)) { return $null }

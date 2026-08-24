@@ -30,6 +30,11 @@ First-install checklist:
 7. Publish a newer release, open the shortcut again, and confirm the ZIP is
    checksum-verified and the installed version updates.
 
+For a source checkout rather than a packaged release, run `Setup Willard AI.bat`
+once. It creates desktop and Start Menu shortcuts that point to
+`Start Willard AI.bat`, preserve the checkout as the working directory, and use
+the Willard icon when `installer\willard.ico` is present.
+
 For a local pre-publication build, run
 `powershell -ExecutionPolicy Bypass -File .\scripts\windows\build-installer.ps1`
 from a Windows checkout. It creates Setup.exe but does not publish an update

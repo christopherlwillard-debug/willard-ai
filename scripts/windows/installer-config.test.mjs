@@ -6,7 +6,9 @@ const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", 
 const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
 const developerLauncher = await readFile(new URL("../launcher/start.ps1", import.meta.url), "utf8");
 const launcherCommon = await readFile(new URL("../launcher/common.ps1", import.meta.url), "utf8");
+const setupLauncher = await readFile(new URL("../launcher/setup.ps1", import.meta.url), "utf8");
 const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
+const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
 
@@ -109,4 +111,15 @@ test("developer fallback stages a complete source archive", async () => {
   assert.match(updater, /The downloaded source archive is incomplete/);
   assert.match(updater, /robocopy/);
   assert.doesNotMatch(updater, /Downloading \+ \$filesToUpdate\.Count/);
+});
+
+test("developer setup creates identity shortcuts for the batch launcher", () => {
+  assert.match(setupLauncher, /New-WillardShortcut/);
+  assert.match(setupLauncher, /GetFolderPath\("Desktop"\)/);
+  assert.match(setupLauncher, /GetFolderPath\("Programs"\)/);
+  assert.match(setupLauncher, /Start Willard AI\.bat/);
+  assert.match(launcherCommon, /WScript\.Shell/);
+  assert.match(launcherCommon, /WorkingDirectory/);
+  assert.match(launcherCommon, /IconLocation/);
+  assert.match(releaseStager, /icons\/willard\.ico/);
 });

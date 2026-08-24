@@ -116,11 +116,36 @@ if ($GithubRepo -notmatch 'OWNER') {
     }
 }
 
+# -- Shortcuts -----------------------------------------------------------------
+$startBatch = Join-Path $Root "Start Willard AI.bat"
+$iconCandidates = @(
+    (Join-Path $Root "icons\willard.ico"),
+    (Join-Path $Root "installer\willard.ico")
+)
+$iconPath = $iconCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$shortcutTargets = @(
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Desktop")) "Willard Media Center.lnk"; Label = "Desktop" },
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Programs")) "Willard Media Center.lnk"; Label = "Start Menu" }
+)
+if (Test-Path $startBatch) {
+    foreach ($target in $shortcutTargets) {
+        try {
+            New-WillardShortcut -ShortcutPath $target.Path -TargetPath $startBatch `
+                -WorkingDirectory $Root -IconPath $iconPath
+            Write-Ok ("Created " + $target.Label + " shortcut")
+        } catch {
+            Write-Warn ("Could not create the " + $target.Label + " shortcut: " + $_.Exception.Message)
+        }
+    }
+} else {
+    Write-Warn "Start Willard AI.bat was not found, so shortcuts were not created."
+}
+
 # -- Done ---------------------------------------------------------------------
 Write-Host ""
 Write-Host "  Setup complete!  Willard AI is ready to use." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Next step:  double-click 'Start Willard AI.bat'" -ForegroundColor White
+Write-Host "  Next step:  open 'Willard Media Center' from your desktop or Start Menu" -ForegroundColor White
 Write-Host ""
 
 $answer = Read-Host "  Start Willard AI now? (Y/n)"

@@ -25,19 +25,25 @@ The packaged installer is built by the Windows release pipeline. Inno Setup,
 code signing, and real Windows install/upgrade validation must run on a Windows
 build machine; they cannot be completed inside Replit's Linux environment.
 
-## Developer-folder fallback: double-click to start
+## Developer-folder fallback: use the Willard shortcut
 
 Once the one-time prerequisites below are installed, opening Willard Media Center
-uses one normal entry point in the project root:
+uses one normal entry point in the project root. Run **`Setup Willard AI.bat`**
+once; setup creates **Willard Media Center** shortcuts on the desktop and in the
+Start Menu. Those shortcuts launch `Start Willard AI.bat` with the project folder
+as their working directory, so they work regardless of the folder that is
+current when Windows launches them.
 
 | File | What it does |
 |------|--------------|
-| **`Start Willard AI.bat`** | Checks everything, safely updates/repairs what is needed, starts the app, and opens it |
+| **`Start Willard AI.bat`** | The underlying launcher used by the Willard Media Center shortcuts; checks everything, safely updates/repairs what is needed, starts the app, and opens it |
 | **`Stop Willard AI.bat`** | Advanced manual troubleshooting control: cleanly shuts the app down |
 | **`Repair Willard AI.bat`** | Advanced manual troubleshooting control: fixes common problems |
 | **`Update Willard AI.bat`** | Advanced manual troubleshooting control: forces an update outside normal startup |
 
-**To start:** double-click `Start Willard AI.bat`. It will:
+**To start:** open **Willard Media Center** from the desktop or Start Menu. For
+advanced troubleshooting, you can also double-click `Start Willard AI.bat`
+directly from the project folder. It will:
 
 1. Check that Node.js, pnpm, and PostgreSQL are installed (and tell you exactly
    what to install if something is missing).
@@ -116,7 +122,10 @@ Open `.env` and set at least:
 
 The `.env` file is git-ignored and never committed.
 
-That's it — from now on, just double-click **`Start Willard AI.bat`**.
+That's it — from now on, just open **Willard Media Center** from the desktop or
+Start Menu. The shortcut is separate from the browser PWA: it starts and checks
+the local services first, then opens the installed PWA or browser at the local
+app address.
 
 ---
 
