@@ -297,7 +297,7 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
 
 // ── Enrichment of one file ───────────────────────────────────────────────────
 
-async function enrichOne(file: PendingFile): Promise<void> {
+export async function enrichOne(file: PendingFile): Promise<void> {
   let analysis: AiAnalysis;
   try {
     if (!file.fullPath || !fs.existsSync(file.fullPath) || !fs.statSync(file.fullPath).isFile()) {
