@@ -241,7 +241,7 @@ function ThumbnailCard({
   onToggleFavorite?: (file: MediaFile) => void;
 }) {
   const [thumbError, setThumbError] = useState(false);
-  const canThumb = (file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") && !thumbError;
+  const canThumb = file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf";
 
   return (
     <div
@@ -261,13 +261,22 @@ function ThumbnailCard({
             src={apiUrl(`/media/thumbnail/${file.id}`)}
             alt={file.name}
             loading="lazy"
-            className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+            className={cn(
+              "w-full h-full object-cover transition-transform duration-200 group-hover:scale-105",
+              thumbError && "opacity-0",
+            )}
             onError={() => setThumbError(true)}
           />
         ) : (
           <div className="flex flex-col items-center gap-1 text-muted-foreground p-2">
             <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
             <span className="text-xs font-mono uppercase">{file.extension || "—"}</span>
+          </div>
+        )}
+        {thumbError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted px-2 text-center text-muted-foreground pointer-events-none">
+            <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
+            <span className="text-[10px] font-mono uppercase">Thumbnail unavailable</span>
           </div>
         )}
         {file.mediaType === "video" && (

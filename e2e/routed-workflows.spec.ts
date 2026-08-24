@@ -159,9 +159,10 @@ test.describe("routed workflow recovery", () => {
 
     await page.goto(routePath("/media"));
     await page.locator("img[alt='missing.jpg']").click();
+    await expect(page.getByRole("dialog")).toHaveAttribute("aria-label", "Viewing missing.jpg");
     await expect(page.getByText("Could not load image")).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry loading" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open original" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "Open original" }).last()).toHaveAttribute(
       "href",
       new RegExp(`${basePath.replace("/", "\\/")}\\/api\\/media\\/file\\/901\\/stream$`),
     );
