@@ -31,3 +31,4 @@
 - [Vectorless auth bootstrap](vectorless-auth-bootstrap.md) — keep required schema independent of pgvector and consume recovery keys with compare-and-set
 - [Sharp patched release compatibility](sharp-patched-release.md) — sharp 0.35.2 keeps security fixes and resolves under the workspace bundler typings; 0.35.0 does not
 - [Routed workflow readiness](routed-workflow-readiness.md) — workflow startup can precede routed-host readiness; check web and API separately before browser tests
+- [Viewer regression harness](viewer-regression-harness.md) — isolate auth and hide the injected dev banner so repeated viewer E2E runs exercise media behavior, not workspace state

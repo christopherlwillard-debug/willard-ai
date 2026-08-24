@@ -854,6 +854,13 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
   // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+      ) {
+        return;
+      }
       if (showRename || showDelete) return;
       showControls();
       switch (e.key) {

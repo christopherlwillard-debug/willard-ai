@@ -1,9 +1,9 @@
 /**
  * Playwright regression coverage for the immersive media viewer.
  *
- * The media endpoints are mocked after the real authentication gate so this
- * suite is deterministic and does not depend on whichever files are currently
- * in the development library.
+ * The authentication and media endpoints are mocked so this suite is
+ * deterministic and does not depend on rate limits or whichever files are
+ * currently in the development library.
  *
  * Run:
  *   npx playwright test e2e/media-viewer.spec.ts
@@ -66,16 +66,24 @@ function mediaFile(id: number, name: string, favorite = false) {
 
 async function loginThroughUI(page: Page): Promise<void> {
   const password = page.locator("input[autocomplete='current-password']");
-  if (await password.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    await password.fill(TEST_PASSWORD);
-    await page.getByRole("button", { name: /authenticate/i }).click();
-    await expect(password).not.toBeVisible({ timeout: 15_000 });
-  }
+  await expect(password).toBeVisible({ timeout: 15_000 });
+  await password.fill(TEST_PASSWORD);
+  await page.getByRole("button", { name: /authenticate/i }).click();
+  await expect(password).not.toBeVisible({ timeout: 15_000 });
+}
+
+async function dismissDevelopmentBanner(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: "#replit-dev-banner { display: none !important; pointer-events: none !important; }",
+  });
 }
 
 async function mockLibrary(page: Page): Promise<void> {
   const files = [mediaFile(901, "sunset.jpg"), mediaFile(902, "beach.jpg")];
 
+  await page.route("**/api/auth/status", (route) =>
+    route.fulfill({ json: { setup: false, authenticated: true } }),
+  );
   await page.route("**/api/media/folders", (route) =>
     route.fulfill({ json: { tree: [] } }),
   );
@@ -118,7 +126,7 @@ test.describe("Media viewer", () => {
   test("supports navigation, info, favorites, rename validation, filmstrip, and safe delete cancel", async ({ page }) => {
     await mockLibrary(page);
     await page.goto("/media");
-    await loginThroughUI(page);
+    await dismissDevelopmentBanner(page);
 
     await expect(page.locator("img[alt='sunset.jpg']").first()).toBeVisible({ timeout: 20_000 });
     await page.locator("img[alt='sunset.jpg']").first().click();
@@ -145,17 +153,22 @@ test.describe("Media viewer", () => {
 
     // Rename validates blank input and closes cleanly on Escape.
     await viewer.getByTitle("Rename").click();
-    await expect(page.getByText("Rename file", { exact: true })).toBeVisible();
-    const renameInput = page.locator("input").last();
+    const renameDialog = page.getByText("Rename file", { exact: true }).locator("..");
+    await expect(renameDialog).toBeVisible();
+    const renameInput = renameDialog.locator("input");
     await renameInput.fill("");
-    await expect(page.getByRole("button", { name: "Rename", exact: true })).toBeDisabled();
-    await page.keyboard.press("Escape");
-    await expect(page.getByText("Rename file", { exact: true })).not.toBeVisible();
+    await expect(renameDialog.getByRole("button", { name: "Rename", exact: true })).toBeDisabled();
+    await renameInput.press("Escape");
+    await expect(renameDialog).not.toBeVisible();
+    await expect(viewer).toBeVisible();
 
     // Delete confirmation names the current file; Cancel leaves the viewer open.
+    await page.mouse.move(500, 100);
+    await expect(viewer.getByTitle("Remove from library")).toBeVisible();
     await viewer.getByTitle("Remove from library").click();
-    await expect(page.getByText("Remove from library?", { exact: true })).toBeVisible();
-    await expect(page.getByText("sunset.jpg", { exact: true })).toBeVisible();
+    const deleteDialog = page.getByText("Remove from library?", { exact: true }).locator("../..");
+    await expect(deleteDialog).toBeVisible();
+    await expect(deleteDialog.locator("span.font-mono")).toHaveText("sunset.jpg");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByText("Remove from library?", { exact: true })).not.toBeVisible();
     await expect(viewer).toHaveAttribute("aria-label", "Viewing sunset.jpg");
