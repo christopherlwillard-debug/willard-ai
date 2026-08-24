@@ -17,6 +17,8 @@ $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
 $ApiUrl = "http://127.0.0.1:8080/api/healthz"
 $WebUrl = "http://127.0.0.1:5000"
 $UpdateManifest = "https://github.com/christopherlwillard-debug/willard-ai/releases/latest/download/release-manifest.json"
+$script:WillardRunToken = [guid]::NewGuid().ToString()
+$script:UpdateBackup = $null
 
 function Say($message) { Write-Host "  $message" -ForegroundColor Gray }
 function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
@@ -31,13 +33,50 @@ function Read-Pids {
   if (-not (Test-Path $PidFile)) { return $null }
   try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
 }
-function Is-Alive($pid) { return [bool]($pid -and (Get-Process -Id $pid -ErrorAction SilentlyContinue)) }
+function Get-ProcessIdentity($processId) {
+  if (-not $processId) { return $null }
+  try {
+    $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
+    if (-not $process) { return $null }
+    return @{
+      pid = [int]$process.ProcessId
+      path = [string]$process.ExecutablePath
+      commandLine = [string]$process.CommandLine
+      creationDate = [string]$process.CreationDate
+    }
+  } catch { return $null }
+}
+function Test-ProcessIdentity($tracked) {
+  if (-not $tracked) { return $false }
+  $current = Get-ProcessIdentity $tracked.pid
+  if (-not $current -or -not $tracked.path -or -not $tracked.commandLine) { return $false }
+  return ($current.path -eq $tracked.path -and $current.commandLine -eq $tracked.commandLine -and
+    (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
+}
+function Is-Alive($process) {
+  if ($process -is [psobject] -and $process.pid) { return (Test-ProcessIdentity $process) }
+  return $false
+}
 function Stop-Services {
   $pids = Read-Pids
-  foreach ($pid in @($pids.api, $pids.web)) {
-    if (Is-Alive $pid) { & taskkill /PID $pid /T /F 2>&1 | Out-Null }
+  foreach ($process in @($pids.api, $pids.web)) {
+    if (Test-ProcessIdentity $process) { & taskkill /PID $process.pid /T /F 2>&1 | Out-Null }
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+function Save-Services($apiPid, $webPid) {
+  $api = Get-ProcessIdentity $apiPid
+  $web = Get-ProcessIdentity $webPid
+  @{ version = 2; runToken = $script:WillardRunToken; api = $api; web = $web; startedAt = (Get-Date).ToString("o") } |
+    ConvertTo-Json | Set-Content $PidFile
+}
+function Restore-UpdateBackup {
+  if (-not $script:UpdateBackup -or -not (Test-Path $script:UpdateBackup)) { return }
+  Remove-Item (Join-Path $InstallRoot "*") -Recurse -Force -ErrorAction SilentlyContinue
+  Copy-Item (Join-Path $script:UpdateBackup "*") $InstallRoot -Recurse -Force
+  Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
+  $script:UpdateBackup = $null
+  Warn "The previous working release was restored."
 }
 function Get-SchemaFingerprint {
   $parts = @()
@@ -73,7 +112,14 @@ function Ensure-Schema {
 function Wait-Ready($url, $label) {
   $until = (Get-Date).AddSeconds(60)
   while ((Get-Date) -lt $until) {
-    try { $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3; if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { return $true } } catch {}
+    try {
+      $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
+      $content = [string]$response.Content
+      if ($response.StatusCode -eq 200) {
+        if ($url -match "/api/healthz$" -and $content -match '"status"\s*:\s*"ok"') { return $true }
+        if ($url -notmatch "/api/healthz$" -and $content -match "<html|<!doctype html") { return $true }
+      }
+    } catch {}
     Say "Still waiting for $label..."
     Start-Sleep -Seconds 2
   }
@@ -117,7 +163,7 @@ function Try-Update {
       Set-Content $UpdateCheckFile (Get-Date).ToString("o")
       return
     }
-    if (-not $remote.artifactUrl -or -not $remote.sha256) { throw "The release description is incomplete." }
+    if (-not $remote.artifactUrl -or -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") { throw "The release description is incomplete." }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"
     New-Item -ItemType Directory -Force (Split-Path $zip) | Out-Null
@@ -127,22 +173,31 @@ function Try-Update {
     if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
-    if (-not (Test-Path (Join-Path $stage "version.json"))) { throw "The downloaded release is incomplete." }
+    $required = @("version.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
+      "desktop\desktop-web-server.mjs", "api-runtime\dist\index.mjs",
+      "api-runtime\setup-db.cjs", "web\index.html")
+    foreach ($entry in $required) {
+      if (-not (Test-Path (Join-Path $stage $entry))) { throw "The downloaded release is incomplete: $entry" }
+    }
+    $stagedVersion = (Get-Content (Join-Path $stage "version.json") -Raw | ConvertFrom-Json).version
+    if ($stagedVersion -ne $remote.version) { throw "The downloaded release version does not match its manifest." }
     Stop-Services
     $backup = Join-Path $DataRoot "backup-$local"
     Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item $InstallRoot $backup -Recurse -Force
+    $script:UpdateBackup = $backup
     try {
       Copy-Item (Join-Path $stage "*") $InstallRoot -Recurse -Force
+      foreach ($entry in $required) {
+        if (-not (Test-Path (Join-Path $InstallRoot $entry))) { throw "Installed update is missing: $entry" }
+      }
       Good "Willard Media Center was updated safely."
     } catch {
       Remove-Item (Join-Path $InstallRoot "*") -Recurse -Force -ErrorAction SilentlyContinue
       Copy-Item (Join-Path $backup "*") $InstallRoot -Recurse -Force
       throw "The update could not be installed; the previous version was restored."
     }
-    Set-Content $UpdateCheckFile (Get-Date).ToString("o")
   } catch {
-    Set-Content $UpdateCheckFile (Get-Date).ToString("o")
     Warn "Update check skipped: $($_.Exception.Message)"
   }
 }
@@ -152,6 +207,11 @@ Write-Host ""
 Write-Host "  Willard Media Center" -ForegroundColor Cyan
 Write-Host "  Starting your local media library" -ForegroundColor Gray
 try {
+  if ($args -contains "-Stop") {
+    Stop-Services
+    Good "Willard Media Center services stopped."
+    exit 0
+  }
   $existing = Read-Pids
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
@@ -165,16 +225,30 @@ try {
   Ensure-Schema
   $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
-  $apiProc = Start-Process $Node -ArgumentList @("--env-file=$EnvFile", $Api) -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
-  $webProc = Start-Process $Node -ArgumentList @($WebServer, "--root=$Web", "--port=5000", "--api=http://127.0.0.1:8080") -WorkingDirectory $InstallRoot -RedirectStandardOutput (Join-Path $LogRoot "web.log") -RedirectStandardError (Join-Path $LogRoot "web-error.log") -WindowStyle Hidden -PassThru
-  @{ api = $apiProc.Id; web = $webProc.Id; startedAt = (Get-Date).ToString("o") } | ConvertTo-Json | Set-Content $PidFile
+  $apiProc = $null
+  try {
+    $apiProc = Start-Process $Node -ArgumentList @("--env-file=$EnvFile", $Api) -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
+    Save-Services $apiProc.Id $null
+    $webProc = Start-Process $Node -ArgumentList @($WebServer, "--root=$Web", "--port=5000", "--api=http://127.0.0.1:8080") -WorkingDirectory $InstallRoot -RedirectStandardOutput (Join-Path $LogRoot "web.log") -RedirectStandardError (Join-Path $LogRoot "web-error.log") -WindowStyle Hidden -PassThru
+    Save-Services $apiProc.Id $webProc.Id
+  } catch {
+    Stop-Services
+    throw
+  }
   Say "Starting the library service..."
   if (-not (Wait-Ready $ApiUrl "library service")) { Stop-Services; throw "The local library service did not become ready. Check the logs in '$LogRoot'." }
   Say "Starting the Media Center..."
   if (-not (Wait-Ready $WebUrl "Media Center")) { Stop-Services; throw "The Media Center did not become ready. Check the logs in '$LogRoot'." }
+  if ($script:UpdateBackup) {
+    Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
+    $script:UpdateBackup = $null
+    Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+  }
   Good "Media Center is ready."
   Start-Process $WebUrl
 } catch {
+  Stop-Services
+  Restore-UpdateBackup
   Fail $_.Exception.Message
   Write-Host "  Logs: $LogRoot" -ForegroundColor DarkGray
   exit 1

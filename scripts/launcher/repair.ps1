@@ -100,4 +100,5 @@ if ($problems.Count -eq 0) {
     }
 }
 Pause-BeforeClose
+if ($problems.Count -gt 0) { exit 1 }
 exit 0

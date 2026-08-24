@@ -27,6 +27,11 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Get-SchemaFingerprint/);
   assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
   assert.match(launcher, /last-update-check\.txt/);
+  assert.match(launcher, /Test-ProcessIdentity/);
+  assert.match(launcher, /StatusCode -eq 200/);
+  assert.match(launcher, /The previous working release was restored/);
+  assert.match(launcher, /Set-Content \$UpdateCheckFile/);
+  assert.match(launcher, /-Stop/);
 });
 
 test("installer deliberately leaves external services outside its payload", () => {
@@ -55,6 +60,8 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /api-runtime\/dist\/index\.mjs/);
   assert.match(releaseValidator, /api-runtime\/setup-db\.cjs/);
   assert.match(releaseValidator, /web\/index\.html/);
+  assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
+  assert.match(releaseValidator, /sha256.*match/i);
 });
 
 test("developer startup launches the API directly and fails when that process exits", () => {
@@ -82,4 +89,24 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(launcherCommon, /function Wait-ForDatabase/);
   assert.match(developerLauncher, /Wait-ForDatabase 30/);
   assert.doesNotMatch(developerLauncher, /Show-Failure \$friendly \$technical/);
+  assert.match(launcherCommon, /Get-CimInstance Win32_Process/);
+  assert.match(launcherCommon, /Test-ProcessIdentity/);
+  assert.match(launcherCommon, /StatusCode -eq 200/);
+  assert.match(developerLauncher, /Save-TrackedPids \$apiProc\.Id \$null/);
+});
+
+test("installer coordinates upgrades and repair reports failures", async () => {
+  const repair = await readFile(new URL("../launcher/repair.ps1", import.meta.url), "utf8");
+  assert.match(config, /PrepareToInstall/);
+  assert.match(config, /WillardMediaCenter\.ps1[\s\S]*-Stop/);
+  assert.match(repair, /\$problems\.Count -gt 0\) \{ exit 1 \}/);
+});
+
+test("developer fallback stages a complete source archive", async () => {
+  const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
+  assert.match(updater, /archive\/refs\/heads/);
+  assert.match(updater, /Expand-Archive/);
+  assert.match(updater, /The downloaded source archive is incomplete/);
+  assert.match(updater, /robocopy/);
+  assert.doesNotMatch(updater, /Downloading \+ \$filesToUpdate\.Count/);
 });

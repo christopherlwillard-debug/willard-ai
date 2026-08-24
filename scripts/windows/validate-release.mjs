@@ -1,4 +1,5 @@
 import { access, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,11 +26,37 @@ for (const relative of requiredFiles) {
   }
 }
 
+const launcher = await readFile(path.join(releaseDir, "desktop", "WillardMediaCenter.ps1"), "utf8");
+for (const requiredReference of [
+  "runtime\\node.exe",
+  "api-runtime\\dist\\index.mjs",
+  "api-runtime\\setup-db.cjs",
+  "desktop\\desktop-web-server.mjs",
+  "web",
+]) {
+  if (!launcher.includes(requiredReference)) {
+    throw new Error(`Packaged launcher does not reference required payload: ${requiredReference}`);
+  }
+}
+
 const manifest = JSON.parse(await readFile(path.join(releaseDir, "version.json"), "utf8"));
 if (manifest.product !== "Willard Media Center") throw new Error("Packaged release has the wrong product name.");
 if (manifest.version !== version) throw new Error(`version.json says ${manifest.version}, expected ${version}.`);
 if (manifest.requires?.windows !== "10+") throw new Error("Windows prerequisite is missing from version.json.");
 if (manifest.requires?.postgresql !== "14+") throw new Error("PostgreSQL prerequisite is missing from version.json.");
 if (!manifest.optional?.ffmpeg) throw new Error("FFmpeg optional-prerequisite note is missing from version.json.");
+
+if (process.env.WILLARD_RELEASE_ZIP) {
+  const zipPath = path.resolve(process.env.WILLARD_RELEASE_ZIP);
+  const hash = createHash("sha256").update(await readFile(zipPath)).digest("hex");
+  const releaseManifestPath = process.env.WILLARD_RELEASE_MANIFEST
+    ? path.resolve(process.env.WILLARD_RELEASE_MANIFEST)
+    : path.join(path.dirname(zipPath), "release-manifest.json");
+  const releaseManifest = JSON.parse(await readFile(releaseManifestPath, "utf8"));
+  if (releaseManifest.version !== version) throw new Error("Release manifest version does not match the packaged payload.");
+  if (releaseManifest.artifactName !== path.basename(zipPath)) throw new Error("Release manifest artifact name does not match the ZIP.");
+  if (releaseManifest.sha256?.toLowerCase() !== hash) throw new Error("Release manifest checksum does not match the ZIP.");
+  if (!releaseManifest.artifactUrl?.endsWith("/" + path.basename(zipPath))) throw new Error("Release manifest artifact URL does not match the ZIP.");
+}
 
 console.log(`Validated Willard Media Center ${version} release payload at ${releaseDir}`);

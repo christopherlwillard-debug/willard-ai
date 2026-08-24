@@ -74,55 +74,46 @@ if ($hasGit -and -not $hasGitDir -and -not $updatedViaGit) {
     }
 }
 
-# Strategy C: no git, or git failed - download key files directly
+# Strategy C: no git, or git failed - stage the complete source archive.
 if (-not $updatedViaGit) {
-    $filesToUpdate = @(
-        "package.json",
-        "pnpm-lock.yaml",
-        "setup-db.cjs",
-        "scripts/launcher/common.ps1",
-        "scripts/launcher/setup.ps1",
-        "scripts/launcher/start.ps1",
-        "scripts/launcher/stop.ps1",
-        "scripts/launcher/repair.ps1",
-        "scripts/launcher/update.ps1",
-        "Setup Willard AI.bat",
-        "Start Willard AI.bat",
-        "Stop Willard AI.bat",
-        "Repair Willard AI.bat",
-        "Update Willard AI.bat"
-    )
-    Write-Info ("Downloading " + $filesToUpdate.Count + " files from GitHub...")
-    $failed = @()
-    foreach ($file in $filesToUpdate) {
-        $encodedFile = $file -replace ' ', '%20'
-        $url  = "$GithubRawBase/$encodedFile"
-        $dest = Join-Path $Root ($file -replace '/', '\')
-        $destDir = Split-Path $dest
-        if ($destDir -and -not (Test-Path $destDir)) {
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    $archive = Join-Path $env:TEMP "willard-source-update.zip"
+    $stage = Join-Path $env:TEMP ("willard-source-" + [guid]::NewGuid().ToString())
+    $backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
+    try {
+        Write-Info "Downloading the complete source update..."
+        Invoke-WebRequest -Uri "$GithubRepo/archive/refs/heads/$GithubBranch.zip" -OutFile $archive -UseBasicParsing -TimeoutSec 120
+        Expand-Archive -Path $archive -DestinationPath $stage -Force
+        $sourceRoot = Get-ChildItem $stage -Directory | Select-Object -First 1
+        if (-not $sourceRoot) { throw "The downloaded source archive was empty." }
+        foreach ($required in @("package.json", "pnpm-lock.yaml", "setup-db.cjs",
+            "artifacts\api-server\package.json", "artifacts\willard-ai\package.json",
+            "scripts\launcher\start.ps1")) {
+            if (-not (Test-Path (Join-Path $sourceRoot.FullName $required))) {
+                throw "The downloaded source archive is incomplete: $required"
+            }
         }
-        try {
-            $savedPref = $ErrorActionPreference
-            $ErrorActionPreference = "SilentlyContinue"
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
-            $ErrorActionPreference = $savedPref
-        } catch {
-            $ErrorActionPreference = $savedPref
-            $failed += $file
-            Add-Content $updateLog ("[update] Failed to download: $file - $_")
+        New-Item -ItemType Directory -Force $backup | Out-Null
+        # Keep user data, dependencies, and logs out of the source swap.
+        & robocopy $Root $backup /E /XD (Join-Path $Root "node_modules") (Join-Path $Root "logs") (Join-Path $Root ".git") /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -gt 7) { throw "Could not create an update backup." }
+        Get-ChildItem $sourceRoot.FullName -Force |
+            Where-Object { $_.Name -notin @(".env", "node_modules", "logs", ".git") } |
+            Copy-Item -Destination $Root -Recurse -Force
+        Write-Ok "Complete source update staged and installed."
+        $updatedViaGit = $true
+        $script:ApiSourceChanged = $true
+    } catch {
+        if (Test-Path $backup) {
+            Get-ChildItem $backup -Force | Copy-Item -Destination $Root -Recurse -Force
+            Write-Warn "The previous source copy was restored."
         }
-    }
-    if ($failed.Count -gt 0) {
-        Write-Warn ("Could not download " + $failed.Count + " file(s): " + ($failed -join ", "))
-        Write-Info ("Check your internet connection and try again. Details: " + $updateLog)
+        Add-Content $updateLog ("[update] Staged source update failed: " + $_)
+        Write-Warn "The complete update could not be installed. Details: $updateLog"
         Pause-BeforeClose; exit 1
+    } finally {
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-Ok ("Downloaded " + $filesToUpdate.Count + " launcher and config files.")
-    # Direct download cannot fetch API source trees - only scripts and config
-    # are updated. API source requires git. Rebuild is skipped accordingly.
-    $script:ApiSourceChanged = $false
-    Write-Info "Note: API source updates require git. Install git and re-run for full updates."
 }
 
 # Refresh packages

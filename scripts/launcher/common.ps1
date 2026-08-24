@@ -191,9 +191,40 @@ function Read-TrackedPids {
     try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
 }
 
+function Get-ProcessIdentity($processId) {
+    if (-not $processId) { return $null }
+    try {
+        $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
+        if (-not $process) { return $null }
+        return @{
+            pid = [int]$process.ProcessId
+            path = [string]$process.ExecutablePath
+            commandLine = [string]$process.CommandLine
+            creationDate = [string]$process.CreationDate
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Test-ProcessIdentity($tracked) {
+    if (-not $tracked) { return $false }
+    $pid = if ($tracked.pid) { $tracked.pid } else { $tracked }
+    $current = Get-ProcessIdentity $pid
+    if (-not $current) { return $false }
+    # Refuse to act on legacy PID-only records. A reused PID must never be
+    # mistaken for a Willard process.
+    if (-not $tracked.path -or -not $tracked.commandLine) { return $false }
+    return ($current.path -eq $tracked.path -and
+        $current.commandLine -eq $tracked.commandLine -and
+        (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
+}
+
 function Save-TrackedPids($apiPid, $webPid) {
     Ensure-LogDir
-    @{ api = $apiPid; web = $webPid; startedAt = (Get-Date).ToString("o") } |
+    $apiIdentity = Get-ProcessIdentity $apiPid
+    $webIdentity = Get-ProcessIdentity $webPid
+    @{ version = 2; runToken = $script:WillardRunToken; api = $apiIdentity; web = $webIdentity; startedAt = (Get-Date).ToString("o") } |
         ConvertTo-Json | Set-Content $PidFile
 }
 
@@ -202,6 +233,9 @@ function Clear-TrackedPids {
 }
 
 function Test-ProcessAlive($processId) {
+    if ($processId -is [psobject] -and $processId.pid) {
+        return (Test-ProcessIdentity $processId)
+    }
     if (-not $processId) { return $false }
     return [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)
 }
@@ -212,9 +246,9 @@ function Stop-TrackedProcesses {
     $stopped = 0
     if ($pids) {
         foreach ($p in @($pids.api, $pids.web)) {
-            if ($p -and (Test-ProcessAlive $p)) {
+            if ($p -and (Test-ProcessIdentity $p)) {
                 # Stop the whole tree the tracked process spawned
-                & taskkill /PID $p /T /F 2>&1 | Out-Null
+                & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
                 $stopped++
             }
         }
@@ -243,7 +277,14 @@ function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $lo
         }
         try {
             $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-            if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { return $true }
+            $content = [string]$r.Content
+            if ($r.StatusCode -eq 200) {
+                if ($url -match "/api/healthz$") {
+                    if ($content -match '"status"\s*:\s*"ok"') { return $true }
+                } elseif ($content -match "<html|<!doctype html") {
+                    return $true
+                }
+            }
         } catch { }
         $elapsed = [int]$sw.Elapsed.TotalSeconds
         if ($elapsed - $lastTick -ge 5) {

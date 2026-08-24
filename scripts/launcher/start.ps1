@@ -62,6 +62,8 @@ if (-not $nodeCommand) {
     Stop-And-Exit "Willard AI couldn't locate Node.js." "Node.js was found but its executable path could not be resolved."
 }
 
+$script:WillardRunToken = [guid]::NewGuid().ToString()
+
 if (-not (Test-Command "pnpm")) {
     if (Test-Command "npm") {
         Write-Info "Installing a small package helper..."
@@ -234,31 +236,39 @@ function Start-WillardServices {
     Write-Info "Opening the library service and Media Center..."
     $env:PORT = "8080"
     $envFile = Join-Path $Root ".env"
-    $apiProc = Start-Process -FilePath $nodeCommand `
-        -ArgumentList @("--enable-source-maps", "--env-file=$envFile", $apiDist) `
-        -WorkingDirectory (Join-Path $Root "artifacts\api-server") `
-        -RedirectStandardOutput $ApiLog -RedirectStandardError (Join-Path $LogDir "api-error.log") `
-        -WindowStyle Minimized -PassThru
-    $env:PORT = "5000"
-    $pnpmCommand = $null
-    foreach ($candidate in @("pnpm.cmd", "pnpm.exe")) {
-        $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
-        if ($resolved) {
-            $pnpmCommand = $resolved.Source
-            break
+    $apiProc = $null
+    try {
+        $apiProc = Start-Process -FilePath $nodeCommand `
+            -ArgumentList @("--enable-source-maps", "--env-file=$envFile", $apiDist) `
+            -WorkingDirectory (Join-Path $Root "artifacts\api-server") `
+            -RedirectStandardOutput $ApiLog -RedirectStandardError (Join-Path $LogDir "api-error.log") `
+            -WindowStyle Minimized -PassThru
+        # Persist ownership immediately so a web startup failure can clean up
+        # the API process as well.
+        Save-TrackedPids $apiProc.Id $null
+        $env:PORT = "5000"
+        $pnpmCommand = $null
+        foreach ($candidate in @("pnpm.cmd", "pnpm.exe")) {
+            $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
+            if ($resolved) {
+                $pnpmCommand = $resolved.Source
+                break
+            }
         }
+        if (-not $pnpmCommand) {
+            throw "The package helper was found but no Windows executable wrapper (pnpm.cmd or pnpm.exe) was available."
+        }
+        $webProc = Start-Process -FilePath $pnpmCommand `
+            -ArgumentList @("--filter", "@workspace/willard-ai", "run", "dev") `
+            -WorkingDirectory $Root -RedirectStandardOutput $WebLog `
+            -RedirectStandardError (Join-Path $LogDir "web-error.log") `
+            -WindowStyle Minimized -PassThru
+        Save-TrackedPids $apiProc.Id $webProc.Id
+        return @{ api = $apiProc; web = $webProc }
+    } catch {
+        Stop-TrackedProcesses | Out-Null
+        throw
     }
-    if (-not $pnpmCommand) {
-        Stop-And-Exit "Willard AI couldn't locate pnpm." `
-            "The package helper was found but no Windows executable wrapper (pnpm.cmd or pnpm.exe) was available."
-    }
-    $webProc = Start-Process -FilePath $pnpmCommand `
-        -ArgumentList @("--filter", "@workspace/willard-ai", "run", "dev") `
-        -WorkingDirectory $Root -RedirectStandardOutput $WebLog `
-        -RedirectStandardError (Join-Path $LogDir "web-error.log") `
-        -WindowStyle Minimized -PassThru
-    Save-TrackedPids $apiProc.Id $webProc.Id
-    return @{ api = $apiProc; web = $webProc }
 }
 
 $services = Start-WillardServices

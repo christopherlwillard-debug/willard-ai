@@ -55,3 +55,17 @@ Type: filesandordirs; Name: "{app}\web"
 Type: filesandordirs; Name: "{app}\api-runtime"
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\icons"
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  Launcher: String;
+begin
+  Result := '';
+  Launcher := ExpandConstant('{app}\desktop\WillardMediaCenter.ps1');
+  if FileExists(Launcher) then
+    Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -ExecutionPolicy Bypass -File "' + Launcher + '" -Stop',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;

@@ -26,6 +26,9 @@ $artifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Version-win
   notes = "See the release notes for this version."
   minimumWindowsVersion = "10"
 } | ConvertTo-Json | Set-Content $manifest -Encoding UTF8
+$env:WILLARD_RELEASE_ZIP = $zip
+$env:WILLARD_RELEASE_MANIFEST = $manifest
+ node (Join-Path $Root "scripts/windows/validate-release.mjs")
 Write-Host "Release ZIP: $zip"
 Write-Host "Release manifest: $manifest"
 Write-Host "Next: compile installer/WillardMediaCenter.iss with Inno Setup and publish both files plus the manifest."

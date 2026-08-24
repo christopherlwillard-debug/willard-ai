@@ -8,3 +8,9 @@ The installed Windows experience is driven by `desktop/WillardMediaCenter.ps1`, 
 **Why:** The first startup optimization changed only the developer path, so installed launches remained slow until the packaged launcher received the same schema gate and update behavior.
 
 **How to apply:** For Windows startup changes, update and test both launcher scripts and ensure the release packaging includes the packaged launcher change.
+
+Both launchers must persist executable path, command line, creation identity, and a run token with tracked processes; readiness requires HTTP 200 plus expected API JSON or web HTML, and update-check timestamps should be written only after a healthy start.
+
+**Why:** Numeric PID cleanup can terminate an unrelated reused process, permissive readiness can accept error pages, and caching before post-update health suppresses recovery retries.
+
+**How to apply:** Treat process ownership and post-update readiness as one lifecycle contract across developer startup, packaged startup, installer upgrades, and repair flows.
