@@ -51,9 +51,13 @@ those paths are unreachable and the library reports "Library Offline".
 - Local browser validation on NixOS uses the `pkgs.chromium` browser from
   `replit.nix`; Playwright selects it automatically, avoiding the missing
   libraries in its downloaded Chromium. With the web app running, run
-  `npx playwright test e2e/routed-workflows.spec.ts`. To use a different
-  browser explicitly, set `PLAYWRIGHT_EXECUTABLE_PATH`; no `LD_LIBRARY_PATH`
-  workaround is needed.
+  `pnpm run test:routed`. Off Replit, this command starts or reuses the API and
+  web services and reports which service failed readiness. On Replit, run the
+  `routed-browser-checks` workflow; it starts the existing API and web
+  workflows before running the same command. To target an already running or
+  published app instead, set `WILLARD_APP_URL`; CI keeps its existing
+  externally managed service behavior. To use a different browser explicitly,
+  set `PLAYWRIGHT_EXECUTABLE_PATH`; no `LD_LIBRARY_PATH` workaround is needed.
 
 ## Stack
 

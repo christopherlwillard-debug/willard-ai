@@ -30,3 +30,4 @@
 - [Node module-mock tests](node-module-mock-tests.md) — Node tests using mock.module require --experimental-test-module-mocks alongside --experimental-strip-types
 - [Vectorless auth bootstrap](vectorless-auth-bootstrap.md) — keep required schema independent of pgvector and consume recovery keys with compare-and-set
 - [Sharp patched release compatibility](sharp-patched-release.md) — sharp 0.35.2 keeps security fixes and resolves under the workspace bundler typings; 0.35.0 does not
+- [Routed workflow readiness](routed-workflow-readiness.md) — workflow startup can precede routed-host readiness; check web and API separately before browser tests

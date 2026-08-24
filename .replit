@@ -111,3 +111,21 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
+
+[[workflows.workflow]]
+name = "routed-browser-checks"
+mode = "sequential"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "artifacts/api-server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "artifacts/willard-ai"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm run test:routed"
+

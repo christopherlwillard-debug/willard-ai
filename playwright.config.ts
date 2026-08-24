@@ -5,7 +5,13 @@ const REPLIT_BASE = process.env["REPLIT_DEV_DOMAIN"]
   ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
   : undefined;
 
-const baseURL = process.env["WILLARD_APP_URL"] ?? REPLIT_BASE ?? "http://localhost:3000";
+const baseURL =
+  process.env["WILLARD_APP_URL"] ?? REPLIT_BASE ?? "http://localhost:5000";
+const usesExternalApp = Boolean(
+  process.env["WILLARD_APP_URL"] || process.env["REPLIT_DEV_DOMAIN"],
+);
+const localWebURL = "http://127.0.0.1:5000";
+const localApiHealthURL = "http://127.0.0.1:8080/api/healthz";
 
 function findLocalChromium(): string | undefined {
   const configuredPath = process.env["PLAYWRIGHT_EXECUTABLE_PATH"];
@@ -13,7 +19,10 @@ function findLocalChromium(): string | undefined {
   if (process.platform !== "linux") return undefined;
 
   try {
-    return execFileSync("which", ["chromium"], { encoding: "utf8" }).trim() || undefined;
+    return (
+      execFileSync("which", ["chromium"], { encoding: "utf8" }).trim() ||
+      undefined
+    );
   } catch {
     // Standard CI environments can continue using Playwright's bundled browser.
     return undefined;
@@ -31,13 +40,36 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: "line",
   use: {
-    baseURL,
+    baseURL: usesExternalApp ? baseURL : localWebURL,
     headless: true,
     ...(executablePath ? { launchOptions: { executablePath } } : {}),
     ignoreHTTPSErrors: true,
     screenshot: "only-on-failure",
     video: "off",
   },
+  // Local routed checks need both sides of the Vite proxy. Reuse services
+  // started from the Replit workflow, but start them for a fresh shell run.
+  // External and CI runs supply their own app URL/processes.
+  ...(usesExternalApp || process.env["CI"] === "true"
+    ? {}
+    : {
+        webServer: [
+          {
+            command: "PORT=8080 pnpm --filter @workspace/api-server run dev",
+            url: localApiHealthURL,
+            name: "API server",
+            timeout: 120_000,
+            reuseExistingServer: true,
+          },
+          {
+            command: "pnpm --filter @workspace/willard-ai run dev",
+            url: localWebURL,
+            name: "web app",
+            timeout: 120_000,
+            reuseExistingServer: true,
+          },
+        ],
+      }),
   projects: [
     {
       name: "chromium",
