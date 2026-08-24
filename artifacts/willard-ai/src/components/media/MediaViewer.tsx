@@ -82,6 +82,7 @@ function PhotoView({
 }: { file: MediaFile; onPrevNext: (d: -1 | 1) => void }) {
   const [loaded, setLoaded] = useState(false);
   const [error,  setError]  = useState(false);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [ps, setPs]         = useState<PhotoState>(FIT);
   const [fitZoom, setFitZoom] = useState(1);
   const imgRef  = useRef<HTMLImageElement>(null);
@@ -215,9 +216,33 @@ function PhotoView({
   }, [onPrevNext, ps.zoom, fitZoom]);
 
   if (error) return (
-    <div className="flex flex-col items-center gap-3 text-muted-foreground">
+    <div className="flex flex-col items-center gap-3 text-muted-foreground text-center">
       <ImageIcon className="w-16 h-16" />
       <span className="text-sm font-mono">Could not load image</span>
+      <p className="max-w-xs text-xs">
+        The original may be unavailable or the library connection may have been interrupted.
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="rounded border border-border px-3 py-1.5 text-xs font-mono hover:bg-secondary"
+          onClick={() => {
+            setError(false);
+            setLoaded(false);
+            setRetryAttempt((attempt) => attempt + 1);
+          }}
+        >
+          Retry loading
+        </button>
+        <a
+          href={`${API}/media/file/${file.id}/stream`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded border border-border px-3 py-1.5 text-xs font-mono hover:bg-secondary"
+        >
+          Open original
+        </a>
+      </div>
     </div>
   );
 
@@ -243,7 +268,7 @@ function PhotoView({
       )}
       <img
         ref={imgRef}
-        src={`${API}/media/file/${file.id}/stream`}
+        src={`${API}/media/file/${file.id}/stream${retryAttempt ? `?retry=${retryAttempt}` : ""}`}
         alt={file.name}
         onLoad={onImgLoad}
         onError={() => setError(true)}
