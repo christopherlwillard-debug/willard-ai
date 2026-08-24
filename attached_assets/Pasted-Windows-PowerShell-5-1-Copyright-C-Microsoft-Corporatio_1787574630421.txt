@@ -1,0 +1,131 @@
+Windows PowerShell 5.1
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\WINDOWS\system32> Test-NetConnection 127.0.0.1 -Port 8080
+WARNING: TCP connect to (127.0.0.1 : 8080) failed
+
+
+ComputerName           : 127.0.0.1
+RemoteAddress          : 127.0.0.1
+RemotePort             : 8080
+InterfaceAlias         : Loopback Pseudo-Interface 1
+SourceAddress          : 127.0.0.1
+PingSucceeded          : True
+PingReplyDetails (RTT) : 0 ms
+TcpTestSucceeded       : False
+
+
+
+PS C:\WINDOWS\system32> Get-Process node -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime
+
+   Id Path                             StartTime
+   -- ----                             ---------
+15952 C:\Program Files\nodejs\node.exe 8/24/2026 7:27:40 AM
+17900 C:\Program Files\nodejs\node.exe 8/24/2026 7:27:40 AM
+25532 C:\Program Files\nodejs\node.exe 8/24/2026 7:27:40 AM
+
+
+PS C:\WINDOWS\system32> Get-Content C:\Willards-Media-Center\logs\api-error.log -Tail 100
+[library-engine] Marked 1 RUNNING job(s) as FAILED (interrupted by restart)
+PS C:\WINDOWS\system32> Get-Content C:\Willards-Media-Center\logs\api.log -Tail 100
+      "stack":
+          Error: UNKNOWN: unknown error, watch
+              at FSWatcher._handle.onchange (node:internal/fs/watchers:267:21)
+      "errno": -4094,
+      "syscall": "watch",
+      "code": "UNKNOWN",
+      "filename": null
+    }
+[07:29:49.817] INFO (15952): Native file watching unavailable on this path â€” falling back to periodic sweeps
+    nasPath: "Z:\"
+    code: "UNKNOWN"
+    restarts: 1
+[07:29:49.865] INFO (15952): request completed
+    req: {
+      "id": 1,
+      "method": "GET",
+      "url": "/api/healthz"
+    }
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31
+[07:29:50.473] WARN (1253.jpg/15952): AI enrichment failed for file
+    fileId: 1
+    err: {
+      "type": "DatabaseError2",
+      "message": "column \"embedding\" of relation \"media_ai\" does not exist",
+      "stack":
+          error: column "embedding" of relation "media_ai" does not exist
+              at <anonymous> (C:\Willards-Media-Center\node_modules\.pnpm\pg-pool@3.14.0_pg@8.22.0\node_modules\pg-pool\index.js:45:11)
+              at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+              at async enrichOne (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:318:5)
+              at async runEnrichmentTick (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:383:7)
+      "length": 131,
+      "name": "error",
+      "severity": "ERROR",
+      "code": "42703",
+      "position": "101",
+      "file": "parse_target.c",
+      "line": "1073",
+      "routine": "checkInsertTargets"
+    }
+[07:29:50.518] WARN (1248.JPG/15952): AI enrichment failed for file
+    fileId: 2
+    err: {
+      "type": "DatabaseError2",
+      "message": "column \"embedding\" of relation \"media_ai\" does not exist",
+      "stack":
+          error: column "embedding" of relation "media_ai" does not exist
+              at <anonymous> (C:\Willards-Media-Center\node_modules\.pnpm\pg-pool@3.14.0_pg@8.22.0\node_modules\pg-pool\index.js:45:11)
+              at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+              at async enrichOne (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:318:5)
+              at async runEnrichmentTick (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:383:7)
+      "length": 131,
+      "name": "error",
+      "severity": "ERROR",
+      "code": "42703",
+      "position": "101",
+      "file": "parse_target.c",
+      "line": "1073",
+      "routine": "checkInsertTargets"
+    }
+[07:29:50.526] INFO (15952): request completed
+    req: {
+      "id": 2,
+      "method": "GET",
+      "url": "/api/healthz"
+    }
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 2
+[07:29:50.578] WARN (1252.jpg/15952): AI enrichment failed for file
+    fileId: 3
+    err: {
+      "type": "DatabaseError2",
+      "message": "column \"embedding\" of relation \"media_ai\" does not exist",
+      "stack":
+          error: column "embedding" of relation "media_ai" does not exist
+              at <anonymous> (C:\Willards-Media-Center\node_modules\.pnpm\pg-pool@3.14.0_pg@8.22.0\node_modules\pg-pool\index.js:45:11)
+              at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+              at async enrichOne (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:318:5)
+              at async runEnrichmentTick (C:\Willards-Media-Center\artifacts\api-server\src\lib\ai-enrichment.ts:383:7)
+      "length": 131,
+      "name": "error",
+      "severity": "ERROR",
+      "code": "42703",
+      "position": "101",
+      "file": "parse_target.c",
+      "line": "1073",
+      "routine": "checkInsertTargets"
+    }
+
+[startup] â•â•â•â•â•â•â•â•â•â• Willard AI Health â•â•â•â•â•â•â•â•â•â•
+[startup] âœ“ Database      connected
+[startup] âœ“ Dir cache     11 entries loaded
+[startup] âœ“ Library       24,566 files indexed
+[startup]   Integrity     2,702 thumbnail paths in DB
+[startup] âœ“ Thumbnails    2,702 files on disk â€” all present
+[startup] â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+PS C:\WINDOWS\system32>
