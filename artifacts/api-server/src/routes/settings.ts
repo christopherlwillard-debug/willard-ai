@@ -63,8 +63,17 @@ async function getOrCreateSettings() {
     .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
     .limit(1);
   if (rows.length > 0) return rows[0];
-  const [created] = await db.insert(appSettingsTable).values({}).returning();
-  return created;
+  try {
+    const [created] = await db.insert(appSettingsTable).values({}).returning();
+    return created;
+  } catch (error: any) {
+    if (error?.code !== "23505") throw error;
+    const [existing] = await db.select().from(appSettingsTable)
+      .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
+      .limit(1);
+    if (!existing) throw error;
+    return existing;
+  }
 }
 
 // Never send credential hashes to the client.

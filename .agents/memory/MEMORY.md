@@ -28,3 +28,4 @@
 - [GitHub workflow push authentication](github-workflow-push.md) — workflow-file pushes need a classic PAT via askpass; use x-access-token as the username
 - [Windows launcher split](windows-launcher-split.md) — packaged desktop startup is separate from the developer launcher; optimize and test both paths
 - [Node module-mock tests](node-module-mock-tests.md) — Node tests using mock.module require --experimental-test-module-mocks alongside --experimental-strip-types
+- [Vectorless auth bootstrap](vectorless-auth-bootstrap.md) — keep required schema independent of pgvector and consume recovery keys with compare-and-set

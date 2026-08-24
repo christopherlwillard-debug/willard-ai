@@ -1,6 +1,7 @@
 import app, { bootstrapSessionTable, initializeVectorCapability } from "./app";
 import { logger } from "./lib/logger";
 import { reconcileCleanupOperations } from "./lib/cleanup-recovery";
+import { recoverInterruptedJobs } from "./lib/library-engine";
 
 const rawPort = process.env["PORT"];
 
@@ -22,6 +23,7 @@ const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTabl
 startupMigrations
   .then(async () => {
     if (schemaReady) await initializeVectorCapability();
+    await recoverInterruptedJobs();
     reconcileCleanupOperations().catch((err) => {
       logger.error({ err }, "Cleanup operation reconciliation failed");
     });

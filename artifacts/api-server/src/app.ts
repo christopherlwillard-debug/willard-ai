@@ -91,6 +91,16 @@ export async function bootstrapSessionTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
   `);
   await pool.query(`
+    DELETE FROM app_settings
+    WHERE id NOT IN (
+      SELECT id FROM app_settings
+      ORDER BY (password_hash IS NOT NULL) DESC, id ASC
+      LIMIT 1
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS app_settings_singleton_idx
+      ON app_settings ((1));
+  `);
+  await pool.query(`
     ALTER TABLE organization_jobs
       ADD COLUMN IF NOT EXISTS conflict_policy text NOT NULL DEFAULT 'keep_existing';
     ALTER TABLE organization_jobs
@@ -479,9 +489,6 @@ db.select().from(appSettingsTable).limit(1).then(async (rows) => {
 
 // Warn (don't crash) if ffmpeg/ffprobe are missing — important for local installs
 checkMediaToolsOnStartup();
-
-// Recover library jobs interrupted mid-run
-recoverInterruptedJobs().catch(() => {});
 
 // Pre-populate thumbnail cache so the first page-load hits zero NAS stat calls
 warmThumbnailCache().catch(() => {});

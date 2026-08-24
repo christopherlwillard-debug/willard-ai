@@ -125,6 +125,15 @@ const SETUP_SQL = [
     onboarding_dismissed_at timestamp,
     celebration_shown_at    timestamp
   )`,
+  // Older installs may contain duplicates from concurrent first-run setup.
+  // Keep the authenticated/oldest row before enforcing the singleton.
+  `DELETE FROM app_settings
+   WHERE id NOT IN (
+     SELECT id FROM app_settings
+     ORDER BY (password_hash IS NOT NULL) DESC, id ASC
+     LIMIT 1
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS app_settings_singleton_idx ON app_settings ((1))`,
 
   // scan_jobs (legacy)
   `CREATE TABLE IF NOT EXISTS scan_jobs (
@@ -334,7 +343,7 @@ const SETUP_SQL = [
   `CREATE INDEX IF NOT EXISTS library_activity_nas_path_idx ON library_activity (nas_path)`,
   `CREATE INDEX IF NOT EXISTS library_activity_created_at_idx ON library_activity (created_at)`,
 
-  // media_ai
+  // media_ai — vector embeddings are added after the optional pgvector probe
   `CREATE TABLE IF NOT EXISTS media_ai (
     id             serial PRIMARY KEY,
     media_file_id  integer NOT NULL,
@@ -343,8 +352,7 @@ const SETUP_SQL = [
     objects        jsonb,
     ocr_text       text,
     doc_type       text,
-    scene          text,
-    embedding      vector(384),
+     scene          text,
     ai_version     integer NOT NULL DEFAULT 1,
     analyzed_at    timestamp,
     error          text,
@@ -391,10 +399,9 @@ const SETUP_SQL = [
     nas_path      text,
     name          text,
     cover_face_id integer,
-    face_count    integer NOT NULL DEFAULT 0,
-    centroid      vector(512),
+     face_count    integer NOT NULL DEFAULT 0,
     hidden        boolean NOT NULL DEFAULT false,
-    created_at    timestamp NOT NULL DEFAULT now()
+     created_at    timestamp NOT NULL DEFAULT now()
   )`,
   `ALTER TABLE people ADD COLUMN IF NOT EXISTS nas_path text`,
   `CREATE INDEX IF NOT EXISTS people_nas_path_idx ON people (nas_path)`,
@@ -426,9 +433,8 @@ const SETUP_SQL = [
     box_y         real NOT NULL,
     box_w         real NOT NULL,
     box_h         real NOT NULL,
-    score         real NOT NULL,
-    crop_path     text,
-    embedding     vector(512),
+     score         real NOT NULL,
+     crop_path     text,
     created_at    timestamp NOT NULL DEFAULT now()
   )`,
   `ALTER TABLE faces ADD COLUMN IF NOT EXISTS manual_assignment boolean NOT NULL DEFAULT false`,
@@ -479,6 +485,14 @@ const SETUP_SQL = [
   `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS metadata_status text`,
 ];
 
+// Vector columns are optional and must never prevent a fresh database from
+// receiving the required catalog/auth schema.
+const VECTOR_SQL = [
+  `ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS embedding vector(384)`,
+  `ALTER TABLE people ADD COLUMN IF NOT EXISTS centroid vector(512)`,
+  `ALTER TABLE faces ADD COLUMN IF NOT EXISTS embedding vector(512)`,
+];
+
 // -- 6. Run everything --------------------------------------------------------
 async function main() {
   console.log('\n  Willard AI - Database Setup\n');
@@ -489,42 +503,56 @@ async function main() {
   await client.connect();
   console.log('  Connected to database.\n');
 
+  let vectorAvailable = false;
+
   // Optional extensions (pgvector etc.) - failures are non-fatal
   for (const sql of OPTIONAL_SQL) {
     const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
     try {
       await client.query(sql);
+      vectorAvailable = true;
       process.stdout.write('  [OK] ' + label + '\n');
     } catch (e) {
       process.stdout.write('  [--] ' + label + ' (optional, skipped: ' + e.message.split('\n')[0] + ')\n');
     }
   }
 
-  // Required tables - failures are fatal
+  // Required tables - run atomically so a failed setup cannot leave a
+  // misleading partially-created schema behind.
   let ok = 0;
-  let fail = 0;
-  for (const sql of SETUP_SQL) {
-    const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
-    try {
+  await client.query('BEGIN');
+  try {
+    for (const sql of SETUP_SQL) {
+      const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
       await client.query(sql);
       ok++;
       process.stdout.write('  [OK] ' + label + '\n');
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('  [FAIL] Required schema setup rolled back');
+    console.error('         ' + e.message);
+    await client.end();
+    process.exit(1);
+  }
+
+  if (vectorAvailable) {
+    try {
+      for (const sql of VECTOR_SQL) await client.query(sql);
+      process.stdout.write('  [OK] Optional pgvector columns\n');
     } catch (e) {
-      fail++;
-      console.error('  [FAIL] ' + label);
-      console.error('         ' + e.message);
+      // The required schema is healthy; leave vector features disabled if a
+      // permission/version issue prevents adding optional columns.
+      vectorAvailable = false;
+      console.error('  [--] Optional pgvector columns skipped: ' + e.message.split('\n')[0]);
     }
   }
 
   await client.end();
 
   console.log('\n  -----------------------------------------');
-  if (fail === 0) {
-    console.log('  All tables ready. You can now start Willard AI.\n');
-  } else {
-    console.log('  Done with ' + fail + ' error(s) - see above. The app may still work if errors were non-critical.\n');
-    process.exit(1);
-  }
+  console.log('  All required tables ready. You can now start Willard AI.\n');
 }
 
 main().catch(e => {

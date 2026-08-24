@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
-import { asc, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
@@ -80,8 +80,19 @@ async function getOrCreateSettings() {
     .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
     .limit(1);
   if (rows.length > 0) return rows[0];
-  const [created] = await db.insert(appSettingsTable).values({}).returning();
-  return created;
+  try {
+    const [created] = await db.insert(appSettingsTable).values({}).returning();
+    return created;
+  } catch (error: any) {
+    // A singleton unique index can race two first requests. The loser reads
+    // the row created by the winner instead of exposing a database error.
+    if (error?.code !== "23505") throw error;
+    const [existing] = await db.select().from(appSettingsTable)
+      .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
+      .limit(1);
+    if (!existing) throw error;
+    return existing;
+  }
 }
 
 export const loginRateLimiter = rateLimit({
@@ -133,9 +144,14 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
       bcrypt.hash(password, BCRYPT_ROUNDS),
       bcrypt.hash(recoveryKeyNormalized, BCRYPT_ROUNDS),
     ]);
-    await db.update(appSettingsTable)
+    const [updated] = await db.update(appSettingsTable)
       .set({ passwordHash, recoveryKeyHash })
-      .where(eq(appSettingsTable.id, settings.id));
+      .where(and(eq(appSettingsTable.id, settings.id), isNull(appSettingsTable.passwordHash)))
+      .returning();
+    if (!updated) {
+      res.status(409).json({ error: "Password already set. Use change-password instead." });
+      return;
+    }
 
     await establishSession(req);
 
@@ -203,9 +219,17 @@ router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Respo
       return;
     }
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    await db.update(appSettingsTable)
-      .set({ passwordHash: newHash })
-      .where(eq(appSettingsTable.id, settings.id));
+    const consumed = await pool.query(
+      `UPDATE app_settings
+       SET password_hash = $1, recovery_key_hash = NULL
+       WHERE id = $2 AND recovery_key_hash = $3
+       RETURNING id`,
+      [newHash, settings.id, settings.recoveryKeyHash],
+    );
+    if (consumed.rowCount !== 1) {
+      res.status(401).json({ error: "Recovery key has already been used." });
+      return;
+    }
 
     await pool.query("DELETE FROM session");
     await establishSession(req);
