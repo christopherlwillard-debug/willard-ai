@@ -10,7 +10,6 @@ Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
     Show-Failure $friendly $technical
-    Pause-BeforeClose
     exit $code
 }
 
@@ -41,6 +40,24 @@ if ($tracked) {
 if (-not (Test-Command "node")) {
     Stop-And-Exit "Willard AI needs Node.js before it can open." `
         "Node.js was not found on PATH. Install the LTS version from https://nodejs.org."
+}
+
+try {
+    $nodeVersion = (& node --version).TrimStart("v")
+    $parsedNodeVersion = [version]$nodeVersion
+    if (($parsedNodeVersion.Major -lt 20) -or
+        ($parsedNodeVersion.Major -eq 20 -and $parsedNodeVersion.Minor -lt 6)) {
+        Stop-And-Exit "Willard AI needs a newer Node.js version." `
+            ("Found Node.js " + $nodeVersion + ". Install Node.js 24 LTS, then launch again.")
+    }
+} catch {
+    Stop-And-Exit "Willard AI couldn't verify Node.js." `
+        "The installed Node.js version could not be read. Install Node.js 24 LTS, then launch again."
+}
+
+$nodeCommand = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodeCommand) {
+    Stop-And-Exit "Willard AI couldn't locate Node.js." "Node.js was found but its executable path could not be resolved."
 }
 
 if (-not (Test-Command "pnpm")) {
@@ -151,40 +168,42 @@ foreach ($port in 8080, 5000) {
 # -- Start both services --------------------------------------------------------
 function Start-WillardServices {
     Write-Info "Opening the library service and Media Center..."
-    $apiProc = Start-Process -FilePath "cmd.exe" `
-        -ArgumentList "/c", "title Willard AI - Library Service && node --enable-source-maps --env-file=.env artifacts\api-server\dist\index.mjs >> `"$ApiLog`" 2>&1" `
-        -WorkingDirectory $Root -WindowStyle Minimized -PassThru
-    $webProc = Start-Process -FilePath "cmd.exe" `
-        -ArgumentList "/c", "title Willard AI - App && pnpm --filter @workspace/willard-ai run dev >> `"$WebLog`" 2>&1" `
-        -WorkingDirectory $Root -WindowStyle Minimized -PassThru
+    $env:PORT = "8080"
+    $envFile = Join-Path $Root ".env"
+    $apiProc = Start-Process -FilePath $nodeCommand `
+        -ArgumentList @("--enable-source-maps", "--env-file=$envFile", $apiDist) `
+        -WorkingDirectory (Join-Path $Root "artifacts\api-server") `
+        -RedirectStandardOutput $ApiLog -RedirectStandardError (Join-Path $LogDir "api-error.log") `
+        -WindowStyle Minimized -PassThru
+    $env:PORT = "5000"
+    $pnpmCommand = (Get-Command pnpm -ErrorAction SilentlyContinue).Source
+    $webProc = Start-Process -FilePath $pnpmCommand `
+        -ArgumentList @("--filter", "@workspace/willard-ai", "run", "dev") `
+        -WorkingDirectory $Root -RedirectStandardOutput $WebLog `
+        -RedirectStandardError (Join-Path $LogDir "web-error.log") `
+        -WindowStyle Minimized -PassThru
     Save-TrackedPids $apiProc.Id $webProc.Id
+    return @{ api = $apiProc; web = $webProc }
 }
 
-Start-WillardServices
+$services = Start-WillardServices
 
 function Fail-And-CleanUp($friendly, $technical) {
     Stop-TrackedProcesses | Out-Null
     Show-Failure $friendly $technical
-    Pause-BeforeClose
     exit 1
 }
 
-# -- Readiness with one safe restart -------------------------------------------
-if (-not (Wait-ForUrl $ApiUrl "your library service" 60)) {
-    Write-Warn "The library service needs one automatic restart..."
-    Stop-TrackedProcesses | Out-Null
-    Start-Sleep -Seconds 1
-    Start-WillardServices
-    if (-not (Wait-ForUrl $ApiUrl "your library service" 60)) {
-        Fail-And-CleanUp "Willard AI couldn't start its library service." `
-            ("The API did not respond after an automatic retry. See " + $ApiLog)
-    }
+# -- Readiness ------------------------------------------------------------------
+if (-not (Wait-ForUrl $ApiUrl "your library service" 60 $services.api.Id $ApiLog)) {
+    Fail-And-CleanUp "Willard AI couldn't start its library service." `
+        (($script:LastWaitFailureReason) + " See " + $ApiLog + " and " + (Join-Path $LogDir "api-error.log"))
 }
 Write-Ok "Media library ready"
 
-if (-not (Wait-ForUrl $WebUrl "Media Center" 60)) {
+if (-not (Wait-ForUrl $WebUrl "Media Center" 60 $services.web.Id $WebLog)) {
     Fail-And-CleanUp "Willard AI couldn't open the Media Center." `
-        ("The web app did not respond within 60 seconds. See " + $WebLog)
+        (($script:LastWaitFailureReason) + " See " + $WebLog + " and " + (Join-Path $LogDir "web-error.log"))
 }
 Write-Ok "Media Center ready"
 
@@ -200,5 +219,4 @@ Write-Host "  Willard Media Center is ready." -ForegroundColor Green
 Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
 Write-Host "  The app will keep running in its minimized service windows." -ForegroundColor Gray
 Write-Host ""
-Read-Host "  Press Enter to close this launcher window" | Out-Null
 exit 0

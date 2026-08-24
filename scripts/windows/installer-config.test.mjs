@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 
 const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
 const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
+const developerLauncher = await readFile(new URL("../launcher/start.ps1", import.meta.url), "utf8");
+const launcherCommon = await readFile(new URL("../launcher/common.ps1", import.meta.url), "utf8");
 const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
@@ -49,4 +51,16 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /api-runtime\/dist\/index\.mjs/);
   assert.match(releaseValidator, /api-runtime\/setup-db\.cjs/);
   assert.match(releaseValidator, /web\/index\.html/);
+});
+
+test("developer startup launches the API directly and fails when that process exits", () => {
+  assert.doesNotMatch(developerLauncher, /Start-Process -FilePath "cmd\.exe"/);
+  assert.match(developerLauncher, /--env-file=\$envFile/);
+  assert.match(developerLauncher, /-FilePath \$nodeCommand/);
+  assert.match(developerLauncher, /\$env:PORT = "8080"/);
+  assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" 60 \$services\.api\.Id/);
+  assert.doesNotMatch(developerLauncher, /automatic restart/);
+  assert.doesNotMatch(developerLauncher, /Read-Host "  Press Enter to close this launcher window"/);
+  assert.match(launcherCommon, /process exited before it became ready/);
+  assert.match(launcherCommon, /Get-LogTail/);
 });

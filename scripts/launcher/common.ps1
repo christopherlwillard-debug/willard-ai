@@ -214,10 +214,24 @@ function Stop-TrackedProcesses {
     return $stopped
 }
 
-function Wait-ForUrl($url, $label, $timeoutSeconds = 60) {
+function Get-LogTail($path, $lines = 20) {
+    if (-not (Test-Path $path)) { return "(no log was written)" }
+    try {
+        return ((Get-Content $path -Tail $lines -ErrorAction Stop) -join " ")
+    } catch {
+        return "(log could not be read: " + $_.Exception.Message + ")"
+    }
+}
+
+function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $logPath = $null) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $lastTick = -5
     while ($sw.Elapsed.TotalSeconds -lt $timeoutSeconds) {
+        if ($processId -and -not (Test-ProcessAlive $processId)) {
+            $script:LastWaitFailureReason = "$label process exited before it became ready. " +
+                (Get-LogTail $logPath)
+            return $false
+        }
         try {
             $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
             if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { return $true }
@@ -229,5 +243,6 @@ function Wait-ForUrl($url, $label, $timeoutSeconds = 60) {
         }
         Start-Sleep -Milliseconds 800
     }
+    $script:LastWaitFailureReason = "$label did not answer $url within $timeoutSeconds seconds."
     return $false
 }
