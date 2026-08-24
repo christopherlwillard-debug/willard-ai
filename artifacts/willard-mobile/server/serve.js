@@ -46,7 +46,12 @@ function getAppName() {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = path.join(STATIC_ROOT, platform, "manifest.json");
+  const manifestPath = path.resolve(STATIC_ROOT, platform, "manifest.json");
+  if (path.relative(STATIC_ROOT, manifestPath).startsWith(`..${path.sep}`)) {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "Forbidden" }));
+    return;
+  }
 
   if (!fs.existsSync(manifestPath)) {
     res.writeHead(404, { "content-type": "application/json" });
@@ -85,9 +90,10 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 
 function serveStaticFile(urlPath, res) {
   const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
-  const filePath = path.join(STATIC_ROOT, safePath);
+  const filePath = path.resolve(STATIC_ROOT, safePath);
 
-  if (!filePath.startsWith(STATIC_ROOT)) {
+  const relativePath = path.relative(STATIC_ROOT, filePath);
+  if (relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
