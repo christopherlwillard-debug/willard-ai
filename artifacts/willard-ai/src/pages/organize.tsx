@@ -109,7 +109,7 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
       </div>
 
       <div className="space-y-2">
-        <Label>Full path on NAS</Label>
+        <Label htmlFor="organize-source-path">Full path on NAS</Label>
         <Input
           id="organize-source-path"
           className="font-mono text-sm"
