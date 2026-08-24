@@ -88,6 +88,11 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
 
   const peekedArchives = archivesData?.archives?.filter(a => a.peekStatus === "peeked") ?? [];
 
+  useEffect(() => {
+    if (!initialPath) return;
+    setForm(prev => prev.sourcePath === initialPath ? prev : { ...prev, sourceType: "archive", sourcePath: initialPath, archiveId: "" });
+  }, [initialPath]);
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -106,6 +111,7 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
       <div className="space-y-2">
         <Label>Full path on NAS</Label>
         <Input
+          id="organize-source-path"
           className="font-mono text-sm"
           placeholder={form.sourceType === "archive" ? "/mnt/nas/old-backup.zip" : "/mnt/nas/Unsorted/"}
           value={form.sourcePath}
