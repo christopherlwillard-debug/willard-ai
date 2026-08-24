@@ -2,8 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { db, pool, appSettingsTable } from "@workspace/db";
-import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage";
-import { logger } from "./logger";
+import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
+import { logger } from "./logger.ts";
 
 /**
  * Face Recognition Engine — privacy-first, fully local.
@@ -105,6 +105,40 @@ export interface DetectedFace {
   score: number;
 }
 
+export interface LetterboxGeometry {
+  scale: number;
+  resizedWidth: number;
+  resizedHeight: number;
+  padRight: number;
+  padBottom: number;
+}
+
+export function calculateLetterbox(srcW: number, srcH: number, size = DET_SIZE): LetterboxGeometry {
+  const scale = Math.min(size / srcW, size / srcH);
+  const resizedWidth = Math.max(1, Math.round(srcW * scale));
+  const resizedHeight = Math.max(1, Math.round(srcH * scale));
+  return {
+    scale,
+    resizedWidth,
+    resizedHeight,
+    padRight: size - resizedWidth,
+    padBottom: size - resizedHeight,
+  };
+}
+
+export function mapBoxToSource(
+  box: { x1: number; y1: number; x2: number; y2: number },
+  geometry: LetterboxGeometry,
+  srcW: number,
+  srcH: number,
+): DetectedFace {
+  const sx = Math.max(0, box.x1 / geometry.scale);
+  const sy = Math.max(0, box.y1 / geometry.scale);
+  const ex = Math.min(srcW, box.x2 / geometry.scale);
+  const ey = Math.min(srcH, box.y2 / geometry.scale);
+  return { x: sx, y: sy, w: Math.max(0, ex - sx), h: Math.max(0, ey - sy), score: 0 };
+}
+
 function iou(a: DetectedFace, b: DetectedFace): number {
   const x1 = Math.max(a.x, b.x);
   const y1 = Math.max(a.y, b.y);
@@ -115,13 +149,28 @@ function iou(a: DetectedFace, b: DetectedFace): number {
   return union > 0 ? inter / union : 0;
 }
 
-function nms(faces: DetectedFace[]): DetectedFace[] {
+export function nms(faces: DetectedFace[], threshold = NMS_IOU): DetectedFace[] {
   const sorted = [...faces].sort((a, b) => b.score - a.score);
   const keep: DetectedFace[] = [];
   for (const f of sorted) {
-    if (keep.every((k) => iou(f, k) < NMS_IOU)) keep.push(f);
+    if (keep.every((k) => iou(f, k) < threshold)) keep.push(f);
   }
   return keep;
+}
+
+export interface ScrfdTensorLike {
+  dims: readonly number[];
+  data: { length: number };
+}
+
+export function selectScrfdOutputs(
+  tensors: ScrfdTensorLike[],
+  anchorCount: number,
+): { scores: ScrfdTensorLike; boxes: ScrfdTensorLike } | null {
+  const lastDim = (tensor: ScrfdTensorLike) => tensor.dims[tensor.dims.length - 1];
+  const scores = tensors.find((tensor) => lastDim(tensor) === 1 && tensor.data.length === anchorCount);
+  const boxes = tensors.find((tensor) => lastDim(tensor) === 4 && tensor.data.length === anchorCount * 4);
+  return scores && boxes ? { scores, boxes } : null;
 }
 
 /**
@@ -136,9 +185,8 @@ export async function detectFaces(imageBuffer: Buffer): Promise<{ faces: Detecte
   const srcH = meta.height ?? 0;
   if (!srcW || !srcH) return { faces: [], width: 0, height: 0 };
 
-  const scale = Math.min(DET_SIZE / srcW, DET_SIZE / srcH);
-  const rw = Math.max(1, Math.round(srcW * scale));
-  const rh = Math.max(1, Math.round(srcH * scale));
+  const geometry = calculateLetterbox(srcW, srcH);
+  const { scale, resizedWidth: rw, resizedHeight: rh } = geometry;
 
   const raw = await sharp(imageBuffer)
     .resize(rw, rh, { fit: "fill" })
@@ -172,12 +220,10 @@ export async function detectFaces(imageBuffer: Buffer): Promise<{ faces: Detecte
     const count = cells * cells * 2;
     // Disambiguate by trailing dim: scores are (N,1), boxes are (N,4) —
     // matching by raw length alone confuses stride-8 scores with stride-16 boxes.
-    const last = (t: { dims: readonly number[] }) => t.dims[t.dims.length - 1];
-    const scoreT = tensors.find((t) => last(t) === 1 && t.data.length === count);
-    const bboxT = tensors.find((t) => last(t) === 4 && t.data.length === count * 4);
-    if (!scoreT || !bboxT) continue;
-    const scores = scoreT.data as Float32Array;
-    const bboxes = bboxT.data as Float32Array;
+    const selected = selectScrfdOutputs(tensors, count);
+    if (!selected) continue;
+    const scores = selected.scores.data as Float32Array;
+    const bboxes = selected.boxes.data as Float32Array;
     for (let i = 0; i < count; i++) {
       const score = scores[i];
       if (score < DET_SCORE_THRESHOLD) continue;
@@ -189,12 +235,9 @@ export async function detectFaces(imageBuffer: Buffer): Promise<{ faces: Detecte
       const x2 = cx + bboxes[i * 4 + 2] * stride;
       const y2 = cy + bboxes[i * 4 + 3] * stride;
       // Map back to source pixels.
-      const sx = Math.max(0, x1 / scale);
-      const sy = Math.max(0, y1 / scale);
-      const ex = Math.min(srcW, x2 / scale);
-      const ey = Math.min(srcH, y2 / scale);
-      if (ex - sx < MIN_FACE_PX || ey - sy < MIN_FACE_PX) continue;
-      faces.push({ x: sx, y: sy, w: ex - sx, h: ey - sy, score });
+       const mapped = mapBoxToSource({ x1, y1, x2, y2 }, geometry, srcW, srcH);
+       if (mapped.w < MIN_FACE_PX || mapped.h < MIN_FACE_PX) continue;
+       faces.push({ ...mapped, score });
     }
   }
   return { faces: nms(faces), width: srcW, height: srcH };
