@@ -27,7 +27,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
 
       - name: Enable pnpm
         shell: pwsh
@@ -55,6 +54,7 @@ jobs:
           "WILLARD_NODE_RUNTIME=$runtimeRoot" >> $env:GITHUB_ENV
 
       - name: Choose release version
+        id: version
         shell: pwsh
         run: |
           $version = "${{ inputs.version }}"
@@ -64,6 +64,8 @@ jobs:
           }
           "WILLARD_VERSION=$version" >> $env:GITHUB_ENV
           "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
 
       - name: Stage and validate the packaged payload
         shell: pwsh
@@ -74,7 +76,7 @@ jobs:
       - name: Create update ZIP and release manifest
         shell: pwsh
         env:
-          WILLARD_ARTIFACT_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
+          WILLARD_ARTIFACT_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}
         run: .\scripts\windows\make-release.ps1
 
       - name: Install Inno Setup
@@ -93,11 +95,11 @@ jobs:
       - name: Publish installer, update ZIP, and manifest
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: Willard Media Center ${{ env.WILLARD_VERSION }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Willard Media Center ${{ steps.version.outputs.version }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            build/installer/WillardMediaCenter-${{ env.WILLARD_VERSION }}-Setup.exe
-            build/release/WillardMediaCenter-${{ env.WILLARD_VERSION }}-windows-x64.zip
+            build/installer/WillardMediaCenter-${{ steps.version.outputs.version }}-Setup.exe
+            build/release/WillardMediaCenter-${{ steps.version.outputs.version }}-windows-x64.zip
             build/release/release-manifest.json

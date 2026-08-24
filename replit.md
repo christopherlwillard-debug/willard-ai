@@ -34,8 +34,10 @@ those paths are unreachable and the library reports "Library Offline".
   `installer/WillardMediaCenter.iss`. The installed PowerShell launcher uses a
   bundled Node runtime and a small static/proxy web server, while PostgreSQL
   remains external and FFmpeg remains optional. Release staging is driven by
-  `scripts/windows/build-release.mjs`; compiling/signing the installer requires
-  a Windows build runner.
+  `scripts/windows/build-release.mjs`; the Windows release workflow builds and
+  publishes the versioned ZIP, checksum manifest, and Setup.exe on pushes to
+  `main`. Compiling/signing and real installation validation require a Windows
+  build runner.
 - Copy `.env.example` → `.env` for local configuration. The API server loads the
   root `.env` automatically (via `--env-file-if-exists`); on Replit it is absent
   and the platform supplies env vars instead.

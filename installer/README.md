@@ -12,6 +12,24 @@ release. The normal release path is the Windows GitHub Action:
 3. Download the generated Setup.exe from that release and run it on a Windows
    PC for the first installation test.
 
+First-install checklist:
+
+1. Confirm PostgreSQL 14+ is installed and create an empty database named
+   `willard` (or use an existing database).
+2. Run `WillardMediaCenter-<version>-Setup.exe` and keep the default install
+   location. Leave **Create a desktop shortcut** selected.
+3. Confirm both the desktop shortcut and the Start Menu entry show the Willard
+   icon.
+4. Open the shortcut once. On first run, edit
+   `%LOCALAPPDATA%\Willard Media Center\.env` and set `DATABASE_URL`, for
+   example `postgresql://postgres:password@localhost:5432/willard`.
+5. Open the shortcut again. Confirm database preparation completes, the local
+   API becomes ready on port 8080, the web service becomes ready on port 5000,
+   and the browser opens to `http://localhost:5000`.
+6. Sign in, choose a local Windows/NAS path, and confirm the library starts.
+7. Publish a newer release, open the shortcut again, and confirm the ZIP is
+   checksum-verified and the installed version updates.
+
 For a local pre-publication build, run
 `powershell -ExecutionPolicy Bypass -File .\scripts\windows\build-installer.ps1`
 from a Windows checkout. It creates Setup.exe but does not publish an update
