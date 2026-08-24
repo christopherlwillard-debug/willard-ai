@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 const appURL =
   process.env.WILLARD_APP_URL ??
@@ -21,6 +21,7 @@ const serviceLogPaths = {
 };
 
 const MAX_LINES_PER_LOG = 8;
+const MAX_LOG_FILES = 12;
 const MAX_STARTUP_OUTPUT_LENGTH = 2_000;
 
 function normalizeLogPaths(paths) {
@@ -28,11 +29,63 @@ function normalizeLogPaths(paths) {
   return [...new Set((Array.isArray(paths) ? paths : [paths]).filter(Boolean))];
 }
 
-export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
-  const logPaths = normalizeLogPaths(paths);
-  const outputs = [];
+function rotationPattern(logName) {
+  const escapedName = logName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `^${escapedName}(?:\\.\\d+|[-.]\\d{8}(?:[-_.]\\d{6})?|[-.]\\d{4}[-_]\\d{2}[-_]\\d{2}(?:[T_.-]\\d{2}[-:.]\\d{2}[-:.]\\d{2}Z?)?)$`,
+  );
+}
+
+async function discoverRotatedLogPaths(logPaths) {
+  const candidates = new Map();
 
   for (const logPath of logPaths) {
+    let requestedMtime = 0;
+    try {
+      requestedMtime = (await stat(logPath)).mtimeMs;
+    } catch {
+      // The requested log may not exist yet.
+    }
+    candidates.set(logPath, requestedMtime);
+    try {
+      const entries = await readdir(dirname(logPath), { withFileTypes: true });
+      const logName = basename(logPath);
+      const rotation = rotationPattern(logName);
+
+      for (const entry of entries) {
+        if (!entry.isFile() || !rotation.test(entry.name)) continue;
+        const candidatePath = join(dirname(logPath), entry.name);
+        try {
+          const details = await stat(candidatePath);
+          candidates.set(candidatePath, details.mtimeMs);
+        } catch {
+          // A rotated file may disappear between directory discovery and stat.
+        }
+      }
+    } catch {
+      // The configured directory may not exist until a service starts.
+    }
+  }
+
+  const requestedPaths = new Set(logPaths);
+  return [...candidates.entries()]
+    .sort(([leftPath, leftTime], [rightPath, rightTime]) => {
+      if (leftTime !== rightTime) return rightTime - leftTime;
+      if (requestedPaths.has(leftPath) !== requestedPaths.has(rightPath)) {
+        return requestedPaths.has(leftPath) ? -1 : 1;
+      }
+      return leftPath.localeCompare(rightPath);
+    })
+    .slice(0, MAX_LOG_FILES)
+    .map(([logPath]) => logPath);
+}
+
+export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
+  const logPaths = normalizeLogPaths(paths);
+  const discoveredLogPaths = await discoverRotatedLogPaths(logPaths);
+  const outputs = [];
+
+  for (const logPath of discoveredLogPaths) {
     try {
       const output = await readFile(logPath, "utf8");
       const lines = output
@@ -52,7 +105,7 @@ export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
 
   // Startup failures are normally near the end of the service logs. Keep the
   // routed-check failure actionable without flooding the workflow output.
-  return outputs.join("\n").slice(-MAX_STARTUP_OUTPUT_LENGTH);
+  return outputs.join("\n").slice(0, MAX_STARTUP_OUTPUT_LENGTH);
 }
 
 export async function checkService(

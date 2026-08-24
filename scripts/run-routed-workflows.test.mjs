@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { checkService } from "./run-routed-workflows.mjs";
+import { checkService, recentStartupOutput } from "./run-routed-workflows.mjs";
 
 async function failingServer() {
   const server = createServer((_request, response) => {
@@ -40,7 +40,7 @@ test("includes the configured service log tail in readiness failures", async () 
         assert.match(error.message, /^API server readiness failed at /);
         assert.match(error.message, /\(HTTP 503\)\./);
         assert.match(error.message, /old detail 6 /);
-        assert.match(error.message, /old detail 11 /);
+        assert.match(error.message, /old detail 10 /);
         assert.match(error.message, /active detail\nlatest startup failure/);
         assert.ok(error.message.length <= 2_200);
         return true;
@@ -49,6 +49,29 @@ test("includes the configured service log tail in readiness failures", async () 
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("discovers numbered and timestamped rotations without unrelated files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "routed-workflows-"));
+  const activeLogPath = join(directory, "api.log");
+  const numberedLogPath = join(directory, "api.log.1");
+  const timestampedLogPath = join(directory, "api.log.2026-08-24T12-30-00");
+  await writeFile(activeLogPath, "active startup failure\n");
+  await writeFile(numberedLogPath, "numbered startup detail\n");
+  await writeFile(timestampedLogPath, "timestamped startup detail\n");
+  await utimes(activeLogPath, 3_000, 3_000);
+  await utimes(numberedLogPath, 2_000, 2_000);
+  await utimes(timestampedLogPath, 1_000, 1_000);
+  await writeFile(join(directory, "api.log.backup"), "unrelated detail\n");
+  await writeFile(join(directory, "web.log.1"), "wrong service detail\n");
+
+  const output = await recentStartupOutput("API server", [activeLogPath]);
+
+  assert.equal(
+    output,
+    "active startup failure\nnumbered startup detail\ntimestamped startup detail",
+  );
+  assert.doesNotMatch(output, /unrelated|wrong service/);
 });
 
 test("includes both files from the default service log pair", async () => {
@@ -69,7 +92,7 @@ test("includes both files from the default service log pair", async () => {
         assert.match(error.message, /\(HTTP 503\)\./);
         assert.match(
           error.message,
-          /Startup output:\nweb startup\nweb bind failure/,
+          /Startup output:\nweb bind failure\nweb startup/,
         );
         return true;
       },
