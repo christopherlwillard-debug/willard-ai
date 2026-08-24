@@ -60,6 +60,10 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /\$env:PORT = "8080"/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
   assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
+  assert.match(developerLauncher, /\$launcherChanged = \[bool\]/);
+  assert.ok(developerLauncher.includes('scripts[/\\\\]launcher[/\\\\]'));
+  assert.match(developerLauncher, /Restarting with the updated launcher/);
+  assert.match(developerLauncher, /-File", \$PSCommandPath/);
   assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" 60 \$services\.api\.Id/);
   assert.doesNotMatch(developerLauncher, /automatic restart/);
   assert.doesNotMatch(developerLauncher, /Read-Host "  Press Enter to close this launcher window"/);

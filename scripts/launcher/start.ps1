@@ -83,6 +83,7 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
 
 # -- Safe update and dependency repair -----------------------------------------
 $apiSourceChanged = $false
+$launcherChanged = $false
 $updateLog = Join-Path $LogDir "update.log"
 if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
     Write-Info "Checking for safe updates..."
@@ -95,6 +96,7 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
     if ($pullOk -and $prevHead -and $newHead -and ($prevHead -ne $newHead)) {
         $changedFiles = (& git -C $Root diff --name-only $prevHead $newHead 2>$null)
         $apiSourceChanged = [bool]($changedFiles -match "artifacts[/\\]api-server[/\\]src")
+        $launcherChanged = [bool]($changedFiles -match "scripts[/\\]launcher[/\\]")
         Write-Ok "Safe updates applied"
     } elseif ($pullOk) {
         Write-Ok "Already up to date"
@@ -103,6 +105,15 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
         Add-Content $updateLog "[launcher] git pull failed; current files were left unchanged."
     }
     $ErrorActionPreference = $savedPref
+}
+if ($launcherChanged) {
+    Write-Info "Restarting with the updated launcher..."
+    $powershellCommand = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    if (-not $powershellCommand) { $powershellCommand = Join-Path $PSHOME "powershell.exe" }
+    Start-Process -FilePath $powershellCommand `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath) `
+        -WorkingDirectory $Root -WindowStyle Normal
+    exit 0
 }
 
 $installLog = Join-Path $LogDir "setup.log"
