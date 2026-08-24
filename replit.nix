@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.got
     pkgs.exiftool
     pkgs.wayland
     pkgs.libGL
