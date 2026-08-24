@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import multer from "multer";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { asc, desc, eq, isNotNull } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
@@ -57,7 +57,11 @@ function isWithinBrandingDir(targetPath: string): boolean {
 }
 
 async function getOrCreateSettings() {
-  const rows = await db.select().from(appSettingsTable).limit(1);
+  // Prefer the authenticated singleton if an older install has duplicate
+  // settings rows; keep all settings and auth routes on the same row.
+  const rows = await db.select().from(appSettingsTable)
+    .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
+    .limit(1);
   if (rows.length > 0) return rows[0];
   const [created] = await db.insert(appSettingsTable).values({}).returning();
   return created;

@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { asc, desc, eq, isNotNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
@@ -73,7 +73,12 @@ function isAuthenticated(req: Request): boolean {
 }
 
 async function getOrCreateSettings() {
-  const rows = await db.select().from(appSettingsTable).limit(1);
+  // app_settings is logically a singleton, but older installs can contain
+  // duplicate rows after concurrent first-run requests. Prefer the row that
+  // actually owns authentication so setup and login cannot disagree.
+  const rows = await db.select().from(appSettingsTable)
+    .orderBy(desc(isNotNull(appSettingsTable.passwordHash)), asc(appSettingsTable.id))
+    .limit(1);
   if (rows.length > 0) return rows[0];
   const [created] = await db.insert(appSettingsTable).values({}).returning();
   return created;
