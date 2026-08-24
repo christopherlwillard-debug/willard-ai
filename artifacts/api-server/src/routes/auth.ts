@@ -98,6 +98,10 @@ async function getOrCreateSettings() {
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
+  // Successful logins should not consume the failed-attempt budget. This
+  // keeps repeated health/audit sessions independent while continuing to
+  // throttle incorrect-password attempts.
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many login attempts. Try again in 15 minutes." },
