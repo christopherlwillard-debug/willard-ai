@@ -23,6 +23,10 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Expand-Archive/);
   assert.match(launcher, /setup-db\.cjs/);
   assert.match(launcher, /database\.log/);
+  assert.match(launcher, /schema-ready\.json/);
+  assert.match(launcher, /Get-SchemaFingerprint/);
+  assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.match(launcher, /last-update-check\.txt/);
 });
 
 test("installer deliberately leaves external services outside its payload", () => {

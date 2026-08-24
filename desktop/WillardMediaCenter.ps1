@@ -5,6 +5,8 @@ $InstallRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $DataRoot = Join-Path $env:LOCALAPPDATA "Willard Media Center"
 $LogRoot = Join-Path $DataRoot "logs"
 $PidFile = Join-Path $DataRoot "services.json"
+$SchemaMarker = Join-Path $DataRoot "schema-ready.json"
+$UpdateCheckFile = Join-Path $DataRoot "last-update-check.txt"
 $EnvFile = Join-Path $DataRoot ".env"
 $VersionFile = Join-Path $InstallRoot "version.json"
 $Node = Join-Path $InstallRoot "runtime\node.exe"
@@ -37,6 +39,37 @@ function Stop-Services {
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
+function Get-SchemaFingerprint {
+  $parts = @()
+  foreach ($path in @($SetupDb, $VersionFile)) {
+    if (Test-Path $path) { $parts += (Get-FileHash $path -Algorithm SHA256).Hash }
+  }
+  return ($parts -join ":")
+}
+function Ensure-Schema {
+  $fingerprint = Get-SchemaFingerprint
+  if ($fingerprint -and (Test-Path $SchemaMarker)) {
+    try {
+      $marker = Get-Content $SchemaMarker -Raw | ConvertFrom-Json
+      if ($marker.version -eq 1 -and $marker.fingerprint -eq $fingerprint) {
+        Good "Media database schema is already ready."
+        return
+      }
+    } catch {}
+  }
+  Say "Applying safe database updates..."
+  $migrationLog = Join-Path $LogRoot "database.log"
+  & $Node "--env-file=$EnvFile" $SetupDb *> $migrationLog
+  if ($LASTEXITCODE -ne 0) {
+    throw "The media database could not be prepared. Check the database settings or the logs in '$LogRoot'."
+  }
+  @{
+    version = 1
+    fingerprint = $fingerprint
+    completedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $SchemaMarker
+  Good "Media database is ready."
+}
 function Wait-Ready($url, $label) {
   $until = (Get-Date).AddSeconds(60)
   while ((Get-Date) -lt $until) {
@@ -67,12 +100,23 @@ function Test-Dependencies {
 }
 function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
+  if (Test-Path $UpdateCheckFile) {
+    try {
+      if (((Get-Date) - (Get-Item $UpdateCheckFile).LastWriteTime).TotalHours -lt 6) {
+        return
+      }
+    } catch {}
+  }
   try {
     Say "Checking for a newer Willard release..."
     $remote = Invoke-RestMethod -Uri $UpdateManifest -TimeoutSec 8
     $local = Read-Version
     $remoteVersion = [version]($remote.version -replace "-.*$", "")
-    if ($remoteVersion -le [version]($local -replace "-.*$", "")) { Good "Willard Media Center $local is current."; return }
+    if ($remoteVersion -le [version]($local -replace "-.*$", "")) {
+      Good "Willard Media Center $local is current."
+      Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+      return
+    }
     if (-not $remote.artifactUrl -or -not $remote.sha256) { throw "The release description is incomplete." }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"
@@ -96,7 +140,11 @@ function Try-Update {
       Copy-Item (Join-Path $backup "*") $InstallRoot -Recurse -Force
       throw "The update could not be installed; the previous version was restored."
     }
-  } catch { Warn "Update check skipped: $($_.Exception.Message)" }
+    Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+  } catch {
+    Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+    Warn "Update check skipped: $($_.Exception.Message)"
+  }
 }
 
 Ensure-Folders
@@ -104,17 +152,18 @@ Write-Host ""
 Write-Host "  Willard Media Center" -ForegroundColor Cyan
 Write-Host "  Starting your local media library" -ForegroundColor Gray
 try {
+  $existing = Read-Pids
+  if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
+    Good "Willard Media Center is already running."
+    Start-Process $WebUrl
+    exit 0
+  }
+  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
   Try-Update
   if (-not (Ensure-Env)) { exit 1 }
   if (-not (Test-Dependencies)) { exit 1 }
-  Say "Checking your media database..."
-  $migrationLog = Join-Path $LogRoot "database.log"
-  & $Node "--env-file=$EnvFile" $SetupDb *> $migrationLog
-  if ($LASTEXITCODE -ne 0) { throw "The media database could not be prepared. Check the database settings or the logs in '$LogRoot'." }
-  Good "Media database is ready."
-  $existing = Read-Pids
-  if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) { Good "Willard Media Center is already running."; Start-Process $WebUrl; exit 0 }
-  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
+  Ensure-Schema
+  $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
   $apiProc = Start-Process $Node -ArgumentList @("--env-file=$EnvFile", $Api) -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
   $webProc = Start-Process $Node -ArgumentList @($WebServer, "--root=$Web", "--port=5000", "--api=http://127.0.0.1:8080") -WorkingDirectory $InstallRoot -RedirectStandardOutput (Join-Path $LogRoot "web.log") -RedirectStandardError (Join-Path $LogRoot "web-error.log") -WindowStyle Hidden -PassThru
