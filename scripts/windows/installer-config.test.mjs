@@ -63,4 +63,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.doesNotMatch(developerLauncher, /Read-Host "  Press Enter to close this launcher window"/);
   assert.match(launcherCommon, /process exited before it became ready/);
   assert.match(launcherCommon, /Get-LogTail/);
+  assert.match(launcherCommon, /function Wait-ForDatabase/);
+  assert.match(developerLauncher, /Wait-ForDatabase 30/);
+  assert.doesNotMatch(developerLauncher, /Show-Failure \$friendly \$technical/);
 });

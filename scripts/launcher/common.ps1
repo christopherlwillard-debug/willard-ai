@@ -126,6 +126,15 @@ s.on('error', function(e) { process.stderr.write(e.message + '\n'); process.exit
     }
 }
 
+function Wait-ForDatabase($timeoutSeconds = 30) {
+    $until = (Get-Date).AddSeconds($timeoutSeconds)
+    while ((Get-Date) -lt $until) {
+        if (Test-DatabaseConnection) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
 function Ensure-AppDatabase {
     # Creates the Willard AI database if it doesn't exist yet, then verifies
     # the connection. Returns $true on success, $false on failure.

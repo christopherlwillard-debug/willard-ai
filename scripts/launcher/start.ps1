@@ -9,7 +9,9 @@ Ensure-LogDir
 Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
-    Show-Failure $friendly $technical
+    Write-Bad $friendly
+    Write-Host ("  " + $technical) -ForegroundColor DarkGray
+    Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
     exit $code
 }
 
@@ -136,11 +138,11 @@ Write-Ok "Library service ready"
 # -- Database bootstrap and additive migrations --------------------------------
 Write-Info "Checking your media database..."
 $env:DATABASE_URL = Get-EnvValue "DATABASE_URL"
-if (-not (Test-DatabaseConnection)) {
-    Write-Info "Attempting to reconnect the media database..."
+if (-not (Wait-ForDatabase 30)) {
+    Write-Info "Waiting for PostgreSQL to accept connections..."
     Ensure-AppDatabase | Out-Null
 }
-if (-not (Test-DatabaseConnection)) {
+if (-not (Wait-ForDatabase 10)) {
     Stop-And-Exit "Willard AI couldn't reach the media database." `
         ("PostgreSQL is unavailable or DATABASE_URL is incorrect. Details are in " + $ApiLog)
 }
@@ -190,7 +192,9 @@ $services = Start-WillardServices
 
 function Fail-And-CleanUp($friendly, $technical) {
     Stop-TrackedProcesses | Out-Null
-    Show-Failure $friendly $technical
+    Write-Bad $friendly
+    Write-Host ("  " + $technical) -ForegroundColor DarkGray
+    Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
     exit 1
 }
 
