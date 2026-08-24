@@ -22,7 +22,7 @@
  *   • Restores the original NAS path and removes the temp dir in `after()`.
  *
  * Run with:
- *   node --experimental-strip-types --test e2e/cleanup-execute.test.ts
+ *   node --experimental-strip-types --test --test-concurrency=1 e2e/cleanup-execute.test.ts
  */
 
 import { describe, test, before, after } from "node:test";
@@ -43,7 +43,12 @@ const API_BASE =
 const TEST_PASSWORD = "willard123";
 
 /** Path to a real JPEG that we copy twice to create identical duplicate files. */
-const SOURCE_JPEG = path.join(process.cwd(), "test-media", "Photos", "city.jpg");
+const SOURCE_JPEG = path.join(
+  process.cwd(),
+  "test-media",
+  "Photos",
+  "city.jpg",
+);
 
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
 
@@ -66,7 +71,10 @@ async function apiGet(p: string): Promise<Response> {
   return res;
 }
 
-async function apiPost(p: string, body: Record<string, unknown>): Promise<Response> {
+async function apiPost(
+  p: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
   const res = await fetch(`${API_BASE}/api${p}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -76,7 +84,10 @@ async function apiPost(p: string, body: Record<string, unknown>): Promise<Respon
   return res;
 }
 
-async function apiPut(p: string, body: Record<string, unknown>): Promise<Response> {
+async function apiPut(
+  p: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
   const res = await fetch(`${API_BASE}/api${p}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -87,10 +98,16 @@ async function apiPut(p: string, body: Record<string, unknown>): Promise<Respons
 }
 
 /** Read the full response body once and return both status and parsed JSON. */
-async function readJson<T>(res: Response): Promise<{ status: number; body: T; text: string }> {
+async function readJson<T>(
+  res: Response,
+): Promise<{ status: number; body: T; text: string }> {
   const text = await res.text();
   let body: T;
-  try { body = JSON.parse(text) as T; } catch { body = text as unknown as T; }
+  try {
+    body = JSON.parse(text) as T;
+  } catch {
+    body = text as unknown as T;
+  }
   return { status: res.status, body, text };
 }
 
@@ -136,14 +153,20 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     // ── 1. Authenticate ────────────────────────────────────────────────────
     const statusRes = await fetch(`${API_BASE}/api/auth/status`);
     assert.strictEqual(statusRes.status, 200, "Auth status should be 200");
-    const status = (await statusRes.json()) as { setup: boolean; authenticated: boolean };
+    const status = (await statusRes.json()) as {
+      setup: boolean;
+      authenticated: boolean;
+    };
 
     if (status.setup) {
       const r = await apiPost("/auth/setup", { password: TEST_PASSWORD });
       assert.ok(r.ok, `Auth setup failed: ${await r.text()}`);
     } else {
       const r = await apiPost("/auth/login", { password: TEST_PASSWORD });
-      assert.ok(r.ok, `Login failed (password must be "${TEST_PASSWORD}"): ${await r.text()}`);
+      assert.ok(
+        r.ok,
+        `Login failed (password must be "${TEST_PASSWORD}"): ${await r.text()}`,
+      );
     }
     assert.ok(sessionCookie, "Session cookie must be set after auth");
 
@@ -159,7 +182,10 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     // Using real JPEGs (copied from test-media/Photos/) ensures the media
     // scanner adds them to `media_files`, making the RECYCLED DB assertion
     // meaningful.  Two identical copies → same SHA-256 → one duplicate group.
-    assert.ok(fs.existsSync(SOURCE_JPEG), `Source JPEG not found at ${SOURCE_JPEG}`);
+    assert.ok(
+      fs.existsSync(SOURCE_JPEG),
+      `Source JPEG not found at ${SOURCE_JPEG}`,
+    );
 
     const ts = Date.now();
     tempNasDir = path.join(TEMP_NAS_BASE, `run-${ts}`);
@@ -185,8 +211,12 @@ describe("Cleanup execute API", { concurrency: false }, () => {
 
     // ── 6. Wait for scan to complete ───────────────────────────────────────
     await pollUntil(
-      async () => (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as { status: string },
-      (s) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(s.status),
+      async () =>
+        (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as {
+          status: string;
+        },
+      (s) =>
+        !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(s.status),
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
 
@@ -198,7 +228,10 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const dupRes = await apiGet("/cleanup/duplicates?limit=100");
     assert.strictEqual(dupRes.status, 200);
     const dupData = (await dupRes.json()) as {
-      groups: Array<{ hash: string; files: Array<{ id: number; path: string; filename: string }> }>;
+      groups: Array<{
+        hash: string;
+        files: Array<{ id: number; path: string; filename: string }>;
+      }>;
     };
 
     // Filter to groups that have at least one file inside tempNasDir.
@@ -207,13 +240,15 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     // make the group contain files from both NAS roots.  We only need to find
     // a file in tempNasDir to delete — its rename stays on the same volume.
     const groupsWithTempFiles = dupData.groups.filter((g) =>
-      g.files.some((f) => typeof f.path === "string" && f.path.startsWith(tempNasDir)),
+      g.files.some(
+        (f) => typeof f.path === "string" && f.path.startsWith(tempNasDir),
+      ),
     );
 
     assert.ok(
       groupsWithTempFiles.length > 0,
       `Expected >= 1 duplicate group with a file in ${tempNasDir}. Total groups: ${dupData.groups.length}. ` +
-      "Check that the scan completed and the two identical JPEGs were indexed.",
+        "Check that the scan completed and the two identical JPEGs were indexed.",
     );
 
     const group = groupsWithTempFiles[0];
@@ -223,12 +258,18 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const targetFile = group.files.find(
       (f) => typeof f.path === "string" && f.path.startsWith(tempNasDir),
     );
-    assert.ok(targetFile !== undefined, "Expected at least one file inside tempNasDir in the group");
+    assert.ok(
+      targetFile !== undefined,
+      "Expected at least one file inside tempNasDir in the group",
+    );
 
-    deleteFileId   = targetFile.id;
+    deleteFileId = targetFile.id;
     deletedFilePath = targetFile.path;
-    assert.ok(deleteFileId > 0,               "deleteFileId must be positive");
-    assert.ok(fs.existsSync(deletedFilePath), `File to delete must exist on disk: ${deletedFilePath}`);
+    assert.ok(deleteFileId > 0, "deleteFileId must be positive");
+    assert.ok(
+      fs.existsSync(deletedFilePath),
+      `File to delete must exist on disk: ${deletedFilePath}`,
+    );
 
     // ── 8. Seed a media_files row for the delete target ───────────────────
     //
@@ -237,18 +278,18 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     // a controlled row (pre-seeded as 'VERIFIED') so the execute UPDATE is
     // exercised against a real row and can flip it to 'RECYCLED'.
     const relPath = deletedFilePath
-      .slice(tempNasDir.length + 1)   // strip leading "tempNasDir/"
-      .replace(/\\/g, "/");           // normalise on Windows
+      .slice(tempNasDir.length + 1) // strip leading "tempNasDir/"
+      .replace(/\\/g, "/"); // normalise on Windows
     const fileName = path.basename(deletedFilePath);
 
     const escapedNasDir = tempNasDir.replace(/'/g, "''");
-    const escapedRel    = relPath.replace(/'/g, "''");
-    const escapedName   = fileName.replace(/'/g, "''");
+    const escapedRel = relPath.replace(/'/g, "''");
+    const escapedName = fileName.replace(/'/g, "''");
 
     queryDb(
       `INSERT INTO media_files (nas_path, relative_path, name, size_bytes, last_scan_action) ` +
-      `VALUES ('${escapedNasDir}', '${escapedRel}', '${escapedName}', 0, 'VERIFIED') ` +
-      `ON CONFLICT DO NOTHING`,
+        `VALUES ('${escapedNasDir}', '${escapedRel}', '${escapedName}', 0, 'VERIFIED') ` +
+        `ON CONFLICT DO NOTHING`,
     );
   });
 
@@ -256,18 +297,29 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     if (originalNasPath) {
       await apiPut("/settings", { nasPath: originalNasPath }).catch(() => {});
     }
-    try { fs.rmSync(tempNasDir, { recursive: true, force: true }); } catch { /* ignore */ }
     try {
-      if (fs.existsSync(TEMP_NAS_BASE) && fs.readdirSync(TEMP_NAS_BASE).length === 0) {
+      fs.rmSync(tempNasDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (
+        fs.existsSync(TEMP_NAS_BASE) &&
+        fs.readdirSync(TEMP_NAS_BASE).length === 0
+      ) {
         fs.rmdirSync(TEMP_NAS_BASE);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   });
 
   // ── Test 1: execute returns recycled=1 with no errors ────────────────────
 
   test("execute returns recycled=1 and an empty errors array", async () => {
-    const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });
+    const res = await apiPost("/cleanup/execute", {
+      deleteFileIds: [deleteFileId],
+    });
     const { status, body } = await readJson<{
       recycled: number;
       recoveredBytes: number;
@@ -275,9 +327,20 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     }>(res);
 
     assert.strictEqual(status, 200, `Expected 200, got ${status}`);
-    assert.strictEqual(body.recycled, 1, `Expected recycled=1. Errors: ${JSON.stringify(body.errors)}`);
-    assert.deepEqual(body.errors, [], `Expected no errors, got: ${JSON.stringify(body.errors)}`);
-    assert.ok(body.recoveredBytes >= 0, "recoveredBytes should be non-negative");
+    assert.strictEqual(
+      body.recycled,
+      1,
+      `Expected recycled=1. Errors: ${JSON.stringify(body.errors)}`,
+    );
+    assert.deepEqual(
+      body.errors,
+      [],
+      `Expected no errors, got: ${JSON.stringify(body.errors)}`,
+    );
+    assert.ok(
+      body.recoveredBytes >= 0,
+      "recoveredBytes should be non-negative",
+    );
   });
 
   // ── Test 2: a rescan must not re-index the recycled file ───────────────────
@@ -289,11 +352,18 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(scanJob.jobId, "Rescan should return a job id");
 
     const finished = await pollUntil(
-      async () => (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as { status: string },
-      (job) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(job.status),
+      async () =>
+        (await (await apiGet(`/library/jobs/${scanJob.jobId}`)).json()) as {
+          status: string;
+        },
+      (job) =>
+        !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(job.status),
       { timeoutMs: 90_000, intervalMs: 2_000, description: "rescan to finish" },
     );
-    assert.ok(!["FAILED", "CANCELLED"].includes(finished.status), `Rescan failed: ${finished.status}`);
+    assert.ok(
+      !["FAILED", "CANCELLED"].includes(finished.status),
+      `Rescan failed: ${finished.status}`,
+    );
 
     const dupRes = await apiGet("/cleanup/duplicates?limit=100");
     assert.strictEqual(dupRes.status, 200);
@@ -303,7 +373,9 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const recycledPath = deletedFilePath.replace(/\\/g, "/");
     assert.ok(
       !dupData.groups.some((group) =>
-        group.files.some((file) => file.path?.replace(/\\/g, "/") === recycledPath),
+        group.files.some(
+          (file) => file.path?.replace(/\\/g, "/") === recycledPath,
+        ),
       ),
       `Recycled path was re-indexed into duplicate groups: ${recycledPath}`,
     );
@@ -317,13 +389,20 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(fs.existsSync(trashRoot), `Expected .Trash at ${trashRoot}`);
 
     const trashSessionDirs = fs.readdirSync(trashRoot);
-    assert.ok(trashSessionDirs.length > 0, "Expected at least one timestamped session dir in .Trash");
+    assert.ok(
+      trashSessionDirs.length > 0,
+      "Expected at least one timestamped session dir in .Trash",
+    );
 
     let found = false;
     for (const sessionDir of trashSessionDirs) {
       const sessionPath = path.join(trashRoot, sessionDir);
       if (!fs.statSync(sessionPath).isDirectory()) continue;
-      if (fs.readdirSync(sessionPath).some((e) => e.startsWith(`${deleteFileId}_`))) {
+      if (
+        fs
+          .readdirSync(sessionPath)
+          .some((e) => e.startsWith(`${deleteFileId}_`))
+      ) {
         found = true;
         break;
       }
@@ -332,7 +411,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(
       found,
       `Expected file with prefix "${deleteFileId}_" inside a .Trash session dir. ` +
-      `Session dirs: ${JSON.stringify(fs.readdirSync(trashRoot))}`,
+        `Session dirs: ${JSON.stringify(fs.readdirSync(trashRoot))}`,
     );
   });
 
@@ -361,10 +440,21 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       ourSession !== undefined,
       `Expected a history session for a file in ${tempNasDir}`,
     );
-    assert.strictEqual(ourSession.recycled, 1, `Session recycled should be 1, got ${ourSession.recycled}`);
+    assert.strictEqual(
+      ourSession.recycled,
+      1,
+      `Session recycled should be 1, got ${ourSession.recycled}`,
+    );
     assert.deepEqual(ourSession.errors, [], "Session should have no errors");
-    assert.ok(!isNaN(new Date(ourSession.ts).getTime()), "Session ts must be a valid timestamp");
-    assert.strictEqual(ourSession.files.length, 1, "Session should record exactly 1 file");
+    assert.ok(
+      !isNaN(new Date(ourSession.ts).getTime()),
+      "Session ts must be a valid timestamp",
+    );
+    assert.strictEqual(
+      ourSession.files.length,
+      1,
+      "Session should record exactly 1 file",
+    );
   });
 
   // ── Test 4: media_files.last_scan_action = 'RECYCLED' (DB assertion) ──────
@@ -389,8 +479,8 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(
       result.includes("RECYCLED"),
       `Expected media_files.last_scan_action = 'RECYCLED' for ${deletedFilePath}, ` +
-      `got: "${result}". ` +
-      "Check that the scanner indexed the JPEG into media_files before execute was called.",
+        `got: "${result}". ` +
+        "Check that the scanner indexed the JPEG into media_files before execute was called.",
     );
   });
 
@@ -400,7 +490,9 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const clearNas = await apiPut("/settings", { nasPath: "" });
     assert.strictEqual(clearNas.status, 200);
     try {
-      const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });
+      const res = await apiPost("/cleanup/execute", {
+        deleteFileIds: [deleteFileId],
+      });
       const { status, body } = await readJson<{ error?: string }>(res);
       assert.strictEqual(status, 409);
       assert.match(body.error ?? "", /No library configured/i);
@@ -413,29 +505,53 @@ describe("Cleanup execute API", { concurrency: false }, () => {
   // ── Test 6: execute with unknown ID returns graceful error ────────────────
 
   test("execute with a non-existent file ID returns error entry and recycled=0", async () => {
-    const res = await apiPost("/cleanup/execute", { deleteFileIds: [999_999_999] });
-    const { status, body } = await readJson<{ recycled: number; errors: string[] }>(res);
+    const res = await apiPost("/cleanup/execute", {
+      deleteFileIds: [999_999_999],
+    });
+    const { status, body } = await readJson<{
+      recycled: number;
+      errors: string[];
+    }>(res);
 
     assert.strictEqual(status, 200);
     assert.strictEqual(body.recycled, 0);
-    assert.ok(body.errors.length > 0, "errors array should have an entry for the unknown ID");
+    assert.ok(
+      body.errors.length > 0,
+      "errors array should have an entry for the unknown ID",
+    );
   });
 
   // ── Test 7: execute with empty array returns 400 ──────────────────────────
 
   test("execute with an empty deleteFileIds array returns 400", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [] });
-    assert.strictEqual(res.status, 400, "Empty deleteFileIds should return 400");
+    assert.strictEqual(
+      res.status,
+      400,
+      "Empty deleteFileIds should return 400",
+    );
   });
 
   // ── Test 8: second execute on already-moved file reports missing-on-disk ──
 
   test("executing the same file ID again reports file-not-found error", async () => {
-    const res = await apiPost("/cleanup/execute", { deleteFileIds: [deleteFileId] });
-    const { status, body } = await readJson<{ recycled: number; errors: string[] }>(res);
+    const res = await apiPost("/cleanup/execute", {
+      deleteFileIds: [deleteFileId],
+    });
+    const { status, body } = await readJson<{
+      recycled: number;
+      errors: string[];
+    }>(res);
 
     assert.strictEqual(status, 200);
-    assert.strictEqual(body.recycled, 0, "recycled should be 0 for already-moved file");
-    assert.ok(body.errors.length > 0, "Should report an error for the already-moved file");
+    assert.strictEqual(
+      body.recycled,
+      0,
+      "recycled should be 0 for already-moved file",
+    );
+    assert.ok(
+      body.errors.length > 0,
+      "Should report an error for the already-moved file",
+    );
   });
 });

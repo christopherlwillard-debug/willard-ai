@@ -10,6 +10,7 @@ Deep-dive into how the pieces fit together: **`ARCHITECTURE.md`**.
 - `pnpm --filter @workspace/willard-ai run dev` — run the web app
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
+- `pnpm run audit:backend` — run the complete backend test audit with module mocks enabled and stateful API suites serialized
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string; `PORT` — server port; `SESSION_SECRET` — required in production

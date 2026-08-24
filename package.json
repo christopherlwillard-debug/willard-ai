@@ -7,7 +7,8 @@
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "check:router": "node scripts/check-wouter-imports.mjs"
+    "check:router": "node scripts/check-wouter-imports.mjs",
+    "audit:backend": "pnpm --filter @workspace/api-server run audit && node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts e2e/cleanup-execute.test.ts"
   },
   "private": true,
   "devDependencies": {

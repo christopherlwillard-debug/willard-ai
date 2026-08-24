@@ -19,7 +19,7 @@
  *     ships with the repo and contains sample Photos, Videos, and Documents).
  *
  * Run with:
- *   node --experimental-strip-types --test e2e/dashboard-after-scan.test.ts
+ *   node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts
  */
 
 import { describe, test, before, after } from "node:test";
@@ -113,9 +113,7 @@ async function pollUntil<T>(
     if (condition(value)) return value;
     await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw new Error(
-    `Timed out after ${timeoutMs}ms waiting for: ${description}`,
-  );
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for: ${description}`);
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -160,20 +158,28 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
   before(async () => {
     // ── 1. Authenticate ────────────────────────────────────────────────────
     const statusRes = await fetch(`${API_BASE}/api/auth/status`);
-    assert.strictEqual(statusRes.status, 200, "Auth status endpoint should be reachable");
+    assert.strictEqual(
+      statusRes.status,
+      200,
+      "Auth status endpoint should be reachable",
+    );
     const status = (await statusRes.json()) as {
       setup: boolean;
       authenticated: boolean;
     };
 
     if (status.setup) {
-      const setupRes = await apiPost("/auth/setup", { password: TEST_PASSWORD });
+      const setupRes = await apiPost("/auth/setup", {
+        password: TEST_PASSWORD,
+      });
       assert.ok(
         setupRes.ok,
         `Auth setup failed with status ${setupRes.status}: ${await setupRes.text()}`,
       );
     } else {
-      const loginRes = await apiPost("/auth/login", { password: TEST_PASSWORD });
+      const loginRes = await apiPost("/auth/login", {
+        password: TEST_PASSWORD,
+      });
       assert.ok(
         loginRes.ok,
         `Login failed with status ${loginRes.status}. ` +
@@ -181,7 +187,10 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       );
     }
 
-    assert.ok(sessionCookie, "Session cookie should be set after authentication");
+    assert.ok(
+      sessionCookie,
+      "Session cookie should be set after authentication",
+    );
 
     // ── 2. Snapshot the configured library location before test mutation ───
     const originalSettingsRes = await apiGet("/settings");
@@ -190,7 +199,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       originalSettingsRes.ok,
       `Could not read settings before the test: ${originalSettingsBody}`,
     );
-    const originalSettings = JSON.parse(originalSettingsBody) as { nasPath?: string | null };
+    const originalSettings = JSON.parse(originalSettingsBody) as {
+      nasPath?: string | null;
+    };
     originalNasPath = originalSettings.nasPath ?? "";
     settingsSnapshotTaken = true;
 
@@ -213,7 +224,11 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     await pollUntil<ScanStatusResponse>(
       async () => {
         const r = await apiGet("/scan/status");
-        assert.strictEqual(r.status, 200, "Scan status endpoint should return 200");
+        assert.strictEqual(
+          r.status,
+          200,
+          "Scan status endpoint should return 200",
+        );
         return r.json() as Promise<ScanStatusResponse>;
       },
       (s) => !s.isRunning,
@@ -239,7 +254,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     const dash = (await res.json()) as DashboardResponse;
 
     // ── Stat card: Photos (image count)
-    const photoEntry = dash.typeBreakdown.find((b) => b.fileType === "image") ?? {
+    const photoEntry = dash.typeBreakdown.find(
+      (b) => b.fileType === "image",
+    ) ?? {
       count: 0,
       sizeBytes: 0,
     };
@@ -249,7 +266,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     );
 
     // ── Stat card: Videos (video count)
-    const videoEntry = dash.typeBreakdown.find((b) => b.fileType === "video") ?? {
+    const videoEntry = dash.typeBreakdown.find(
+      (b) => b.fileType === "video",
+    ) ?? {
       count: 0,
       sizeBytes: 0,
     };
@@ -259,7 +278,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     );
 
     // ── Stat card: Documents (document count)
-    const docEntry = dash.typeBreakdown.find((b) => b.fileType === "document") ?? {
+    const docEntry = dash.typeBreakdown.find(
+      (b) => b.fileType === "document",
+    ) ?? {
       count: 0,
       sizeBytes: 0,
     };
@@ -280,7 +301,8 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       `duplicateCount should be a non-negative number, got: ${dash.duplicateCount}`,
     );
     assert.ok(
-      typeof dash.duplicateSizeBytes === "number" && dash.duplicateSizeBytes >= 0,
+      typeof dash.duplicateSizeBytes === "number" &&
+        dash.duplicateSizeBytes >= 0,
       `duplicateSizeBytes should be a non-negative number, got: ${dash.duplicateSizeBytes}`,
     );
 
@@ -322,7 +344,11 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
 
   test('health status reports "All Systems Healthy" conditions after a clean scan', async () => {
     const res = await apiGet("/health/status");
-    assert.strictEqual(res.status, 200, "GET /api/health/status should return 200");
+    assert.strictEqual(
+      res.status,
+      200,
+      "GET /api/health/status should return 200",
+    );
 
     const health = (await res.json()) as HealthStatusResponse;
 
@@ -364,7 +390,9 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     // The donut chart renders when: (hasDisk || data.totalSizeBytes > 0) && chartData.length > 0
     // where chartData = typeBreakdown.filter(b => b.sizeBytes > 0)
     if (dash.totalSizeBytes === 0) {
-      console.log("[test] totalSizeBytes is 0 — donut chart is intentionally hidden. Skipping chart assertions.");
+      console.log(
+        "[test] totalSizeBytes is 0 — donut chart is intentionally hidden. Skipping chart assertions.",
+      );
       return;
     }
 

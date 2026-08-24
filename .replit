@@ -13,32 +13,27 @@ runButton = "Project"
 
 [[workflows.workflow]]
 name = "Project"
-mode = "parallel"
+mode = "sequential"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "organize-helpers-tests"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "optimize-cycle-tests"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "e2e-dashboard-scan"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "cleanup-queue-tests"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "cleanup-execute-tests"
+args = "backend-audit"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "media-viewer-e2e"
+
+[[workflows.workflow]]
+name = "backend-audit"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm run audit:backend"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [[workflows.workflow]]
 name = "organize-helpers-tests"
