@@ -52,12 +52,15 @@ those paths are unreachable and the library reports "Library Offline".
   `replit.nix`; Playwright selects it automatically, avoiding the missing
   libraries in its downloaded Chromium. With the web app running, run
   `pnpm run test:routed`. Off Replit, this command starts or reuses the API and
-  web services and reports which service failed readiness. On Replit, run the
-  `routed-browser-checks` workflow; it starts the existing API and web
-  workflows before running the same command. To target an already running or
-  published app instead, set `WILLARD_APP_URL`; CI keeps its existing
-  externally managed service behavior. To use a different browser explicitly,
-  set `PLAYWRIGHT_EXECUTABLE_PATH`; no `LD_LIBRARY_PATH` workaround is needed.
+  web services and reports which service failed readiness, including the
+  service's recent `logs/api.log` or `logs/web.log` output when available. On
+  Replit, run the `routed-browser-checks` workflow; it starts the existing API
+  and web workflows before running the same command. To target an already
+  running or published app instead, set `WILLARD_APP_URL`; CI keeps its
+  existing externally managed service behavior. Set `WILLARD_API_LOG`,
+  `WILLARD_WEB_LOG`, or `WILLARD_STARTUP_LOG_DIR` when service logs live
+  elsewhere. To use a different browser explicitly, set
+  `PLAYWRIGHT_EXECUTABLE_PATH`; no `LD_LIBRARY_PATH` workaround is needed.
 
 ## Stack
 

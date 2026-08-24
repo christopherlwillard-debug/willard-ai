@@ -1,10 +1,48 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const appURL =
   process.env.WILLARD_APP_URL ??
   (process.env.REPLIT_DEV_DOMAIN
     ? `https://${process.env.REPLIT_DEV_DOMAIN}`
     : null);
+
+const logDir = process.env.WILLARD_STARTUP_LOG_DIR ?? join(process.cwd(), "logs");
+
+const serviceLogPaths = {
+  "Web app": process.env.WILLARD_WEB_LOG
+    ? [process.env.WILLARD_WEB_LOG]
+    : [join(logDir, "web.log"), join(logDir, "web-error.log")],
+  "API server": process.env.WILLARD_API_LOG
+    ? [process.env.WILLARD_API_LOG]
+    : [join(logDir, "api.log"), join(logDir, "api-error.log")],
+};
+
+async function recentStartupOutput(name) {
+  const logPaths = serviceLogPaths[name] ?? [];
+  const outputs = [];
+
+  for (const logPath of logPaths) {
+    try {
+      const output = await readFile(logPath, "utf8");
+      const lines = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length > 0) outputs.push(...lines.slice(-8));
+    } catch {
+      // A service may only write stdout or stderr, so a missing companion log
+      // is expected.
+    }
+  }
+
+  if (outputs.length === 0) return null;
+
+  // Startup failures are normally near the end of the service logs. Keep the
+  // routed-check failure actionable without flooding the workflow output.
+  return outputs.join("\n").slice(-2_000);
+}
 
 async function checkService(name, url, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
@@ -21,7 +59,13 @@ async function checkService(name, url, timeoutMs = 120_000) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  throw new Error(`${name} readiness failed at ${url} (${lastFailure}).`);
+  const startupOutput = await recentStartupOutput(name);
+  const outputSuffix = startupOutput
+    ? ` Startup output:\n${startupOutput}`
+    : "";
+  throw new Error(
+    `${name} readiness failed at ${url} (${lastFailure}).${outputSuffix}`,
+  );
 }
 
 if (appURL) {
