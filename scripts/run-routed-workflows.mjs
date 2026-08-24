@@ -20,8 +20,16 @@ const serviceLogPaths = {
     : [join(logDir, "api.log"), join(logDir, "api-error.log")],
 };
 
+const MAX_LINES_PER_LOG = 8;
+const MAX_STARTUP_OUTPUT_LENGTH = 2_000;
+
+function normalizeLogPaths(paths) {
+  if (paths == null) return [];
+  return [...new Set((Array.isArray(paths) ? paths : [paths]).filter(Boolean))];
+}
+
 export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
-  const logPaths = paths ?? [];
+  const logPaths = normalizeLogPaths(paths);
   const outputs = [];
 
   for (const logPath of logPaths) {
@@ -31,7 +39,9 @@ export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
-      if (lines.length > 0) outputs.push(...lines.slice(-8));
+      if (lines.length > 0) {
+        outputs.push(...lines.slice(-MAX_LINES_PER_LOG));
+      }
     } catch {
       // A service may only write stdout or stderr, so a missing companion log
       // is expected.
@@ -42,7 +52,7 @@ export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
 
   // Startup failures are normally near the end of the service logs. Keep the
   // routed-check failure actionable without flooding the workflow output.
-  return outputs.join("\n").slice(-2_000);
+  return outputs.join("\n").slice(-MAX_STARTUP_OUTPUT_LENGTH);
 }
 
 export async function checkService(
