@@ -64,7 +64,8 @@ test("developer startup launches the API directly and fails when that process ex
   assert.ok(developerLauncher.includes('scripts[/\\\\]launcher[/\\\\]'));
   assert.match(developerLauncher, /Restarting with the updated launcher/);
   assert.match(developerLauncher, /-File", \$PSCommandPath/);
-  assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" 60 \$services\.api\.Id/);
+  assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" \$apiReadyTimeout \$services\.api\.Id/);
+  assert.match(developerLauncher, /\$apiReadyTimeout = 180/);
   assert.doesNotMatch(developerLauncher, /automatic restart/);
   assert.doesNotMatch(developerLauncher, /Read-Host "  Press Enter to close this launcher window"/);
   assert.match(launcherCommon, /process exited before it became ready/);

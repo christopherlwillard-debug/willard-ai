@@ -221,7 +221,8 @@ function Fail-And-CleanUp($friendly, $technical) {
 }
 
 # -- Readiness ------------------------------------------------------------------
-if (-not (Wait-ForUrl $ApiUrl "your library service" 60 $services.api.Id $ApiLog)) {
+$apiReadyTimeout = 180
+if (-not (Wait-ForUrl $ApiUrl "your library service" $apiReadyTimeout $services.api.Id $ApiLog)) {
     Fail-And-CleanUp "Willard AI couldn't start its library service." `
         (($script:LastWaitFailureReason) + " See " + $ApiLog + " and " + (Join-Path $LogDir "api-error.log"))
 }
