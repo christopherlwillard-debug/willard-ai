@@ -11,6 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api";
 import {
   Activity, Play, RefreshCw, Cpu, Database, Clock, TrendingUp,
   AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown,
@@ -267,7 +268,7 @@ export default function Diagnostics() {
   const { data, isLoading, refetch } = useQuery<{ scans: ScanRecord[] }>({
     queryKey: ["diagnostics-scans"],
     queryFn: async () => {
-      const res = await fetch("/api/diagnostics/scans");
+      const res = await fetch(apiUrl("/diagnostics/scans"));
       if (!res.ok) throw new Error("Failed to fetch diagnostics");
       return res.json();
     },
@@ -276,7 +277,7 @@ export default function Diagnostics() {
 
   const benchmarkMutation = useMutation({
     mutationFn: async (size: string) => {
-      const res = await fetch(`/api/library/scan/benchmark?size=${size}`, { method: "POST" });
+      const res = await fetch(apiUrl(`/library/scan/benchmark?size=${size}`), { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err?.error ?? "Benchmark failed");

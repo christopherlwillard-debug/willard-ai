@@ -1,6 +1,9 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { setBaseUrl } from "@workspace/api-client-react";
+
+setBaseUrl((import.meta.env.BASE_URL || "/").replace(/\/+$/, ""));
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, {

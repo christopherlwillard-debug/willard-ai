@@ -44,6 +44,7 @@ import type {
   SmartRule,
   TimelineResponse,
 } from "@/types/collections";
+import { apiUrl } from "@/lib/api";
 
 const LIMIT = 60;
 
@@ -73,7 +74,7 @@ function CoverImage({ fileId, className }: { fileId: number | null; className?: 
   }
   return (
     <img
-      src={`/api/media/thumbnail/${fileId}`}
+      src={apiUrl(`/media/thumbnail/${fileId}`)}
       alt=""
       className={cn("object-cover", className)}
       onError={() => setError(true)}
@@ -294,7 +295,7 @@ function CollectionDetail({
   const itemsQuery = useQuery({
     queryKey: ["collection-items", collection.id, page],
     queryFn: async () => {
-      const r = await fetch(`/api/collections/${collection.id}/items?page=${page}&limit=${LIMIT}`);
+      const r = await fetch(apiUrl(`/collections/${collection.id}/items?page=${page}&limit=${LIMIT}`));
       if (!r.ok) throw new Error("Failed to load collection items");
       return r.json() as Promise<CollectionItemsResponse>;
     },
@@ -349,7 +350,7 @@ function FavoritesDetail({
   const favQuery = useQuery({
     queryKey: ["favorite-files", page],
     queryFn: async () => {
-      const r = await fetch(`/api/media/files?favorites=true&page=${page}&limit=${LIMIT}`);
+      const r = await fetch(apiUrl(`/media/files?favorites=true&page=${page}&limit=${LIMIT}`));
       if (!r.ok) throw new Error("Failed to load favorites");
       return r.json() as Promise<MediaFilesResponse>;
     },
@@ -399,7 +400,7 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
   const timelineQuery = useQuery({
     queryKey: ["media-timeline"],
     queryFn: async () => {
-      const r = await fetch("/api/media/timeline");
+      const r = await fetch(apiUrl("/media/timeline"));
       if (!r.ok) throw new Error("Failed to load timeline");
       return r.json() as Promise<TimelineResponse>;
     },
@@ -416,7 +417,7 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
         params.set("year", String(selected.year));
         params.set("month", String(selected.month));
       }
-      const r = await fetch(`/api/media/timeline/items?${params}`);
+      const r = await fetch(apiUrl(`/media/timeline/items?${params}`));
       if (!r.ok) throw new Error("Failed to load timeline items");
       return r.json() as Promise<MediaFilesResponse>;
     },
@@ -539,7 +540,7 @@ export default function Collections() {
   const collectionsQuery = useQuery({
     queryKey: ["collections"],
     queryFn: async () => {
-      const r = await fetch("/api/collections");
+      const r = await fetch(apiUrl("/collections"));
       if (!r.ok) throw new Error("Failed to load collections");
       return r.json() as Promise<CollectionsResponse>;
     },
@@ -553,7 +554,7 @@ export default function Collections() {
 
   const favoriteMutation = useMutation({
     mutationFn: async ({ id, favorite }: { id: number; favorite: boolean }) => {
-      const r = await fetch(`/api/media/files/${id}/favorite`, {
+      const r = await fetch(apiUrl(`/media/files/${id}/favorite`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ favorite }),
@@ -574,7 +575,7 @@ export default function Collections() {
 
   const manualCreateMutation = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/collections", {
+      const r = await fetch(apiUrl("/collections"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: manualName.trim(), kind: "manual" }),
@@ -596,7 +597,7 @@ export default function Collections() {
 
   const removeItemMutation = useMutation({
     mutationFn: async ({ collectionId, fileId }: { collectionId: number; fileId: number }) => {
-      const r = await fetch(`/api/collections/${collectionId}/items/${fileId}`, { method: "DELETE" });
+      const r = await fetch(apiUrl(`/collections/${collectionId}/items/${fileId}`), { method: "DELETE" });
       if (!r.ok) throw new Error("Failed to remove file from album");
     },
     onSuccess: () => {
@@ -608,7 +609,7 @@ export default function Collections() {
 
   const rebuildMutation = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/collections/rebuild", { method: "POST" });
+      const r = await fetch(apiUrl("/collections/rebuild"), { method: "POST" });
       if (!r.ok) {
         const body = await r.json().catch(() => ({ error: "Rebuild failed" }));
         throw new Error((body as any).error ?? "Rebuild failed");
@@ -624,7 +625,7 @@ export default function Collections() {
 
   const renameMutation = useMutation({
     mutationFn: async ({ id, name }: { id: number; name: string }) => {
-      const r = await fetch(`/api/collections/${id}`, {
+      const r = await fetch(apiUrl(`/collections/${id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -642,7 +643,7 @@ export default function Collections() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`/api/collections/${id}`, { method: "DELETE" });
+      const r = await fetch(apiUrl(`/collections/${id}`), { method: "DELETE" });
       if (!r.ok) throw new Error("Delete failed");
       return r.json();
     },
@@ -657,7 +658,7 @@ export default function Collections() {
 
   const mergeMutation = useMutation({
     mutationFn: async ({ targetId, sourceIds }: { targetId: number; sourceIds: number[] }) => {
-      const r = await fetch(`/api/collections/${targetId}/merge`, {
+      const r = await fetch(apiUrl(`/collections/${targetId}/merge`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceIds }),
@@ -680,7 +681,7 @@ export default function Collections() {
   const smartSaveMutation = useMutation({
     mutationFn: async () => {
       if (smartEditTarget) {
-        const r = await fetch(`/api/collections/${smartEditTarget.id}`, {
+        const r = await fetch(apiUrl(`/collections/${smartEditTarget.id}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: smartName, ruleJson: smartRule }),
@@ -688,7 +689,7 @@ export default function Collections() {
         if (!r.ok) throw new Error("Failed to update smart folder");
         return r.json();
       }
-      const r = await fetch("/api/collections", {
+        const r = await fetch(apiUrl("/collections"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: smartName, kind: "smart", ruleJson: smartRule }),

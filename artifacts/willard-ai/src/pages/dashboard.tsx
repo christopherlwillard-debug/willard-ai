@@ -42,6 +42,7 @@ import { BuildingLibraryProgress } from "@/components/library/building-progress"
 import { LibraryReadyCelebration } from "@/components/library/celebration";
 import { useQueryClient } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import { apiUrl } from "@/lib/api";
 
 function formatRelativeDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "Never";
@@ -97,7 +98,7 @@ function ThumbnailCard({ file, ext, badgeColor }: {
       <div className="relative h-24 w-36 rounded-lg bg-muted flex items-center justify-center overflow-hidden border border-border">
         {canThumbnail && !imgFailed ? (
           <img
-            src={`/api/media/thumbnail/${file.id}`}
+            src={apiUrl(`/media/thumbnail/${file.id}`)}
             alt={file.filename}
             className="absolute inset-0 w-full h-full object-cover"
             onError={() => setImgFailed(true)}
@@ -122,7 +123,7 @@ function ThumbnailJobProgress() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await fetch("/api/library/thumbnails/status");
+        const res = await fetch(apiUrl("/library/thumbnails/status"));
         if (res.ok && !cancelled) {
           const data = await res.json();
           setStats(data);

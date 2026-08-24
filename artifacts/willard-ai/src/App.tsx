@@ -94,7 +94,7 @@ function ProtectedRoutes() {
 }
 
 function AuthGate() {
-  const { authenticated, loading } = useAuth();
+  const { authenticated, loading, authError, refetch } = useAuth();
 
   if (loading) {
     return (
@@ -102,6 +102,23 @@ function AuthGate() {
         <div className="flex items-center gap-3 text-muted-foreground font-mono">
           <Loader2 className="w-5 h-5 animate-spin" />
           <span className="text-sm">INITIALIZING…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-xl border border-destructive/40 bg-card p-8 text-center shadow-2xl">
+          <h1 className="font-mono text-lg font-bold text-destructive">AUTHENTICATION UNAVAILABLE</h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            The server could not be reached. This is different from an incorrect password.
+            Check the connection and try again.
+          </p>
+          <button className="mt-5 rounded-md border px-4 py-2 font-mono text-sm hover:bg-secondary" onClick={() => void refetch()}>
+            RETRY_CONNECTION
+          </button>
         </div>
       </div>
     );

@@ -1,3 +1,4 @@
+import { eventUrl } from "@/lib/api";
 import { useEffect, useState } from "react";
 
 export interface LibraryJobProgress {
@@ -26,7 +27,24 @@ export function useLibraryJobStream() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const source = new EventSource("/api/library/jobs/events");
+    let source: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    let delay = 500;
+    const connect = () => {
+      if (stopped) return;
+      source = new EventSource(eventUrl("/library/jobs/events"));
+      source.addEventListener("jobs", onJobs);
+      source.onopen = () => { delay = 500; setConnected(true); };
+      source.onerror = () => {
+        setConnected(false);
+        source?.close();
+        if (!stopped) {
+          reconnectTimer = setTimeout(connect, delay);
+          delay = Math.min(delay * 2, 10_000);
+        }
+      };
+    };
     const onJobs = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as { jobs?: LibraryJobProgress[]; lastCompleted?: LibraryJobProgress | null };
@@ -35,12 +53,12 @@ export function useLibraryJobStream() {
         setConnected(true);
       } catch { /* ignore malformed server events */ }
     };
-    source.addEventListener("jobs", onJobs);
-    source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
+    connect();
     return () => {
-      source.removeEventListener("jobs", onJobs);
-      source.close();
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.removeEventListener("jobs", onJobs);
+      source?.close();
     };
   }, []);
 

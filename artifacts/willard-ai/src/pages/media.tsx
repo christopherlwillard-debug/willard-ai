@@ -44,6 +44,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api";
 import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
 import {
   Dialog,
@@ -257,7 +258,7 @@ function ThumbnailCard({
       <div className="relative w-full aspect-square bg-muted flex items-center justify-center overflow-hidden">
         {canThumb ? (
           <img
-            src={`/api/media/thumbnail/${file.id}`}
+            src={apiUrl(`/media/thumbnail/${file.id}`)}
             alt={file.name}
             loading="lazy"
             className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
@@ -345,7 +346,7 @@ function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; j
     queryKey: ["library-job-files", jobId, detail],
     enabled: detail !== null && detail !== "SKIPPED" && detail !== "DUPLICATES",
     queryFn: async () => {
-      const r = await fetch(`/api/library/jobs/${jobId}/files?action=${detail}&limit=200`);
+      const r = await fetch(apiUrl(`/library/jobs/${jobId}/files?action=${detail}&limit=200`));
       if (!r.ok) throw new Error("Failed to load files");
       return r.json() as Promise<{ files: JobActionFile[]; note?: string }>;
     },
@@ -355,7 +356,7 @@ function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; j
     queryKey: ["library-duplicates"],
     enabled: detail === "DUPLICATES",
     queryFn: async () => {
-      const r = await fetch("/api/library/duplicates");
+      const r = await fetch(apiUrl("/library/duplicates"));
       if (!r.ok) throw new Error("Failed to load duplicates");
       return r.json() as Promise<{ groups: DuplicateGroup[] }>;
     },
@@ -701,14 +702,14 @@ function AddToCollection({ fileId }: { fileId: number }) {
   const collectionsQuery = useQuery({
     queryKey: ["collections"],
     queryFn: async () => {
-      const r = await fetch("/api/collections");
+      const r = await fetch(apiUrl("/collections"));
       if (!r.ok) throw new Error("Failed to load albums");
       return r.json() as Promise<{ collections: { id: number; name: string; kind: string }[] }>;
     },
   });
   const addMutation = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`/api/collections/${id}/items`, {
+      const r = await fetch(apiUrl(`/collections/${id}/items`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileIds: [fileId] }),
@@ -768,7 +769,7 @@ function AddSelectedToAlbumDialog({
   const collectionsQuery = useQuery({
     queryKey: ["collections"],
     queryFn: async () => {
-      const r = await fetch("/api/collections");
+      const r = await fetch(apiUrl("/collections"));
       if (!r.ok) throw new Error("Failed to load albums");
       return r.json() as Promise<{ collections: { id: number; name: string; kind: string }[] }>;
     },
@@ -778,7 +779,7 @@ function AddSelectedToAlbumDialog({
     mutationFn: async ({ id, name }: { id?: number; name?: string }) => {
       let targetId = id;
       if (!targetId && name?.trim()) {
-        const create = await fetch("/api/collections", {
+        const create = await fetch(apiUrl("/collections"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: name.trim(), kind: "manual" }),
@@ -791,7 +792,7 @@ function AddSelectedToAlbumDialog({
         targetId = data.collection.id;
       }
       if (!targetId) throw new Error("Choose an album or enter a new album name");
-      const add = await fetch(`/api/collections/${targetId}/items`, {
+      const add = await fetch(apiUrl(`/collections/${targetId}/items`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileIds }),
@@ -862,7 +863,7 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
   const aiQuery = useQuery({
     queryKey: ["media-detail-ai", file.id],
     queryFn: async () => {
-      const response = await fetch(`/api/media/files/${file.id}/detail`, { credentials: "include" });
+            const response = await fetch(apiUrl(`/media/files/${file.id}/detail`), { credentials: "include" });
       if (!response.ok) throw new Error("Could not load AI details");
       return response.json() as Promise<{ ai?: { analyzed?: boolean; description?: string | null } }>;
     },
@@ -887,7 +888,7 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
       <div className="w-full aspect-square bg-muted flex items-center justify-center overflow-hidden border-b border-border shrink-0">
         {(file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") ? (
           <img
-            src={`/api/media/thumbnail/${file.id}`}
+            src={apiUrl(`/media/thumbnail/${file.id}`)}
             alt={file.name}
             loading="lazy"
             className="w-full h-full object-contain"
@@ -1096,13 +1097,13 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
             Open Detail Page
           </Button>
         </Link>
-        <a href={`/api/media/file/${file.id}/stream`} download={file.name}>
+        <a href={apiUrl(`/media/file/${file.id}/stream`)} download={file.name}>
           <Button variant="outline" size="sm" className="w-full gap-2 font-mono text-xs">
             <Download className="w-3.5 h-3.5" />
             Download
           </Button>
         </a>
-        <a href={`/api/media/file/${file.id}/stream`} target="_blank" rel="noopener noreferrer">
+        <a href={apiUrl(`/media/file/${file.id}/stream`)} target="_blank" rel="noopener noreferrer">
           <Button variant="ghost" size="sm" className="w-full gap-2 font-mono text-xs">
             <ExternalLink className="w-3.5 h-3.5" />
             Open Original
@@ -1264,7 +1265,7 @@ export default function Media() {
   const foldersQuery = useQuery({
     queryKey: ["media-folders"],
     queryFn: async () => {
-      const r = await fetch("/api/media/folders");
+      const r = await fetch(apiUrl("/media/folders"));
       if (!r.ok) throw new Error("Failed to load folders");
       return r.json() as Promise<{ tree: FolderNode[] }>;
     },
@@ -1272,7 +1273,7 @@ export default function Media() {
   const tagsQuery = useQuery({
     queryKey: ["media-tags"],
     queryFn: async () => {
-      const r = await fetch("/api/media/tags");
+      const r = await fetch(apiUrl("/media/tags"));
       if (!r.ok) throw new Error("Failed to load tags");
       return r.json() as Promise<{ tags: MediaTag[] }>;
     },
@@ -1286,7 +1287,7 @@ export default function Media() {
       if (debouncedSearch)      params.set("search", debouncedSearch);
       if (selectedFolder)       params.set("folder", selectedFolder);
       if (selectedTags.length)  params.set("tags", selectedTags.join(","));
-      const r = await fetch(`/api/media/files?${params}`);
+      const r = await fetch(apiUrl(`/media/files?${params}`));
       if (!r.ok) throw new Error("Failed to load media files");
       return r.json() as Promise<MediaFilesResponse>;
     },
@@ -1301,7 +1302,7 @@ export default function Media() {
   const activeJobQuery = useQuery({
     queryKey: ["library-active-job"],
     queryFn: async () => {
-      const r = await fetch("/api/library/jobs/active");
+      const r = await fetch(apiUrl("/library/jobs/active"));
       if (!r.ok) throw new Error("Failed to load active job");
       return r.json() as Promise<ProgressEvent | null>;
     },
@@ -1321,7 +1322,7 @@ export default function Media() {
   const historyQuery = useQuery({
     queryKey: ["library-jobs", "SCAN"],
     queryFn: async () => {
-      const r = await fetch("/api/library/jobs?type=SCAN&limit=20");
+      const r = await fetch(apiUrl("/library/jobs?type=SCAN&limit=20"));
       if (!r.ok) throw new Error("Failed to load scan history");
       return r.json() as Promise<{ jobs: LibraryJob[] }>;
     },
@@ -1352,7 +1353,7 @@ export default function Media() {
 
   const scanMutation = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/library/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: "QUICK" }) });
+      const r = await fetch(apiUrl("/library/scan"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile: "QUICK" }) });
       if (!r.ok) {
         const body = await r.json().catch(() => ({ error: "Unknown error" }));
         throw new Error((body as any).error ?? "Scan failed");
@@ -1370,21 +1371,21 @@ export default function Media() {
 
   const pauseMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(`/api/library/jobs/${jobId}/pause`, { method: "POST" });
+      await fetch(apiUrl(`/library/jobs/${jobId}/pause`), { method: "POST" });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
   });
 
   const resumeMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(`/api/library/jobs/${jobId}/resume`, { method: "POST" });
+      await fetch(apiUrl(`/library/jobs/${jobId}/resume`), { method: "POST" });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
   });
 
   const cancelMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(`/api/library/jobs/${jobId}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "USER_CANCELLED" }) });
+      await fetch(apiUrl(`/library/jobs/${jobId}/cancel`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "USER_CANCELLED" }) });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
@@ -1394,7 +1395,7 @@ export default function Media() {
 
   const favoriteMutation = useMutation({
     mutationFn: async ({ id, favorite }: { id: number; favorite: boolean }) => {
-      const r = await fetch(`/api/media/files/${id}/favorite`, {
+      const r = await fetch(apiUrl(`/media/files/${id}/favorite`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ favorite }),
@@ -1414,7 +1415,7 @@ export default function Media() {
 
   const thumbnailsMutation = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/library/thumbnails", { method: "POST" });
+      const r = await fetch(apiUrl("/library/thumbnails"), { method: "POST" });
       if (!r.ok) {
         const body = await r.json().catch(() => ({ error: "Unknown error" }));
         throw new Error((body as any).error ?? "Thumbnail job failed");
@@ -1445,7 +1446,7 @@ export default function Media() {
   const seqQuery = useQuery({
     queryKey: ["library-seq"],
     queryFn: async () => {
-      const r = await fetch("/api/library/seq");
+      const r = await fetch(apiUrl("/library/seq"));
       if (!r.ok) throw new Error("Failed to fetch seq");
       return r.json() as Promise<{ seq: number; total: number }>;
     },

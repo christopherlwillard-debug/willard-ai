@@ -14,6 +14,7 @@ import {
 import type { OrganizationJob } from "@workspace/api-client-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl, eventUrl } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   Boxes, Plus, ChevronRight, CheckCircle2, XCircle, AlertTriangle, Loader2,
@@ -574,7 +575,7 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
   const runDryRun = async () => {
     setIsDryRunning(true);
     try {
-      const resp = await fetch(`/api/organize/jobs/${job.id}/dry-run`);
+      const resp = await fetch(apiUrl(`/organize/jobs/${job.id}/dry-run`));
       if (!resp.ok) throw new Error("Dry-run failed");
       setDryRunResult(await resp.json());
     } catch {
@@ -595,7 +596,7 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
     setError(null);
     setLog([]);
 
-    const es = new EventSource(`/api/organize/jobs/${job.id}/execute`);
+    const es = new EventSource(eventUrl(`/organize/jobs/${job.id}/execute`));
     esRef.current = es;
 
     es.addEventListener("status", (e: MessageEvent) => {
@@ -1131,7 +1132,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["organize-recovery"],
     queryFn: async () => {
-      const resp = await fetch("/api/organize/recovery");
+      const resp = await fetch(apiUrl("/organize/recovery"));
       if (!resp.ok) throw new Error("Failed to fetch recovery data");
       return resp.json() as Promise<{ interrupted: InterruptedJob[] }>;
     },
@@ -1150,7 +1151,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
   const handleRollBack = async (jobId: number) => {
     setActionPending(jobId);
     try {
-      const resp = await fetch(`/api/organize/jobs/${jobId}/rollback`, { method: "POST" });
+      const resp = await fetch(apiUrl(`/organize/jobs/${jobId}/rollback`), { method: "POST" });
       const body = await resp.json();
       if (!resp.ok) throw new Error(body.error ?? "Rollback failed");
       toast({ title: "Rolled back", description: `${body.rolledBack}/${body.total} move(s) reversed.` });
@@ -1167,7 +1168,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
   const handleReset = async (jobId: number) => {
     setActionPending(jobId);
     try {
-      const resp = await fetch(`/api/organize/jobs/${jobId}/reset`, { method: "POST" });
+      const resp = await fetch(apiUrl(`/organize/jobs/${jobId}/reset`), { method: "POST" });
       const body = await resp.json();
       if (!resp.ok) throw new Error(body.error ?? "Reset failed");
       toast({ title: "Job reset to Verified", description: "Open the job to re-execute from the Execute step." });
@@ -1185,7 +1186,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
     if (esRefs.current[jobId]) esRefs.current[jobId].close();
     setResumeState(prev => ({ ...prev, [jobId]: { stage: "starting", progress: 0, log: [], done: false, error: null } }));
 
-    const es = new EventSource(`/api/organize/jobs/${jobId}/resume`);
+    const es = new EventSource(eventUrl(`/organize/jobs/${jobId}/resume`));
     esRefs.current[jobId] = es;
 
     es.addEventListener("status", (e: MessageEvent) => {
@@ -1551,7 +1552,7 @@ export default function Organize() {
   const { data: recoveryData } = useQuery({
     queryKey: ["organize-recovery"],
     queryFn: async () => {
-      const resp = await fetch("/api/organize/recovery");
+      const resp = await fetch(apiUrl("/organize/recovery"));
       if (!resp.ok) return { interrupted: [] };
       return resp.json() as Promise<{ interrupted: { id: number }[] }>;
     },

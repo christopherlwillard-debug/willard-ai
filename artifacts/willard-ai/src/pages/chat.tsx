@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, Send, Terminal, Loader2, File, Image as ImageIcon, Video, FolderOpen } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { formatBytes } from "@/lib/format";
+import { apiUrl } from "@/lib/api";
 
 interface MatchedFile {
   filename: string;
@@ -124,7 +125,7 @@ export default function Chat() {
     });
 
     try {
-      const res = await fetch(`/api/openai/conversations/${activeId}/messages`, {
+      const res = await fetch(apiUrl(`/openai/conversations/${activeId}/messages`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: userMessage })

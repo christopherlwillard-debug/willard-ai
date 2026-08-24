@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { ReassignFaceDialog } from "@/components/reassign-face-dialog";
 
@@ -63,7 +64,7 @@ function FaceAvatar({ faceId, name, size = "h-20 w-20" }: { faceId: number | nul
   }
   return (
     <img
-      src={`/api/faces/${faceId}/crop`}
+      src={apiUrl(`/faces/${faceId}/crop`)}
       alt={name ?? "Unnamed person"}
       className={`${size} rounded-full border object-cover`}
       onError={() => setFailed(true)}
@@ -214,7 +215,7 @@ function PersonDetail({ personId }: { personId: number }) {
             data-testid={`person-item-${it.id}`}
           >
             {isVisual(it.mediaType) ? (
-              <img src={`/api/media/thumbnail/${it.id}`} alt={it.name} loading="lazy" className="h-full w-full object-cover" />
+              <img src={apiUrl(`/media/thumbnail/${it.id}`)} alt={it.name} loading="lazy" className="h-full w-full object-cover" />
             ) : (
               <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-muted-foreground">
                 <FileText className="h-6 w-6" />

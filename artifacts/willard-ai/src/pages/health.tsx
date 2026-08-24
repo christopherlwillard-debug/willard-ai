@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, FolderCheck, HardDrive, Loader2, RefreshCw
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
+import { apiUrl } from "@/lib/api";
 
 type Report = {
   checkedAt: string;
@@ -43,7 +44,7 @@ export default function Health() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/media/health");
+      const response = await fetch(apiUrl("/media/health"));
       if (!response.ok) throw new Error("Health scan failed");
       setReport(await response.json());
       setError("");
@@ -60,7 +61,7 @@ export default function Health() {
   const runCleanup = async () => {
     setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError("");
     try {
-      const response = await fetch("/api/media/cleanup", {
+      const response = await fetch(apiUrl("/media/cleanup"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected }),
       });
       if (!response.ok || !response.body) throw new Error("Cleanup could not start");

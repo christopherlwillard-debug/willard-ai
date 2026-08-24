@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api";
 import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud, Layers, BarChart2, AlertTriangle, Filter, Plus, X as XIcon, Eye } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +64,7 @@ export default function Settings() {
   }>({
     queryKey: ["diagnostics-scans-typical"],
     queryFn: async () => {
-      const res = await fetch("/api/diagnostics/scans");
+      const res = await fetch(apiUrl("/diagnostics/scans"));
       if (!res.ok) return { scans: [] };
       return res.json();
     },
@@ -407,7 +408,7 @@ function LibrarySection() {
   const { data: interruptedJobs, refetch: refetchInterrupted } = useQuery({
     queryKey: ["library-jobs-interrupted"],
     queryFn: async () => {
-      const res = await fetch(`${import.meta.env.BASE_URL}api/library/jobs?status=INTERRUPTED_BY_RESTART&limit=5`);
+      const res = await fetch(apiUrl("/library/jobs?status=INTERRUPTED_BY_RESTART&limit=5"));
       if (!res.ok) return { jobs: [] };
       return res.json() as Promise<{ jobs: Array<{ id: number; jobType: string; createdAt: string; processedFiles: number; totalFiles: number | null }> }>;
     },
@@ -418,13 +419,13 @@ function LibrarySection() {
 
   const resumeInterrupted = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(`${import.meta.env.BASE_URL}api/library/jobs/${jobId}/resume`, { method: "POST" });
+      await fetch(apiUrl(`/library/jobs/${jobId}/resume`), { method: "POST" });
     },
     onSuccess: () => { toast({ title: "Scan resuming" }); refetchInterrupted(); queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() }); },
   });
   const discardInterrupted = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(`${import.meta.env.BASE_URL}api/library/jobs/${jobId}/cancel`, { method: "POST" });
+      await fetch(apiUrl(`/library/jobs/${jobId}/cancel`), { method: "POST" });
     },
     onSuccess: () => { toast({ title: "Scan discarded" }); refetchInterrupted(); },
   });
@@ -588,7 +589,7 @@ function ScannerSettingsSection() {
   const [dryRunLoading, setDryRunLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/settings/scanner")
+    fetch(apiUrl("/settings/scanner"))
       .then(r => r.json())
       .then(data => {
         setSettings(data);
@@ -601,7 +602,7 @@ function ScannerSettingsSection() {
   const save = async (patch: Partial<ScannerSettings>) => {
     setSaving(true);
     try {
-      const res = await fetch("/api/settings/scanner", {
+      const res = await fetch(apiUrl("/settings/scanner"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -661,7 +662,7 @@ function ScannerSettingsSection() {
     setDryRunLoading(true);
     setDryRun(null);
     try {
-      const res = await fetch("/api/library/scan/dry-run", { method: "POST" });
+      const res = await fetch(apiUrl("/library/scan/dry-run"), { method: "POST" });
       if (!res.ok) throw new Error((await res.json()).error ?? "Dry-run failed");
       setDryRun(await res.json());
     } catch (err: any) {
@@ -913,7 +914,7 @@ function ThumbnailManagerSection() {
     setThumbLoading(true);
     setThumbError(null);
     try {
-      const res = await fetch("/api/library/thumbnails/status");
+      const res = await fetch(apiUrl("/library/thumbnails/status"));
       if (!res.ok) throw new Error("Failed to fetch stats");
       const data = await res.json();
       setThumbStats(data);
@@ -928,7 +929,7 @@ function ThumbnailManagerSection() {
 
   const updateMutation = useMutation({
     mutationFn: async (q: string) => {
-      const res = await fetch("/api/library/thumbnails/quality", {
+      const res = await fetch(apiUrl("/library/thumbnails/quality"), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quality: q }),
@@ -944,7 +945,7 @@ function ThumbnailManagerSection() {
 
   const rebuildMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/library/thumbnails/rebuild", { method: "POST" });
+      const res = await fetch(apiUrl("/library/thumbnails/rebuild"), { method: "POST" });
       if (!res.ok) throw new Error("Failed to start rebuild");
       return res.json();
     },
@@ -957,7 +958,7 @@ function ThumbnailManagerSection() {
 
   const clearMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/library/thumbnails/cache", { method: "DELETE" });
+      const res = await fetch(apiUrl("/library/thumbnails/cache"), { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to clear cache");
       return res.json();
     },
@@ -970,7 +971,7 @@ function ThumbnailManagerSection() {
 
   const startMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/library/thumbnails", { method: "POST" });
+      const res = await fetch(apiUrl("/library/thumbnails"), { method: "POST" });
       if (!res.ok) throw new Error("Failed to start");
       return res.json();
     },
@@ -1472,7 +1473,7 @@ function OptimizeProfileSection() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch("/api/settings").then(r => r.json()).then((s: any) => {
+    fetch(apiUrl("/settings")).then(r => r.json()).then((s: any) => {
       if (s.optimizeProfile) setProfile(s.optimizeProfile);
       if (typeof s.rawConversionEnabled === "boolean") setRawEnabled(s.rawConversionEnabled);
     }).catch(() => {});
@@ -1481,7 +1482,7 @@ function OptimizeProfileSection() {
   async function save(newProfile: typeof profile, newRaw: boolean) {
     setSaving(true);
     try {
-      const resp = await fetch("/api/settings", {
+      const resp = await fetch(apiUrl("/settings"), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ optimizeProfile: newProfile, rawConversionEnabled: newRaw }),

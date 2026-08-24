@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { ReassignFaceDialog } from "@/components/reassign-face-dialog";
+import { apiUrl } from "@/lib/api";
 
 const API = `${import.meta.env.BASE_URL}api`;
 
@@ -108,7 +109,7 @@ function MediaThumb({ item, size = "h-24 w-24" }: { item: { id: number; name: st
       data-testid={`related-item-${item.id}`}
     >
       {isVisual(item.mediaType) ? (
-        <img src={`/api/media/thumbnail/${item.id}`} alt={item.name} loading="lazy" className="h-full w-full object-cover" />
+        <img src={apiUrl(`/media/thumbnail/${item.id}`)} alt={item.name} loading="lazy" className="h-full w-full object-cover" />
       ) : (
         <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-muted-foreground">
           <FileText className="h-6 w-6" />
@@ -273,7 +274,7 @@ export default function MediaDetail() {
           ) : isVisual(file.mediaType) ? (
             <img src={streamUrl} alt={file.name} className="max-h-[60vh] object-contain" />
           ) : file.mimeType === "application/pdf" || file.extension === "pdf" ? (
-            <img src={`/api/media/thumbnail/${file.id}`} alt={`First page of ${file.name}`} className="max-h-[60vh] bg-white object-contain" />
+            <img src={apiUrl(`/media/thumbnail/${file.id}`)} alt={`First page of ${file.name}`} className="max-h-[60vh] bg-white object-contain" />
           ) : (
             <div className="flex flex-col items-center gap-2 p-12 text-white/70">
               <FileText className="h-16 w-16" />
@@ -407,7 +408,7 @@ export default function MediaDetail() {
                               title={f.personName ? `View ${f.personName}` : "View this person"}
                             >
                           {f.hasCrop ? (
-                            <img src={`/api/faces/${f.id}/crop`} alt={f.personName ?? "Detected face"} className="h-8 w-8 rounded-full object-cover" />
+                            <img src={apiUrl(`/faces/${f.id}/crop`)} alt={f.personName ?? "Detected face"} className="h-8 w-8 rounded-full object-cover" />
                           ) : (
                             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted"><Users className="h-4 w-4 text-muted-foreground" /></span>
                           )}

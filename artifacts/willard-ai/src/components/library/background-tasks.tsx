@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CheckCircle2, ImagePlus, Loader2, Pause, Play, ScanLine, Square, X } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useLibraryJobStream, formatEta, type LibraryJobProgress } from "@/hooks/use-library-job-stream";
+import { apiUrl } from "@/lib/api";
 
 function jobName(job: LibraryJobProgress) {
   return job.jobType === "THUMBNAILS" ? "Thumbnail Generation" : "Library Scan";
@@ -13,7 +14,7 @@ function JobRow({ job, onRefresh }: { job: LibraryJobProgress; onRefresh: () => 
   const action = async (kind: "pause" | "resume" | "cancel") => {
     setBusy(true);
     try {
-      await fetch(`/api/library/jobs/${job.jobId}/${kind}`, { method: "POST" });
+      await fetch(apiUrl(`/library/jobs/${job.jobId}/${kind}`), { method: "POST" });
       onRefresh();
     } finally { setBusy(false); }
   };

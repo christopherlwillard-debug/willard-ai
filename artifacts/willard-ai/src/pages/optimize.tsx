@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl, eventUrl } from "@/lib/api";
 import {
   Dialog,
   DialogContent,
@@ -273,6 +274,7 @@ function RunConversionsDialog({
   const [fileResults, setFileResults] = useState<ConversionFileResult[]>([]);
   const [summary, setSummary]              = useState<ConversionSummary | null>(null);
   const [runError, setRunError]            = useState<string | null>(null);
+  const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedAction, setSelectedAction] = useState<FinalizeAction>("recycle");
   const [finalizing, setFinalizing]         = useState(false);
   const [finalizeJobId, setFinalizeJobId]   = useState<number | null>(null);
@@ -292,7 +294,7 @@ function RunConversionsDialog({
     setSummary(null);
     setProgress({ stage: "starting", message: "Reconnecting to conversion job…", progress: 1 });
 
-    const es = new EventSource(`/api/optimize/jobs/${existingJobId}/execute`);
+    const es = new EventSource(eventUrl(`/optimize/jobs/${existingJobId}/execute`));
     esRef.current = es;
 
     es.addEventListener("status", (e) => {
@@ -312,8 +314,15 @@ function RunConversionsDialog({
       esRef.current = null;
     });
     es.addEventListener("error", (e) => {
-      const data = (e as MessageEvent).data ? JSON.parse((e as MessageEvent).data) : null;
-      const msg = data?.message ?? "Connection error";
+      const raw = (e as MessageEvent).data;
+      let data: any = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
+      const msg = data?.message ?? "Connection interrupted";
+      if (!data || /already running/i.test(msg)) {
+        setProgress(prev => prev ? { ...prev, message: "Connection interrupted — tracking saved progress…" } : prev);
+        recoverFromDisconnect(existingJobId ?? finalizeJobId ?? 0);
+        return;
+      }
       setRunError(msg);
       setPhase("done");
       es.close();
@@ -337,6 +346,7 @@ function RunConversionsDialog({
     if (phase === "running") return; // prevent closing while running
     esRef.current?.close();
     esRef.current = null;
+    if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
     setPhase("config");
     setProgress(null);
     setFileResults([]);
@@ -345,10 +355,46 @@ function RunConversionsDialog({
     onClose();
   }
 
+  function recoverFromDisconnect(jobId: number) {
+    if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
+    const poll = async () => {
+      try {
+        const resp = await fetch(apiUrl(`/optimize/jobs/${jobId}`));
+        if (!resp.ok) throw new Error("Could not read conversion status");
+        const job = await resp.json() as any;
+        setProgress(prev => ({
+          ...(prev ?? { stage: "converting", message: "", processed: 0, total: 0, progress: 0 }),
+          processed: job.processedFiles ?? prev?.processed ?? 0,
+          total: job.totalFiles ?? prev?.total ?? 0,
+          message: job.status === "running" ? "Connection interrupted — tracking saved progress…" : (prev?.message ?? ""),
+        }));
+        if (job.status === "done" || job.status === "cancelled" || job.status === "failed") {
+          const result = (job.resultJson ?? {}) as any;
+          setSummary({
+            totalFiles: job.totalFiles ?? 0,
+            succeeded: job.succeededFiles ?? 0,
+            failed: job.failedFiles ?? 0,
+            skipped: job.skippedFiles ?? 0,
+            totalSavedBytes: result.totalSavedBytes ?? 0,
+            results: result.results ?? result.files ?? [],
+            cancelled: job.status === "cancelled",
+          });
+          if (job.status === "failed") setRunError(job.error ?? "Conversion failed");
+          setPhase(job.status === "done" && (job.succeededFiles ?? 0) > 0 ? "awaiting_action" : "done");
+          return;
+        }
+        recoveryTimerRef.current = setTimeout(() => void poll(), 2000);
+      } catch {
+        recoveryTimerRef.current = setTimeout(() => void poll(), 3000);
+      }
+    };
+    void poll();
+  }
+
   async function startConversion() {
     setRunError(null);
     try {
-      const resp = await fetch("/api/optimize/run", {
+      const resp = await fetch(apiUrl("/optimize/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -365,7 +411,7 @@ function RunConversionsDialog({
       setPhase("running");
       setFileResults([]);
 
-      const es = new EventSource(`/api/optimize/jobs/${job.id}/execute`);
+      const es = new EventSource(eventUrl(`/optimize/jobs/${job.id}/execute`));
       esRef.current = es;
 
       es.addEventListener("status", (e) => {
@@ -389,8 +435,15 @@ function RunConversionsDialog({
       });
 
       es.addEventListener("error", (e) => {
-        const data = (e as MessageEvent).data ? JSON.parse((e as MessageEvent).data) : null;
-        const msg = data?.message ?? "Connection error";
+        const raw = (e as MessageEvent).data;
+        let data: any = null;
+        try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
+        const msg = data?.message ?? "Connection interrupted";
+        if (!data || /already running/i.test(msg)) {
+          setProgress(prev => prev ? { ...prev, message: "Connection interrupted — tracking saved progress…" } : prev);
+          recoverFromDisconnect(job.id);
+          return;
+        }
         setRunError(msg);
         setPhase("done");
         es.close();
@@ -405,7 +458,7 @@ function RunConversionsDialog({
   async function handleFinalize(jobId: number) {
     setFinalizing(true);
     try {
-      const resp = await fetch(`/api/optimize/conversion/${jobId}/action`, {
+      const resp = await fetch(apiUrl(`/optimize/conversion/${jobId}/action`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: selectedAction }),
@@ -429,7 +482,7 @@ function RunConversionsDialog({
     if (!jobId || cancelling) return;
     setCancelling(true);
     try {
-      const resp = await fetch(`/api/optimize/jobs/${jobId}/cancel`, { method: "POST" });
+      const resp = await fetch(apiUrl(`/optimize/jobs/${jobId}/cancel`), { method: "POST" });
       const body = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error((body as any).error ?? "Failed to cancel conversion");
       toast({
@@ -1237,7 +1290,7 @@ export default function Optimize() {
   const { data: recentJobs = [], refetch: refetchJobs } = useQuery({
     queryKey: ["optimize-jobs"],
     queryFn: async () => {
-      const resp = await fetch("/api/optimize/jobs");
+      const resp = await fetch(apiUrl("/optimize/jobs"));
       if (!resp.ok) return [];
       return resp.json() as Promise<ConversionJob[]>;
     },
@@ -1249,7 +1302,7 @@ export default function Optimize() {
 
   const retryMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      const resp = await fetch(`/api/optimize/jobs/${jobId}/retry`, { method: "POST" });
+      const resp = await fetch(apiUrl(`/optimize/jobs/${jobId}/retry`), { method: "POST" });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
         throw new Error((body as any).error ?? "Failed to retry job");
@@ -1268,7 +1321,7 @@ export default function Optimize() {
 
   const finalizeMutation = useMutation({
     mutationFn: async ({ jobId, action }: { jobId: number; action: FinalizeAction }) => {
-      const resp = await fetch(`/api/optimize/jobs/${jobId}/finalize`, {
+      const resp = await fetch(apiUrl(`/optimize/jobs/${jobId}/finalize`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
@@ -1300,7 +1353,7 @@ export default function Optimize() {
   async function fetchAiSummary(data: ScanResult) {
     setAiLoading(true);
     try {
-      const resp = await fetch("/api/optimize/ai-summary", {
+      const resp = await fetch(apiUrl("/optimize/ai-summary"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

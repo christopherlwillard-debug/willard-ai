@@ -8,6 +8,7 @@ interface AuthContextValue {
   loading: boolean;
   refetch: () => void;
   invalidate: () => void;
+  authError: Error | null;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -16,12 +17,13 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   refetch: () => {},
   invalidate: () => {},
+  authError: null,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
 
-  const { data, isLoading, refetch } = useGetAuthStatus({
+  const { data, isLoading, isError, error, refetch } = useGetAuthStatus({
     query: {
       queryKey: getGetAuthStatusQueryKey(),
       retry: false,
@@ -39,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading: isLoading,
     refetch: () => void refetch(),
     invalidate,
+    authError: isError ? (error as Error) : null,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,3 +1,4 @@
+import { apiUrl } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, RefreshCw, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ export function ServiceAvailability({ children }: { children: React.ReactNode })
 
   const checkService = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch("/api/healthz", { signal, cache: "no-store" });
+      const response = await fetch(apiUrl("/healthz"), { signal, cache: "no-store" });
       if (!response.ok) throw new Error("Service unavailable");
       setState("online");
     } catch (error) {
