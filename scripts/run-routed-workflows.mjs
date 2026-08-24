@@ -8,7 +8,8 @@ const appURL =
     ? `https://${process.env.REPLIT_DEV_DOMAIN}`
     : null);
 
-const logDir = process.env.WILLARD_STARTUP_LOG_DIR ?? join(process.cwd(), "logs");
+const logDir =
+  process.env.WILLARD_STARTUP_LOG_DIR ?? join(process.cwd(), "logs");
 
 const serviceLogPaths = {
   "Web app": process.env.WILLARD_WEB_LOG
@@ -19,8 +20,8 @@ const serviceLogPaths = {
     : [join(logDir, "api.log"), join(logDir, "api-error.log")],
 };
 
-async function recentStartupOutput(name) {
-  const logPaths = serviceLogPaths[name] ?? [];
+export async function recentStartupOutput(name, paths = serviceLogPaths[name]) {
+  const logPaths = paths ?? [];
   const outputs = [];
 
   for (const logPath of logPaths) {
@@ -44,7 +45,12 @@ async function recentStartupOutput(name) {
   return outputs.join("\n").slice(-2_000);
 }
 
-async function checkService(name, url, timeoutMs = 120_000) {
+export async function checkService(
+  name,
+  url,
+  timeoutMs = 120_000,
+  options = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let lastFailure = "no response";
 
@@ -59,7 +65,7 @@ async function checkService(name, url, timeoutMs = 120_000) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  const startupOutput = await recentStartupOutput(name);
+  const startupOutput = await recentStartupOutput(name, options.logPaths);
   const outputSuffix = startupOutput
     ? ` Startup output:\n${startupOutput}`
     : "";
@@ -68,37 +74,43 @@ async function checkService(name, url, timeoutMs = 120_000) {
   );
 }
 
-if (appURL) {
-  const base = appURL.replace(/\/+$/, "");
-  try {
-    await Promise.all([
-      checkService("Web app", `${base}/`),
-      checkService("API server", `${base}/api/healthz`),
-    ]);
-  } catch (error) {
-    console.error(
-      `[routed-browser-checks] ${error instanceof Error ? error.message : error}`,
-    );
-    process.exit(1);
+export async function runRoutedWorkflows() {
+  if (appURL) {
+    const base = appURL.replace(/\/+$/, "");
+    try {
+      await Promise.all([
+        checkService("Web app", `${base}/`),
+        checkService("API server", `${base}/api/healthz`),
+      ]);
+    } catch (error) {
+      console.error(
+        `[routed-browser-checks] ${error instanceof Error ? error.message : error}`,
+      );
+      process.exit(1);
+    }
   }
+
+  const test = spawn(
+    "pnpm",
+    ["exec", "playwright", "test", "e2e/routed-workflows.spec.ts"],
+    {
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    },
+  );
+
+  test.on("error", (error) => {
+    console.error(
+      `[routed-browser-checks] Could not start Playwright: ${error.message}`,
+    );
+    process.exitCode = 1;
+  });
+
+  test.on("exit", (code, signal) => {
+    process.exitCode = code ?? (signal ? 1 : 0);
+  });
 }
 
-const test = spawn(
-  "pnpm",
-  ["exec", "playwright", "test", "e2e/routed-workflows.spec.ts"],
-  {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  },
-);
-
-test.on("error", (error) => {
-  console.error(
-    `[routed-browser-checks] Could not start Playwright: ${error.message}`,
-  );
-  process.exitCode = 1;
-});
-
-test.on("exit", (code, signal) => {
-  process.exitCode = code ?? (signal ? 1 : 0);
-});
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  await runRoutedWorkflows();
+}
