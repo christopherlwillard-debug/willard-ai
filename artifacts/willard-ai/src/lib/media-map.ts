@@ -18,6 +18,12 @@ export interface MediaMapFilters {
   mediaType: string;
 }
 
+export interface MediaMapViewport {
+  centerLat: number;
+  centerLon: number;
+  zoom: number;
+}
+
 export function parseMediaMapFilters(search: string): MediaMapFilters {
   const params = new URLSearchParams(search);
   return {
@@ -25,6 +31,27 @@ export function parseMediaMapFilters(search: string): MediaMapFilters {
     dateTo: params.get("dateTo") ?? "",
     mediaType: params.get("mediaType") || "all",
   };
+}
+
+export function parseMediaMapViewport(search: string): MediaMapViewport | null {
+  const params = new URLSearchParams(search);
+  const centerLat = Number(params.get("centerLat"));
+  const centerLon = Number(params.get("centerLon"));
+  const zoom = Number(params.get("zoom"));
+  if (
+    !Number.isFinite(centerLat) ||
+    !Number.isFinite(centerLon) ||
+    !Number.isInteger(zoom) ||
+    centerLat < -90 ||
+    centerLat > 90 ||
+    centerLon < -180 ||
+    centerLon > 180 ||
+    zoom < 1 ||
+    zoom > 10
+  ) {
+    return null;
+  }
+  return { centerLat, centerLon, zoom };
 }
 
 const API = `${import.meta.env.BASE_URL}api`;

@@ -24,7 +24,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fetchMediaMap, parseMediaMapFilters, type MediaMapFilters, type MediaMapItem } from "@/lib/media-map";
+import {
+  fetchMediaMap,
+  parseMediaMapFilters,
+  parseMediaMapViewport,
+  type MediaMapFilters,
+  type MediaMapItem,
+  type MediaMapViewport,
+} from "@/lib/media-map";
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 1;
@@ -178,10 +185,13 @@ export default function MapPage() {
   const [, navigate] = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const mapRef = useRef<HTMLDivElement>(null);
-  const hasFitRef = useRef(false);
+  const initialViewport = parseMediaMapViewport(searchParams.toString());
+  const hasFitRef = useRef(initialViewport != null);
   const [viewport, setViewport] = useState({ width: 960, height: 570 });
-  const [center, setCenter] = useState<Coordinate>({ lat: 20, lon: 0 });
-  const [zoom, setZoom] = useState(2);
+  const [center, setCenter] = useState<Coordinate>(() => initialViewport
+    ? { lat: initialViewport.centerLat, lon: initialViewport.centerLon }
+    : { lat: 20, lon: 0 });
+  const [zoom, setZoom] = useState(() => initialViewport?.zoom ?? 2);
   const [popupId, setPopupId] = useState<number | null>(null);
   const { dateFrom, dateTo, mediaType } = parseMediaMapFilters(searchParams.toString());
 
@@ -289,20 +299,38 @@ export default function MapPage() {
     updateFilters({ dateFrom: "", dateTo: "", mediaType: "all" });
   };
 
-  const zoomIn = () => setZoom((value) => Math.min(MAX_ZOOM, value + 1));
-  const zoomOut = () => setZoom((value) => Math.max(MIN_ZOOM, value - 1));
+  const updateViewport = (next: MediaMapViewport) => {
+    setCenter({ lat: next.centerLat, lon: next.centerLon });
+    setZoom(next.zoom);
+    setSearchParams((current) => {
+      const params = new URLSearchParams(current);
+      params.set("centerLat", String(next.centerLat));
+      params.set("centerLon", String(next.centerLon));
+      params.set("zoom", String(next.zoom));
+      return params;
+    }, { replace: true });
+  };
+  const zoomIn = () => updateViewport({ centerLat: center.lat, centerLon: center.lon, zoom: Math.min(MAX_ZOOM, zoom + 1) });
+  const zoomOut = () => updateViewport({ centerLat: center.lat, centerLon: center.lon, zoom: Math.max(MIN_ZOOM, zoom - 1) });
   const resetMap = () => {
     const fitted = fitMap(items, viewport.width, viewport.height);
     setCenter(fitted.center);
     setZoom(fitted.zoom);
     setPopupId(null);
+    hasFitRef.current = true;
+    setSearchParams((current) => {
+      const params = new URLSearchParams(current);
+      params.delete("centerLat");
+      params.delete("centerLon");
+      params.delete("zoom");
+      return params;
+    }, { replace: true });
   };
   const openItem = (id: number) => navigate(`/media/${id}`);
   const zoomCluster = (cluster: { items: ScreenPoint[]; x: number; y: number }) => {
     const nextZoom = Math.min(MAX_ZOOM, zoom + 2);
     const anchor = cluster.items[0];
-    setCenter({ lat: anchor.latitude, lon: anchor.longitude });
-    setZoom(nextZoom);
+    updateViewport({ centerLat: anchor.latitude, centerLon: anchor.longitude, zoom: nextZoom });
     setPopupId(null);
   };
 
