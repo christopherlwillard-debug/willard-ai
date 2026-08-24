@@ -25,3 +25,4 @@
 - [Cleanup queue retry behavior](cleanup-queue-retry.md) — clear staged decisions only when at least one file is actually recycled
 - [Canonical catalog scope](canonical-catalog-scope.md) — media_files plus active nas_path is authoritative; legacy reconciliation is insert-only and reports conflicts
 - [Place grid rounding parity](place-grid-rounding.md) — normalize JavaScript negative zero so exact southern/western half-cell keys match PostgreSQL
+- [GitHub workflow push authentication](github-workflow-push.md) — workflow-file pushes need a classic PAT via askpass; use x-access-token as the username
