@@ -11,7 +11,6 @@ import {
   useGetSystemEnvironment,
 } from "@workspace/api-client-react";
 import { LibrarySetup } from "@/components/library/library-setup";
-import { Loader2 } from "lucide-react";
 
 import Dashboard from "@/pages/dashboard";
 import Media from "@/pages/media";
@@ -98,10 +97,28 @@ function AuthGate() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex items-center gap-3 text-muted-foreground font-mono">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm">INITIALIZING…</span>
+      <div className="relative min-h-screen overflow-hidden bg-[#020617] text-white">
+        <video
+          className="absolute inset-0 h-full w-full object-cover"
+          src={`${import.meta.env.BASE_URL}willard-loading.mp4`}
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          aria-hidden="true"
+        />
+        <div
+          className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_20%,rgba(2,6,23,.18)_58%,rgba(2,6,23,.72)_100%)]"
+          aria-hidden="true"
+        />
+        <div className="absolute inset-x-0 bottom-0 flex justify-center px-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
+          <p
+            className="rounded-full border border-white/15 bg-slate-950/45 px-4 py-2 text-[11px] font-medium tracking-[0.22em] text-white/75 shadow-lg backdrop-blur-sm"
+            role="status"
+          >
+            PREPARING YOUR LIBRARY
+          </p>
         </div>
       </div>
     );

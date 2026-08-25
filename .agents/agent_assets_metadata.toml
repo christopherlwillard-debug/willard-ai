@@ -26,3 +26,10 @@ uri = "file://attached_assets/dreamina-2026-08-25-1809-Spoken-language_constrain
 type = "video"
 title = "Willard AI loading screen reference"
 description = "5-second 1280×720 MP4 reference clip for the looping loading background."
+
+[[outputs]]
+id = "H_FuMNMQogcYUu1yZuG1F"
+uri = "file://artifacts/willard-ai/public/willard-loading.mp4"
+type = "video"
+title = "Clean silent seamless Willard AI loading loop"
+description = "10-second forward/reverse loop, video-only with the embedded loading bar and percentage masked out. The web loading screen now uses this asset with no separate progress bar or spinner."
