@@ -4,42 +4,27 @@ import { Search, ScanLine, Loader2, CheckCircle2, Bell, Settings } from "lucide-
 import { Button } from "@/components/ui/button";
 import { Sidebar } from "./sidebar";
 import {
-  useGetDashboard,
   useStartScan,
-  getGetDashboardQueryKey,
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { BackgroundTasksButton, BackgroundTasksPanel } from "@/components/library/background-tasks";
 import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
 
 function TopBar() {
   const [, navigate] = useLocation();
-  const queryClient = useQueryClient();
   const [scanTriggered, setScanTriggered] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
   const { jobs } = useLibraryJobStream();
 
-  const { data } = useGetDashboard({
-    query: {
-      queryKey: getGetDashboardQueryKey(),
-      refetchInterval: scanTriggered ? 3000 : 30000,
-    },
-  });
-
   const scanMutation = useStartScan({
     mutation: {
-      onSuccess: () => setScanTriggered(true),
+      onSuccess: () => {
+        setScanTriggered(true);
+        window.setTimeout(() => setScanTriggered(false), 2500);
+      },
     },
   });
 
-  const isScanning = data?.isScanning || scanTriggered;
-
-  useEffect(() => {
-    if (scanTriggered && data && !data.isScanning) {
-      setScanTriggered(false);
-      queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
-    }
-  }, [scanTriggered, data, queryClient]);
+  const isScanning = scanTriggered || scanMutation.isPending;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -65,7 +50,7 @@ function TopBar() {
       </button>
 
       <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
-        {data && (
+        {jobs.length > 0 && (
           <div className="mr-1 hidden items-center gap-1.5 text-xs text-muted-foreground md:flex lg:mr-2">
             {isScanning ? (
               <>
@@ -75,14 +60,15 @@ function TopBar() {
             ) : (
               <>
                 <CheckCircle2 className="h-3 w-3 text-teal-300" />
-                <span>Healthy</span>
+              <span>{jobs.length} background task{jobs.length === 1 ? "" : "s"}</span>
               </>
             )}
           </div>
         )}
 
-        <button aria-label="Notifications" className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
+        <button aria-label="Notifications" onClick={() => navigate("/")} className="relative rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
           <Bell className="h-4 w-4" />
+          {jobs.length > 0 && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary" />}
         </button>
         <BackgroundTasksButton onClick={() => setTasksOpen(true)} count={jobs.length} />
 
@@ -96,15 +82,15 @@ function TopBar() {
           onClick={() => scanMutation.mutate()}
           disabled={isScanning || scanMutation.isPending}
           className="ml-1 h-8 shrink-0 gap-1.5 rounded-lg border border-primary/40 bg-primary/10 text-xs text-primary shadow-[0_0_18px_rgba(43,218,255,.10)] hover:bg-primary/20 hover:text-primary"
-          title="Re-indexes all files from scratch. Normally not needed — the library updates automatically."
+          title="Checks the library for changes. Willard normally keeps it up to date automatically."
         >
           {isScanning ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
             <ScanLine className="w-3 h-3" />
           )}
-          <span className="hidden sm:inline">{isScanning ? "Scanning…" : "Full Rescan"}</span>
-          <span className="sm:hidden">{isScanning ? "Scan" : "Rescan"}</span>
+           <span className="hidden sm:inline">{isScanning ? "Checking…" : "Check library"}</span>
+           <span className="sm:hidden">{isScanning ? "Check…" : "Check"}</span>
         </Button>
       </div>
       <BackgroundTasksPanel open={tasksOpen} onOpenChange={setTasksOpen} />

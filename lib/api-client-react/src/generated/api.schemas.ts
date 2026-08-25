@@ -686,6 +686,7 @@ export type OrganizeJobInputArchiveDisposition = typeof OrganizeJobInputArchiveD
 
 
 export const OrganizeJobInputArchiveDisposition = {
+  waiting: 'waiting',
   keep: 'keep',
   move_to_processed: 'move_to_processed',
   delete: 'delete',

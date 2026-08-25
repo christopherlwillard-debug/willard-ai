@@ -2747,7 +2747,7 @@ components:
           type: ["integer", "null"]
         archiveDisposition:
           type: string
-          enum: [keep, move_to_processed, delete]
+          enum: [waiting, keep, move_to_processed, delete]
         conflictPolicy:
           type: string
           enum: [keep_existing, replace, rename, skip]

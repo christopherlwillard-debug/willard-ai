@@ -77,8 +77,9 @@ function routeDestination(
   fileType: string,
   settings: any,
   nasPath: string,
-  opts: { archiveName?: string } = {}
+  opts: { archiveName?: string; archiveToWaiting?: boolean } = {}
 ): string {
+  if (opts.archiveToWaiting) return path.join(nasPath, "Waiting to be Organized");
   const override = (key: string): string | null =>
     settings?.[key] && String(settings[key]).trim() ? String(settings[key]).trim() : null;
   switch (fileType) {
@@ -597,15 +598,24 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     for (const e of fileEntries) {
       const ft = e.fileType === "image" ? "image" : e.fileType === "video" ? "video" : e.fileType === "document" ? "document" : "other";
       (summary as any)[ft === "image" ? "images" : ft === "video" ? "videos" : ft === "document" ? "documents" : "other"]++;
-      routes.push({ relativePath: e.path, filename: path.basename(e.path), fileType: ft, sizeBytes: e.sizeBytes, destination: routeDestination(ft, settings, nasPath, { archiveName }) });
+       routes.push({
+         relativePath: e.path,
+         filename: path.basename(e.path),
+         fileType: ft,
+         sizeBytes: e.sizeBytes,
+         destination: routeDestination(ft, settings, nasPath, {
+           archiveName,
+           archiveToWaiting: job.sourceType === "archive" && job.archiveDisposition === "waiting",
+         }),
+       });
     }
 
     const totalSizeBytes = fileEntries.reduce((s, e) => s + (e.sizeBytes ?? 0), 0);
     const destinations = {
-      images:    routeDestination("image",    settings, nasPath),
-      videos:    routeDestination("video",    settings, nasPath),
-      documents: routeDestination("document", settings, nasPath),
-      other:     routeDestination("other",    settings, nasPath, { archiveName }),
+       images:    routeDestination("image",    settings, nasPath, { archiveToWaiting: job.sourceType === "archive" && job.archiveDisposition === "waiting" }),
+       videos:    routeDestination("video",    settings, nasPath, { archiveToWaiting: job.sourceType === "archive" && job.archiveDisposition === "waiting" }),
+       documents: routeDestination("document", settings, nasPath, { archiveToWaiting: job.sourceType === "archive" && job.archiveDisposition === "waiting" }),
+       other:     routeDestination("other",    settings, nasPath, { archiveName, archiveToWaiting: job.sourceType === "archive" && job.archiveDisposition === "waiting" }),
     };
 
     // Build intra-plan conflict list for AI review input

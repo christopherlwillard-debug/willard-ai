@@ -77,7 +77,7 @@ function StepIndicator({ current }: { current: Step }) {
 
 function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) => void; initialPath?: string }) {
   const { toast } = useToast();
-  const [form, setForm] = useState({ sourceType: "archive", sourcePath: initialPath, archiveId: "", archiveDisposition: "keep", conflictPolicy: "keep_existing" });
+  const [form, setForm] = useState({ sourceType: "archive", sourcePath: initialPath, archiveId: "", archiveDisposition: "waiting", conflictPolicy: "keep_existing" });
   const { data: archivesData } = useListArchives({ limit: 200, offset: 0 });
   const createMutation = useCreateOrganizeJob({
     mutation: {
@@ -139,11 +139,12 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
 
       {form.sourceType === "archive" && (
         <div className="space-y-2">
-          <Label>After successful move, the archive should…</Label>
+          <Label>After approval, the archive contents should…</Label>
           <Select value={form.archiveDisposition} onValueChange={v => setForm({ ...form, archiveDisposition: v })}>
             <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="keep">Keep in place (safe default)</SelectItem>
+              <SelectItem value="waiting">Go to “Waiting to be Organized” (safe default)</SelectItem>
+              <SelectItem value="keep">Organize into media folders, keep archive</SelectItem>
               <SelectItem value="move_to_processed">Move to WillardAI/archive-index/processed/</SelectItem>
               <SelectItem value="delete">Delete archive (⚠ requires confirmation)</SelectItem>
             </SelectContent>

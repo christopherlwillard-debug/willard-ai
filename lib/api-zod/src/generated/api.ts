@@ -885,7 +885,7 @@ export const CreateOrganizeJobBody = zod.object({
   "sourceType": zod.enum(['archive', 'folder']),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
-  "archiveDisposition": zod.enum(['keep', 'move_to_processed', 'delete']).optional(),
+  "archiveDisposition": zod.enum(['waiting', 'keep', 'move_to_processed', 'delete']).optional(),
   "conflictPolicy": zod.enum(['keep_existing', 'replace', 'rename', 'skip']).optional()
 })
 
