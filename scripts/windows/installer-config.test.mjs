@@ -34,7 +34,6 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /last-update-check\.txt/);
   assert.match(launcher, /UpdateStage/);
   assert.match(launcher, /checksum verification/);
-  assert.match(launcher, /Update \$script:UpdateStage skipped/);
   assert.match(launcher, /Test-ProcessIdentity/);
   assert.match(launcher, /StatusCode -eq 200/);
   assert.match(launcher, /The previous working release was restored/);
@@ -42,7 +41,6 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /-Stop/);
   assert.match(launcher, /loading\.html/);
   assert.match(launcher, /Start-Process \$LoadingScreen/);
-  assert.match(launcher, /UpdateStage/);
 });
 
 test("installer deliberately leaves external services outside its payload", () => {

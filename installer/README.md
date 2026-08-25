@@ -27,8 +27,9 @@ First-install checklist:
    API becomes ready on port 8080, the web service becomes ready on port 5000,
    and the browser opens to `http://localhost:5000`.
 6. Sign in, choose a local Windows/NAS path, and confirm the library starts.
-7. Publish a newer release, open the shortcut again, and confirm the ZIP is
-   checksum-verified and the installed version updates.
+7. Publish a newer release, open the shortcut again, and confirm the looping
+   loading screen appears, the packaged ZIP is checksum-verified, and the
+   installed version updates before the app opens.
 
 For a source checkout rather than a packaged release, run `Setup Willard AI.bat`
 once. It creates desktop and Start Menu shortcuts that point to
@@ -51,9 +52,9 @@ The manual release steps performed by the action are:
    `release-manifest.json`.
 3. Run Inno Setup with `installer/WillardMediaCenter.iss`, passing
    `/DMyAppVersion=MAJOR.MINOR.PATCH` when building a release.
-4. Publish the generated installer, update ZIP, and
-   `release-manifest.json` containing `version`, `artifactUrl`, and the
-   SHA-256 of the ZIP.
+4. Publish the generated installer, packaged update ZIP, developer source
+   update ZIP, and `release-manifest.json` containing `version`, `artifactUrl`,
+   `sha256`, `sourceArtifactUrl`, and `sourceSha256`.
 
 The installer includes the application, API production dependencies, web
 output, the bundled Node runtime, and the native launcher. It does not include

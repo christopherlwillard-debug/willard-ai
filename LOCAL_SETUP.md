@@ -13,8 +13,9 @@ machine where that drive is a real, local path.
 For a packaged Windows release, run the Willard Media Center installer once.
 It creates a desktop shortcut and a Start Menu entry. From then on, double-click
 **Willard Media Center** to start the local application; the installed native
-launcher checks the release, starts or recovers local services, applies safe
-updates and database migrations, verifies readiness, and opens the web UI.
+launcher shows the looping loading screen, checks the published release, applies
+a verified update when needed, starts or recovers local services, applies safe
+database migrations, verifies readiness, and opens the web UI.
 
 The installer includes the application, production API dependencies, a private
 Node runtime, and the launcher. It does **not** include PostgreSQL, your media,
