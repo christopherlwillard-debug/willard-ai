@@ -1,0 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+:root {
+  --background: 230 42% 5%;
+  --foreground: 218 45% 94%;
+  --border: 226 32% 19%;
+  --input: 226 32% 17%;
+  --ring: 188 100% 58%;
+  --card: 229 38% 9%;
+  --card-foreground: 218 45% 94%;
+  --popover: 231 39% 10%;
+  --popover-foreground: 218 45% 94%;
+  --primary: 188 100% 58%;
+  --primary-foreground: 230 42% 5%;
+  --secondary: 233 34% 16%;
+  --secondary-foreground: 218 40% 92%;
+  --muted: 230 29% 14%;
+  --muted-foreground: 220 18% 63%;
+  --accent: 286 88% 66%;
+  --accent-foreground: 231 39% 7%;
+  --destructive: 350 74% 61%;
+  --destructive-foreground: 218 45% 96%;
+  --sidebar: 232 46% 6%;
+  --sidebar-foreground: 218 38% 88%;
+  --sidebar-border: 226 34% 16%;
+  --sidebar-accent: 231 37% 13%;
+  --sidebar-accent-foreground: 218 45% 96%;
+  --app-font-sans: "Space Grotesk", sans-serif;
+  --app-font-mono: "DM Mono", monospace;
+  --radius: .55rem;
+}
+
+body {
+  font-family: var(--app-font-sans);
+  background:
+    radial-gradient(circle at 76% -10%, rgba(106,72,255,.14), transparent 31rem),
+    radial-gradient(circle at 10% 100%, rgba(0,205,255,.07), transparent 34rem),
+    linear-gradient(135deg, #070b1b 0%, #0a1024 48%, #09091b 100%);
+  background-attachment: fixed;
+}
+
+.willard-shell { isolation: isolate; position: relative; }
+.willard-shell::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1; opacity: .22;
+  background-image: radial-gradient(circle at 20% 20%, rgba(147,233,255,.9) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 70% 72%, rgba(213,125,255,.8) 0 1px, transparent 1.5px);
+  background-size: 151px 173px, 227px 191px;
+  mask-image: linear-gradient(to bottom, black, transparent 88%);
+}
+.willard-brand {
+  background: linear-gradient(130deg,#6ff8ff 5%,#4ea7ff 42%,#c267ff 78%,#ff5bcc);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: 0 0 26px rgba(64,209,255,.26);
+}

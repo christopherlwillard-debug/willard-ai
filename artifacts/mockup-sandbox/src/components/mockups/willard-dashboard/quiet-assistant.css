@@ -1,0 +1,95 @@
+.quiet-assistant {
+  --quiet-ink: 228 36% 94%;
+  --quiet-muted: 222 18% 66%;
+  --quiet-dim: 223 19% 48%;
+  --quiet-line: 222 28% 18%;
+  --quiet-panel: 226 30% 9%;
+  --quiet-panel-raised: 226 31% 12%;
+  --quiet-blue: 196 100% 69%;
+  --quiet-violet: 264 92% 73%;
+  --quiet-green: 157 72% 63%;
+  min-height: 100dvh;
+  color: hsl(var(--quiet-ink));
+  background:
+    radial-gradient(circle at 74% -8%, rgba(93, 106, 255, .14), transparent 29rem),
+    radial-gradient(circle at 10% 83%, rgba(28, 188, 190, .06), transparent 26rem),
+    #080b14;
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.quiet-assistant button,
+.quiet-assistant input {
+  font: inherit;
+}
+
+.quiet-assistant .quiet-panel {
+  background: linear-gradient(145deg, rgba(22, 27, 43, .88), rgba(11, 15, 27, .91));
+  border: 1px solid hsl(var(--quiet-line));
+  box-shadow: 0 14px 44px rgba(0, 0, 0, .16);
+}
+
+.quiet-assistant .quiet-panel-soft {
+  background: rgba(15, 20, 34, .66);
+  border: 1px solid hsl(var(--quiet-line));
+}
+
+.quiet-assistant .quiet-grid {
+  background-image:
+    linear-gradient(rgba(128, 154, 255, .026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(128, 154, 255, .026) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.quiet-assistant .quiet-display {
+  letter-spacing: -.045em;
+}
+
+.quiet-assistant .quiet-thumbnail {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: #172033;
+}
+
+.quiet-assistant .quiet-thumbnail::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(155deg, transparent 18%, rgba(244, 220, 184, .22) 18.5%, transparent 47%),
+    linear-gradient(25deg, rgba(5, 10, 21, .72) 0 28%, transparent 28.5%),
+    radial-gradient(circle at 74% 20%, rgba(255, 220, 173, .74) 0 2%, transparent 18%),
+    linear-gradient(155deg, var(--thumb-a), var(--thumb-b));
+  transform: scale(1.04);
+  transition: transform .45s ease;
+}
+
+.quiet-assistant .quiet-thumbnail:hover::after {
+  transform: scale(1.1);
+}
+
+.quiet-assistant .quiet-fade-in {
+  animation: quiet-fade-in .55s ease both;
+}
+
+.quiet-assistant .quiet-delay-1 { animation-delay: .06s; }
+.quiet-assistant .quiet-delay-2 { animation-delay: .12s; }
+.quiet-assistant .quiet-delay-3 { animation-delay: .18s; }
+
+.quiet-assistant .quiet-scrollbar::-webkit-scrollbar { height: 4px; width: 4px; }
+.quiet-assistant .quiet-scrollbar::-webkit-scrollbar-thumb { background: hsl(var(--quiet-line)); border-radius: 999px; }
+
+@keyframes quiet-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quiet-assistant *,
+  .quiet-assistant *::before,
+  .quiet-assistant *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
