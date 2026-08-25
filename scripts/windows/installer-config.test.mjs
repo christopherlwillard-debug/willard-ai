@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { findHighSeverityImageAdvisories } from "./validate-release.mjs";
 
 const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
 const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
@@ -67,6 +68,73 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /sha256.*match/i);
   assert.match(releaseValidator, /sharp.*package\.json/);
   assert.match(releaseValidator, /sharpManifest\.version !== "0\.35\.2"/);
+});
+
+test("release validation gates high and critical image parser advisories in both runtime graphs", () => {
+  const findings = findHighSeverityImageAdvisories({
+    advisories: {
+      "api-image": {
+        module_name: "image-size",
+        severity: "high",
+        title: "Image parser denial of service",
+        findings: [{
+          version: "1.2.1",
+          paths: ["artifacts__willard-mobile>@expo/cli>image-size"],
+        }],
+      },
+      "api-sharp": {
+        module_name: "sharp",
+        severity: "critical",
+        title: "Sharp parser issue",
+        findings: [{
+          version: "0.35.1",
+          paths: ["artifacts__api-server>sharp"],
+        }],
+      },
+      "unrelated": {
+        module_name: "tar",
+        severity: "critical",
+        title: "Archive issue",
+        findings: [{
+          version: "7.5.20",
+          paths: ["artifacts__willard-mobile>@expo/cli>tar"],
+        }],
+      },
+      "below-threshold": {
+        module_name: "image-size",
+        severity: "moderate",
+        title: "Not a release-blocking severity",
+        findings: [{
+          version: "1.2.0",
+          paths: ["artifacts__api-server>image-size"],
+        }],
+      },
+    },
+  }, {
+    "API runtime": "artifacts__api-server>",
+    "Mobile toolchain": "artifacts__willard-mobile>",
+  });
+
+  assert.deepEqual(findings, [
+    {
+      scope: "Mobile toolchain",
+      package: "image-size",
+      version: "1.2.1",
+      severity: "high",
+      path: "artifacts__willard-mobile>@expo/cli>image-size",
+      title: "Image parser denial of service",
+    },
+    {
+      scope: "API runtime",
+      package: "sharp",
+      version: "0.35.1",
+      severity: "critical",
+      path: "artifacts__api-server>sharp",
+      title: "Sharp parser issue",
+    },
+  ]);
+  assert.match(releaseValidator, /pnpm.*audit.*--json/);
+  assert.match(releaseValidator, /High or critical image-processing advisories/);
 });
 
 test("clean Windows payload includes a one-click launcher", () => {
