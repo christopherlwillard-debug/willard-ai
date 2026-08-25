@@ -4,7 +4,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { pool, db } from "@workspace/db";
+import { pool as dbPool, db } from "@workspace/db";
 
 import { appSettingsTable, organizationJobsTable, conversionJobsTable } from "@workspace/db";
 import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
@@ -20,6 +20,7 @@ import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
 import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
 import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
+import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-lock";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
@@ -27,6 +28,8 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:3000",
   "http://127.0.0.1:5173",
 ]);
+
+const pool = dbPool;
 
 function configuredAppOrigins(): Set<string> {
   const origins = new Set(DEFAULT_ALLOWED_ORIGINS);
@@ -55,8 +58,6 @@ function isAllowedAppOrigin(origin: string): boolean {
   }
 }
 
-type Queryable = Pick<typeof pool, "query">;
-
 export async function initializeVectorCapability(queryable: Queryable = pool): Promise<void> {
   try {
     await queryable.query(`CREATE EXTENSION IF NOT EXISTS vector`);
@@ -83,11 +84,8 @@ export async function initializeVectorCapability(queryable: Queryable = pool): P
 }
 
 export async function bootstrapSessionTable(): Promise<void> {
-  const schemaPool = pool;
-  const client = await schemaPool.connect();
-  const pool = client;
-  try {
-    await client.query(`SELECT pg_advisory_lock(hashtext('willard-schema-bootstrap'))`);
+  await withSchemaBootstrapLock(dbPool, async (client) => {
+    const pool = client;
     await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
       "sid"    varchar      NOT NULL COLLATE "default",
@@ -344,13 +342,7 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE media_files
       ADD COLUMN IF NOT EXISTS metadata_status text;
   `);
-  } finally {
-    try {
-      await client.query(`SELECT pg_advisory_unlock(hashtext('willard-schema-bootstrap'))`);
-    } finally {
-      client.release();
-    }
-  }
+  });
 }
 
 const PgStore = connectPgSimple(session);
