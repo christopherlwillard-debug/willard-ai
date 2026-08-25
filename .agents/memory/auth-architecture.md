@@ -28,3 +28,9 @@ All `/api/*` routes except `/api/auth/*` and `/api/healthz` require a valid sess
 - `AuthGate` in `App.tsx`: spinner → first-run setup → login page → protected app.
 - Logout button in sidebar clears QueryClient and invalidates auth status.
 - Security section in `settings.tsx`: change password + active sessions list.
+
+Auth mutations must await invalidation/refetch of the auth-status query before the login gate can transition.
+
+**Why:** A successful server-side session can otherwise leave the login screen visible until a later stale-time refresh, making valid credentials appear rejected.
+
+**How to apply:** Keep password and recovery success handlers asynchronous and await the shared auth-status invalidation.

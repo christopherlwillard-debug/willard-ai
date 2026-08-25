@@ -97,12 +97,19 @@ export default function LoginPage() {
 
   const loginMutation = useLogin({
     mutation: {
-      onSuccess: () => invalidate(),
-      onError: (err: any) => toast({
-        title: "Login failed",
-        description: err?.response?.data?.error ?? "Incorrect password.",
-        variant: "destructive"
-      }),
+      onSuccess: async () => {
+        await invalidate();
+      },
+      onError: (err: any) => {
+        const rateLimited = err?.response?.status === 429;
+        toast({
+          title: rateLimited ? "Too many login attempts" : "Login failed",
+          description: rateLimited
+            ? "Please wait 15 minutes before trying again."
+            : err?.response?.data?.error ?? "Incorrect password.",
+          variant: "destructive"
+        });
+      },
     },
   });
 
@@ -122,7 +129,9 @@ export default function LoginPage() {
 
   const recoverMutation = useRecoverAuth({
     mutation: {
-      onSuccess: () => invalidate(),
+      onSuccess: async () => {
+        await invalidate();
+      },
       onError: (err: any) => {
         const rateLimited = err?.response?.status === 429;
         toast({

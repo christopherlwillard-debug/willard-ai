@@ -7,7 +7,7 @@ interface AuthContextValue {
   setup: boolean;
   loading: boolean;
   refetch: () => void;
-  invalidate: () => void;
+  invalidate: () => Promise<void>;
   authError: Error | null;
 }
 
@@ -16,7 +16,7 @@ const AuthContext = createContext<AuthContextValue>({
   setup: false,
   loading: true,
   refetch: () => {},
-  invalidate: () => {},
+  invalidate: async () => {},
   authError: null,
 });
 
@@ -31,8 +31,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  const invalidate = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: getGetAuthStatusQueryKey() });
+  const invalidate = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: getGetAuthStatusQueryKey() });
   }, [queryClient]);
 
   const value: AuthContextValue = {
