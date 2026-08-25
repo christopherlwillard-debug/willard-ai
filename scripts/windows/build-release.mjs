@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -21,6 +21,61 @@ async function copy(source, destination) {
   await cp(source, destination, { recursive: true });
 }
 
+async function pruneWindowsPayload() {
+  const pnpmStore = path.join(output, "api-runtime", "node_modules", ".pnpm");
+  try {
+    const entries = await readdir(pnpmStore);
+    for (const entry of entries) {
+      if (/(darwin|linux|android|freebsd|arm64|armv7)/i.test(entry)) {
+        await rm(path.join(pnpmStore, entry), { recursive: true, force: true });
+      }
+    }
+  } catch {
+    // A future package manager layout may not expose a .pnpm store.
+  }
+
+  const onnxRoot = path.join(
+    output,
+    "api-runtime",
+    "node_modules",
+    ".pnpm",
+    "onnxruntime-node@1.24.3",
+    "node_modules",
+    "onnxruntime-node",
+    "bin",
+    "napi-v6",
+  );
+  for (const platform of ["linux", "darwin"]) {
+    await rm(path.join(onnxRoot, platform), { recursive: true, force: true });
+  }
+  await rm(path.join(onnxRoot, "win32", "arm64"), { recursive: true, force: true });
+
+  try {
+    const webEntries = await readdir(
+      path.join(output, "api-runtime", "node_modules", ".pnpm"),
+    );
+    for (const entry of webEntries.filter((name) => name.startsWith("onnxruntime-web@"))) {
+      const webDist = path.join(
+        output,
+        "api-runtime",
+        "node_modules",
+        ".pnpm",
+        entry,
+        "node_modules",
+        "onnxruntime-web",
+        "dist",
+      );
+      for (const file of await readdir(webDist).catch(() => [])) {
+        if (file.endsWith(".wasm") || file.endsWith(".map")) {
+          await rm(path.join(webDist, file), { force: true });
+        }
+      }
+    }
+  } catch {
+    // The web backend is not present in every production dependency layout.
+  }
+}
+
 async function main() {
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("WILLARD_VERSION must be MAJOR.MINOR.PATCH.");
   if (!nodeRuntime) throw new Error("Set WILLARD_NODE_RUNTIME to a directory containing the Windows node.exe runtime.");
@@ -30,6 +85,7 @@ async function main() {
   await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv, stdio: "inherit" });
   await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
   await run(pnpmCommand, ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", path.join(output, "api-runtime")], { cwd: root, stdio: "inherit" });
+  await pruneWindowsPayload();
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
   await copy(path.join(root, "artifacts/api-server/dist"), path.join(output, "api-runtime/dist"));
@@ -39,7 +95,7 @@ async function main() {
   await copy(path.join(root, "desktop/WillardMediaCenter.ps1"), path.join(output, "desktop/WillardMediaCenter.ps1"));
   await copy(path.join(root, "desktop/Start Willard Media Center.bat"), path.join(output, "Start Willard Media Center.bat"));
   await copy(path.join(root, "installer/willard.ico"), path.join(output, "icons/willard.ico"));
-  await copy(nodeRuntime, path.join(output, "runtime"));
+  await copy(path.join(nodeRuntime, "node.exe"), path.join(output, "runtime/node.exe"));
 
   const manifest = {
     product: "Willard Media Center",

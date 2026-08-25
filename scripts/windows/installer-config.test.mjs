@@ -72,6 +72,12 @@ test("clean Windows payload includes a one-click launcher", () => {
   assert.match(releaseValidator, /Start Willard Media Center\.bat/);
 });
 
+test("Windows payload prunes non-Windows native dependencies and bundles only node.exe", () => {
+  assert.match(releaseStager, /pruneWindowsPayload/);
+  assert.match(releaseStager, /darwin\|linux\|android\|freebsd\|arm64\|armv7/);
+  assert.match(releaseStager, /nodeRuntime, "node\.exe"/);
+});
+
 test("Windows release builds provide Vite's required build-time environment", () => {
   assert.match(releaseStager, /PORT: process\.env\.PORT \|\| "5000"/);
   assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);
