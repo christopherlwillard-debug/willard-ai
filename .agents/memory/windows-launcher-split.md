@@ -20,3 +20,9 @@ PowerShell variable names are case-insensitive, so never use `$pid` for a local 
 **Why:** Interrupted-launch recovery previously failed before validating tracked processes because assigning `$pid` raised `VariableNotWritable`.
 
 **How to apply:** Use descriptive names such as `$trackedProcessId` in every launcher script and keep a regression assertion against `$pid =`.
+
+Developer launchers on Windows must resolve `pnpm.cmd` or `pnpm.exe` explicitly instead of invoking the ambiguous `pnpm` command.
+
+**Why:** Windows PowerShell can resolve `pnpm` to `pnpm.ps1`, whose native output is surfaced as `NativeCommandError` even when the underlying pnpm command succeeds.
+
+**How to apply:** Use the executable wrapper for launcher-owned installs, builds, and long-lived web processes; keep readiness failures paired with the relevant log tail.

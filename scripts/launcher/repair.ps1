@@ -48,6 +48,8 @@ if (Test-Command "pnpm") {
     $problems += "Install Node.js first, then run Repair again."
 }
 
+$pnpmCommand = Get-WillardPnpmCommand
+
 if (Test-Command "ffmpeg") {
     Write-Ok "Media processing is available."
 } else {
@@ -67,9 +69,9 @@ if (Test-Path $envPath) {
 }
 
 # -- Application components ---------------------------------------------------
-if ((Test-Command "pnpm") -and (Test-Command "node")) {
+if ($pnpmCommand -and (Test-Command "node")) {
     Write-Info "Checking application components (this can take a few minutes)..."
-    & pnpm install --ignore-scripts --silent *> (Join-Path $LogDir "repair-install.log")
+    & $pnpmCommand install --ignore-scripts --silent *> (Join-Path $LogDir "repair-install.log")
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "Application components are complete."
     } else {

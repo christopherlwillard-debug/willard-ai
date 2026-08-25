@@ -75,6 +75,13 @@ if (-not (Test-Command "pnpm")) {
     }
     Write-Ok "Package helper ready"
 }
+$pnpmCommand = Get-WillardPnpmCommand
+if (-not $pnpmCommand) {
+    Stop-And-Exit "Willard AI couldn't locate its package helper." `
+        "pnpm was found, but its Windows executable wrapper (pnpm.cmd or pnpm.exe) could not be resolved."
+}
+# Keep the supported Windows wrapper names visible in this entry point too:
+# "pnpm.cmd", "pnpm.exe". The shared resolver prefers them in that order.
 
 # -- Configuration --------------------------------------------------------------
 if (Ensure-EnvFile) { Write-Ok "Created your settings file automatically." }
@@ -150,12 +157,12 @@ if ($dependenciesReady) {
     Write-Ok "Application components already ready"
 } else {
     $installCode = Invoke-LoggedCommand "Checking application components..." $installLog {
-        & pnpm install --ignore-scripts --silent
+        & $pnpmCommand install --ignore-scripts --silent
     }
     if ($installCode -ne 0) {
         Write-Warn "The first package check needs another try..."
         $installCode = Invoke-LoggedCommand "Repairing application components..." $installLog {
-            & pnpm install --force --ignore-scripts --silent
+            & $pnpmCommand install --force --ignore-scripts --silent
         }
     }
     if ($installCode -ne 0) {
@@ -175,7 +182,7 @@ $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
 if ($apiSourceChanged -or -not (Test-Path $apiDist)) {
     $buildLog = Join-Path $LogDir "startup-build.log"
     $buildCode = Invoke-LoggedCommand "Preparing the library service..." $buildLog {
-        & pnpm --filter @workspace/api-server run build
+        & $pnpmCommand --filter @workspace/api-server run build
     }
     if ($buildCode -ne 0 -or -not (Test-Path $apiDist)) {
         Stop-And-Exit "Willard AI couldn't prepare its library service." `
@@ -257,14 +264,6 @@ function Start-WillardServices {
         # the API process as well.
         Save-TrackedPids $apiProc.Id $null
         $env:PORT = "5000"
-        $pnpmCommand = $null
-        foreach ($candidate in @("pnpm.cmd", "pnpm.exe")) {
-            $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
-            if ($resolved) {
-                $pnpmCommand = $resolved.Source
-                break
-            }
-        }
         if (-not $pnpmCommand) {
             throw "The package helper was found but no Windows executable wrapper (pnpm.cmd or pnpm.exe) was available."
         }
@@ -274,6 +273,10 @@ function Start-WillardServices {
             -RedirectStandardError (Join-Path $LogDir "web-error.log") `
             -WindowStyle Minimized -PassThru
         Save-TrackedPids $apiProc.Id $webProc.Id
+        if (-not (Test-ProcessAlive $webProc.Id)) {
+            throw "The Media Center process exited immediately after launch. " +
+                (Get-LogTail $WebLog)
+        }
         return @{ api = $apiProc; web = $webProc }
     } catch {
         Stop-TrackedProcesses | Out-Null

@@ -63,6 +63,17 @@ function Test-Command($name) {
     return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+function Get-WillardPnpmCommand {
+    # Windows PowerShell can resolve `pnpm` to pnpm.ps1, which wraps native
+    # output as a NativeCommandError even when pnpm exits successfully. Always
+    # prefer the executable wrapper for launcher-owned child processes.
+    foreach ($candidate in @("pnpm.cmd", "pnpm.exe")) {
+        $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($resolved) { return $resolved.Source }
+    }
+    return $null
+}
+
 function Ensure-LogDir {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 }
@@ -330,6 +341,7 @@ function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $lo
         }
         Start-Sleep -Milliseconds 800
     }
-    $script:LastWaitFailureReason = "$label did not answer $url within $timeoutSeconds seconds."
+    $script:LastWaitFailureReason = "$label did not answer $url within $timeoutSeconds seconds. " +
+        (Get-LogTail $logPath)
     return $false
 }
