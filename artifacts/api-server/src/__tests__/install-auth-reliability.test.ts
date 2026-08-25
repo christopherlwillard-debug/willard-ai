@@ -46,12 +46,12 @@ test("successful recovery consumes the recovery key", () => {
   assert.match(authSource, /consumed\.rowCount !== 1/);
 });
 
-test("interrupted-job recovery is behind the schema startup gate", () => {
+test("interrupted-job recovery is behind the schema startup gate and does not block listening", () => {
   const migration = indexSource.indexOf("const startupMigrations");
   const recovery = indexSource.indexOf("await recoverInterruptedJobs()");
   const listen = indexSource.indexOf("app.listen");
 
   assert.ok(migration >= 0);
   assert.ok(recovery > migration);
-  assert.ok(recovery < listen);
+  assert.ok(recovery > listen);
 });
