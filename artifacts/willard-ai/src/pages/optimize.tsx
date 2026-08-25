@@ -319,7 +319,10 @@ function RunConversionsDialog({
       try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
       const msg = data?.message ?? "Connection interrupted";
       if (!data || /already running/i.test(msg)) {
-        setProgress(prev => prev ? { ...prev, message: "Connection interrupted — tracking saved progress…" } : prev);
+        setProgress(prev => ({
+          ...(prev ?? { stage: "converting", message: "", progress: 0 }),
+          message: "Connection interrupted — tracking saved progress…",
+        }));
         recoverFromDisconnect(existingJobId ?? finalizeJobId ?? 0);
         return;
       }
@@ -440,7 +443,10 @@ function RunConversionsDialog({
         try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
         const msg = data?.message ?? "Connection interrupted";
         if (!data || /already running/i.test(msg)) {
-          setProgress(prev => prev ? { ...prev, message: "Connection interrupted — tracking saved progress…" } : prev);
+          setProgress(prev => ({
+            ...(prev ?? { stage: "converting", message: "", progress: 0 }),
+            message: "Connection interrupted — tracking saved progress…",
+          }));
           recoverFromDisconnect(job.id);
           return;
         }

@@ -25,6 +25,9 @@ async function mockAuth(page: Page, authenticated = true): Promise<void> {
 }
 
 async function mockShell(page: Page): Promise<void> {
+  await page.route("**/api/healthz", (route) =>
+    route.fulfill({ json: { ok: true } }),
+  );
   await page.route("**/api/settings", (route) =>
     route.fulfill({ json: { nasPath: "/test-media" } }),
   );
@@ -89,7 +92,7 @@ test.describe("routed workflow recovery", () => {
     await mockAuth(page);
     await mockShell(page);
     let statusPolls = 0;
-    await page.route("**/api/optimize/conversions/recent", (route) => route.fulfill({
+    await page.route("**/api/optimize/jobs", (route) => route.fulfill({
       json: [{
         id: 77, status: "failed", approvedExts: ["jpg"], backupDir: null,
         nasPath: "/test-media", totalFiles: 1, processedFiles: 1,
@@ -97,6 +100,16 @@ test.describe("routed workflow recovery", () => {
         createdAt: "2026-01-01T00:00:00.000Z", completedAt: null,
       }],
     }));
+    await page.route("**/api/optimize/jobs/77/retry", (route) =>
+      route.fulfill({
+        json: {
+          id: 77, status: "running", approvedExts: ["jpg"], backupDir: null,
+          nasPath: "/test-media", totalFiles: 1, processedFiles: 1,
+          succeededFiles: 1, failedFiles: 0, skippedFiles: 0, error: null,
+          createdAt: "2026-01-01T00:00:00.000Z", completedAt: null,
+        },
+      }),
+    );
     await page.route("**/api/optimize/jobs/77/execute", (route) =>
       route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }),
     );
@@ -112,12 +125,16 @@ test.describe("routed workflow recovery", () => {
     });
 
     await page.goto(routePath("/optimize"));
+    await page.getByRole("button", { name: "Retry", exact: true }).first().click();
     await expect(page.getByText(/Connection interrupted — tracking saved progress/)).toBeVisible();
     await expect.poll(() => statusPolls).toBeGreaterThan(0);
   });
 
   test("offers retry when the authentication service is unavailable", async ({ page }) => {
     let attempts = 0;
+    await page.route("**/api/healthz", (route) =>
+      route.fulfill({ json: { ok: true } }),
+    );
     await page.route("**/api/auth/status", (route) => {
       attempts += 1;
       if (attempts === 1) return route.abort("failed");
