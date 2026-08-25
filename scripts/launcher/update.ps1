@@ -1,5 +1,6 @@
-# Update Willard AI from a published, checksum-verified Windows release.
-# This command is intentionally separate from the normal startup path.
+# Update the Windows developer checkout from GitHub.
+# Git is the normal path; the signed release archive remains a fallback for
+# machines that do not have Git installed.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -9,126 +10,147 @@ Ensure-LogDir
 Write-Banner "Updating Willard AI..."
 
 $updateLog = Join-Path $LogDir "update.log"
-$manifestUrl = "$GithubRepo/releases/latest/download/release-manifest.json"
-$archive = Join-Path $env:TEMP "willard-source-update.zip"
-$stage = Join-Path $env:TEMP ("willard-source-" + [guid]::NewGuid().ToString())
-$backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
-$backupReady = $false
 
 function Update-Fail($stageName, $message) {
     Write-Bad ("Update failed during " + $stageName + ".")
     Write-Host ("  " + $message) -ForegroundColor DarkGray
-    Write-Host ("  Logs: " + $updateLog) -ForegroundColor Gray
+    Write-Host ("  Your current installation was not replaced. Logs: " + $updateLog) -ForegroundColor Gray
     Pause-BeforeClose
     exit 1
 }
 
-function Invoke-Robocopy($source, $destination) {
-    & robocopy $source $destination /E /PURGE `
-        /XD (Join-Path $source "node_modules") (Join-Path $source "logs") (Join-Path $source ".git") `
-        /XF ".env" | Out-Null
-    if ($LASTEXITCODE -gt 7) {
-        throw "File copy failed with robocopy exit code $LASTEXITCODE."
+function Invoke-LoggedCommand($label, $logPath, [scriptblock]$command) {
+    Write-Info $label
+    $savedPref = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    & $command *> $logPath
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $savedPref
+    return $exitCode
+}
+
+function Invoke-ArchiveFallback {
+    $manifestUrl = "$GithubRepo/releases/latest/download/release-manifest.json"
+    $archive = Join-Path $env:TEMP "willard-source-update.zip"
+    $stage = Join-Path $env:TEMP ("willard-source-" + [guid]::NewGuid().ToString())
+    $backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
+    $backupReady = $false
+
+    function Invoke-Robocopy($source, $destination) {
+        & robocopy $source $destination /E /PURGE `
+            /XD (Join-Path $source "node_modules") (Join-Path $source "logs") (Join-Path $source ".git") `
+            /XF ".env" | Out-Null
+        if ($LASTEXITCODE -gt 7) { throw "File copy failed with robocopy exit code $LASTEXITCODE." }
+    }
+
+    try {
+        Write-Info "Reading the latest release manifest..."
+        $manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content | ConvertFrom-Json
+        if (-not $manifest.sourceArtifactUrl -or -not $manifest.sourceSha256) {
+            throw "This release does not contain a developer-source archive."
+        }
+        Write-Info "Downloading the developer update..."
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $manifest.sourceArtifactUrl -OutFile $archive -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+        if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.sourceSha256.ToLowerInvariant()) {
+            throw "The downloaded release failed checksum verification."
+        }
+        Expand-Archive -Path $archive -DestinationPath $stage -Force
+        $sourceRoot = if (Test-Path (Join-Path $stage "package.json")) { Get-Item $stage } else { Get-ChildItem $stage -Directory | Select-Object -First 1 }
+        if (-not $sourceRoot -or -not (Test-Path (Join-Path $sourceRoot.FullName "package.json"))) {
+            throw "The developer-source archive was empty or malformed."
+        }
+        New-Item -ItemType Directory -Force $backup | Out-Null
+        Invoke-Robocopy $Root $backup
+        $backupReady = $true
+        Invoke-Robocopy $sourceRoot.FullName $Root
+        $pnpmCommand = Get-WillardPnpmCommand
+        if (-not $pnpmCommand) { throw "pnpm.cmd or pnpm.exe could not be found." }
+        $installLog = Join-Path $LogDir "update-install.log"
+        & $pnpmCommand install --ignore-scripts *> $installLog
+        if ($LASTEXITCODE -ne 0) { throw "Package refresh failed. See $installLog." }
+        $buildLog = Join-Path $LogDir "update-build.log"
+        & $pnpmCommand --filter @workspace/api-server run build *> $buildLog
+        if ($LASTEXITCODE -ne 0) { throw "The API rebuild failed. See $buildLog." }
+        Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+        $backupReady = $false
+        Write-Ok "Developer update installed."
+    } catch {
+        if ($backupReady -and (Test-Path $backup)) {
+            Write-Warn "Restoring the previous installation..."
+            Invoke-Robocopy $backup $Root
+            Write-Ok "The previous installation was restored."
+        }
+        throw
+    } finally {
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
 try {
     Add-Content $updateLog ("[update] Started " + (Get-Date).ToString("o"))
+    $gitCommand = Get-WillardGitCommand
 
-    Write-Info "Reading the latest release manifest..."
-    $manifestResponse = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-    $manifest = $manifestResponse.Content | ConvertFrom-Json
-    if (-not $manifest.version -or $manifest.version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
-        throw "The release manifest contains an invalid version."
-    }
-    if (-not $manifest.sourceArtifactUrl -or $manifest.sourceArtifactUrl -notmatch '^https://') {
-        throw "This release does not contain a secure developer-source download address."
-    }
-    if (-not $manifest.sourceSha256 -or $manifest.sourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
-        throw "The release manifest does not contain a valid developer-source checksum."
-    }
+    if ($gitCommand -and (Test-Path (Join-Path $Root ".git"))) {
+        $remote = Get-GitRemoteUrl $gitCommand
+        if ($remote -ne $GithubRepo) {
+            & $gitCommand -C $Root remote set-url origin $GithubRepo 2>$null
+            if ($LASTEXITCODE -ne 0) { throw "This folder's GitHub update source could not be configured." }
+        }
 
-    Write-Info ("Downloading Willard AI " + $manifest.version + "...")
-    Remove-Item $archive -Force -ErrorAction SilentlyContinue
-    Invoke-WebRequest -Uri $manifest.sourceArtifactUrl -OutFile $archive -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
-    $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $manifest.sourceSha256.ToLowerInvariant()) {
-        throw "The downloaded release failed checksum verification."
-    }
-    Write-Ok "Release download verified"
+        $before = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "This developer folder has an invalid Git checkout. Run setup again to repair it." }
+        $dirty = & $gitCommand -C $Root status --porcelain --untracked-files=no
+        if ($dirty) {
+            throw "Local code changes are present. Save or revert them before running Update Willard AI."
+        }
 
-    Write-Info "Staging and validating the release..."
-    Expand-Archive -Path $archive -DestinationPath $stage -Force
-    $sourceRoot = if (Test-Path (Join-Path $stage "package.json")) {
-        Get-Item $stage
+        $pullLog = Join-Path $LogDir "update-git.log"
+        $pullCode = Invoke-LoggedCommand "Checking GitHub for the latest Willard AI..." $pullLog {
+            & $gitCommand -C $Root pull --ff-only origin $GithubBranch
+        }
+        if ($pullCode -ne 0) { throw "GitHub could not update this folder. Check your connection or run setup again." }
+        $after = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
+        $changed = if ($before -ne $after) { @(& $gitCommand -C $Root diff --name-only $before $after) } else { @() }
+        if ($changed.Count -eq 0) {
+            Write-Ok "Willard AI is already up to date."
+        } else {
+            $packageChanged = $changed | Where-Object { $_ -match '(^|/)(package\.json|pnpm-lock\.yaml)$' }
+            $apiChanged = $changed | Where-Object { $_ -match '(^|/)(artifacts/api-server/|lib/|setup-db\.cjs)' }
+            $pnpmCommand = Get-WillardPnpmCommand
+            if (-not $pnpmCommand) { throw "pnpm.cmd or pnpm.exe could not be found." }
+            if ($packageChanged) {
+                $installLog = Join-Path $LogDir "update-install.log"
+                $installCode = Invoke-LoggedCommand "Refreshing changed application components..." $installLog {
+                    & $pnpmCommand install --ignore-scripts
+                }
+                if ($installCode -ne 0) { throw "Package refresh failed. See $installLog." }
+            }
+            if ($apiChanged -or $packageChanged) {
+                $buildLog = Join-Path $LogDir "update-build.log"
+                $buildCode = Invoke-LoggedCommand "Rebuilding the updated library service..." $buildLog {
+                    & $pnpmCommand --filter @workspace/api-server run build
+                }
+                if ($buildCode -ne 0 -or -not (Test-Path (Join-Path $Root "artifacts\api-server\dist\index.mjs"))) {
+                    throw "The API rebuild failed. See $buildLog."
+                }
+            }
+            Write-Ok ("Updated to " + $after.Substring(0, [Math]::Min(8, $after.Length)) + ".")
+        }
+    } elseif ($gitCommand) {
+        Initialize-DeveloperGitCheckout | Out-Null
+        Write-Ok "This folder is now connected to GitHub."
+        Write-Host "  Run Update Willard AI again to receive the newest code." -ForegroundColor White
     } else {
-        Get-ChildItem $stage -Directory | Select-Object -First 1
+        Write-Warn "Git is not installed, so the verified ZIP update path will be used."
+        Invoke-ArchiveFallback
     }
-    if (-not $sourceRoot -or -not (Test-Path (Join-Path $sourceRoot.FullName "package.json"))) {
-        throw "The developer-source archive was empty or malformed."
-    }
-    $required = @(
-        "package.json",
-        "pnpm-lock.yaml",
-        "setup-db.cjs",
-        "artifacts\api-server\package.json",
-        "artifacts\willard-ai\package.json",
-        "scripts\launcher\start.ps1",
-        "scripts\launcher\setup.ps1"
-    )
-    foreach ($entry in $required) {
-        if (-not (Test-Path (Join-Path $sourceRoot.FullName $entry))) {
-            throw "The developer-source archive is incomplete: $entry"
-        }
-    }
-    Write-Ok "Release contents validated"
-
-    Write-Info "Backing up the current installation..."
-    New-Item -ItemType Directory -Force $backup | Out-Null
-    Invoke-Robocopy $Root $backup
-    $backupReady = $true
-
-    Write-Info "Installing the verified release..."
-    Invoke-Robocopy $sourceRoot.FullName $Root
-
-    Write-Info "Refreshing local packages..."
-    $installLog = Join-Path $LogDir "update-install.log"
-    $pnpmCommand = Get-WillardPnpmCommand
-    if (-not $pnpmCommand) { throw "pnpm.cmd or pnpm.exe could not be found." }
-    & $pnpmCommand install --ignore-scripts *> $installLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Package refresh failed. See $installLog."
-    }
-
-    Write-Info "Rebuilding the library service..."
-    $buildLog = Join-Path $LogDir "update-build.log"
-    & $pnpmCommand --filter @workspace/api-server run build *> $buildLog
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $Root "artifacts\api-server\dist\index.mjs"))) {
-        throw "The API rebuild failed. See $buildLog."
-    }
-
-    Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
-    $backupReady = $false
-    Write-Ok ("Willard AI " + $manifest.version + " is ready.")
-    Write-Host "  Start Willard AI.bat to launch the updated local copy." -ForegroundColor White
 } catch {
-    $message = $_.Exception.Message
-    Add-Content $updateLog ("[update] " + $message)
-    if ($backupReady -and (Test-Path $backup)) {
-        try {
-            Write-Warn "Restoring the previous installation..."
-            Invoke-Robocopy $backup $Root
-            Write-Ok "The previous installation was restored."
-        } catch {
-            Add-Content $updateLog ("[update] Restore failed: " + $_.Exception.Message)
-            $message = $message + " Restore also failed; see the update log."
-        }
-    }
-    Update-Fail "release installation" $message
-} finally {
-    Remove-Item $archive -Force -ErrorAction SilentlyContinue
-    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Add-Content $updateLog ("[update] " + $_.Exception.Message)
+    Update-Fail "GitHub update" $_.Exception.Message
 }
 
+Write-Host "  Start Willard AI.bat to launch the updated local copy." -ForegroundColor White
 Pause-BeforeClose
 exit 0

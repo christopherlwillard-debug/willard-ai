@@ -63,6 +63,72 @@ function Test-Command($name) {
     return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+function Get-WillardGitCommand {
+    foreach ($candidate in @("git.exe", "git")) {
+        $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($resolved) { return $resolved.Source }
+    }
+    return $null
+}
+
+function Get-GitRemoteUrl($gitCommand = (Get-WillardGitCommand)) {
+    if (-not $gitCommand -or -not (Test-Path (Join-Path $Root ".git"))) { return $null }
+    $remote = & $gitCommand -C $Root remote get-url origin 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ([string]$remote).Trim()
+}
+
+function Initialize-DeveloperGitCheckout {
+    $gitCommand = Get-WillardGitCommand
+    if (-not $gitCommand) { return $false }
+
+    $gitDir = Join-Path $Root ".git"
+    if (Test-Path $gitDir) {
+        $remote = Get-GitRemoteUrl $gitCommand
+        if ($remote -ne $GithubRepo) {
+            & $gitCommand -C $Root remote set-url origin $GithubRepo 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                & $gitCommand -C $Root remote add origin $GithubRepo 2>$null
+            }
+        }
+        return ($LASTEXITCODE -eq 0 -or (Get-GitRemoteUrl $gitCommand) -eq $GithubRepo)
+    }
+
+    Write-Host ""
+    Write-Host "  Connect this developer copy to GitHub for one-click updates? (Y/n)" -ForegroundColor White
+    $answer = Read-Host "  Connect updates"
+    if ($answer -match '^[Nn]') {
+        Write-Warn "GitHub updates skipped. You can still use the manual Update shortcut."
+        return $false
+    }
+
+    $envPath = Join-Path $Root ".env"
+    $envBackup = $null
+    if (Test-Path $envPath) { $envBackup = Get-Content $envPath -Raw }
+
+    Write-Info "Connecting this developer copy to GitHub..."
+    & $gitCommand -C $Root init --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Git could not initialize this developer folder." }
+    & $gitCommand -C $Root remote add origin $GithubRepo 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & $gitCommand -C $Root remote set-url origin $GithubRepo
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Git could not configure the Willard AI update source." }
+    & $gitCommand -C $Root fetch --quiet origin $GithubBranch
+    if ($LASTEXITCODE -ne 0) { throw "Git could not reach GitHub. Check your internet connection and try again." }
+
+    # ZIP extractions begin as entirely untracked working trees. Capture that
+    # baseline locally so reset can safely align code with origin/main; .env,
+    # logs, node_modules, and other ignored runtime data remain untouched.
+    & $gitCommand -C $Root add -A
+    & $gitCommand -C $Root -c user.name="Willard AI" -c user.email="willard-local@users.noreply.github.com" commit --quiet -m "Local developer installation baseline" 2>$null
+    & $gitCommand -C $Root checkout --quiet -B $GithubBranch "origin/$GithubBranch"
+    if ($LASTEXITCODE -ne 0) { throw "Git could not attach this folder to the Willard AI source branch." }
+    if ($envBackup) { Set-Content $envPath -Value $envBackup -Encoding UTF8 }
+    Write-Ok "One-click GitHub updates enabled"
+    return $true
+}
+
 function Get-WillardPnpmCommand {
     # Windows PowerShell can resolve `pnpm` to pnpm.ps1, which wraps native
     # output as a NativeCommandError even when pnpm exits successfully. Always

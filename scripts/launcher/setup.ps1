@@ -43,6 +43,14 @@ if (Ensure-EnvFile) {
     Write-Ok "Created settings file"
 }
 
+# -- Developer update channel ---------------------------------------------------
+try {
+    Initialize-DeveloperGitCheckout | Out-Null
+} catch {
+    Show-Failure "GitHub updates could not be enabled." $_.Exception.Message
+    Write-Host "  Willard can still be used locally, and you can run setup again later." -ForegroundColor White
+}
+
 # -- PostgreSQL password setup ------------------------------------------------
 $dbUrl = Get-EnvValue "DATABASE_URL"
 $needsPassword = (-not $dbUrl) -or ($dbUrl -match "your.password|change.me|<password>|PASSWORD")
