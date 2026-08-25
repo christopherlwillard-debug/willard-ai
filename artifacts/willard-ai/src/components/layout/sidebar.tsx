@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Image as ImageIcon,
+  Film,
+  Music2,
   Archive,
   FileText,
   Trash2,
@@ -53,22 +55,25 @@ function SidebarBrand() {
   );
 }
 
-const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Media", href: "/media", icon: ImageIcon },
-  { name: "Memory Map", href: "/map", icon: MapPinned },
-  { name: "Library", href: "/library", icon: BookImage },
+const primaryNavigation = [
+  { name: "Home", href: "/", icon: LayoutDashboard },
+  { name: "Photos", href: "/media", icon: ImageIcon },
+  { name: "Videos", href: "/media?type=video", icon: Film },
+  { name: "Documents", href: "/documents", icon: FileText },
+  { name: "Music", href: "/library?type=audio", icon: Music2 },
   { name: "Collections", href: "/collections", icon: FolderHeart },
   { name: "People", href: "/people", icon: Users },
-  { name: "Archives", href: "/archives", icon: Archive },
-  { name: "Documents", href: "/documents", icon: FileText },
+  { name: "Places", href: "/map", icon: MapPinned },
+  { name: "Search", href: "/search", icon: Search },
+  { name: "Ask Willard", href: "/chat", icon: MessageSquare },
+];
+
+const advancedNavigation = [
   { name: "Operations", href: "/organize", icon: Boxes },
   { name: "Optimize", href: "/optimize", icon: Zap },
   { name: "Cleanup", href: "/cleanup", icon: Trash2 },
+  { name: "Archives", href: "/archives", icon: Archive },
   { name: "Health Center", href: "/health", icon: ShieldCheck },
-  { name: "Search", href: "/search", icon: Search },
-  { name: "AI Chat", href: "/chat", icon: MessageSquare },
-  { name: "Settings", href: "/settings", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -92,7 +97,7 @@ export function Sidebar() {
       </div>
       <div className="archive-scrollbar flex-1 overflow-y-auto py-3 md:py-4">
         <nav className="space-y-1 px-2">
-          {navigation.map((item) => {
+          {primaryNavigation.map((item) => {
             const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
             return (
               <Link
@@ -120,6 +125,34 @@ export function Sidebar() {
             );
           })}
         </nav>
+        <div className="mt-6 px-2">
+          <p className="mb-2 hidden px-2 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60 md:block">
+            More
+          </p>
+          <nav className="space-y-1">
+            {advancedNavigation.map((item) => {
+              const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+              return (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  aria-label={item.name}
+                  aria-current={isActive ? "page" : undefined}
+                  className={cn(
+                    "group flex items-center justify-center rounded-lg border border-transparent px-2 py-2 font-mono text-xs transition-all md:justify-start",
+                    isActive
+                      ? "border-primary/20 bg-sidebar-accent/90 text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/60 hover:border-border/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                  )}
+                  data-testid={`link-nav-${item.name.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  <item.icon className={cn("h-3.5 w-3.5 flex-shrink-0 md:mr-3", isActive ? "text-primary" : "text-muted-foreground group-hover:text-primary")} aria-hidden="true" />
+                  <span className="hidden truncate md:inline">{item.name}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
       </div>
       <div className="border-t border-sidebar-border p-2">
         <div className="pwa-install-container">
