@@ -1,0 +1,406 @@
+import * as fs from "fs";
+import { sql } from "drizzle-orm";
+import { db, pool, appSettingsTable } from "@workspace/db";
+import { openai } from "@workspace/integrations-openai-ai-server";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { logger } from "./logger.ts";
+import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
+import { isVectorAvailable } from "./vector-capability.ts";
+
+/**
+ * AI Enrichment Engine — builds the "understanding" layer on top of the
+ * canonical media_files index. For every indexed file it derives (into the
+ * media_ai table, one row per file, fully rebuildable):
+ *
+ *  - Images / video thumbnails → vision model: description, tags, objects,
+ *    visible text (OCR), scene.
+ *  - PDFs / documents → extracted text + classification (receipt, invoice…).
+ *  - Everything → a semantic embedding (pgvector) over all textual signals,
+ *    powering natural-language and similarity search.
+ *
+ * Runs as a low-intensity background loop; respects indexing pause and
+ * library offline states. media_files stays the single source of truth —
+ * media_ai is derived data keyed by media_file_id.
+ */
+
+const TICK_MS = 20_000;
+const BATCH_PER_TICK = 3;
+export const AI_VERSION = 3; // v3: indexes Office document text and image OCR
+const CHAT_MODEL = "gpt-5.4";
+
+const MAX_DOC_TEXT = 6_000;
+
+interface EnrichmentStatus {
+  running: boolean;
+  analyzed: number;   // this process lifetime
+  failed: number;
+  pending: number;    // as of last tick
+  lastRunAt: string | null;
+}
+
+const status: EnrichmentStatus = {
+  running: false,
+  analyzed: 0,
+  failed: 0,
+  pending: 0,
+  lastRunAt: null,
+};
+
+export function getEnrichmentStatus(): EnrichmentStatus {
+  return { ...status };
+}
+
+// ── Vision / document analysis ────────────────────────────────────────────────
+
+interface AiAnalysis {
+  description: string | null;
+  tags: string[];
+  objects: string[];
+  ocrText: string | null;
+  docType: string | null;
+  scene: string | null;
+  people: string[];
+}
+
+const VISION_PROMPT = `You are an expert photo/video analyst for a personal media library.
+Analyze the image and return STRICT JSON with keys:
+{"description": "one natural sentence describing the image",
+ "tags": ["5-12 lowercase content/scene tags e.g. beach, sunset, snow, family"],
+ "objects": ["concrete objects visible e.g. truck, dog, waterfall, receipt"],
+ "ocr_text": "any readable text in the image, or null",
+ "people": ["short visual descriptor for each clearly visible person e.g. 'man in red jacket', 'toddler in stroller' — empty array if none"],
+ "scene": "one of: outdoor, indoor, nature, city, beach, mountains, forest, water, sunset, night, document, screenshot, people, food, vehicle, other"}
+Return JSON only.`;
+
+async function analyzeImage(thumbnailPath: string): Promise<AiAnalysis> {
+  const b64 = fs.readFileSync(thumbnailPath).toString("base64");
+  const resp = await openai.chat.completions.create({
+    model: CHAT_MODEL,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: VISION_PROMPT },
+        { type: "image_url", image_url: { url: `data:image/webp;base64,${b64}` } },
+      ],
+    }],
+    response_format: { type: "json_object" },
+  });
+  const parsed = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
+  return {
+    description: typeof parsed.description === "string" ? parsed.description : null,
+    tags: Array.isArray(parsed.tags) ? parsed.tags.map(String).slice(0, 20) : [],
+    objects: Array.isArray(parsed.objects) ? parsed.objects.map(String).slice(0, 20) : [],
+    ocrText: typeof parsed.ocr_text === "string" && parsed.ocr_text.trim() ? parsed.ocr_text.trim() : null,
+    docType: null,
+    scene: typeof parsed.scene === "string" ? parsed.scene : null,
+    people: Array.isArray(parsed.people) ? parsed.people.map(String).slice(0, 12) : [],
+  };
+}
+
+async function extractPdfText(fullPath: string): Promise<string | null> {
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const uint8 = new Uint8Array(fs.readFileSync(fullPath));
+    const doc = await (pdfjsLib as any).getDocument({ data: uint8, verbosity: 0 }).promise;
+    let text = "";
+    const pages = Math.min(doc.numPages, 10);
+    for (let i = 1; i <= pages && text.length < MAX_DOC_TEXT; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((it: any) => it.str ?? "").join(" ") + "\n";
+    }
+    await doc.destroy();
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    return trimmed ? trimmed.slice(0, MAX_DOC_TEXT) : null;
+  } catch {
+    return null;
+  }
+}
+
+const DOC_PROMPT = `You are a document classifier for a personal file library.
+Given document text and filename, return STRICT JSON:
+{"description": "one sentence describing what this document is",
+ "tags": ["3-8 lowercase topic tags e.g. receipt, flooring, warranty, tax"],
+ "doc_type": "one of: receipt, invoice, statement, manual, contract, letter, report, form, ticket, recipe, note, other"}
+Return JSON only.`;
+
+async function analyzeDocument(name: string, text: string | null): Promise<AiAnalysis> {
+  const resp = await openai.chat.completions.create({
+    model: CHAT_MODEL,
+    messages: [{
+      role: "user",
+      content: `${DOC_PROMPT}\n\nFilename: ${name}\nText:\n${text ? text.slice(0, 4000) : "(no extractable text)"}`,
+    }],
+    response_format: { type: "json_object" },
+  });
+  const parsed = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
+  return {
+    description: typeof parsed.description === "string" ? parsed.description : null,
+    tags: Array.isArray(parsed.tags) ? parsed.tags.map(String).slice(0, 12) : [],
+    objects: [],
+    ocrText: text,
+    docType: typeof parsed.doc_type === "string" ? parsed.doc_type : null,
+    scene: "document",
+    people: [],
+  };
+}
+
+// ── Embeddings (local-first, privacy-respecting) ──────────────────────────────
+//
+// The AI proxy does not expose an embeddings endpoint, and the task calls for
+// a local-first approach anyway: we run all-MiniLM-L6-v2 (384-dim) fully
+// locally via transformers.js. No file content ever leaves the machine for
+// semantic indexing.
+
+let embedderPromise: Promise<(text: string) => Promise<number[]>> | null = null;
+
+function getEmbedder(): Promise<(text: string) => Promise<number[]>> {
+  if (!embedderPromise) {
+    embedderPromise = (async () => {
+      const { pipeline } = await import("@huggingface/transformers");
+      const extractor = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", { dtype: "q8" });
+      return async (text: string) => {
+        const out = await extractor(text.slice(0, 4000), { pooling: "mean", normalize: true });
+        return Array.from(out.data as Float32Array);
+      };
+    })();
+    embedderPromise.catch(() => { embedderPromise = null; });
+  }
+  return embedderPromise;
+}
+
+export async function embedText(text: string): Promise<number[]> {
+  const embed = await getEmbedder();
+  return embed(text);
+}
+
+export function toVectorLiteral(embedding: number[]): string {
+  return `[${embedding.join(",")}]`;
+}
+
+function buildEmbeddingText(file: PendingFile, a: AiAnalysis): string {
+  const parts = [
+    file.name,
+    file.relativePath.split("/").slice(0, -1).join(" "),
+    a.description,
+    a.tags.join(" "),
+    a.objects.join(" "),
+    a.people.join(" "),
+    a.scene,
+    a.docType,
+    a.ocrText ? a.ocrText.slice(0, 2000) : null,
+    file.cameraMake, file.cameraModel,
+    file.dateTaken ? new Date(file.dateTaken).toISOString().slice(0, 10) : null,
+    // User corrections & notes are part of the item's meaning.
+    file.userDescription,
+    file.userTags?.join(" ") ?? null,
+    file.notes ? file.notes.slice(0, 2000) : null,
+  ];
+  return parts.filter(Boolean).join("\n");
+}
+
+/**
+ * Recompute a file's embedding from the CURRENT canonical row (AI output +
+ * user corrections + notes). Called after user edits so search reflects the
+ * correction immediately. Fully local — nothing leaves the machine.
+ */
+export async function recomputeEmbedding(fileId: number): Promise<void> {
+  if (!isVectorAvailable()) return;
+  const { rows } = await pool.query(
+    `SELECT f.name, f.relative_path, f.camera_make, f.camera_model, f.date_taken,
+            a.description, a.tags, a.objects, a.people, a.scene, a.doc_type, a.ocr_text,
+            a.user_tags, a.user_description, a.notes
+       FROM media_files f
+       JOIN media_ai a ON a.media_file_id = f.id
+       WHERE f.id = $1
+         AND f.nas_path = (SELECT nas_path FROM app_settings LIMIT 1)
+         AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
+    [fileId],
+  );
+  const r = rows[0];
+  if (!r) return;
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+  const file: PendingFile = {
+    id: fileId, name: r.name, relativePath: r.relative_path, mediaType: "",
+    thumbnailPath: null, fullPath: "", cameraMake: r.camera_make,
+    cameraModel: r.camera_model, dateTaken: r.date_taken,
+    userTags: arr(r.user_tags), userDescription: r.user_description, notes: r.notes,
+  };
+  const analysis: AiAnalysis = {
+    description: r.description, tags: arr(r.tags), objects: arr(r.objects),
+    ocrText: r.ocr_text, docType: r.doc_type, scene: r.scene, people: arr(r.people),
+  };
+  const embedding = await embedText(buildEmbeddingText(file, analysis));
+  if (isVectorAvailable() && embedding.length) {
+    await pool.query(`UPDATE media_ai SET embedding = $1 WHERE media_file_id = $2`, [toVectorLiteral(embedding), fileId]);
+  }
+}
+
+// ── Work selection ────────────────────────────────────────────────────────────
+
+interface PendingFile {
+  id: number;
+  name: string;
+  relativePath: string;
+  mediaType: string;
+  thumbnailPath: string | null;
+  fullPath: string;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  dateTaken: string | null;
+  userTags: string[] | null;
+  userDescription: string | null;
+  notes: string | null;
+}
+
+async function fetchPending(nasPath: string, limit: number): Promise<{ rows: PendingFile[]; total: number }> {
+  const { rows } = await pool.query(
+    `SELECT f.id, f.name, f.relative_path, f.media_type, f.thumbnail_path,
+            f.camera_make, f.camera_model, f.date_taken,
+            u.user_tags, u.user_description, u.notes,
+            count(*) OVER () AS total
+       FROM media_files f
+       LEFT JOIN media_ai u ON u.media_file_id = f.id
+       LEFT JOIN media_ai a ON a.media_file_id = f.id AND a.ai_version >= $2
+       WHERE f.nas_path = $1
+         AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+        AND a.id IS NULL
+      ORDER BY f.id
+      LIMIT $3`,
+    [nasPath, AI_VERSION, limit],
+  );
+  return {
+    total: rows.length ? Number(rows[0].total) : 0,
+    rows: rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      relativePath: r.relative_path,
+      mediaType: r.media_type,
+      fullPath: (() => {
+        try { return resolveLibraryPath(nasPath, r.relative_path); }
+        catch { return ""; }
+      })(),
+      thumbnailPath: (() => {
+        if (!r.thumbnail_path) return null;
+        try { return resolveWithinRoot(r.thumbnail_path, getWillardAIDir(nasPath)); }
+        catch { return null; }
+      })(),
+      cameraMake: r.camera_make,
+      cameraModel: r.camera_model,
+      dateTaken: r.date_taken,
+      userTags: Array.isArray(r.user_tags) ? r.user_tags.map(String) : null,
+      userDescription: r.user_description ?? null,
+      notes: r.notes ?? null,
+    })),
+  };
+}
+
+// ── Enrichment of one file ───────────────────────────────────────────────────
+
+export async function enrichOne(file: PendingFile): Promise<void> {
+  let analysis: AiAnalysis;
+  try {
+    if (!file.fullPath || !fs.existsSync(file.fullPath) || !fs.statSync(file.fullPath).isFile()) {
+      throw new Error("Source file is missing or outside the active library");
+    }
+    if ((file.mediaType === "image" || file.mediaType === "photo" || file.mediaType === "video") &&
+        file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
+      analysis = await analyzeImage(file.thumbnailPath);
+    } else if (file.mediaType === "document") {
+      const text = file.fullPath.toLowerCase().endsWith(".pdf")
+        ? await extractPdfText(file.fullPath)
+        : await extractOfficeDocumentText(file.fullPath);
+      analysis = await analyzeDocument(file.name, text);
+    } else {
+      // No visual/text content available (yet) — index name & metadata only.
+      analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null, people: [] };
+    }
+
+    const embedding = isVectorAvailable() ? await embedText(buildEmbeddingText(file, analysis)) : [];
+    const columns = [
+      "media_file_id", "description", "tags", "objects", "ocr_text", "doc_type",
+      "scene", "people", ...(isVectorAvailable() ? ["embedding"] : []),
+      "ai_version", "analyzed_at", "error",
+    ];
+    const values = [
+      "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8",
+      ...(isVectorAvailable() ? ["$9"] : []),
+      isVectorAvailable() ? "$10" : "$9", "now()", "NULL",
+    ];
+    const updates = [
+      "description = excluded.description", "tags = excluded.tags",
+      "objects = excluded.objects", "ocr_text = excluded.ocr_text",
+      "doc_type = excluded.doc_type", "scene = excluded.scene",
+      "people = excluded.people",
+      ...(isVectorAvailable() ? ["embedding = excluded.embedding"] : []),
+      "ai_version = excluded.ai_version", "analyzed_at = now()", "error = NULL",
+    ];
+    await pool.query(
+      `INSERT INTO media_ai (${columns.join(", ")})
+       VALUES (${values.join(", ")})
+       ON CONFLICT (media_file_id) DO UPDATE SET ${updates.join(", ")}`,
+      [
+        file.id, analysis.description,
+        JSON.stringify(analysis.tags), JSON.stringify(analysis.objects),
+        analysis.ocrText, analysis.docType, analysis.scene,
+        JSON.stringify(analysis.people),
+        ...(isVectorAvailable() ? [embedding.length ? toVectorLiteral(embedding) : null] : []),
+        AI_VERSION,
+      ],
+    );
+    status.analyzed++;
+  } catch (err) {
+    status.failed++;
+    logger.warn({ err, fileId: file.id, name: file.name }, "AI enrichment failed for file");
+    await pool.query(
+      `INSERT INTO media_ai (media_file_id, ai_version, error)
+       VALUES ($1, 0, $2)
+       ON CONFLICT (media_file_id) DO UPDATE SET error = excluded.error`,
+      [file.id, String(err instanceof Error ? err.message : err).slice(0, 500)],
+    ).catch(() => {});
+  }
+}
+
+// ── Background loop ───────────────────────────────────────────────────────────
+
+let timer: NodeJS.Timeout | null = null;
+let ticking = false;
+
+export async function runEnrichmentTick(): Promise<void> {
+  if (ticking) return;
+  ticking = true;
+  status.running = true;
+  try {
+    let nasPath: string | null = null;
+    let paused = false;
+    try {
+      const [row] = await db.select({
+        nasPath: appSettingsTable.nasPath,
+        indexingPaused: appSettingsTable.indexingPaused,
+      }).from(appSettingsTable).limit(1);
+      nasPath = row?.nasPath ?? null;
+      paused = row?.indexingPaused ?? false;
+    } catch { return; }
+    if (!nasPath || paused) return;
+    const reach = await checkNasReachableAsync(nasPath);
+    if (!reach.online) return;
+
+    const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK);
+    status.pending = total;
+    status.lastRunAt = new Date().toISOString();
+    for (const file of rows) {
+      await enrichOne(file);
+    }
+    if (rows.length) status.pending = Math.max(0, total - rows.length);
+  } finally {
+    ticking = false;
+    status.running = false;
+  }
+}
+
+export function startAiEnrichment(): void {
+  if (timer) return;
+  setTimeout(() => { runEnrichmentTick().catch(() => {}); }, 8_000);
+  timer = setInterval(() => { runEnrichmentTick().catch(() => {}); }, TICK_MS);
+  timer.unref?.();
+}

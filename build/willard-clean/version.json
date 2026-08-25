@@ -1,0 +1,17 @@
+{
+  "product": "Willard Media Center",
+  "version": "0.1.1",
+  "artifactName": "WillardMediaCenter-0.1.1-windows-x64.zip",
+  "builtAt": "2026-08-25T12:15:32.864Z",
+  "requires": {
+    "windows": "10+",
+    "postgresql": "14+"
+  },
+  "optional": {
+    "ffmpeg": "enables thumbnails, video metadata, and conversion"
+  },
+  "update": {
+    "manifestPath": "release-manifest.json",
+    "atomic": true
+  }
+}

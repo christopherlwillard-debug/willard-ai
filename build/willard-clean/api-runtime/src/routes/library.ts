@@ -1,0 +1,904 @@
+import { Router, type Request, type Response } from "express";
+import { db } from "@workspace/db";
+import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
+import {
+  getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
+  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq, getAllJobProgress,
+} from "../lib/library-engine";
+import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
+import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
+import { getWatcherSnapshot } from "../lib/library-watcher";
+import { getRecentActivity, recordActivity } from "../lib/library-activity";
+import { SCANNER_VERSION } from "../lib/library-engine/types";
+import { resolveWithinRoot } from "../lib/nas-storage";
+
+const router = Router();
+
+async function getNasPath(): Promise<string | null> {
+  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
+  const nasPath = row?.nasPath?.trim();
+  return nasPath || null;
+}
+
+async function getScopedJob(id: number, nasPath: string) {
+  const [job] = await db.select().from(libraryJobsTable).where(and(
+    eq(libraryJobsTable.id, id),
+    eq(libraryJobsTable.nasPath, nasPath),
+  )).limit(1);
+  return job;
+}
+
+// ── GET /api/library/seq — library sequence counter for incremental UI refresh ─
+// The seq counter increments on every successful DB batch flush during a scan.
+// The frontend polls this while a scan is running; when seq changes, it knows
+// new files have been written and re-fetches the media grid.
+
+router.get("/library/seq", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const seq = getLibrarySeq();
+  if (!nasPath) { res.json({ seq, total: 0 }); return; }
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+    ));
+
+  res.json({ seq, total: total ?? 0 });
+});
+
+// ── GET /api/library/health — smart library health snapshot ──────────────────
+
+router.get("/library/health", async (_req: Request, res: Response) => {
+  const health = getLibraryHealthSnapshot();
+  const activeId = getActiveJobId();
+  const activeJob = activeId !== null ? getJobProgress(activeId) : null;
+  const lastCompleted = activeId === null ? getLastCompletedProgress() : null;
+  const [row] = await db.select({ lastScanAt: appSettingsTable.lastScanAt })
+    .from(appSettingsTable).limit(1);
+  res.json({
+    ...health,
+    lastScanAt: row?.lastScanAt?.toISOString() ?? null,
+    activeJob,
+    lastCompleted,
+    watcher: getWatcherSnapshot(),
+  });
+});
+
+// ── GET /api/library/activity — friendly Library Activity feed ───────────────
+
+router.get("/library/activity", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.json({ entries: [] }); return; }
+  const limit = Math.min(100, parseInt(req.query["limit"] as string) || 20);
+  const entries = await getRecentActivity(nasPath, limit);
+  res.json({ entries });
+});
+
+// ── POST /api/library/retry — user-triggered "Retry Now" reachability check ──
+
+router.post("/library/retry", async (_req: Request, res: Response) => {
+  const health = await runLibraryCheck();
+  res.json(health);
+});
+
+// ── POST /api/library/reconnect-ack — dismiss the one-time reconnect banner ──
+
+router.post("/library/reconnect-ack", (_req: Request, res: Response) => {
+  acknowledgeReconnect();
+  res.json({ ok: true });
+});
+
+// ── POST /api/library/indexing/pause | resume — user-facing indexing switch ──
+
+router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
+  await db.update(appSettingsTable).set({ indexingPaused: true });
+  const activeId = getActiveJobId();
+  if (activeId !== null) requestPause(activeId);
+  const nasPath = await getNasPath();
+  if (nasPath) void recordActivity(nasPath, "paused", "Indexing paused — live watching is on hold until you resume.");
+  res.json({ ok: true, indexingPaused: true });
+});
+
+router.post("/library/indexing/resume", async (_req: Request, res: Response) => {
+  await db.update(appSettingsTable).set({ indexingPaused: false });
+  // Resume the most recent genuinely-PAUSED job (not INTERRUPTED_BY_RESTART).
+  // INTERRUPTED_BY_RESTART jobs must be explicitly resumed by the user via
+  // POST /api/library/jobs/:id/resume, not auto-resumed on indexing enable.
+  const [paused] = await db.select().from(libraryJobsTable)
+    .where(eq(libraryJobsTable.status, "PAUSED"))
+    .orderBy(desc(libraryJobsTable.createdAt))
+    .limit(1);
+  let resumedJobId: number | null = null;
+  if (paused) {
+    const ok = await resumeJob(paused.id);
+    if (ok) resumedJobId = paused.id;
+  }
+  const nasPath = await getNasPath();
+  if (nasPath) void recordActivity(nasPath, "resumed", "Indexing resumed — watching for library changes again.");
+  res.json({ ok: true, indexingPaused: false, resumedJobId });
+});
+
+// ── POST /api/library/scan/dry-run — preview what a full scan would touch ────
+
+router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured" });
+    return;
+  }
+
+  try {
+    // Load current scanner settings
+    const [settingsRow] = await db.select({
+      ignoredFolders:    appSettingsTable.ignoredFolders,
+      ignoredExtensions: appSettingsTable.ignoredExtensions,
+      ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
+      ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
+      ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
+      ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
+      ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
+      followSymlinks:     appSettingsTable.followSymlinks,
+      indexOtherFiles:    appSettingsTable.indexOtherFiles,
+    }).from(appSettingsTable).limit(1);
+
+    const { walkNas } = await import("../lib/library-engine/indexer");
+    const { getWillardAIDir } = await import("../lib/nas-storage");
+    const fs = await import("fs");
+    const path = await import("path");
+
+    try { fs.statSync(nasPath); } catch {
+      res.status(503).json({ error: "NAS is offline" });
+      return;
+    }
+
+    const scannerSettings = {
+      ignoredFolders:    settingsRow?.ignoredFolders    ?? [],
+      ignoredExtensions: settingsRow?.ignoredExtensions ?? [],
+      ignoreHiddenFiles:  settingsRow?.ignoreHiddenFiles  ?? true,
+      ignoreSystemFiles:  settingsRow?.ignoreSystemFiles  ?? true,
+      ignoreTempFiles:    settingsRow?.ignoreTempFiles    ?? true,
+      ignoreSidecarFiles: settingsRow?.ignoreSidecarFiles ?? true,
+      ignoreEmptyFolders: settingsRow?.ignoreEmptyFolders ?? false,
+      followSymlinks:     settingsRow?.followSymlinks     ?? false,
+      indexOtherFiles:    settingsRow?.indexOtherFiles    ?? true,
+    };
+
+    const willardDir = path.resolve(getWillardAIDir(nasPath));
+    const skipDirs   = new Set([willardDir]);
+    const files: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
+
+    // Fixed schema — canonical skip-reason keys, all initialized to 0
+    const skipped = {
+      system_file:          0,
+      hidden_file:          0,
+      user_ignored_folder:  0,
+      user_ignored_extension: 0,
+      system_directory:     0,
+      other_type_excluded:  0,
+    };
+
+    walkNas(
+      path.resolve(nasPath),
+      skipDirs,
+      files,
+      undefined,
+      (_skippedPath, reason) => {
+        if (Object.prototype.hasOwnProperty.call(skipped, reason)) {
+          (skipped as Record<string, number>)[reason]++;
+        }
+        // read-error strings are intentionally excluded from the breakdown
+      },
+      undefined,
+      undefined,
+      undefined,
+      path.resolve(nasPath),
+      scannerSettings,
+    );
+
+    res.json({ wouldScan: files.length, skipped });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Dry-run failed" });
+  }
+});
+
+// ── POST /api/library/scan — start a scan job ────────────────────────────────
+
+router.post("/library/scan", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured. Visit Settings to configure it." });
+    return;
+  }
+
+  const profile = (req.body?.profile as string) ?? "QUICK";
+  let rootPath: string | undefined;
+  if (req.body?.rootPath != null) {
+    if (typeof req.body.rootPath !== "string" || !req.body.rootPath.trim()) {
+      res.status(400).json({ error: "rootPath must be a non-empty path" });
+      return;
+    }
+    try {
+      rootPath = resolveWithinRoot(req.body.rootPath, nasPath);
+    } catch {
+      res.status(403).json({ error: "rootPath must remain inside the configured library" });
+      return;
+    }
+  }
+
+  const result = await startJob({
+    jobType: "SCAN",
+    profile: profile as any,
+    nasPath,
+    rootPath,
+  });
+
+  if (result.errorCode === "NAS_OFFLINE") {
+    res.status(503).json({
+      code: "NAS_OFFLINE",
+      error: "NAS Not Available",
+      message: `Cannot reach ${nasPath}. Check that your NAS is online and the drive is mounted.`,
+      jobId: result.jobId,
+    });
+    return;
+  }
+
+  res.json(result);
+});
+
+// ── GET /api/library/jobs/active — live progress of the running job ───────────
+
+router.get("/library/jobs/active", async (_req: Request, res: Response) => {
+  const activeId = getActiveJobId();
+  if (activeId === null) {
+    // Pausing removes the worker from the in-memory map. Keep the paused job
+    // visible to polling clients so the Library UI can render Resume instead
+    // of appearing idle.
+    const [paused] = await db.select().from(libraryJobsTable)
+      .where(or(
+        eq(libraryJobsTable.status, "PAUSED"),
+        eq(libraryJobsTable.status, "INTERRUPTED_BY_RESTART"),
+      ))
+      .orderBy(desc(libraryJobsTable.createdAt))
+      .limit(1);
+    if (paused) {
+      const saved = (paused.summary ?? {}) as {
+        partialCounters?: Record<string, number>;
+      };
+      const counters = {
+        new: 0, modified: 0, moved: 0, unchanged: 0, deleted: 0,
+        hashed: 0, thumbnails: 0, thumbnailsFailed: 0, skipped: 0, reanalyzed: 0,
+        ...saved.partialCounters,
+      };
+      const total = paused.totalFiles ?? 0;
+      res.json({
+        jobId: paused.id,
+        jobType: paused.jobType,
+        status: paused.status,
+        phase: "walking",
+        profile: paused.profile,
+        progress: total > 0 ? Math.min(100, Math.round((paused.processedFiles / total) * 100)) : 0,
+        filesProcessed: paused.processedFiles,
+        filesTotal: total,
+        currentPath: paused.cursor ?? "",
+        currentFileStartedAt: null,
+        etaSeconds: null,
+        speed: 0,
+        counters,
+        summary: null,
+      });
+      return;
+    }
+    // No running job — surface the most recent completion (with summary) so
+    // the UI can show the scan-summary card after the job finishes.
+    res.json(getLastCompletedProgress());
+    return;
+  }
+  const progress = getJobProgress(activeId);
+  res.json(progress);
+});
+
+// ── GET /api/library/jobs/events — server-pushed live task snapshots ─────────
+// This is intentionally SSE rather than a polling endpoint. A snapshot is
+// pushed once on connect and whenever the stream heartbeat fires; clients can
+// stay on any page while long-running work continues.
+router.get("/library/jobs/events", async (_req: Request, res: Response) => {
+  res.status(200);
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+
+  const send = () => {
+    if (res.writableEnded) return;
+    const jobs = getAllJobProgress();
+    res.write(`event: jobs\ndata: ${JSON.stringify({ jobs, lastCompleted: jobs.length === 0 ? getLastCompletedProgress() : null })}\n\n`);
+  };
+  send();
+  const timer = setInterval(send, 1000);
+  _req.on("close", () => clearInterval(timer));
+});
+
+// Convenient aggregate for task-center consumers that need a one-shot
+// snapshot (for example after an action completes).
+router.get("/library/jobs/background", async (_req: Request, res: Response) => {
+  res.json({ jobs: getAllJobProgress() });
+});
+
+// ── GET /api/library/jobs — paginated job history ────────────────────────────
+
+router.get("/library/jobs", async (req: Request, res: Response) => {
+  const configuredNasPath = await getNasPath();
+  const nasPath = configuredNasPath;
+  const type    = req.query["type"] as string | undefined;
+  const limit   = Math.min(100, parseInt(req.query["limit"] as string) || 20);
+
+  const status = req.query["status"] as string | undefined;
+
+  const conditions = [];
+  if (nasPath) conditions.push(eq(libraryJobsTable.nasPath, nasPath));
+  if (type)    conditions.push(eq(libraryJobsTable.jobType, type));
+  if (status)  conditions.push(eq(libraryJobsTable.status, status));
+
+  const jobs = await db.select().from(libraryJobsTable)
+    .where(conditions.length === 1 ? conditions[0] : conditions.length > 1 ? and(...conditions) : undefined)
+    .orderBy(desc(libraryJobsTable.createdAt))
+    .limit(limit);
+
+  res.json({ jobs });
+});
+
+// ── GET /api/library/jobs/:id — single job ────────────────────────────────────
+
+router.get("/library/jobs/:id", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+  const scopedJob = await getScopedJob(id, nasPath);
+  if (!scopedJob) { res.status(404).json({ error: "Job not found" }); return; }
+
+  // Check in-memory first for live progress
+  const liveProgress = getJobProgress(id);
+  if (liveProgress) { res.json({ ...liveProgress, fromMemory: true }); return; }
+
+  res.json(scopedJob);
+});
+
+// ── POST /api/library/jobs/:id/pause ─────────────────────────────────────────
+
+router.post("/library/jobs/:id/pause", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
+  const ok = requestPause(id);
+  res.json({ ok, jobId: id });
+});
+
+// ── POST /api/library/jobs/:id/resume ────────────────────────────────────────
+
+router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
+  const ok = await resumeJob(id);
+  if (!ok) { res.status(400).json({ error: "Job not found or not paused" }); return; }
+  res.json({ ok, jobId: id });
+});
+
+// ── POST /api/library/jobs/:id/cancel ────────────────────────────────────────
+
+router.post("/library/jobs/:id/cancel", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
+  const reason = req.body?.reason ?? "USER_CANCELLED";
+  const ok = requestCancel(id, reason);
+  res.json({ ok, jobId: id });
+});
+
+// ── DELETE /api/library/active-job — force-discard a stuck job ────────────────
+// Bypasses the normal cancel flag (which requires the job loop to be responsive)
+// and immediately removes the job from the in-memory engine. Use this when a
+// scan is visibly stuck and Cancel has no effect.
+
+router.delete("/library/active-job", async (_req: Request, res: Response) => {
+  try {
+    const result = await forceDiscardActiveJob();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Force-discard failed" });
+  }
+});
+
+// ── POST /api/library/thumbnails — start a thumbnail backfill job ─────────────
+
+router.post("/library/thumbnails", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "FULL",
+    nasPath,
+  });
+
+  res.json(result);
+});
+
+// ── GET /api/library/thumbnails/status — thumbnail cache stats ────────────────
+
+router.get("/library/thumbnails/status", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.json({ total: 0, built: 0, missing: 0, cacheSizeBytes: 0, activeJob: null });
+    return;
+  }
+
+  const eligibleFilter = and(
+    eq(mediaFilesTable.nasPath, nasPath),
+    or(
+      eq(mediaFilesTable.mediaType, "photo"),
+      eq(mediaFilesTable.mediaType, "video"),
+      eq(mediaFilesTable.extension, "pdf"),
+    ),
+    sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+  );
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(eligibleFilter);
+
+  const [{ built }] = await db
+    .select({ built: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(and(eligibleFilter, sql`${mediaFilesTable.thumbnailPath} IS NOT NULL`));
+
+  const cacheSizeBytes = getThumbnailCacheSizeBytes(nasPath);
+
+  const totalNum = total ?? 0;
+  const builtNum = built ?? 0;
+
+  res.json({
+    total: totalNum,
+    built: builtNum,
+    missing: Math.max(0, totalNum - builtNum),
+    cacheSizeBytes,
+    activeJob: null,
+  });
+});
+
+// ── POST /api/library/thumbnails/prioritize — boost a folder to front ─────────
+
+router.post("/library/thumbnails/prioritize", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const folder = req.body?.folder as string | undefined;
+  if (!folder) {
+    res.status(400).json({ error: "folder is required" });
+    return;
+  }
+
+  // Find files in this folder without thumbnails
+  const folderPrefix = folder.replace(/^\//, "");
+  const files = await db.select({ id: mediaFilesTable.id })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      isNull(mediaFilesTable.thumbnailPath),
+      or(
+        eq(mediaFilesTable.mediaType, "photo"),
+        eq(mediaFilesTable.mediaType, "video"),
+        eq(mediaFilesTable.extension, "pdf"),
+      ),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      sql`relative_path LIKE ${folderPrefix + "/%"}`,
+    ))
+    .limit(500);
+
+  if (files.length > 0) {
+    addThumbnailPriority(nasPath, files.map(f => f.id));
+  }
+
+  res.json({ boosted: files.length, folder });
+});
+
+// ── DELETE /api/library/thumbnails/cache — wipe thumbnail cache ───────────────
+
+router.delete("/library/thumbnails/cache", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const deleted = clearThumbnailCache(nasPath);
+
+  // Reset thumbnailPath in DB so the backfill job can regenerate them
+  await db.update(mediaFilesTable).set({
+    thumbnailPath: null,
+    thumbnailGeneratedAt: null,
+  }).where(eq(mediaFilesTable.nasPath, nasPath));
+
+  res.json({ deleted });
+});
+
+// ── POST /api/library/thumbnails/rebuild — wipe cache then start fresh job ────
+
+router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  clearThumbnailCache(nasPath);
+
+  await db.update(mediaFilesTable).set({
+    thumbnailPath: null,
+    thumbnailGeneratedAt: null,
+  }).where(eq(mediaFilesTable.nasPath, nasPath));
+
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "FULL",
+    nasPath,
+  });
+
+  res.json(result);
+});
+
+// ── GET /api/library/jobs/:id/files?action=NEW — files touched by a scan ──────
+// Uses the scan's time anchor (summary.scanStartedAt) so the summary counts are
+// clickable: each count maps to the exact files behind it.
+
+router.get("/library/jobs/:id/files", async (req: Request, res: Response) => {
+  const id = parseInt(req.params["id"] as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const action = (req.query["action"] as string | undefined)?.toUpperCase();
+  const allowed = new Set(["NEW", "MODIFIED", "MOVED", "DELETED", "UNCHANGED"]);
+  if (!action || !allowed.has(action)) {
+    res.status(400).json({ error: "Query param 'action' must be one of NEW, MODIFIED, MOVED, DELETED, UNCHANGED" });
+    return;
+  }
+  const limit = Math.min(500, parseInt(req.query["limit"] as string) || 100);
+
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+  const job = await getScopedJob(id, nasPath);
+  if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+
+  const summary = (job.summary ?? {}) as { scanStartedAt?: string };
+  if (!summary.scanStartedAt) {
+    res.json({ files: [], note: "This job has no per-file details (older scan)." });
+    return;
+  }
+  const anchor = new Date(summary.scanStartedAt);
+
+  const files = await db.select({
+    id: mediaFilesTable.id,
+    relativePath: mediaFilesTable.relativePath,
+    name: mediaFilesTable.name,
+    mediaType: mediaFilesTable.mediaType,
+    sizeBytes: mediaFilesTable.sizeBytes,
+    modifiedAt: mediaFilesTable.modifiedAt,
+  }).from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, job.nasPath),
+      eq(mediaFilesTable.lastScanAction, action),
+      gte(mediaFilesTable.lastScannedAt, anchor),
+    ))
+    .orderBy(desc(mediaFilesTable.modifiedAt))
+    .limit(limit);
+
+  res.json({ files });
+});
+
+// ── GET /api/library/duplicates — confirmed duplicate groups ──────────────────
+
+router.get("/library/duplicates", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.json({ groups: [] }); return; }
+
+  const rows = await db.select({
+    id: mediaFilesTable.id,
+    relativePath: mediaFilesTable.relativePath,
+    name: mediaFilesTable.name,
+    mediaType: mediaFilesTable.mediaType,
+    sizeBytes: mediaFilesTable.sizeBytes,
+    contentHash: mediaFilesTable.contentHash,
+  }).from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+      sql`${mediaFilesTable.contentHash} IN (
+        SELECT content_hash FROM media_files
+        WHERE nas_path = ${nasPath}
+          AND content_hash IS NOT NULL
+          AND (last_scan_action IS DISTINCT FROM 'DELETED')
+        GROUP BY content_hash HAVING count(*) > 1
+      )`,
+    ))
+    .orderBy(desc(mediaFilesTable.sizeBytes));
+
+  const byHash = new Map<string, typeof rows>();
+  for (const row of rows) {
+    if (!row.contentHash) continue;
+    const g = byHash.get(row.contentHash);
+    if (g) g.push(row); else byHash.set(row.contentHash, [row]);
+  }
+  const groups = [...byHash.entries()].map(([hash, files]) => ({
+    contentHash: hash,
+    sizeBytes: files[0]!.sizeBytes,
+    count: files.length,
+    files: files.map(({ contentHash: _h, ...rest }) => rest),
+  }));
+
+  res.json({ groups });
+});
+
+// ── PATCH /api/library/thumbnails/quality — update thumbnail quality setting ──
+
+router.patch("/library/thumbnails/quality", async (req: Request, res: Response) => {
+  const quality = req.body?.quality as string | undefined;
+  const allowed = new Set(["FAST", "BALANCED", "HIGH"]);
+  if (!quality || !allowed.has(quality.toUpperCase())) {
+    res.status(400).json({ error: "quality must be FAST, BALANCED, or HIGH" });
+    return;
+  }
+
+  const [existing] = await db.select({ id: appSettingsTable.id }).from(appSettingsTable).limit(1);
+  if (!existing) {
+    res.status(400).json({ error: "Settings not found" });
+    return;
+  }
+
+  await db.update(appSettingsTable)
+    .set({ thumbnailQuality: quality.toUpperCase() })
+    .where(eq(appSettingsTable.id, existing.id));
+
+  res.json({ thumbnailQuality: quality.toUpperCase() });
+});
+
+// ── POST /api/library/scan/benchmark — real pipeline benchmark ────────────────
+// Runs the full hash + metadata + DB-write pipeline stages on up to `size` files
+// without permanently modifying media_files (DB writes are in a rolled-back
+// transaction). Results are directly comparable to real scan diagnostics.
+
+router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(400).json({ error: "NAS path not configured" }); return; }
+
+  const sizeParam = req.query["size"] as string | undefined;
+  const sampleLimit = sizeParam === "full" ? Infinity :
+                      sizeParam === "10000" ? 10000 :
+                      sizeParam === "5000"  ? 5000  : 1000;
+
+  try {
+    const {
+      walkNas, extractPhotoMeta, extractVideoMeta, hashFile,
+      PHOTO_EXTS, VIDEO_META_EXTS,
+    } = await import("../lib/library-engine/indexer");
+    const { getWillardAIDir: _wDir } = await import("../lib/nas-storage");
+    const { DEFAULT_SCANNER_SETTINGS } = await import("../lib/system-filter");
+    const fs   = await import("fs");
+    const path = await import("path");
+
+    try { fs.statSync(nasPath); } catch {
+      res.status(503).json({ error: "NAS is offline" });
+      return;
+    }
+
+    const willardDir = path.resolve(_wDir(nasPath));
+    const skipDirs   = new Set([willardDir]);
+    const allFiles: Array<{ fullPath: string; name: string; ext: string; sizeBytes: number; modifiedAt: Date }> = [];
+
+    const walkStart = Date.now();
+    walkNas(
+      path.resolve(nasPath), skipDirs, allFiles,
+      undefined, undefined, undefined, undefined, undefined,
+      path.resolve(nasPath), DEFAULT_SCANNER_SETTINGS,
+    );
+    const walkTimeMs = Date.now() - walkStart;
+
+    const sampled = sampleLimit === Infinity ? allFiles : allFiles.slice(0, sampleLimit);
+
+    // ── Stage 1 + 2: concurrent hash + metadata (mirrors real job-engine) ─────
+    const BENCH_CONCURRENCY = 8;
+    const BENCH_BATCH_SIZE  = 50;
+
+    let hashesGenerated = 0;
+    let metadataExtracted = 0;
+    let metadataExtractionTimeMs = 0;
+    let totalSizeBytes = 0;
+    let peakConcurrency = 0;
+    let peakQueueDepth  = 0;
+    const latencies: number[] = [];
+
+    type Processed = {
+      relativePath: string; name: string; extension: string;
+      sizeBytes: number; modifiedAt: Date; contentHash: string | null;
+    };
+    const processed: Processed[] = [];
+
+    // Promise pool — same concurrency model as real scan
+    let pendingIdx   = 0;
+    let activeNow    = 0;
+
+    const processOne = async (f: typeof sampled[0]): Promise<void> => {
+      const t0   = Date.now();
+      const hash = await hashFile(f.fullPath);
+      latencies.push(Date.now() - t0);
+      if (hash) hashesGenerated++;
+      totalSizeBytes += f.sizeBytes;
+
+      if (PHOTO_EXTS.has(f.ext) || VIDEO_META_EXTS.has(f.ext)) {
+        const tMeta = Date.now();
+        try {
+          if (PHOTO_EXTS.has(f.ext)) await extractPhotoMeta(f.fullPath, f.ext);
+          else extractVideoMeta(f.fullPath);
+          metadataExtractionTimeMs += Date.now() - tMeta;
+          metadataExtracted++;
+        } catch { /* unreadable — skip */ }
+      }
+
+      processed.push({
+        relativePath: path.relative(path.resolve(nasPath), f.fullPath),
+        name: f.name, extension: f.ext,
+        sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
+        contentHash: hash,
+      });
+    };
+
+    const workerFn = async (): Promise<void> => {
+      while (pendingIdx < sampled.length) {
+        const f = sampled[pendingIdx++];
+        activeNow++;
+        peakConcurrency  = Math.max(peakConcurrency, activeNow);
+        peakQueueDepth   = Math.max(peakQueueDepth,  sampled.length - pendingIdx);
+        await processOne(f);
+        activeNow--;
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(BENCH_CONCURRENCY, sampled.length) }, () => workerFn()),
+    );
+
+    // ── Stage 3: real DB batch writes (rolled-back transaction) ───────────────
+    let dbWriteBatches = 0;
+    let dbWriteTimeMs  = 0;
+
+    if (processed.length > 0) {
+      try {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < processed.length; i += BENCH_BATCH_SIZE) {
+            const chunk = processed.slice(i, i + BENCH_BATCH_SIZE);
+            const t0 = Date.now();
+            await tx.insert(mediaFilesTable).values(
+              chunk.map(f => ({
+                nasPath,
+                relativePath: f.relativePath,
+                name:         f.name,
+                extension:    f.extension,
+                sizeBytes:    f.sizeBytes,
+                modifiedAt:   f.modifiedAt,
+                contentHash:  f.contentHash,
+                mediaType:    "other",
+              })),
+            ).onConflictDoNothing();
+            dbWriteTimeMs += Date.now() - t0;
+            dbWriteBatches++;
+          }
+          // Deliberate rollback — no permanent changes to media_files
+          throw new Error("benchmark-rollback");
+        });
+      } catch (e: any) {
+        if (e?.message !== "benchmark-rollback") throw e;
+      }
+    }
+
+    const elapsedMs   = Date.now() - walkStart;
+    const elapsedSecs = elapsedMs / 1000;
+    const avgNasLatencyMs = latencies.length > 0
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
+    const maxNasLatencyMs = latencies.length > 0
+      ? Math.round(Math.max(...latencies)) : 0;
+
+    const diagnostics = {
+      walkTimeMs,
+      dirCacheHits: 0, dirCacheMisses: 0, skippedByReason: {},
+      metadataExtracted, hashesGenerated, dbWriteBatches,
+      avgNasLatencyMs, maxNasLatencyMs, peakConcurrency,
+      throughputFilesPerSec: elapsedSecs > 0
+        ? Math.round((sampled.length / elapsedSecs) * 10) / 10 : 0,
+      throughputMBPerSec: elapsedSecs > 0
+        ? Math.round((totalSizeBytes / (1024 * 1024) / elapsedSecs) * 100) / 100 : 0,
+      peakQueueDepth, dbWriteTimeMs, metadataExtractionTimeMs, totalSizeBytes,
+    };
+
+    const [benchJob] = await db.insert(libraryJobsTable).values({
+      jobType:  "SCAN", profile: "BENCHMARK", priority: "NORMAL", status: "DONE", nasPath,
+      startedAt:      new Date(Date.now() - elapsedMs),
+      finishedAt:     new Date(),
+      processedFiles: sampled.length,
+      totalFiles:     allFiles.length,
+      summary:        { benchmark: true, sampleSize: sampled.length, totalFiles: allFiles.length, elapsedMs } as any,
+      diagnostics:    diagnostics as any,
+    }).returning({ id: libraryJobsTable.id });
+
+    res.json({ jobId: benchJob?.id, filesWalked: allFiles.length, sampleSize: sampled.length, elapsedMs, diagnostics });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Benchmark failed" });
+  }
+});
+
+// ── GET /api/library/outdated — count of items with an older scanner version ──
+
+router.get("/library/outdated", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.json({ count: 0, scannerVersion: SCANNER_VERSION }); return; }
+
+  const [{ count }] = await db.select({ count: sql<number>`count(*)::int` })
+    .from(mediaFilesTable)
+    .where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      lt(mediaFilesTable.scannerVersion, SCANNER_VERSION),
+      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+    ));
+
+  res.json({ count: count ?? 0, scannerVersion: SCANNER_VERSION });
+});
+
+// ── POST /api/library/reprocess — selective metadata re-processing ────────────
+
+router.post("/library/reprocess", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  if (!nasPath) {
+    res.status(400).json({ error: "NAS path not configured." });
+    return;
+  }
+
+  const result = await startJob({
+    jobType: "METADATA",
+    profile: "FULL",
+    nasPath,
+  });
+
+  res.json(result);
+});
+
+// ── POST /api/library/optimize — §8.3 readiness gate ─────────────────────────
+// Returns { alreadyRunning: false } when the scan engine is idle and ready to
+// accept a new job.  Used by the lifecycle proof test (Task #156 §8.3) to
+// verify that no orphaned lock is held after sequential scans settle.
+
+router.post("/library/optimize", (_req: Request, res: Response) => {
+  const activeId = getActiveJobId();
+  if (activeId !== null) {
+    res.json({ alreadyRunning: true, jobId: activeId });
+  } else {
+    res.json({ alreadyRunning: false });
+  }
+});
+
+export default router;

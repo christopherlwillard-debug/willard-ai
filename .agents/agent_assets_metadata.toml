@@ -1,8 +1,14 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "sgjURByiru3c287oI90cq"
 uri = "file://artifacts/willard-mobile/assets/images/icon.png"
 type = "image"
 title = "willard-ai-app-icon"
+
+[[outputs]]
+id = "w_PhzVK3UjgPfWrhTLWII"
+uri = "file://build/WillardMediaCenter-clean-0.1.1-windows-x64.zip"
+type = "unspecified"
+title = "Willard Media Center — Compact Clean Windows Package"
+description = "120 MB clean Windows package with bundled Node runtime, packaged API/web app, native launcher, and one-click Start batch file. Extract into a new folder; do not use the earlier 1.3 GB download."
