@@ -101,12 +101,12 @@ export default function LoginPage() {
         await invalidate();
       },
       onError: (err: any) => {
-        const rateLimited = err?.response?.status === 429;
+        const rateLimited = err?.status === 429 || err?.response?.status === 429;
         toast({
           title: rateLimited ? "Too many login attempts" : "Login failed",
           description: rateLimited
             ? "Please wait 15 minutes before trying again."
-            : err?.response?.data?.error ?? "Incorrect password.",
+            : err?.data?.error ?? err?.response?.data?.error ?? "Incorrect password.",
           variant: "destructive"
         });
       },
@@ -121,7 +121,7 @@ export default function LoginPage() {
       },
       onError: (err: any) => toast({
         title: "Setup failed",
-        description: err?.response?.data?.error ?? "Something went wrong.",
+        description: err?.data?.error ?? err?.response?.data?.error ?? "Something went wrong.",
         variant: "destructive"
       }),
     },
@@ -133,12 +133,12 @@ export default function LoginPage() {
         await invalidate();
       },
       onError: (err: any) => {
-        const rateLimited = err?.response?.status === 429;
+        const rateLimited = err?.status === 429 || err?.response?.status === 429;
         toast({
           title: rateLimited ? "Too many recovery attempts" : "Recovery failed",
           description: rateLimited
             ? "Please wait 15 minutes before trying again."
-            : err?.response?.data?.error ?? "Invalid recovery key.",
+            : err?.data?.error ?? err?.response?.data?.error ?? "Invalid recovery key.",
           variant: "destructive"
         });
       },
