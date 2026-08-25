@@ -1,0 +1,40 @@
+PS C:\Willards-Media-Center>
+PS C:\Willards-Media-Center> Write-Host "Willard AI files updated successfully."
+Willard AI files updated successfully.
+PS C:\Willards-Media-Center> Select-String -Path .\scripts\launcher\common.ps1 -Pattern "trackedProcessId"
+
+scripts\launcher\common.ps1:249:    $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
+scripts\launcher\common.ps1:250:    $current = Get-ProcessIdentity $trackedProcessId
+
+
+PS C:\Willards-Media-Center> Select-String -Path .\scripts\launcher\update.ps1 -Pattern "System32"
+PS C:\Willards-Media-Center> Select-String -Path .\scripts\launcher\update.ps1 -Pattern "System32"
+PS C:\Willards-Media-Center> cd C:\Willards-Media-Center
+PS C:\Willards-Media-Center>
+PS C:\Willards-Media-Center> $curl = "$env:SystemRoot\System32\curl.exe"
+PS C:\Willards-Media-Center> $tempUpdater = Join-Path $env:TEMP "willard-update.ps1"
+PS C:\Willards-Media-Center>
+PS C:\Willards-Media-Center> & $curl --fail --location --retry 3 --connect-timeout 20 --max-time 120 `
+>>   --output $tempUpdater `
+>>   --write-out "HTTP status: %{http_code}`n" `
+>>   "https://raw.githubusercontent.com/christopherlwillard-debug/willard-ai/main/scripts/launcher/update.ps1"
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+100   7457 100   7457   0      0  12309      0                              0
+HTTP status: 200
+PS C:\Willards-Media-Center>
+PS C:\Willards-Media-Center> if ($LASTEXITCODE -ne 0) {
+>>     Write-Host "Download failed. Curl exit code: $LASTEXITCODE"
+>> } elseif (-not (Test-Path $tempUpdater)) {
+>>     Write-Host "Download did not create the temporary file."
+>> } else {
+>>     Move-Item $tempUpdater .\scripts\launcher\update.ps1 -Force
+>>     Write-Host "Updater replaced successfully."
+>> }
+Updater replaced successfully.
+PS C:\Willards-Media-Center> Select-String -Path .\scripts\launcher\update.ps1 -Pattern "System32"
+
+scripts\launcher\update.ps1:87:            $systemCurl = Join-Path $env:SystemRoot "System32\curl.exe"
+
+
+PS C:\Willards-Media-Center>
