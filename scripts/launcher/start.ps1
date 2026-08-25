@@ -111,17 +111,8 @@ if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
         Write-Ok "Already up to date"
     } else {
         Add-Content $updateLog "[launcher] git pull failed; current files were left unchanged."
-        $updateScript = Join-Path $PSScriptRoot "update.ps1"
-        $powershellCommand = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
-        if (-not $powershellCommand) { $powershellCommand = Join-Path $PSHOME "powershell.exe" }
-        if (Test-Path $updateScript) {
-            Write-Info "Trying direct download instead..."
-            Start-Process -FilePath $powershellCommand `
-                -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $updateScript) `
-                -WorkingDirectory $Root -WindowStyle Normal
-            exit 0
-        }
-        Write-Warn "Update check was unavailable; continuing with this copy"
+        Write-Warn "Update check was unavailable; continuing with this copy."
+        Write-Host ("  Details: " + $updateLog) -ForegroundColor DarkGray
     }
     $ErrorActionPreference = $savedPref
 }

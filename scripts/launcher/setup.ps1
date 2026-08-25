@@ -31,6 +31,12 @@ if (-not (Test-Command "pnpm")) {
     }
 }
 Write-Ok "pnpm ready"
+$pnpmCommand = Get-WillardPnpmCommand
+if (-not $pnpmCommand) {
+    Show-Failure "Couldn't locate pnpm's Windows command." `
+        "pnpm was found, but pnpm.cmd or pnpm.exe was not available."
+    Pause-BeforeClose; exit 1
+}
 
 # -- Settings file (.env) -----------------------------------------------------
 if (Ensure-EnvFile) {
@@ -56,7 +62,7 @@ if ($needsPassword) {
 # -- Packages -----------------------------------------------------------------
 Write-Info "Installing packages (this is the longest step -- a few minutes)..."
 $installLog = Join-Path $LogDir "setup-install.log"
-& pnpm install --ignore-scripts *> $installLog
+& $pnpmCommand install --ignore-scripts *> $installLog
 if ($LASTEXITCODE -ne 0) {
     Show-Failure "Package installation failed." ("pnpm install failed - see " + $installLog)
     Pause-BeforeClose; exit 1
@@ -78,7 +84,7 @@ Write-Ok "Database ready"
 # -- Build API server ---------------------------------------------------------
 Write-Info "Building API server..."
 $buildLog = Join-Path $LogDir "setup-build.log"
-& pnpm --filter @workspace/api-server run build *> $buildLog
+& $pnpmCommand --filter @workspace/api-server run build *> $buildLog
 if ($LASTEXITCODE -ne 0) {
     Show-Failure "API build failed." ("Build failed - see " + $buildLog)
     Pause-BeforeClose; exit 1
