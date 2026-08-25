@@ -55,10 +55,12 @@ function isAllowedAppOrigin(origin: string): boolean {
   }
 }
 
-export async function initializeVectorCapability(): Promise<void> {
+type Queryable = Pick<typeof pool, "query">;
+
+export async function initializeVectorCapability(queryable: Queryable = pool): Promise<void> {
   try {
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
-    await pool.query(`
+    await queryable.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await queryable.query(`
       ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS embedding vector(384);
       ALTER TABLE people    ADD COLUMN IF NOT EXISTS centroid  vector(512);
       ALTER TABLE faces     ADD COLUMN IF NOT EXISTS embedding vector(512);
@@ -70,7 +72,7 @@ export async function initializeVectorCapability(): Promise<void> {
   }
   if (isVectorAvailable()) {
     try {
-      await pool.query(`
+      await queryable.query(`
         CREATE INDEX IF NOT EXISTS media_ai_embedding_hnsw_idx
           ON media_ai USING hnsw (embedding vector_cosine_ops);
       `);
@@ -81,7 +83,12 @@ export async function initializeVectorCapability(): Promise<void> {
 }
 
 export async function bootstrapSessionTable(): Promise<void> {
-  await pool.query(`
+  const schemaPool = pool;
+  const client = await schemaPool.connect();
+  const pool = client;
+  try {
+    await client.query(`SELECT pg_advisory_lock(hashtext('willard-schema-bootstrap'))`);
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
       "sid"    varchar      NOT NULL COLLATE "default",
       "sess"   json         NOT NULL,
@@ -295,7 +302,7 @@ export async function bootstrapSessionTable(): Promise<void> {
   `);
 
   // pgvector is optional; probe it after the base schema exists.
-  await initializeVectorCapability();
+  await initializeVectorCapability(client);
   await pool.query(`
     ALTER TABLE app_settings
       ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';
@@ -337,6 +344,13 @@ export async function bootstrapSessionTable(): Promise<void> {
     ALTER TABLE media_files
       ADD COLUMN IF NOT EXISTS metadata_status text;
   `);
+  } finally {
+    try {
+      await client.query(`SELECT pg_advisory_unlock(hashtext('willard-schema-bootstrap'))`);
+    } finally {
+      client.release();
+    }
+  }
 }
 
 const PgStore = connectPgSimple(session);
