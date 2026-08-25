@@ -33,3 +33,4 @@
 - [Routed workflow readiness](routed-workflow-readiness.md) — workflow startup can precede routed-host readiness; check web and API separately before browser tests
 - [Viewer regression harness](viewer-regression-harness.md) — isolate auth and hide the injected dev banner so repeated viewer E2E runs exercise media behavior, not workspace state
 - [Windows release build environment](windows-release-build-env.md) — package builds need Vite's PORT and BASE_PATH defaults before installer creation
+- [Release payload dependency surface](release-payload-dependency-surface.md) — Windows payloads should exclude workspace lockfiles and package-manager metadata

@@ -113,6 +113,7 @@ async function compactWindowsDependencies(payloadRoot) {
   await rm(path.join(nodeModules, ".modules.yaml"), { force: true });
   await rm(path.join(nodeModules, ".pnpm-workspace-state-v1.json"), { force: true });
   await rm(path.join(nodeModules, ".bin"), { recursive: true, force: true });
+  await rm(path.join(payloadRoot, "pnpm-lock.yaml"), { force: true });
 }
 
 async function main() {
