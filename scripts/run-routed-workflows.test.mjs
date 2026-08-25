@@ -66,6 +66,61 @@ test("reports simultaneous web and API readiness failures with isolated logs", a
   }
 });
 
+test("waits for a late service and reports the service that fails at the timeout", async () => {
+  const webLogPath = "/tmp/routed-web.log";
+  const apiLogPath = "/tmp/routed-api.log";
+  const timeoutMs = 40;
+  const calls = [];
+  const startedAt = performance.now();
+
+  await assert.rejects(
+    checkRoutedServices("http://routed.example", {
+      timeoutMs,
+      logPaths: {
+        "Web app": [webLogPath],
+        "API server": [apiLogPath],
+      },
+      check: (name, url, configuredTimeoutMs, options) => {
+        calls.push({ name, url, configuredTimeoutMs, logPaths: options.logPaths });
+        if (name === "Web app") {
+          return new Promise((resolve) => setTimeout(resolve, timeoutMs - 5));
+        }
+        return new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(
+              `API server readiness failed at ${url} (HTTP 503). Startup output:\napi database failure`,
+            ));
+          }, configuredTimeoutMs);
+        });
+      },
+    }),
+    (error) => {
+      assert.match(error.message, /API server readiness failed/);
+      assert.doesNotMatch(error.message, /Web app readiness failed/);
+      return true;
+    },
+  );
+
+  assert.ok(
+    performance.now() - startedAt >= timeoutMs - 2,
+    "readiness should wait through the configured timeout",
+  );
+  assert.deepEqual(calls, [
+    {
+      name: "Web app",
+      url: "http://routed.example/",
+      configuredTimeoutMs: timeoutMs,
+      logPaths: [webLogPath],
+    },
+    {
+      name: "API server",
+      url: "http://routed.example/api/healthz",
+      configuredTimeoutMs: timeoutMs,
+      logPaths: [apiLogPath],
+    },
+  ]);
+});
+
 test("includes the configured service log tail in readiness failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "routed-workflows-"));
   const rotatedLogPath = join(directory, "api.log.1");
