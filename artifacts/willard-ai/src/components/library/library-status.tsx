@@ -58,7 +58,13 @@ export function LibraryStatusIndicator() {
   const indexing = job != null;
   const pct = indexing && job?.filesTotal ? Math.min(100, Math.round(((job.filesProcessed ?? 0) / job.filesTotal) * 100)) : null;
   const watcher = (health as unknown as {
-    watcher?: { lastChangeAt?: string | null; mechanism?: string; sweepIntervalSeconds?: number };
+    watcher?: {
+      lastChangeAt?: string | null;
+      mechanism?: string;
+      sweepIntervalSeconds?: number;
+      nextSweepAt?: string | null;
+      state?: string;
+    };
     lastScanAt?: string | null;
   }).watcher;
 
@@ -95,6 +101,9 @@ export function LibraryStatusIndicator() {
     watcher?.lastChangeAt ? `Last change ${formatAgo(watcher.lastChangeAt)}` : null,
     lastScanAt ? `Last scan ${formatAgo(lastScanAt)}` : null,
     watcher?.mechanism === "sweep" ? "Watching via periodic sweeps" : null,
+    watcher?.mechanism === "sweep" && watcher.state === "watching" && watcher.nextSweepAt
+      ? `Next sweep ${formatTime(watcher.nextSweepAt)}`
+      : null,
   ].filter(Boolean).join(" • ");
 
   return (

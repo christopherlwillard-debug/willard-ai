@@ -99,6 +99,7 @@ test("switching library path cancels queued old-path scans and watches only the 
   const snapshot = getWatcherSnapshot();
   assert.equal(snapshot.state, "watching");
   assert.equal(snapshot.watchedPath, newPath);
+  assert.equal(snapshot.nextSweepAt, null, "events mode must not expose a sweep countdown");
 
   // Confirm the replacement watcher is live and uses the new path.
   assert.equal(watchers.length, 2);

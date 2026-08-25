@@ -92,6 +92,7 @@ export interface WatcherSnapshot {
   watchedPath:       string | null;
   lastChangeAt:      string | null;
   lastScanTriggerAt: string | null;
+  nextSweepAt:       string | null;
   pendingChanges:    number;
   restarts:          number;
   sweepIntervalSeconds: number;
@@ -109,6 +110,9 @@ export function getWatcherSnapshot(): WatcherSnapshot {
     watchedPath: state.watchedPath,
     lastChangeAt: state.lastChangeAt?.toISOString() ?? null,
     lastScanTriggerAt: state.lastScanTriggerAt?.toISOString() ?? null,
+    nextSweepAt: state.mechanism === "sweep" && state.configured && state.online
+      ? new Date(state.lastSweepAt + state.sweepIntervalMs).toISOString()
+      : null,
     pendingChanges: state.pendingChanges,
     restarts: state.restarts,
     sweepIntervalSeconds: Math.round(state.sweepIntervalMs / 1000),
@@ -331,6 +335,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
       clearPendingScan();
       state.watchedPath = reach.path;
       state.eventsUnsupported = false;
+      state.lastSweepAt = Date.now();
     }
 
     if (indexingPaused) {

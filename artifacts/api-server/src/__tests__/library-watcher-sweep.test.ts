@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 
 const configuredPath = "/mnt/nas/photos";
 let now = 1_000_000;
+let intervalSeconds = 10;
 const startedScans: Array<{ nasPath: string; profile: string }> = [];
 
 const appSettingsTable = {
@@ -26,7 +27,7 @@ const db = {
       limit: async () => [{
         nasPath: configuredPath,
         indexingPaused: false,
-        watcherPollIntervalSeconds: 10,
+        watcherPollIntervalSeconds: intervalSeconds,
       }],
     }),
   }),
@@ -76,6 +77,7 @@ test("falls back to sweep mode and scans at the configured NAS interval", async 
   assert.equal(snapshot.state, "watching");
   assert.equal(snapshot.mechanism, "sweep");
   assert.equal(snapshot.sweepIntervalSeconds, 10);
+  assert.equal(snapshot.nextSweepAt, new Date(now + 10_000).toISOString());
   assert.equal(snapshot.watchedPath, configuredPath);
   assert.deepEqual(startedScans, []);
 
@@ -86,4 +88,10 @@ test("falls back to sweep mode and scans at the configured NAS interval", async 
   snapshot = getWatcherSnapshot();
   assert.deepEqual(startedScans, [{ jobType: "SCAN", nasPath: configuredPath, profile: "QUICK" }]);
   assert.ok(snapshot.lastScanTriggerAt, "sweep should record when its scan was triggered");
+  assert.equal(snapshot.nextSweepAt, new Date(now + 10_000).toISOString());
+
+  intervalSeconds = 30;
+  await runWatcherHeartbeat();
+  snapshot = getWatcherSnapshot();
+  assert.equal(snapshot.nextSweepAt, new Date(now + 30_000).toISOString());
 });
