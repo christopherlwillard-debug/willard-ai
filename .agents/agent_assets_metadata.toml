@@ -1,14 +1,8 @@
 uploads = []
+outputs = []
 
 [[generated]]
 id = "sgjURByiru3c287oI90cq"
 uri = "file://artifacts/willard-mobile/assets/images/icon.png"
 type = "image"
 title = "willard-ai-app-icon"
-
-[[outputs]]
-id = "3CZsa2lgnYHgkUdTKvSf-"
-uri = "file://willard-hotfix.zip"
-type = "unspecified"
-title = "Willard AI offline hotfix"
-description = "Latest hotfix: the launcher now invokes the direct updater when git pull fails, and the updater uses curl.exe to avoid the PowerShell download stall. Also includes the PID, API readiness, and authentication fixes. Extract over the installation without replacing .env, logs, or node_modules. SHA-256: 8e76bd0393a0b85d41cf513ebb54225a91fd92f3c0d13a49df22ac472dde208c"
