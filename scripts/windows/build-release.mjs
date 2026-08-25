@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -21,8 +21,29 @@ async function copy(source, destination) {
   await cp(source, destination, { recursive: true });
 }
 
-async function pruneWindowsPayload() {
-  const pnpmStore = path.join(output, "api-runtime", "node_modules", ".pnpm");
+async function copyDereferenced(source, destination) {
+  const info = await lstat(source);
+  if (info.isSymbolicLink()) {
+    try {
+      return copyDereferenced(await realpath(source), destination);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+  }
+  if (info.isDirectory()) {
+    await mkdir(destination, { recursive: true });
+    for (const entry of await readdir(source)) {
+      await copyDereferenced(path.join(source, entry), path.join(destination, entry));
+    }
+    return;
+  }
+  await mkdir(path.dirname(destination), { recursive: true });
+  await cp(source, destination);
+}
+
+async function pruneWindowsPayload(payloadRoot) {
+  const pnpmStore = path.join(payloadRoot, "node_modules", ".pnpm");
   try {
     const entries = await readdir(pnpmStore);
     for (const entry of entries) {
@@ -35,8 +56,7 @@ async function pruneWindowsPayload() {
   }
 
   const onnxRoot = path.join(
-    output,
-    "api-runtime",
+    payloadRoot,
     "node_modules",
     ".pnpm",
     "onnxruntime-node@1.24.3",
@@ -52,12 +72,11 @@ async function pruneWindowsPayload() {
 
   try {
     const webEntries = await readdir(
-      path.join(output, "api-runtime", "node_modules", ".pnpm"),
+      path.join(payloadRoot, "node_modules", ".pnpm"),
     );
     for (const entry of webEntries.filter((name) => name.startsWith("onnxruntime-web@"))) {
       const webDist = path.join(
-        output,
-        "api-runtime",
+        payloadRoot,
         "node_modules",
         ".pnpm",
         entry,
@@ -84,8 +103,12 @@ async function main() {
 
   await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv, stdio: "inherit" });
   await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
-  await run(pnpmCommand, ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", path.join(output, "api-runtime")], { cwd: root, stdio: "inherit" });
-  await pruneWindowsPayload();
+  const deployOutput = path.join(output, ".api-deploy");
+  const apiOutput = path.join(output, "api-runtime");
+  await run(pnpmCommand, ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", deployOutput], { cwd: root, stdio: "inherit" });
+  await pruneWindowsPayload(deployOutput);
+  await copyDereferenced(deployOutput, apiOutput);
+  await rm(deployOutput, { recursive: true, force: true });
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
   await copy(path.join(root, "artifacts/api-server/dist"), path.join(output, "api-runtime/dist"));

@@ -128,6 +128,16 @@ function Wait-Ready($url, $label) {
 function Ensure-Env {
   Ensure-Folders
   if (Test-Path $EnvFile) { return $true }
+  $legacyEnv = Join-Path $env:SystemDrive "Willards-Media-Center\.env"
+  if (Test-Path $legacyEnv) {
+    $databaseLine = Get-Content $legacyEnv | Where-Object { $_ -match "^DATABASE_URL=" } | Select-Object -First 1
+    $secretLine = Get-Content $legacyEnv | Where-Object { $_ -match "^SESSION_SECRET=" } | Select-Object -First 1
+    if ($databaseLine -and $databaseLine -notmatch "yourpassword") {
+      @($databaseLine, $secretLine, "PORT=8080") | Where-Object { $_ } | Set-Content $EnvFile -Encoding UTF8
+      Good "Existing database settings were found and reused."
+      return $true
+    }
+  }
   @"
 DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/willard
 PORT=8080
@@ -198,7 +208,11 @@ function Try-Update {
       throw "The update could not be installed; the previous version was restored."
     }
   } catch {
-    Warn "Update check skipped: $($_.Exception.Message)"
+    $statusCode = 0
+    try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($statusCode -ne 404) {
+      Warn "Update check skipped: $($_.Exception.Message)"
+    }
   }
 }
 
