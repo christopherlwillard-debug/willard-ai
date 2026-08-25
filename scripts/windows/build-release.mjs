@@ -9,6 +9,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
 const version = process.env.WILLARD_VERSION || "0.1.0";
 const nodeRuntime = process.env.WILLARD_NODE_RUNTIME;
+const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const webBuildEnv = {
+  ...process.env,
+  PORT: process.env.PORT || "5000",
+  BASE_PATH: process.env.BASE_PATH || "/",
+};
 
 async function copy(source, destination) {
   await mkdir(path.dirname(destination), { recursive: true });
@@ -21,9 +27,9 @@ async function main() {
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
 
-  await run("pnpm", ["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, stdio: "inherit" });
-  await run("pnpm", ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
-  await run("pnpm", ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", path.join(output, "api-runtime")], { cwd: root, stdio: "inherit" });
+  await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv, stdio: "inherit" });
+  await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
+  await run(pnpmCommand, ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", path.join(output, "api-runtime")], { cwd: root, stdio: "inherit" });
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
   await copy(path.join(root, "artifacts/api-server/dist"), path.join(output, "api-runtime/dist"));

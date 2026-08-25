@@ -66,6 +66,13 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /sha256.*match/i);
 });
 
+test("Windows release builds provide Vite's required build-time environment", () => {
+  assert.match(releaseStager, /PORT: process\.env\.PORT \|\| "5000"/);
+  assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);
+  assert.match(workflow, /PORT: "5000"/);
+  assert.match(workflow, /BASE_PATH: "\/"/);
+});
+
 test("developer startup launches the API directly and fails when that process exits", () => {
   assert.doesNotMatch(developerLauncher, /Start-Process -FilePath "cmd\.exe"/);
   assert.match(developerLauncher, /--env-file=\$envFile/);
