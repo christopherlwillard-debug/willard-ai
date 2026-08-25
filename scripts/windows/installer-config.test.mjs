@@ -174,10 +174,9 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
   assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
-  assert.match(developerLauncher, /\$launcherChanged = \[bool\]/);
-  assert.ok(developerLauncher.includes('scripts[/\\\\]launcher[/\\\\]'));
-  assert.match(developerLauncher, /Restarting with the updated launcher/);
-  assert.match(developerLauncher, /-File", \$PSCommandPath/);
+  assert.doesNotMatch(developerLauncher, /git -C \$Root pull/);
+  assert.doesNotMatch(developerLauncher, /Checking for safe updates/);
+  assert.doesNotMatch(developerLauncher, /Start-Process -FilePath \$powershellCommand/);
   assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" \$apiReadyTimeout \$services\.api\.Id/);
   assert.match(developerLauncher, /\$apiReadyTimeout = 180/);
   assert.doesNotMatch(developerLauncher, /automatic restart/);
@@ -192,6 +191,12 @@ test("developer startup launches the API directly and fails when that process ex
   assert.doesNotMatch(launcherCommon, /\$pid\s*=/i);
   assert.match(launcherCommon, /StatusCode -eq 200/);
   assert.match(developerLauncher, /Save-TrackedPids \$apiProc\.Id \$null/);
+});
+
+test("developer setup does not require or initialize GitHub updates", () => {
+  assert.doesNotMatch(setupLauncher, /Enable one-click updates from GitHub/);
+  assert.doesNotMatch(setupLauncher, /git -C \$Root init/);
+  assert.doesNotMatch(setupLauncher, /git -C \$Root fetch/);
 });
 
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {

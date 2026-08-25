@@ -1,5 +1,4 @@
-# Launch Willard AI - one automatic path for first launch, restart, update,
-# dependency repair, and recoverable startup failures.
+# Launch Willard AI from the local developer installation.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
@@ -90,42 +89,6 @@ if (-not (Test-Path (Join-Path $Root ".env"))) {
         "Neither .env nor .env.example is available in the application folder."
 }
 
-# -- Safe update and dependency repair -----------------------------------------
-$apiSourceChanged = $false
-$launcherChanged = $false
-$updateLog = Join-Path $LogDir "update.log"
-if ((Test-Path (Join-Path $Root ".git")) -and (Test-Command "git")) {
-    Write-Info "Checking for safe updates..."
-    $savedPref = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    $prevHead = (& git -C $Root rev-parse HEAD 2>$null)
-    & git -C $Root pull --ff-only origin $GithubBranch *>> $updateLog
-    $pullOk = ($LASTEXITCODE -eq 0)
-    $newHead = (& git -C $Root rev-parse HEAD 2>$null)
-    if ($pullOk -and $prevHead -and $newHead -and ($prevHead -ne $newHead)) {
-        $changedFiles = (& git -C $Root diff --name-only $prevHead $newHead 2>$null)
-        $apiSourceChanged = [bool]($changedFiles -match "artifacts[/\\]api-server[/\\]src")
-        $launcherChanged = [bool]($changedFiles -match "scripts[/\\]launcher[/\\]")
-        Write-Ok "Safe updates applied"
-    } elseif ($pullOk) {
-        Write-Ok "Already up to date"
-    } else {
-        Add-Content $updateLog "[launcher] git pull failed; current files were left unchanged."
-        Write-Warn "Update check was unavailable; continuing with this copy."
-        Write-Host ("  Details: " + $updateLog) -ForegroundColor DarkGray
-    }
-    $ErrorActionPreference = $savedPref
-}
-if ($launcherChanged) {
-    Write-Info "Restarting with the updated launcher..."
-    $powershellCommand = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
-    if (-not $powershellCommand) { $powershellCommand = Join-Path $PSHOME "powershell.exe" }
-    Start-Process -FilePath $powershellCommand `
-        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath) `
-        -WorkingDirectory $Root -WindowStyle Normal
-    exit 0
-}
-
 $installLog = Join-Path $LogDir "setup.log"
 $dependencyMarkerPath = Join-Path $LogDir "dependencies-ready.json"
 $dependencySources = @(
@@ -168,9 +131,9 @@ if ($dependenciesReady) {
     Write-Ok "Application components ready"
 }
 
-# -- Build when first-run or after an API update -------------------------------
+# -- Build when first-run or after a local dependency change -------------------
 $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
-if ($apiSourceChanged -or -not (Test-Path $apiDist)) {
+if (-not (Test-Path $apiDist)) {
     $buildLog = Join-Path $LogDir "startup-build.log"
     $buildCode = Invoke-LoggedCommand "Preparing the library service..." $buildLog {
         & $pnpmCommand --filter @workspace/api-server run build

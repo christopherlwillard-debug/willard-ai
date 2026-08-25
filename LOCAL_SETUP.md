@@ -36,7 +36,7 @@ current when Windows launches them.
 
 | File | What it does |
 |------|--------------|
-| **`Start Willard AI.bat`** | The underlying launcher used by the Willard Media Center shortcuts; checks everything, safely updates/repairs what is needed, starts the app, and opens it |
+| **`Start Willard AI.bat`** | The underlying launcher used by the Willard Media Center shortcuts; checks the local installation, starts the app, and opens it |
 | **`Stop Willard AI.bat`** | Advanced manual troubleshooting control: cleanly shuts the app down |
 | **`Repair Willard AI.bat`** | Advanced manual troubleshooting control: fixes common problems |
 | **`Update Willard AI.bat`** | Advanced manual troubleshooting control: forces an update outside normal startup |
@@ -47,7 +47,7 @@ directly from the project folder. It will:
 
 1. Check that Node.js, pnpm, and PostgreSQL are installed (and tell you exactly
    what to install if something is missing).
-2. Safely check for updates and refresh dependencies when needed.
+2. Use the local application files without requiring GitHub or an internet connection.
 3. Check your `.env` file exists and the database is reachable, then apply safe
    database migrations.
 4. Start or recover the API server and web app in the background (logs go to the `logs/`

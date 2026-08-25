@@ -52,7 +52,6 @@ function Stop-Willard {
 try {
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-  $env:WILLARD_SKIP_UPDATE = "1"
   $env:DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/willard"
   $env:SESSION_SECRET = "windows-startup-smoke-session-secret"
   @(
@@ -99,5 +98,4 @@ exit /b 1
 } finally {
   try { Stop-Willard } catch {}
   Remove-Item $ShimDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item Env:\WILLARD_SKIP_UPDATE -ErrorAction SilentlyContinue
 }

@@ -91,37 +91,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "API server built"
 
-# -- Enable one-click updates (optional) -------------------------------------
-if ($GithubRepo -notmatch 'OWNER') {
-    Write-Host ""
-    $updateAnswer = Read-Host "  Enable one-click updates from GitHub? (Y/n)"
-    if ($updateAnswer -notmatch '^[Nn]') {
-        if (Test-Command "git") {
-            $gitDir = Join-Path $Root ".git"
-            if (-not (Test-Path $gitDir)) {
-                Write-Info "Setting up one-click updates from GitHub..."
-                $updateLog = Join-Path $LogDir "setup-update.log"
-                $savedPref = $ErrorActionPreference
-                $ErrorActionPreference = "SilentlyContinue"
-                & git -C $Root init *>> $updateLog
-                & git -C $Root remote add origin $GithubRepo *>> $updateLog
-                & git -C $Root fetch origin $GithubBranch *>> $updateLog
-                & git -C $Root reset --hard "origin/$GithubBranch" *>> $updateLog
-                $ErrorActionPreference = $savedPref
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Ok "Updates enabled. Use 'Update Willard AI.bat' to get future fixes."
-                } else {
-                    Write-Warn "Could not connect to GitHub right now - run 'Update Willard AI.bat' later to retry."
-                }
-            } else {
-                Write-Ok "Update channel already configured."
-            }
-        } else {
-            Write-Info "Git not installed. 'Update Willard AI.bat' will download scripts directly from GitHub."
-        }
-    }
-}
-
 # -- Shortcuts -----------------------------------------------------------------
 $startBatch = Join-Path $Root "Start Willard AI.bat"
 $iconCandidates = @(
