@@ -246,8 +246,8 @@ function Get-ProcessIdentity($processId) {
 
 function Test-ProcessIdentity($tracked) {
     if (-not $tracked) { return $false }
-    $pid = if ($tracked.pid) { $tracked.pid } else { $tracked }
-    $current = Get-ProcessIdentity $pid
+    $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
+    $current = Get-ProcessIdentity $trackedProcessId
     if (-not $current) { return $false }
     # Refuse to act on legacy PID-only records. A reused PID must never be
     # mistaken for a Willard process.

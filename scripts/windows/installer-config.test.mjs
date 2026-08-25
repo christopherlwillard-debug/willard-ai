@@ -93,6 +93,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.doesNotMatch(developerLauncher, /Show-Failure \$friendly \$technical/);
   assert.match(launcherCommon, /Get-CimInstance Win32_Process/);
   assert.match(launcherCommon, /Test-ProcessIdentity/);
+  assert.doesNotMatch(launcherCommon, /\$pid\s*=/i);
   assert.match(launcherCommon, /StatusCode -eq 200/);
   assert.match(developerLauncher, /Save-TrackedPids \$apiProc\.Id \$null/);
 });

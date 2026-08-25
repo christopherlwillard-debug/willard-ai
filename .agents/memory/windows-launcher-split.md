@@ -14,3 +14,9 @@ Both launchers must persist executable path, command line, creation identity, an
 **Why:** Numeric PID cleanup can terminate an unrelated reused process, permissive readiness can accept error pages, and caching before post-update health suppresses recovery retries.
 
 **How to apply:** Treat process ownership and post-update readiness as one lifecycle contract across developer startup, packaged startup, installer upgrades, and repair flows.
+
+PowerShell variable names are case-insensitive, so never use `$pid` for a local process identifier: it aliases the read-only automatic `$PID` variable and fails during recovery.
+
+**Why:** Interrupted-launch recovery previously failed before validating tracked processes because assigning `$pid` raised `VariableNotWritable`.
+
+**How to apply:** Use descriptive names such as `$trackedProcessId` in every launcher script and keep a regression assertion against `$pid =`.
