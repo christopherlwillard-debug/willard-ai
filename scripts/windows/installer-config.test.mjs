@@ -67,6 +67,11 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /sha256.*match/i);
 });
 
+test("clean Windows payload includes a one-click launcher", () => {
+  assert.match(releaseStager, /Start Willard Media Center\.bat/);
+  assert.match(releaseValidator, /Start Willard Media Center\.bat/);
+});
+
 test("Windows release builds provide Vite's required build-time environment", () => {
   assert.match(releaseStager, /PORT: process\.env\.PORT \|\| "5000"/);
   assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);

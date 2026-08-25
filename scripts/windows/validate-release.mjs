@@ -11,6 +11,7 @@ const requiredFiles = [
   "version.json",
   "runtime/node.exe",
   "desktop/WillardMediaCenter.ps1",
+  "Start Willard Media Center.bat",
   "desktop/desktop-web-server.mjs",
   "desktop/release-contract.mjs",
   "api-runtime/dist/index.mjs",
