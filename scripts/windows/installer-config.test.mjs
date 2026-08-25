@@ -73,6 +73,10 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(workflow, /BASE_PATH: "\/"/);
 });
 
+test("source updater finds the built-in Windows curl executable", () => {
+  assert.match(updater, /SystemRoot.*System32\\curl\.exe/);
+});
+
 test("developer startup launches the API directly and fails when that process exits", () => {
   assert.doesNotMatch(developerLauncher, /Start-Process -FilePath "cmd\.exe"/);
   assert.match(developerLauncher, /--env-file=\$envFile/);

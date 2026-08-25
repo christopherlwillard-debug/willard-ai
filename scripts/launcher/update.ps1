@@ -83,6 +83,10 @@ if (-not $updatedViaGit) {
         Write-Info "Downloading the complete source update..."
         $archiveUrl = "$GithubRepo/archive/refs/heads/$GithubBranch.zip"
         $curl = (Get-Command "curl.exe" -ErrorAction SilentlyContinue).Source
+        if (-not $curl) {
+            $systemCurl = Join-Path $env:SystemRoot "System32\curl.exe"
+            if (Test-Path $systemCurl) { $curl = $systemCurl }
+        }
         if ($curl) {
             & $curl --fail --location --silent --show-error --max-time 120 --output $archive $archiveUrl
             if ($LASTEXITCODE -ne 0) { throw "The direct source download failed with curl exit code $LASTEXITCODE." }
