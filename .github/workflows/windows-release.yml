@@ -38,6 +38,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install PostgreSQL for the source launcher smoke test
+        shell: pwsh
+        run: |
+          choco install postgresql16 --params="/Password:postgres" --no-progress --yes
+          $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object -First 1
+          if (-not $service) { throw "PostgreSQL service was not installed." }
+          Start-Service $service.Name
+          $env:PGPASSWORD = "postgres"
+          & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
+          & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
+
+      - name: Verify source launcher startup and failure diagnostics
+        shell: pwsh
+        run: .\scripts\windows\startup-smoke.ps1
+
       - name: Download the bundled Windows Node runtime
         shell: pwsh
         run: |

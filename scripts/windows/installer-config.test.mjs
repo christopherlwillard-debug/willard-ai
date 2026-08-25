@@ -13,6 +13,7 @@ const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.
 const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
+const startupSmoke = await readFile(new URL("./startup-smoke.ps1", import.meta.url), "utf8");
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
@@ -191,6 +192,20 @@ test("developer startup launches the API directly and fails when that process ex
   assert.doesNotMatch(launcherCommon, /\$pid\s*=/i);
   assert.match(launcherCommon, /StatusCode -eq 200/);
   assert.match(developerLauncher, /Save-TrackedPids \$apiProc\.Id \$null/);
+});
+
+test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
+  assert.match(workflow, /startup-smoke\.ps1/);
+  assert.match(workflow, /Install PostgreSQL for the source launcher smoke test/);
+  assert.match(startupSmoke, /Start Willard AI\.bat/);
+  assert.match(startupSmoke, /127\.0\.0\.1:8080\/api\/healthz/);
+  assert.match(startupSmoke, /127\.0\.0\.1:5000/);
+  assert.match(startupSmoke, /Get-CimInstance Win32_Process/);
+  assert.match(startupSmoke, /deliberate web startup failure/);
+  assert.match(startupSmoke, /web\.log/);
+  assert.match(startupSmoke, /scripts\\launcher\\stop\.ps1/);
+  assert.doesNotMatch(startupSmoke, /desktop\\WillardMediaCenter\.ps1/);
+  assert.match(config, /WillardMediaCenter\.ps1/);
 });
 
 test("installer coordinates upgrades and repair reports failures", async () => {
