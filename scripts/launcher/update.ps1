@@ -1,166 +1,134 @@
-# Update Willard AI - pulls the latest fixes from GitHub.
-# Uses git pull when git is available; falls back to direct file download.
+# Update Willard AI from a published, checksum-verified Windows release.
+# This command is intentionally separate from the normal startup path.
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
-Write-Banner "Checking for updates..."
-
-if ($GithubRepo -match 'OWNER') {
-    Write-Host ""
-    Write-Bad "Update channel is not configured yet."
-    Write-Host ""
-    Write-Host "  To enable one-click updates:" -ForegroundColor White
-    Write-Host "    1. Create a public GitHub repository for Willard AI." -ForegroundColor Gray
-    Write-Host "    2. Open scripts\launcher\common.ps1 in Notepad." -ForegroundColor Gray
-    Write-Host "    3. Replace OWNER with your GitHub username on the GithubRepo line." -ForegroundColor Gray
-    Write-Host "    4. Run this again." -ForegroundColor Gray
-    Pause-BeforeClose; exit 1
-}
+Write-Banner "Updating Willard AI..."
 
 $updateLog = Join-Path $LogDir "update.log"
-$hasGit    = Test-Command "git"
-$hasGitDir = Test-Path (Join-Path $Root ".git")
-$updatedViaGit = $false
+$manifestUrl = "$GithubRepo/releases/latest/download/release-manifest.json"
+$archive = Join-Path $env:TEMP "willard-source-update.zip"
+$stage = Join-Path $env:TEMP ("willard-source-" + [guid]::NewGuid().ToString())
+$backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
+$backupReady = $false
 
-# Strategy A: git pull (fastest - only downloads what changed)
-if ($hasGit -and $hasGitDir) {
-    Write-Info "Downloading updates..."
-    $savedPref = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    $prevHead = (& git -C $Root rev-parse HEAD 2>$null)
-    & git -C $Root pull --ff-only origin $GithubBranch *>> $updateLog
-    $pullOk = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $savedPref
-    if ($pullOk) {
-        $newHead = (& git -C $Root rev-parse HEAD 2>$null)
-        if ($prevHead -eq $newHead) {
-            Write-Ok "Already up to date - no changes."
-            Pause-BeforeClose; exit 0
-        }
-        Write-Ok "Downloaded latest updates."
-        $updatedViaGit = $true
-        # Check if API server source changed so we know whether to rebuild
-        $savedPref = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
-        $changedFiles = (& git -C $Root diff --name-only $prevHead $newHead 2>$null)
-        $ErrorActionPreference = $savedPref
-        $script:ApiSourceChanged = ($changedFiles -match "artifacts[/\\]api-server[/\\]src")
+function Update-Fail($stageName, $message) {
+    Write-Bad ("Update failed during " + $stageName + ".")
+    Write-Host ("  " + $message) -ForegroundColor DarkGray
+    Write-Host ("  Logs: " + $updateLog) -ForegroundColor Gray
+    Pause-BeforeClose
+    exit 1
+}
+
+function Invoke-Robocopy($source, $destination) {
+    & robocopy $source $destination /E /PURGE `
+        /XD (Join-Path $source "node_modules") (Join-Path $source "logs") (Join-Path $source ".git") `
+        /XF ".env" | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "File copy failed with robocopy exit code $LASTEXITCODE."
+    }
+}
+
+try {
+    Add-Content $updateLog ("[update] Started " + (Get-Date).ToString("o"))
+
+    Write-Info "Reading the latest release manifest..."
+    $manifestResponse = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+    $manifest = $manifestResponse.Content | ConvertFrom-Json
+    if (-not $manifest.version -or $manifest.version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
+        throw "The release manifest contains an invalid version."
+    }
+    if (-not $manifest.sourceArtifactUrl -or $manifest.sourceArtifactUrl -notmatch '^https://') {
+        throw "This release does not contain a secure developer-source download address."
+    }
+    if (-not $manifest.sourceSha256 -or $manifest.sourceSha256 -notmatch '^[a-fA-F0-9]{64}$') {
+        throw "The release manifest does not contain a valid developer-source checksum."
+    }
+
+    Write-Info ("Downloading Willard AI " + $manifest.version + "...")
+    Remove-Item $archive -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri $manifest.sourceArtifactUrl -OutFile $archive -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+    $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $manifest.sourceSha256.ToLowerInvariant()) {
+        throw "The downloaded release failed checksum verification."
+    }
+    Write-Ok "Release download verified"
+
+    Write-Info "Staging and validating the release..."
+    Expand-Archive -Path $archive -DestinationPath $stage -Force
+    $sourceRoot = if (Test-Path (Join-Path $stage "package.json")) {
+        Get-Item $stage
     } else {
-        Write-Warn "git pull failed - check your internet connection or see " + $updateLog
-        Write-Info "Trying direct download instead..."
+        Get-ChildItem $stage -Directory | Select-Object -First 1
     }
-}
-
-# Strategy B: set up git for the first time, then pull
-if ($hasGit -and -not $hasGitDir -and -not $updatedViaGit) {
-    Write-Info "Connecting to update channel (one-time setup)..."
-    $savedPref = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    & git -C $Root init *>> $updateLog
-    & git -C $Root remote add origin $GithubRepo *>> $updateLog
-    & git -C $Root fetch origin $GithubBranch *>> $updateLog
-    & git -C $Root reset --hard "origin/$GithubBranch" *>> $updateLog
-    $gitOk = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $savedPref
-    if ($gitOk) {
-        Write-Ok "Connected and updated. Future updates will use git pull."
-        $updatedViaGit = $true
-        $script:ApiSourceChanged = $true
-    } else {
-        Write-Warn "Could not connect via git - trying direct download instead..."
+    if (-not $sourceRoot -or -not (Test-Path (Join-Path $sourceRoot.FullName "package.json"))) {
+        throw "The developer-source archive was empty or malformed."
     }
-}
-
-# Strategy C: no git, or git failed - stage the complete source archive.
-if (-not $updatedViaGit) {
-    $archive = Join-Path $env:TEMP "willard-source-update.zip"
-    $stage = Join-Path $env:TEMP ("willard-source-" + [guid]::NewGuid().ToString())
-    $backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
-    try {
-        Write-Info "Downloading the complete source update..."
-        $archiveUrl = "$GithubRepo/archive/refs/heads/$GithubBranch.zip"
-        $curl = (Get-Command "curl.exe" -ErrorAction SilentlyContinue).Source
-        if (-not $curl) {
-            $systemCurl = Join-Path $env:SystemRoot "System32\curl.exe"
-            if (Test-Path $systemCurl) { $curl = $systemCurl }
+    $required = @(
+        "package.json",
+        "pnpm-lock.yaml",
+        "setup-db.cjs",
+        "artifacts\api-server\package.json",
+        "artifacts\willard-ai\package.json",
+        "scripts\launcher\start.ps1",
+        "scripts\launcher\setup.ps1"
+    )
+    foreach ($entry in $required) {
+        if (-not (Test-Path (Join-Path $sourceRoot.FullName $entry))) {
+            throw "The developer-source archive is incomplete: $entry"
         }
-        if ($curl) {
-            & $curl --fail --location --silent --show-error --max-time 120 --output $archive $archiveUrl
-            if ($LASTEXITCODE -ne 0) { throw "The direct source download failed with curl exit code $LASTEXITCODE." }
-        } else {
-            Invoke-WebRequest -Uri $archiveUrl -OutFile $archive -UseBasicParsing -TimeoutSec 120
-        }
-        Expand-Archive -Path $archive -DestinationPath $stage -Force
-        $sourceRoot = Get-ChildItem $stage -Directory | Select-Object -First 1
-        if (-not $sourceRoot) { throw "The downloaded source archive was empty." }
-        foreach ($required in @("package.json", "pnpm-lock.yaml", "setup-db.cjs",
-            "artifacts\api-server\package.json", "artifacts\willard-ai\package.json",
-            "scripts\launcher\start.ps1")) {
-            if (-not (Test-Path (Join-Path $sourceRoot.FullName $required))) {
-                throw "The downloaded source archive is incomplete: $required"
-            }
-        }
-        New-Item -ItemType Directory -Force $backup | Out-Null
-        # Keep user data, dependencies, and logs out of the source swap.
-        & robocopy $Root $backup /E /XD (Join-Path $Root "node_modules") (Join-Path $Root "logs") (Join-Path $Root ".git") /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -gt 7) { throw "Could not create an update backup." }
-        Get-ChildItem $sourceRoot.FullName -Force |
-            Where-Object { $_.Name -notin @(".env", "node_modules", "logs", ".git") } |
-            Copy-Item -Destination $Root -Recurse -Force
-        Write-Ok "Complete source update staged and installed."
-        $updatedViaGit = $true
-        $script:ApiSourceChanged = $true
-    } catch {
-        if (Test-Path $backup) {
-            Get-ChildItem $backup -Force | Copy-Item -Destination $Root -Recurse -Force
-            Write-Warn "The previous source copy was restored."
-        }
-        Add-Content $updateLog ("[update] Staged source update failed: " + $_)
-        Write-Warn "The complete update could not be installed. Details: $updateLog"
-        Pause-BeforeClose; exit 1
-    } finally {
-        Remove-Item $archive -Force -ErrorAction SilentlyContinue
-        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
-}
+    Write-Ok "Release contents validated"
 
-# Refresh packages
-Write-Info "Refreshing packages..."
-$installLog = Join-Path $LogDir "update-install.log"
-$savedPref = $ErrorActionPreference
-$ErrorActionPreference = "SilentlyContinue"
-& pnpm install --ignore-scripts *> $installLog
-$installOk = ($LASTEXITCODE -eq 0)
-$ErrorActionPreference = $savedPref
-if ($installOk) {
-    Write-Ok "Packages up to date."
-} else {
-    Write-Warn "Package refresh had a problem. The update may still work - see " + $installLog
-}
+    Write-Info "Backing up the current installation..."
+    New-Item -ItemType Directory -Force $backup | Out-Null
+    Invoke-Robocopy $Root $backup
+    $backupReady = $true
 
-# Rebuild API server only when source files changed
-if ($script:ApiSourceChanged -ne $false) {
-    Write-Info "Rebuilding API server..."
+    Write-Info "Installing the verified release..."
+    Invoke-Robocopy $sourceRoot.FullName $Root
+
+    Write-Info "Refreshing local packages..."
+    $installLog = Join-Path $LogDir "update-install.log"
+    $pnpmCommand = Get-WillardPnpmCommand
+    if (-not $pnpmCommand) { throw "pnpm.cmd or pnpm.exe could not be found." }
+    & $pnpmCommand install --ignore-scripts *> $installLog
+    if ($LASTEXITCODE -ne 0) {
+        throw "Package refresh failed. See $installLog."
+    }
+
+    Write-Info "Rebuilding the library service..."
     $buildLog = Join-Path $LogDir "update-build.log"
-    $savedPref = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    & pnpm --filter @workspace/api-server run build *> $buildLog
-    $buildOk = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $savedPref
-    if ($buildOk) {
-        Write-Ok "API server rebuilt."
-    } else {
-        Show-Failure "API server build failed after update." ("Build failed - see " + $buildLog)
-        Pause-BeforeClose; exit 1
+    & $pnpmCommand --filter @workspace/api-server run build *> $buildLog
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $Root "artifacts\api-server\dist\index.mjs"))) {
+        throw "The API rebuild failed. See $buildLog."
     }
+
+    Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+    $backupReady = $false
+    Write-Ok ("Willard AI " + $manifest.version + " is ready.")
+    Write-Host "  Start Willard AI.bat to launch the updated local copy." -ForegroundColor White
+} catch {
+    $message = $_.Exception.Message
+    Add-Content $updateLog ("[update] " + $message)
+    if ($backupReady -and (Test-Path $backup)) {
+        try {
+            Write-Warn "Restoring the previous installation..."
+            Invoke-Robocopy $backup $Root
+            Write-Ok "The previous installation was restored."
+        } catch {
+            Add-Content $updateLog ("[update] Restore failed: " + $_.Exception.Message)
+            $message = $message + " Restore also failed; see the update log."
+        }
+    }
+    Update-Fail "release installation" $message
+} finally {
+    Remove-Item $archive -Force -ErrorAction SilentlyContinue
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host ""
-Write-Host "  Update complete." -ForegroundColor Green
-Write-Host "  Double-click 'Start Willard AI.bat' to launch with the latest version." -ForegroundColor White
-Write-Host ""
 Pause-BeforeClose
 exit 0

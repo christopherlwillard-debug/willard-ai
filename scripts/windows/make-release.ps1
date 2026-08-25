@@ -12,17 +12,25 @@ node (Join-Path $Root "scripts/windows/build-release.mjs")
 $releaseDir = Join-Path $Root "build\windows"
 $outputDir = Join-Path $Root "build\release"
 $zip = Join-Path $outputDir "WillardMediaCenter-$Version-windows-x64.zip"
+$sourceZip = Join-Path $outputDir "WillardMediaCenter-$Version-source.zip"
 $manifest = Join-Path $outputDir "release-manifest.json"
 New-Item -ItemType Directory -Force $outputDir | Out-Null
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
+Remove-Item $sourceZip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $releaseDir "*") -DestinationPath $zip -CompressionLevel Optimal
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 $artifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Version-windows-x64.zip"
+& git -C $Root archive --format=zip --output=$sourceZip HEAD
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sourceZip)) { throw "Could not create the developer source update ZIP." }
+$sourceHash = (Get-FileHash $sourceZip -Algorithm SHA256).Hash.ToLowerInvariant()
+$sourceArtifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Version-source.zip"
 @{
   product = "Willard Media Center"
   version = $Version
   artifactUrl = $artifactUrl
   sha256 = $hash
+  sourceArtifactUrl = $sourceArtifactUrl
+  sourceSha256 = $sourceHash
   notes = "See the release notes for this version."
   minimumWindowsVersion = "10"
 } | ConvertTo-Json | Set-Content $manifest -Encoding UTF8
@@ -30,5 +38,6 @@ $env:WILLARD_RELEASE_ZIP = $zip
 $env:WILLARD_RELEASE_MANIFEST = $manifest
  node (Join-Path $Root "scripts/windows/validate-release.mjs")
 Write-Host "Release ZIP: $zip"
+Write-Host "Source update ZIP: $sourceZip"
 Write-Host "Release manifest: $manifest"
 Write-Host "Next: compile installer/WillardMediaCenter.iss with Inno Setup and publish both files plus the manifest."

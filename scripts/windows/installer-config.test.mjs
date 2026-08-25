@@ -47,6 +47,9 @@ test("installer deliberately leaves external services outside its payload", () =
 test("release helper produces a checksum-bearing update artifact", () => {
   assert.match(releaseBuilder, /Compress-Archive/);
   assert.match(releaseBuilder, /Get-FileHash .*SHA256/);
+  assert.match(releaseBuilder, /git -C \$Root archive/);
+  assert.match(releaseBuilder, /sourceArtifactUrl/);
+  assert.match(releaseBuilder, /sourceSha256/);
   assert.match(releaseBuilder, /release-manifest\.json/);
 });
 
@@ -159,7 +162,8 @@ test("Windows release builds provide Vite's required build-time environment", ()
 });
 
 test("source updater finds the built-in Windows curl executable", () => {
-  assert.match(updater, /SystemRoot.*System32\\curl\.exe/);
+  assert.doesNotMatch(updater, /git -C \$Root pull/);
+  assert.match(updater, /Invoke-WebRequest.*sourceArtifactUrl/);
 });
 
 test("developer startup launches the API directly and fails when that process exits", () => {
@@ -222,11 +226,13 @@ test("installer coordinates upgrades and repair reports failures", async () => {
 
 test("developer fallback stages a complete source archive", async () => {
   const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
-  assert.match(updater, /archive\/refs\/heads/);
+  assert.match(updater, /sourceArtifactUrl/);
+  assert.match(updater, /sourceSha256/);
   assert.match(updater, /Expand-Archive/);
-  assert.match(updater, /The downloaded source archive is incomplete/);
+  assert.match(updater, /The developer-source archive was empty or malformed/);
+  assert.match(updater, /failed checksum verification/);
   assert.match(updater, /robocopy/);
-  assert.doesNotMatch(updater, /Downloading \+ \$filesToUpdate\.Count/);
+  assert.match(updater, /previous installation was restored/);
 });
 
 test("developer setup creates identity shortcuts for the batch launcher", () => {

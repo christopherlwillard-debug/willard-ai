@@ -120,4 +120,5 @@ jobs:
           files: |
             build/installer/WillardMediaCenter-${{ steps.version.outputs.version }}-Setup.exe
             build/release/WillardMediaCenter-${{ steps.version.outputs.version }}-windows-x64.zip
+            build/release/WillardMediaCenter-${{ steps.version.outputs.version }}-source.zip
             build/release/release-manifest.json
