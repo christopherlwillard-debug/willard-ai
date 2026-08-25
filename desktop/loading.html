@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Willard AI</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; background: #050617; color: white; }
+    body { display: grid; place-items: center; overflow: hidden; }
+    video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .shade { position: fixed; inset: 0; background: radial-gradient(circle at center, transparent 12%, rgba(5,6,23,.22) 52%, rgba(5,6,23,.86) 100%); }
+    main { position: relative; display: grid; justify-items: center; gap: 16px; padding: 24px; text-align: center; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: .32em; }
+    p { margin: 0; padding: 9px 16px; border: 1px solid rgba(207,246,255,.2); border-radius: 999px; background: rgba(2,8,25,.45); color: rgba(255,255,255,.78); font-size: 10px; letter-spacing: .24em; }
+  </style>
+</head>
+<body>
+  <video autoplay loop muted playsinline aria-hidden="true" src="../web/willard-loading.mp4"></video>
+  <div class="shade" aria-hidden="true"></div>
+  <main>
+    <h1>WILLARD_AI</h1>
+    <p id="status">PREPARING YOUR LIBRARY</p>
+  </main>
+  <script>
+    const status = document.getElementById("status");
+    const api = "http://127.0.0.1:8080/api/healthz";
+    const web = "http://127.0.0.1:5000";
+    async function ready(url, check) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) return false;
+        if (!check) return true;
+        const data = await response.json();
+        return data.status === "ok";
+      } catch { return false; }
+    }
+    async function waitForWillard() {
+      if (await ready(api, true) && await ready(web, false)) {
+        window.location.replace(web);
+        return;
+      }
+      window.setTimeout(waitForWillard, 800);
+    }
+    waitForWillard();
+  </script>
+</body>
+</html>

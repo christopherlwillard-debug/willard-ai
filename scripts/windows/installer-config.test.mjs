@@ -32,11 +32,17 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Get-SchemaFingerprint/);
   assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
   assert.match(launcher, /last-update-check\.txt/);
+  assert.match(launcher, /UpdateStage/);
+  assert.match(launcher, /checksum verification/);
+  assert.match(launcher, /Update \$script:UpdateStage skipped/);
   assert.match(launcher, /Test-ProcessIdentity/);
   assert.match(launcher, /StatusCode -eq 200/);
   assert.match(launcher, /The previous working release was restored/);
   assert.match(launcher, /Set-Content \$UpdateCheckFile/);
   assert.match(launcher, /-Stop/);
+  assert.match(launcher, /loading\.html/);
+  assert.match(launcher, /Start-Process \$LoadingScreen/);
+  assert.match(launcher, /UpdateStage/);
 });
 
 test("installer deliberately leaves external services outside its payload", () => {
@@ -150,6 +156,7 @@ test("Windows payload prunes non-Windows native dependencies and bundles only no
   assert.match(releaseStager, /pruneWindowsPayload/);
   assert.match(releaseStager, /darwin\|linux\|android\|freebsd\|arm64\|armv7/);
   assert.match(releaseStager, /nodeRuntime, "node\.exe"/);
+  assert.match(releaseStager, /desktop\/loading\.html/);
   assert.match(releaseValidator, /pg-types/);
   assert.match(releaseValidator, /isSymbolicLink/);
 });

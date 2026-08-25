@@ -14,11 +14,13 @@ $Api = Join-Path $InstallRoot "api-runtime\dist\index.mjs"
 $SetupDb = Join-Path $InstallRoot "api-runtime\setup-db.cjs"
 $Web = Join-Path $InstallRoot "web"
 $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
+$LoadingScreen = Join-Path $InstallRoot "desktop\loading.html"
 $ApiUrl = "http://127.0.0.1:8080/api/healthz"
 $WebUrl = "http://127.0.0.1:5000"
 $UpdateManifest = "https://github.com/christopherlwillard-debug/willard-ai/releases/latest/download/release-manifest.json"
 $script:WillardRunToken = [guid]::NewGuid().ToString()
 $script:UpdateBackup = $null
+$script:UpdateStage = "startup"
 
 function Say($message) { Write-Host "  $message" -ForegroundColor Gray }
 function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
@@ -156,14 +158,8 @@ function Test-Dependencies {
 }
 function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
-  if (Test-Path $UpdateCheckFile) {
-    try {
-      if (((Get-Date) - (Get-Item $UpdateCheckFile).LastWriteTime).TotalHours -lt 6) {
-        return
-      }
-    } catch {}
-  }
   try {
+    $script:UpdateStage = "manifest check"
     Say "Checking for a newer Willard release..."
     $remote = Invoke-RestMethod -Uri $UpdateManifest -TimeoutSec 8
     $local = Read-Version
@@ -173,14 +169,20 @@ function Try-Update {
       Set-Content $UpdateCheckFile (Get-Date).ToString("o")
       return
     }
-    if (-not $remote.artifactUrl -or -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") { throw "The release description is incomplete." }
+    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
+      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
+      throw "The release description is incomplete or unsafe."
+    }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"
     New-Item -ItemType Directory -Force (Split-Path $zip) | Out-Null
+    $script:UpdateStage = "release download"
     Say "Downloading Willard Media Center $($remote.version)..."
     Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $zip -TimeoutSec 120
+    $script:UpdateStage = "checksum verification"
     $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
+    $script:UpdateStage = "release validation"
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
     $required = @("version.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
@@ -191,12 +193,14 @@ function Try-Update {
     }
     $stagedVersion = (Get-Content (Join-Path $stage "version.json") -Raw | ConvertFrom-Json).version
     if ($stagedVersion -ne $remote.version) { throw "The downloaded release version does not match its manifest." }
+    $script:UpdateStage = "installation backup"
     Stop-Services
     $backup = Join-Path $DataRoot "backup-$local"
     Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item $InstallRoot $backup -Recurse -Force
     $script:UpdateBackup = $backup
     try {
+      $script:UpdateStage = "release installation"
       Copy-Item (Join-Path $stage "*") $InstallRoot -Recurse -Force
       foreach ($entry in $required) {
         if (-not (Test-Path (Join-Path $InstallRoot $entry))) { throw "Installed update is missing: $entry" }
@@ -211,7 +215,7 @@ function Try-Update {
     $statusCode = 0
     try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
     if ($statusCode -ne 404) {
-      Warn "Update check skipped: $($_.Exception.Message)"
+      Warn ("Update " + $script:UpdateStage + " skipped: " + $_.Exception.Message)
     }
   }
 }
@@ -233,6 +237,7 @@ try {
     exit 0
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
+  if (Test-Path $LoadingScreen) { Start-Process $LoadingScreen }
   Try-Update
   if (-not (Ensure-Env)) { exit 1 }
   if (-not (Test-Dependencies)) { exit 1 }
@@ -259,7 +264,7 @@ try {
     Set-Content $UpdateCheckFile (Get-Date).ToString("o")
   }
   Good "Media Center is ready."
-  Start-Process $WebUrl
+  if (-not (Test-Path $LoadingScreen)) { Start-Process $WebUrl }
 } catch {
   Stop-Services
   Restore-UpdateBackup
