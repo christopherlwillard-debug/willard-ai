@@ -1,8 +1,14 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "sgjURByiru3c287oI90cq"
 uri = "file://artifacts/willard-mobile/assets/images/icon.png"
 type = "image"
 title = "willard-ai-app-icon"
+
+[[outputs]]
+id = "3CZsa2lgnYHgkUdTKvSf-"
+uri = "file://willard-hotfix.zip"
+type = "unspecified"
+title = "Willard AI offline hotfix"
+description = "Contains the corrected Windows launcher, rebuilt API service, and authentication client fixes. Extract over the existing installation without replacing .env, logs, or node_modules. SHA-256: cc80173754eafda45744dadf6721f248269dc46934c2bc4ad150d9d65fb663fa"

@@ -81,7 +81,14 @@ if (-not $updatedViaGit) {
     $backup = Join-Path $LogDir ("update-backup-" + (Get-Date -Format "yyyyMMddHHmmss"))
     try {
         Write-Info "Downloading the complete source update..."
-        Invoke-WebRequest -Uri "$GithubRepo/archive/refs/heads/$GithubBranch.zip" -OutFile $archive -UseBasicParsing -TimeoutSec 120
+        $archiveUrl = "$GithubRepo/archive/refs/heads/$GithubBranch.zip"
+        $curl = (Get-Command "curl.exe" -ErrorAction SilentlyContinue).Source
+        if ($curl) {
+            & $curl --fail --location --silent --show-error --max-time 120 --output $archive $archiveUrl
+            if ($LASTEXITCODE -ne 0) { throw "The direct source download failed with curl exit code $LASTEXITCODE." }
+        } else {
+            Invoke-WebRequest -Uri $archiveUrl -OutFile $archive -UseBasicParsing -TimeoutSec 120
+        }
         Expand-Archive -Path $archive -DestinationPath $stage -Force
         $sourceRoot = Get-ChildItem $stage -Directory | Select-Object -First 1
         if (-not $sourceRoot) { throw "The downloaded source archive was empty." }
