@@ -50,6 +50,17 @@ try {
   throw error;
 }
 
+const sharpPackage = path.join(releaseDir, "api-runtime", "node_modules", "sharp", "package.json");
+try {
+  const sharpManifest = JSON.parse(await readFile(sharpPackage, "utf8"));
+  if (sharpManifest.version !== "0.35.2") {
+    throw new Error(`Packaged sharp must be 0.35.2, found ${sharpManifest.version || "unknown"}.`);
+  }
+} catch (error) {
+  if (error?.code === "ENOENT") throw new Error("Packaged sharp dependency is missing.");
+  throw error;
+}
+
 const manifest = JSON.parse(await readFile(path.join(releaseDir, "version.json"), "utf8"));
 if (manifest.product !== "Willard Media Center") throw new Error("Packaged release has the wrong product name.");
 if (manifest.version !== version) throw new Error(`version.json says ${manifest.version}, expected ${version}.`);

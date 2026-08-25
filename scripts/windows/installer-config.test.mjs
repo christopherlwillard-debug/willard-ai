@@ -65,6 +65,8 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
   assert.match(releaseValidator, /sha256.*match/i);
+  assert.match(releaseValidator, /sharp.*package\.json/);
+  assert.match(releaseValidator, /sharpManifest\.version !== "0\.35\.2"/);
 });
 
 test("clean Windows payload includes a one-click launcher", () => {
