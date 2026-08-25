@@ -166,9 +166,11 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(workflow, /BASE_PATH: "\/"/);
 });
 
-test("source updater finds the built-in Windows curl executable", () => {
-  assert.doesNotMatch(updater, /git -C \$Root pull/);
-  assert.match(updater, /Invoke-WebRequest.*sourceArtifactUrl/);
+test("developer updater is Git-first with a verified archive fallback", () => {
+  assert.match(updater, /gitCommand/);
+  assert.match(updater, /pull --ff-only origin/);
+  assert.match(updater, /sourceArtifactUrl/);
+  assert.match(updater, /failed checksum verification/);
 });
 
 test("developer startup launches the API directly and fails when that process exits", () => {
@@ -183,7 +185,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
   assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
-  assert.doesNotMatch(developerLauncher, /git -C \$Root pull/);
+  assert.doesNotMatch(developerLauncher, /pull --ff-only origin/);
   assert.doesNotMatch(developerLauncher, /Checking for safe updates/);
   assert.doesNotMatch(developerLauncher, /Start-Process -FilePath \$powershellCommand/);
   assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" \$apiReadyTimeout \$services\.api\.Id/);
@@ -202,10 +204,12 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /Save-TrackedPids \$apiProc\.Id \$null/);
 });
 
-test("developer setup does not require or initialize GitHub updates", () => {
-  assert.doesNotMatch(setupLauncher, /Enable one-click updates from GitHub/);
-  assert.doesNotMatch(setupLauncher, /git -C \$Root init/);
-  assert.doesNotMatch(setupLauncher, /git -C \$Root fetch/);
+test("developer setup enables one-click GitHub updates without affecting packaged installs", () => {
+  assert.match(setupLauncher, /Initialize-DeveloperGitCheckout/);
+  assert.match(launcherCommon, /init --quiet/);
+  assert.match(launcherCommon, /fetch --quiet origin/);
+  assert.match(launcherCommon, /One-click GitHub updates enabled/);
+  assert.match(updater, /signed release archive remains a fallback/);
 });
 
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
@@ -240,11 +244,21 @@ test("developer fallback stages a complete source archive", async () => {
   assert.match(updater, /previous installation was restored/);
 });
 
+test("developer updater preserves local data and rolls back failed Git updates", () => {
+  assert.match(updater, /status --porcelain/);
+  assert.match(updater, /reset --hard \$gitBefore/);
+  assert.match(updater, /previous developer version was restored/);
+  assert.match(updater, /--ignore-scripts/);
+  assert.match(updater, /api-server run build/);
+});
+
 test("developer setup creates identity shortcuts for the batch launcher", () => {
   assert.match(setupLauncher, /New-WillardShortcut/);
   assert.match(setupLauncher, /GetFolderPath\("Desktop"\)/);
   assert.match(setupLauncher, /GetFolderPath\("Programs"\)/);
   assert.match(setupLauncher, /Start Willard AI\.bat/);
+  assert.match(setupLauncher, /Update Willard AI\.bat/);
+  assert.match(setupLauncher, /Update Willard AI from GitHub/);
   assert.match(launcherCommon, /WScript\.Shell/);
   assert.match(launcherCommon, /WorkingDirectory/);
   assert.match(launcherCommon, /IconLocation/);

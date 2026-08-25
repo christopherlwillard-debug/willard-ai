@@ -31,10 +31,17 @@ First-install checklist:
    loading screen appears, the packaged ZIP is checksum-verified, and the
    installed version updates before the app opens.
 
-For a source checkout rather than a packaged release, run `Setup Willard AI.bat`
-once. It creates desktop and Start Menu shortcuts that point to
-`Start Willard AI.bat`, preserve the checkout as the working directory, and use
-the Willard icon when `installer\willard.ico` is present.
+For a developer source folder rather than a packaged release, run
+`Setup Willard AI.bat` once. It connects the folder to the public GitHub source
+branch, creates desktop and Start Menu shortcuts that point to
+`Start Willard AI.bat`, preserves the checkout as the working directory, and
+uses the Willard icon when `installer\willard.ico` is present. Future developer
+updates use `Update Willard AI.bat`; no manual ZIP download is required.
+
+The developer updater is separate from the packaged updater. Developer updates
+use Git and preserve `.env`, logs, PostgreSQL data, and media libraries.
+Packaged installations remain self-contained and use checksum-verified release
+artifacts without requiring Git.
 
 For a local pre-publication build, run
 `powershell -ExecutionPolicy Bypass -File .\scripts\windows\build-installer.ps1`

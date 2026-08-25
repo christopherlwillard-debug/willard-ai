@@ -26,21 +26,20 @@ The packaged installer is built by the Windows release pipeline. Inno Setup,
 code signing, and real Windows install/upgrade validation must run on a Windows
 build machine; they cannot be completed inside Replit's Linux environment.
 
-## Developer-folder fallback: use the Willard shortcut
+## Developer-folder setup: update with one click
 
-Once the one-time prerequisites below are installed, opening Willard Media Center
-uses one normal entry point in the project root. Run **`Setup Willard AI.bat`**
-once; setup creates **Willard Media Center** shortcuts on the desktop and in the
-Start Menu. Those shortcuts launch `Start Willard AI.bat` with the project folder
-as their working directory, so they work regardless of the folder that is
-current when Windows launches them.
+Once the one-time prerequisites below are installed, run **`Setup Willard AI.bat`**
+once. Setup connects this developer folder to the public Willard AI GitHub
+repository, then creates **Willard Media Center** shortcuts on the desktop and in
+the Start Menu. Those shortcuts launch `Start Willard AI.bat` with the project
+folder as their working directory.
 
 | File | What it does |
 |------|--------------|
 | **`Start Willard AI.bat`** | The underlying launcher used by the Willard Media Center shortcuts; checks the local installation, starts the app, and opens it |
 | **`Stop Willard AI.bat`** | Advanced manual troubleshooting control: cleanly shuts the app down |
 | **`Repair Willard AI.bat`** | Advanced manual troubleshooting control: fixes common problems |
-| **`Update Willard AI.bat`** | Advanced manual troubleshooting control: forces an update outside normal startup |
+| **`Update Willard AI.bat`** | Pulls the latest code from GitHub, refreshes packages only when needed, rebuilds the API when needed, and keeps local settings and media data |
 
 **To start:** open **Willard Media Center** from the desktop or Start Menu. For
 advanced troubleshooting, you can also double-click `Start Willard AI.bat`
@@ -48,7 +47,7 @@ directly from the project folder. It will:
 
 1. Check that Node.js, pnpm, and PostgreSQL are installed (and tell you exactly
    what to install if something is missing).
-2. Use the local application files without requiring GitHub or an internet connection.
+2. Use the local application files without contacting GitHub during normal startup.
 3. Check your `.env` file exists and the database is reachable, then apply safe
    database migrations.
 4. Start or recover the API server and web app in the background (logs go to the `logs/`
@@ -88,6 +87,7 @@ the developer-folder fallback, where the Start script checks all of them:
 |------|-----|---------|
 | **Node.js 24+** | Runs the API server and web app | https://nodejs.org (LTS or current) |
 | **pnpm** | Package manager for this monorepo | `npm install -g pnpm` |
+| **Git** | Keeps the developer folder connected for one-click updates | `winget install Git.Git` |
 | **PostgreSQL 14+** | The app's database | https://www.postgresql.org/download/windows/ |
 | **FFmpeg** | Thumbnails, video metadata, media conversion | `winget install Gyan.FFmpeg` then restart your terminal |
 
@@ -124,9 +124,18 @@ Open `.env` and set at least:
 The `.env` file is git-ignored and never committed.
 
 That's it — from now on, just open **Willard Media Center** from the desktop or
-Start Menu. The shortcut is separate from the browser PWA: it starts and checks
-the local services first, then opens the installed PWA or browser at the local
-app address.
+Start Menu. When you want a pushed update, double-click **Update Willard AI.bat**;
+you do not need to download or extract another ZIP. The updater keeps `.env`,
+logs, PostgreSQL data, and media libraries untouched. The shortcut is separate
+from the browser PWA: it starts the local services first, then opens the browser
+at the local app address.
+
+### Existing ZIP-based folders
+
+If this folder came from an older ZIP download, run **Setup Willard AI.bat** again.
+When it asks whether to connect updates to GitHub, answer **Y**. Setup safely
+connects the folder to the source branch while preserving `.env`, logs, and local
+runtime data. After that, use **Update Willard AI.bat** for future updates.
 
 ---
 

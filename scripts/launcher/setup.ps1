@@ -107,14 +107,20 @@ $iconCandidates = @(
 )
 $iconPath = $iconCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $shortcutTargets = @(
-    @{ Path = Join-Path ([Environment]::GetFolderPath("Desktop")) "Willard Media Center.lnk"; Label = "Desktop" },
-    @{ Path = Join-Path ([Environment]::GetFolderPath("Programs")) "Willard Media Center.lnk"; Label = "Start Menu" }
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Desktop")) "Willard Media Center.lnk"; Label = "Desktop"; Target = $startBatch; Description = "Start your local Willard Media Center" },
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Programs")) "Willard Media Center.lnk"; Label = "Start Menu"; Target = $startBatch; Description = "Start your local Willard Media Center" },
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Desktop")) "Update Willard AI.lnk"; Label = "Desktop update"; Target = (Join-Path $Root "Update Willard AI.bat"); Description = "Update Willard AI from GitHub" },
+    @{ Path = Join-Path ([Environment]::GetFolderPath("Programs")) "Update Willard AI.lnk"; Label = "Start Menu update"; Target = (Join-Path $Root "Update Willard AI.bat"); Description = "Update Willard AI from GitHub" }
 )
 if (Test-Path $startBatch) {
     foreach ($target in $shortcutTargets) {
+        if (-not (Test-Path $target.Target)) {
+            Write-Warn ("Could not create the " + $target.Label + " shortcut because its launcher was not found.")
+            continue
+        }
         try {
-            New-WillardShortcut -ShortcutPath $target.Path -TargetPath $startBatch `
-                -WorkingDirectory $Root -IconPath $iconPath
+            New-WillardShortcut -ShortcutPath $target.Path -TargetPath $target.Target `
+                -WorkingDirectory $Root -IconPath $iconPath -Description $target.Description
             Write-Ok ("Created " + $target.Label + " shortcut")
         } catch {
             Write-Warn ("Could not create the " + $target.Label + " shortcut: " + $_.Exception.Message)

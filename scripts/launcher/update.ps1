@@ -91,8 +91,11 @@ function Invoke-ArchiveFallback {
 try {
     Add-Content $updateLog ("[update] Started " + (Get-Date).ToString("o"))
     $gitCommand = Get-WillardGitCommand
+    $gitBefore = $null
+    $gitPulled = $false
 
     if ($gitCommand -and (Test-Path (Join-Path $Root ".git"))) {
+        Stop-TrackedProcesses | Out-Null
         $remote = Get-GitRemoteUrl $gitCommand
         if ($remote -ne $GithubRepo) {
             & $gitCommand -C $Root remote set-url origin $GithubRepo 2>$null
@@ -100,8 +103,9 @@ try {
         }
 
         $before = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
+        $gitBefore = $before
         if ($LASTEXITCODE -ne 0) { throw "This developer folder has an invalid Git checkout. Run setup again to repair it." }
-        $dirty = & $gitCommand -C $Root status --porcelain --untracked-files=no
+        $dirty = & $gitCommand -C $Root status --porcelain
         if ($dirty) {
             throw "Local code changes are present. Save or revert them before running Update Willard AI."
         }
@@ -111,6 +115,7 @@ try {
             & $gitCommand -C $Root pull --ff-only origin $GithubBranch
         }
         if ($pullCode -ne 0) { throw "GitHub could not update this folder. Check your connection or run setup again." }
+        $gitPulled = ($before -ne ((& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()))
         $after = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
         $changed = if ($before -ne $after) { @(& $gitCommand -C $Root diff --name-only $before $after) } else { @() }
         if ($changed.Count -eq 0) {
@@ -147,6 +152,15 @@ try {
         Invoke-ArchiveFallback
     }
 } catch {
+    if ($gitPulled -and $gitCommand -and $gitBefore) {
+        Write-Warn "The update could not be prepared. Restoring the previous code..."
+        & $gitCommand -C $Root reset --hard $gitBefore *> (Join-Path $LogDir "update-rollback.log")
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "The previous developer version was restored."
+        } else {
+            Add-Content $updateLog "[update] Git rollback failed; run git reset --hard $gitBefore from this folder."
+        }
+    }
     Add-Content $updateLog ("[update] " + $_.Exception.Message)
     Update-Fail "GitHub update" $_.Exception.Message
 }

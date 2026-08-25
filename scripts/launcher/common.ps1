@@ -164,7 +164,8 @@ function New-WillardShortcut {
         [Parameter(Mandatory = $true)][string]$ShortcutPath,
         [Parameter(Mandatory = $true)][string]$TargetPath,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
-        [string]$IconPath
+        [string]$IconPath,
+        [string]$Description = "Start your local Willard Media Center"
     )
 
     $shortcutDirectory = Split-Path -Parent $ShortcutPath
@@ -181,7 +182,7 @@ function New-WillardShortcut {
         $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\cmd.exe"
         $shortcut.Arguments = '/d /c ""' + $TargetPath + '""'
         $shortcut.WorkingDirectory = $WorkingDirectory
-        $shortcut.Description = "Start your local Willard Media Center"
+        $shortcut.Description = $Description
         if ($IconPath -and (Test-Path $IconPath)) {
             $shortcut.IconLocation = $IconPath + ",0"
         }
