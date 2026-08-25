@@ -7,6 +7,7 @@ const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", 
 const developerLauncher = await readFile(new URL("../launcher/start.ps1", import.meta.url), "utf8");
 const launcherCommon = await readFile(new URL("../launcher/common.ps1", import.meta.url), "utf8");
 const setupLauncher = await readFile(new URL("../launcher/setup.ps1", import.meta.url), "utf8");
+const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
 const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
 const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
