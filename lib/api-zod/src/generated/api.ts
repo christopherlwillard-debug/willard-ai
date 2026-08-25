@@ -209,7 +209,9 @@ export const UpdateSettingsBody = zod.object({
   "otherFilesDestination": zod.string().optional(),
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "onboardingDismissed": zod.boolean().optional(),
-  "celebrationShown": zod.boolean().optional()
+  "celebrationShown": zod.boolean().optional(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({

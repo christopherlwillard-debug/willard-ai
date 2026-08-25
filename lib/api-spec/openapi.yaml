@@ -1607,6 +1607,11 @@ components:
           type: ["string", "null"]
         celebrationShownAt:
           type: ["string", "null"]
+        optimizeProfile:
+          type: string
+          enum: [ARCHIVE, BALANCED, MAXIMUM]
+        rawConversionEnabled:
+          type: boolean
       required:
         - nasPath
         - lastScanAt
@@ -1635,6 +1640,11 @@ components:
         onboardingDismissed:
           type: boolean
         celebrationShown:
+          type: boolean
+        optimizeProfile:
+          type: string
+          enum: [ARCHIVE, BALANCED, MAXIMUM]
+        rawConversionEnabled:
           type: boolean
 
     NasTestInput:

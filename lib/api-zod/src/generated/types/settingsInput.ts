@@ -16,4 +16,6 @@ export interface SettingsInput {
   scanPerformance?: SettingsInputScanPerformance;
   onboardingDismissed?: boolean;
   celebrationShown?: boolean;
+  optimizeProfile?: 'ARCHIVE' | 'BALANCED' | 'MAXIMUM';
+  rawConversionEnabled?: boolean;
 }

@@ -24,4 +24,6 @@ export interface AppSettings {
   onboardingDismissedAt?: string | null;
   /** @nullable */
   celebrationShownAt?: string | null;
+  optimizeProfile?: 'ARCHIVE' | 'BALANCED' | 'MAXIMUM';
+  rawConversionEnabled?: boolean;
 }
