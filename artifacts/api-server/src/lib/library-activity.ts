@@ -1,5 +1,5 @@
 import { db, libraryActivityTable } from "@workspace/db";
-import { desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
 /**
@@ -69,9 +69,20 @@ export function describeChanges(c: ScanChangeCounts): string | null {
   return parts.join(", ");
 }
 
-export async function getRecentActivity(nasPath: string, limit = 20) {
+export async function getRecentActivity(
+  nasPath: string,
+  limit = 20,
+  kinds?: ActivityKind[],
+) {
+  const scope = kinds?.length
+    ? and(
+        eq(libraryActivityTable.nasPath, nasPath),
+        inArray(libraryActivityTable.kind, kinds),
+      )
+    : eq(libraryActivityTable.nasPath, nasPath);
+
   return db.select().from(libraryActivityTable)
-    .where(eq(libraryActivityTable.nasPath, nasPath))
+    .where(scope)
     .orderBy(desc(libraryActivityTable.createdAt), desc(libraryActivityTable.id))
     .limit(limit);
 }

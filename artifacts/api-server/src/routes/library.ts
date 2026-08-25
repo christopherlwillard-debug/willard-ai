@@ -9,7 +9,7 @@ import {
 import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
 import { getWatcherSnapshot } from "../lib/library-watcher";
-import { getRecentActivity, recordActivity } from "../lib/library-activity";
+import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/library-activity";
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
 
@@ -74,7 +74,11 @@ router.get("/library/activity", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
   if (!nasPath) { res.json({ entries: [] }); return; }
   const limit = Math.min(100, parseInt(req.query["limit"] as string) || 20);
-  const entries = await getRecentActivity(nasPath, limit);
+  const filter = req.query["kind"];
+  const kinds = filter === "watcher"
+    ? (["watcher_mode", "watcher_restart"] satisfies ActivityKind[])
+    : undefined;
+  const entries = await getRecentActivity(nasPath, limit, kinds);
   res.json({ entries });
 });
 
