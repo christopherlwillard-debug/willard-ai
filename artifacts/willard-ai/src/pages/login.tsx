@@ -85,7 +85,7 @@ function RecoveryKeyDisplay({ recoveryKey, onAcknowledge }: RecoveryKeyDisplayPr
 }
 
 export default function LoginPage() {
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   const { invalidate, setup } = useAuth();
   const [mode, setMode] = useState<Mode>(setup ? "setup" : "login");
   const [password, setPassword] = useState("");
@@ -98,6 +98,10 @@ export default function LoginPage() {
   const loginMutation = useLogin({
     mutation: {
       onSuccess: async () => {
+          // A previous failed attempt may still have its toast open while a
+          // retry succeeds. Do not leave a misleading password error over the
+          // authenticated app.
+          dismiss();
         await invalidate();
       },
       onError: (err: any) => {
