@@ -95,6 +95,26 @@ async function pruneWindowsPayload(payloadRoot) {
   }
 }
 
+async function compactWindowsDependencies(payloadRoot) {
+  const nodeModules = path.join(payloadRoot, "node_modules");
+  const pnpmStore = path.join(nodeModules, ".pnpm");
+  const sharedModules = path.join(pnpmStore, "node_modules");
+  for (const entry of await readdir(sharedModules).catch(() => [])) {
+    const source = path.join(sharedModules, entry);
+    const destination = path.join(nodeModules, entry);
+    try {
+      await lstat(destination);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      await copyDereferenced(source, destination);
+    }
+  }
+  await rm(pnpmStore, { recursive: true, force: true });
+  await rm(path.join(nodeModules, ".modules.yaml"), { force: true });
+  await rm(path.join(nodeModules, ".pnpm-workspace-state-v1.json"), { force: true });
+  await rm(path.join(nodeModules, ".bin"), { recursive: true, force: true });
+}
+
 async function main() {
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("WILLARD_VERSION must be MAJOR.MINOR.PATCH.");
   if (!nodeRuntime) throw new Error("Set WILLARD_NODE_RUNTIME to a directory containing the Windows node.exe runtime.");
@@ -105,9 +125,22 @@ async function main() {
   await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
   const deployOutput = path.join(output, ".api-deploy");
   const apiOutput = path.join(output, "api-runtime");
-  await run(pnpmCommand, ["--filter", "@workspace/api-server", "deploy", "--prod", "--legacy", deployOutput], { cwd: root, stdio: "inherit" });
+  await run(
+    pnpmCommand,
+    [
+      "--filter",
+      "@workspace/api-server",
+      "deploy",
+      "--prod",
+      "--no-optional",
+      "--config.inject-workspace-packages=true",
+      deployOutput,
+    ],
+    { cwd: root, stdio: "inherit" },
+  );
   await pruneWindowsPayload(deployOutput);
   await copyDereferenced(deployOutput, apiOutput);
+  await compactWindowsDependencies(apiOutput);
   await rm(deployOutput, { recursive: true, force: true });
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));

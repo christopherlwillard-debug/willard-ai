@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, lstat, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,16 @@ for (const requiredReference of [
   if (!launcher.includes(requiredReference)) {
     throw new Error(`Packaged launcher does not reference required payload: ${requiredReference}`);
   }
+}
+
+const pgTypes = path.join(releaseDir, "api-runtime", "node_modules", "pg-types");
+try {
+  if ((await lstat(pgTypes)).isSymbolicLink()) {
+    throw new Error("Packaged pg-types dependency is a symbolic link; Windows extraction would break it.");
+  }
+} catch (error) {
+  if (error?.code === "ENOENT") throw new Error("Packaged pg-types dependency is missing.");
+  throw error;
 }
 
 const manifest = JSON.parse(await readFile(path.join(releaseDir, "version.json"), "utf8"));

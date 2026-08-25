@@ -76,6 +76,8 @@ test("Windows payload prunes non-Windows native dependencies and bundles only no
   assert.match(releaseStager, /pruneWindowsPayload/);
   assert.match(releaseStager, /darwin\|linux\|android\|freebsd\|arm64\|armv7/);
   assert.match(releaseStager, /nodeRuntime, "node\.exe"/);
+  assert.match(releaseValidator, /pg-types/);
+  assert.match(releaseValidator, /isSymbolicLink/);
 });
 
 test("Windows release builds provide Vite's required build-time environment", () => {
