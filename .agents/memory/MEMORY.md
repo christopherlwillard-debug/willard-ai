@@ -34,3 +34,4 @@
 - [Viewer regression harness](viewer-regression-harness.md) — isolate auth and hide the injected dev banner so repeated viewer E2E runs exercise media behavior, not workspace state
 - [Windows release build environment](windows-release-build-env.md) — package builds need Vite's PORT and BASE_PATH defaults before installer creation
 - [Release payload dependency surface](release-payload-dependency-surface.md) — Windows payloads should exclude workspace lockfiles and package-manager metadata
+- [Loading loop cleanup](loading-loop-text-removal.md) — for baked-in animated labels, crop the lower band rather than using solid blocks or delogo smearing

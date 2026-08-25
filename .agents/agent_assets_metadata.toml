@@ -31,5 +31,5 @@ description = "5-second 1280×720 MP4 reference clip for the looping loading bac
 id = "H_FuMNMQogcYUu1yZuG1F"
 uri = "file://artifacts/willard-ai/public/willard-loading.mp4"
 type = "video"
-title = "Cleaned Willard AI loading loop"
-description = "10-second looping MP4 with the cinematic background and central Willard AI title retained; extra labels, icons, tagline, and lower text removed."
+title = "Final natural Willard AI loading loop"
+description = "10-second looping MP4 preserving the cinematic motion and central Willard AI title, with the lower lettering/icons and upper-left badge cleanly cropped out instead of blocked."
