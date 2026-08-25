@@ -31,5 +31,5 @@ description = "5-second 1280×720 MP4 reference clip for the looping loading bac
 id = "H_FuMNMQogcYUu1yZuG1F"
 uri = "file://artifacts/willard-ai/public/willard-loading.mp4"
 type = "video"
-title = "Natural full-screen Willard AI loop"
-description = "20-second looping MP4 with original audio, natural title proportions, lower wording/icons cropped away, and no stretched or blocky fill."
+title = "Silent natural Willard AI loop"
+description = "20-second looping MP4 with no audio track, natural title proportions, and all wording/icons below the title removed."
