@@ -53,42 +53,41 @@ function TopBar() {
   }, [navigate]);
 
   return (
-    <div className="flex items-center h-12 border-b border-border px-4 gap-3 bg-background shrink-0">
+    <div className="glass-surface relative z-10 flex h-14 shrink-0 items-center gap-3 rounded-none border-x-0 border-t-0 px-3 sm:px-5">
       <button
         onClick={() => navigate("/search")}
-        className="flex items-center gap-2 flex-1 max-w-md rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors text-left"
+        className="cyan-focus flex min-w-0 max-w-xl flex-1 items-center gap-2 rounded-lg border border-border/80 bg-background/35 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+        aria-label="Search your library"
       >
         <Search className="w-3.5 h-3.5 shrink-0" />
-        <span className="flex-1">Search your library…</span>
-        <kbd className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono tracking-tight">Ctrl+K</kbd>
+        <span className="flex-1 truncate">Search your library…</span>
+        <kbd className="hidden rounded border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] tracking-tight sm:inline">Ctrl+K</kbd>
       </button>
 
-      <div className="flex items-center gap-1.5 ml-auto">
+      <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
         {data && (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mr-2">
+          <div className="mr-1 hidden items-center gap-1.5 text-xs text-muted-foreground md:flex lg:mr-2">
             {isScanning ? (
               <>
-                <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
-                <span className="text-amber-400">Scanning…</span>
+                <Loader2 className="h-3 w-3 animate-spin text-amber-300" />
+                <span className="text-amber-300">Scanning…</span>
               </>
             ) : (
               <>
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
+                <CheckCircle2 className="h-3 w-3 text-teal-300" />
                 <span>Healthy</span>
               </>
             )}
           </div>
         )}
 
-        <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-          <Bell className="w-4 h-4" />
+        <button aria-label="Notifications" className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
+          <Bell className="h-4 w-4" />
         </button>
         <BackgroundTasksButton onClick={() => setTasksOpen(true)} count={jobs.length} />
 
-        <Link href="/settings">
-          <button className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-            <Settings className="w-4 h-4" />
-          </button>
+        <Link href="/settings" aria-label="Settings" className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
+          <Settings className="h-4 w-4" />
         </Link>
 
         <Button
@@ -96,7 +95,7 @@ function TopBar() {
           variant="default"
           onClick={() => scanMutation.mutate()}
           disabled={isScanning || scanMutation.isPending}
-          className="h-7 text-xs gap-1.5 shrink-0 ml-1"
+          className="ml-1 h-8 shrink-0 gap-1.5 rounded-lg border border-primary/40 bg-primary/10 text-xs text-primary shadow-[0_0_18px_rgba(43,218,255,.10)] hover:bg-primary/20 hover:text-primary"
           title="Re-indexes all files from scratch. Normally not needed — the library updates automatically."
         >
           {isScanning ? (
@@ -104,7 +103,8 @@ function TopBar() {
           ) : (
             <ScanLine className="w-3 h-3" />
           )}
-          {isScanning ? "Scanning…" : "Full Rescan"}
+          <span className="hidden sm:inline">{isScanning ? "Scanning…" : "Full Rescan"}</span>
+          <span className="sm:hidden">{isScanning ? "Scan" : "Rescan"}</span>
         </Button>
       </div>
       <BackgroundTasksPanel open={tasksOpen} onOpenChange={setTasksOpen} />
@@ -114,12 +114,12 @@ function TopBar() {
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="archive-shell flex min-h-[100dvh] overflow-hidden bg-background">
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <TopBar />
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-6xl p-6">{children}</div>
+        <main className="archive-scrollbar flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       </div>
     </div>

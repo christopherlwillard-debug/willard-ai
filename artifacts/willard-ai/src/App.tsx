@@ -56,7 +56,7 @@ function ProtectedRoutes() {
 
   if (!settingsLoading && settings && !settings.nasPath && env?.isLocal) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
+      <div className="archive-shell flex min-h-[100dvh] items-center justify-center bg-background px-4 py-12">
         <LibrarySetup />
       </div>
     );
@@ -97,7 +97,7 @@ function AuthGate() {
 
   if (loading) {
     return (
-      <div className="relative min-h-screen overflow-hidden bg-[#020617] text-white">
+      <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-[#050617] text-white">
         <video
           className="absolute inset-0 h-full w-full object-cover"
           src={`${import.meta.env.BASE_URL}willard-loading.mp4`}
@@ -109,12 +109,13 @@ function AuthGate() {
           aria-hidden="true"
         />
         <div
-          className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_20%,rgba(2,6,23,.18)_58%,rgba(2,6,23,.72)_100%)]"
+          className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_12%,rgba(5,6,23,.22)_52%,rgba(5,6,23,.82)_100%)]"
           aria-hidden="true"
         />
-        <div className="absolute inset-x-0 bottom-0 flex justify-center px-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
+        <div className="relative flex flex-col items-center gap-4 px-6 text-center">
+          <div className="brand-mark font-mono text-xl font-bold tracking-[0.32em]">WILLARD_AI</div>
           <p
-            className="rounded-full border border-white/15 bg-slate-950/45 px-4 py-2 text-[11px] font-medium tracking-[0.22em] text-white/75 shadow-lg backdrop-blur-sm"
+            className="rounded-full border border-cyan-100/20 bg-slate-950/45 px-4 py-2 text-[10px] font-medium tracking-[0.26em] text-white/75 shadow-lg backdrop-blur-sm"
             role="status"
           >
             PREPARING YOUR LIBRARY
@@ -126,14 +127,15 @@ function AuthGate() {
 
   if (authError) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-xl border border-destructive/40 bg-card p-8 text-center shadow-2xl">
-          <h1 className="font-mono text-lg font-bold text-destructive">AUTHENTICATION UNAVAILABLE</h1>
+      <div className="archive-shell flex min-h-[100dvh] items-center justify-center bg-background p-4">
+        <div className="glass-surface w-full max-w-md rounded-2xl border-destructive/40 p-8 text-center shadow-2xl">
+          <div className="mx-auto mb-5 flex h-10 w-10 items-center justify-center rounded-xl border border-destructive/50 bg-destructive/10 font-mono font-bold text-destructive">!</div>
+          <h1 className="font-mono text-lg font-bold tracking-[0.12em] text-destructive">AUTHENTICATION UNAVAILABLE</h1>
           <p className="mt-3 text-sm text-muted-foreground">
             The server could not be reached. This is different from an incorrect password.
             Check the connection and try again.
           </p>
-          <button className="mt-5 rounded-md border px-4 py-2 font-mono text-sm hover:bg-secondary" onClick={() => void refetch()}>
+          <button className="mt-5 rounded-lg border border-border bg-secondary/50 px-4 py-2 font-mono text-sm transition-colors hover:border-primary/50 hover:bg-secondary" onClick={() => void refetch()}>
             RETRY_CONNECTION
           </button>
         </div>

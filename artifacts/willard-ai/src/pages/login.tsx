@@ -30,15 +30,15 @@ function RecoveryKeyDisplay({ recoveryKey, onAcknowledge }: RecoveryKeyDisplayPr
   return (
     <div className="space-y-6">
       <div className="text-center space-y-1">
-        <div className="text-3xl font-mono font-bold tracking-widest text-primary">WILLARD_AI</div>
-        <div className="text-xs text-muted-foreground font-mono uppercase tracking-widest">Setup complete</div>
+        <div className="brand-mark text-3xl font-mono font-bold tracking-[0.18em]">WILLARD_AI</div>
+        <div className="text-xs font-mono uppercase tracking-[0.28em] text-muted-foreground">Setup complete</div>
       </div>
 
       <div className="space-y-3">
         <p className="text-sm text-muted-foreground font-mono">
           Save this recovery key now. It will not be shown again. If you lose your password, this is the only way to regain access.
         </p>
-        <div className="bg-secondary/80 border border-primary/40 rounded-lg p-4 space-y-3">
+        <div className="space-y-3 rounded-xl border border-primary/35 bg-primary/[0.06] p-4 shadow-[inset_0_1px_0_rgba(193,244,255,.08)]">
           <div data-testid="recovery-key" className="text-center font-mono text-xl tracking-[0.3em] text-primary font-bold select-all">
             {recoveryKey}
           </div>
@@ -60,14 +60,14 @@ function RecoveryKeyDisplay({ recoveryKey, onAcknowledge }: RecoveryKeyDisplayPr
         </p>
       </div>
 
-      <div className="flex items-start space-x-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+      <div className="flex items-start space-x-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.06] p-3">
         <Checkbox
           id="ack"
           checked={acknowledged}
           onCheckedChange={(v) => setAcknowledged(!!v)}
           className="mt-0.5"
         />
-        <Label htmlFor="ack" className="text-sm font-mono text-amber-400 leading-snug cursor-pointer">
+        <Label htmlFor="ack" className="cursor-pointer font-mono text-sm leading-snug text-amber-200">
           I have saved my recovery key in a safe place and understand it cannot be recovered if lost.
         </Label>
       </div>
@@ -168,27 +168,65 @@ export default function LoginPage() {
 
   if (mode === "setup-recovery-key" && generatedKey) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="w-full max-w-md space-y-0 bg-card border border-border rounded-xl p-8 shadow-2xl">
-          <RecoveryKeyDisplay recoveryKey={generatedKey} onAcknowledge={invalidate} />
+        <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-background p-4 sm:p-8">
+          <div className="pointer-events-none absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-primary/10 blur-3xl" />
+          <div className="pointer-events-none absolute -right-24 bottom-0 h-80 w-80 rounded-full bg-accent/10 blur-3xl" />
+          <div className="glass-surface relative w-full max-w-md rounded-2xl p-6 shadow-2xl sm:p-8">
+            <RecoveryKeyDisplay recoveryKey={generatedKey} onAcknowledge={invalidate} />
+          </div>
         </div>
-      </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-card border border-border rounded-xl p-8 shadow-2xl space-y-6">
-        <div className="text-center space-y-1">
-          <div className="text-3xl font-mono font-bold tracking-widest text-primary">WILLARD_AI</div>
-          <div className="text-xs text-muted-foreground font-mono uppercase tracking-widest">
-            {mode === "setup"
-              ? "First-run setup"
-              : mode === "recover"
-              ? "Account recovery"
-              : "Authentication required"}
+    <div className="relative flex min-h-[100dvh] overflow-hidden bg-background">
+      <div className="pointer-events-none absolute inset-0 archive-shell" aria-hidden="true" />
+      <section className="relative hidden w-[45%] max-w-2xl flex-col justify-between overflow-hidden border-r border-border/60 bg-[radial-gradient(circle_at_52%_42%,rgba(38,119,255,.2),transparent_31%),linear-gradient(145deg,#070b1d,#111039_58%,#0a0b20)] p-10 lg:flex xl:p-14">
+        <div className="absolute left-1/2 top-[43%] h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/20 shadow-[0_0_80px_rgba(39,194,255,.12),inset_0_0_80px_rgba(175,78,255,.08)]" />
+        <div className="absolute left-1/2 top-[43%] h-[19rem] w-[19rem] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[4rem] border border-accent/30" />
+        <div className="absolute left-1/2 top-[43%] h-52 w-52 -translate-x-1/2 -translate-y-1/2 -rotate-12 rounded-[3rem] border-2 border-primary/60 bg-primary/[0.03] shadow-[0_0_32px_rgba(39,222,255,.24)]" />
+        <div className="relative">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-primary/50 bg-primary/10 font-mono text-lg font-bold text-primary shadow-[0_0_22px_rgba(39,222,255,.18)]">W</div>
+            <div>
+              <p className="font-mono text-xs tracking-[0.3em] text-primary">WILLARD / LOCAL NODE</p>
+              <p className="mt-1 text-xs text-muted-foreground">Private media intelligence</p>
+            </div>
           </div>
         </div>
+        <div className="relative max-w-md">
+          <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.35em] text-primary/75">Memory archive // 01</p>
+          <h1 className="text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-foreground xl:text-5xl">Your memories,<br /><span className="brand-mark">in their orbit.</span></h1>
+          <p className="mt-5 max-w-sm text-sm leading-6 text-muted-foreground">A quiet, intelligent home for the photographs, films, and documents that make a life.</p>
+          <div className="mt-8 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+            <span className="h-px w-10 bg-gradient-to-r from-primary to-accent" />
+            Encrypted on your hardware
+          </div>
+        </div>
+        <p className="relative font-mono text-[10px] uppercase tracking-[0.25em] text-muted-foreground/70">WILLARD AI MEDIA CENTER · EST. LOCAL</p>
+      </section>
+
+      <section className="relative flex flex-1 items-center justify-center p-4 sm:p-8">
+        <div className="pointer-events-none absolute -right-20 top-10 h-72 w-72 rounded-full bg-accent/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-28 left-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
+        <div className="glass-surface relative w-full max-w-md space-y-6 rounded-2xl p-6 shadow-2xl sm:p-8">
+          <div className="text-center space-y-1 lg:hidden">
+            <div className="brand-mark text-3xl font-mono font-bold tracking-[0.18em]">WILLARD_AI</div>
+            <div className="text-xs font-mono uppercase tracking-[0.28em] text-muted-foreground">
+              {mode === "setup"
+                ? "First-run setup"
+                : mode === "recover"
+                ? "Account recovery"
+                : "Authentication required"}
+            </div>
+          </div>
+          <div className="hidden items-center justify-between lg:flex">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-primary/75">Secure access</p>
+              <p className="mt-1 text-sm text-muted-foreground">Enter your local archive</p>
+            </div>
+            <div className="h-2 w-2 rounded-full bg-primary shadow-[0_0_14px_rgba(39,222,255,.85)]" />
+          </div>
 
         {mode === "login" && (
           <form onSubmit={handleLogin} className="space-y-5">
@@ -196,11 +234,11 @@ export default function LoginPage() {
               <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Password</Label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
+                  <Input
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="pl-10 pr-10 font-mono"
+                   className="cyan-focus h-11 rounded-lg border-border/80 bg-background/45 pl-10 pr-10 font-mono"
                   placeholder="Enter password"
                   autoFocus
                   autoComplete="current-password"
@@ -217,7 +255,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full font-mono font-bold"
+               className="h-11 w-full rounded-lg font-mono font-bold shadow-[0_0_22px_rgba(39,222,255,.14)]"
               disabled={loginMutation.isPending || !password}
             >
               {loginMutation.isPending ? (
@@ -230,7 +268,7 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setMode("recover")}
-              className="w-full text-center text-xs text-muted-foreground hover:text-foreground font-mono transition-colors"
+               className="w-full text-center font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               Forgot password? Use recovery key →
             </button>
@@ -250,7 +288,7 @@ export default function LoginPage() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="pl-10 pr-10 font-mono"
+                   className="cyan-focus h-11 rounded-lg border-border/80 bg-background/45 pl-10 pr-10 font-mono"
                   placeholder="Min. 6 characters"
                   autoFocus
                   autoComplete="new-password"
@@ -270,7 +308,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full font-mono font-bold"
+               className="h-11 w-full rounded-lg font-mono font-bold shadow-[0_0_22px_rgba(39,222,255,.14)]"
               disabled={setupMutation.isPending || password.length < 6}
             >
               {setupMutation.isPending ? (
@@ -292,7 +330,7 @@ export default function LoginPage() {
                   type="text"
                   value={recoveryKey}
                   onChange={e => setRecoveryKey(e.target.value)}
-                  className="pl-10 font-mono uppercase tracking-widest"
+                   className="cyan-focus h-11 rounded-lg border-border/80 bg-background/45 pl-10 font-mono uppercase tracking-widest"
                   placeholder="XXXX-XXXX-XXXX-XXXX"
                   autoFocus
                   autoComplete="off"
@@ -308,7 +346,7 @@ export default function LoginPage() {
                   type={showPassword ? "text" : "password"}
                   value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
-                  className="pl-10 pr-10 font-mono"
+                   className="cyan-focus h-11 rounded-lg border-border/80 bg-background/45 pl-10 pr-10 font-mono"
                   placeholder="Min. 6 characters"
                   autoComplete="new-password"
                 />
@@ -324,7 +362,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full font-mono font-bold"
+               className="h-11 w-full rounded-lg font-mono font-bold shadow-[0_0_22px_rgba(39,222,255,.14)]"
               disabled={recoverMutation.isPending || !recoveryKey || newPassword.length < 6}
             >
               {recoverMutation.isPending ? (
@@ -337,13 +375,14 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setMode("login")}
-              className="w-full text-center text-xs text-muted-foreground hover:text-foreground font-mono transition-colors"
+               className="w-full text-center font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               ← Back to login
             </button>
           </form>
         )}
-      </div>
+        </div>
+      </section>
     </div>
   );
 }
