@@ -29,7 +29,7 @@ import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -484,7 +484,134 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 5: missing NAS returns a retryable conflict ──────────────────────
+  // ── Test 5: approved archive waits for organization ──────────────────────
+
+  test("approved archive routes extracted files to Waiting to be Organized and keeps the archive", async () => {
+    const archivePath = path.join(tempNasDir, "approved-archive.zip");
+    const waitingDir = path.join(tempNasDir, "Waiting to be Organized");
+    const files = [
+      { entry: "photos/approved.jpg", content: Buffer.from("approved-photo-content") },
+      { entry: "notes/readme.txt", content: Buffer.from("approved-note-content") },
+    ];
+    const archiveInputDir = path.join(tempNasDir, "approved-archive-input");
+    for (const file of files) {
+      const inputPath = path.join(archiveInputDir, file.entry);
+      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+      fs.writeFileSync(inputPath, file.content);
+    }
+    execFileSync("zip", ["-q", "-r", archivePath, "photos", "notes"], { cwd: archiveInputDir });
+    fs.rmSync(archiveInputDir, { recursive: true, force: true });
+
+    const createRes = await apiPost("/organize/jobs", {
+      sourceType: "archive",
+      sourcePath: archivePath,
+      archiveDisposition: "waiting",
+    });
+    const created = await readJson<{ id: number }>(createRes);
+    assert.strictEqual(created.status, 201, `Archive job creation failed: ${created.text}`);
+
+    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+    const analyzed = await readJson<{
+      status: string;
+      planJson?: {
+        routes: Array<{ destination: string; filename: string }>;
+        destinations: { images: string; videos: string; documents: string; other: string };
+      };
+    }>(analyzeRes);
+    assert.strictEqual(analyzed.status, 200, `Archive analysis failed: ${analyzed.text}`);
+    assert.ok(analyzed.body.planJson, "Analysis should return the saved plan");
+
+    const plan = analyzed.body.planJson!;
+    const expectedWaiting = path.resolve(waitingDir);
+    assert.deepEqual(
+      plan.routes.map((route) => path.resolve(route.destination)),
+      files.map(() => expectedWaiting),
+      "every approved archive route must use Waiting to be Organized",
+    );
+    assert.deepEqual(
+      Object.values(plan.destinations).map((destination) => path.resolve(destination)),
+      [expectedWaiting, expectedWaiting, expectedWaiting, expectedWaiting],
+      "all planned destination summaries must use Waiting to be Organized",
+    );
+    assert.ok(
+      plan.routes.every((route) => !route.destination.includes(path.join("Media", "Photos"))),
+      "approved archive contents must not route directly into media folders",
+    );
+
+    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
+    const preflight = await readJson<{ status: string }>(preflightRes);
+    assert.strictEqual(preflight.status, 200, `Archive preflight failed: ${preflight.text}`);
+
+    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeText = await executeRes.text();
+    assert.strictEqual(executeRes.status, 200, "Archive execution should return an SSE stream");
+    assert.match(executeText, /event: complete/, `Archive execution did not complete: ${executeText}`);
+    assert.doesNotMatch(executeText, /event: error/, "Archive execution must not report an error");
+
+    for (const file of files) {
+      const destination = path.join(waitingDir, path.basename(file.entry));
+      assert.ok(fs.existsSync(destination), `Extracted file should arrive at ${destination}`);
+      assert.deepEqual(fs.readFileSync(destination), file.content, "Extracted bytes must be intact");
+    }
+    assert.ok(fs.existsSync(archivePath), "The approved source archive must remain present");
+    assert.ok(!fs.existsSync(path.join(tempNasDir, "Media", "Photos", "approved.jpg")),
+      "Approved archive content must not be placed in Media/Photos");
+
+    const jobRes = await apiGet(`/organize/jobs/${created.body.id}`);
+    const job = await jobRes.json() as {
+      status: string;
+      reportJson?: {
+        filesVerified: number;
+        checksumVerifiedCount: number;
+        archiveExtractionChecksums?: Array<{ verified: boolean }>;
+      };
+    };
+    assert.strictEqual(job.status, "completed");
+    assert.equal(job.reportJson?.filesVerified, files.length);
+    assert.equal(job.reportJson?.checksumVerifiedCount, files.length);
+    assert.equal(
+      job.reportJson?.archiveExtractionChecksums?.filter((checksum) => checksum.verified).length,
+      files.length,
+      "each extracted archive entry must pass integrity verification",
+    );
+  });
+
+  // ── Test 6: traversal protection still applies ───────────────────────────
+
+  test("archive traversal is rejected before extraction and the source remains intact", async () => {
+    const archivePath = path.join(tempNasDir, "malicious-archive.zip");
+    const escapedPath = path.join(tempNasDir, "escape.txt");
+    const archiveInputDir = path.join(tempNasDir, "malicious-archive-input");
+    fs.mkdirSync(archiveInputDir, { recursive: true });
+    fs.writeFileSync(path.join(tempNasDir, "escape-source.txt"), "must not escape staging");
+    execFileSync("zip", ["-q", archivePath, "../escape-source.txt"], { cwd: archiveInputDir });
+    fs.rmSync(archiveInputDir, { recursive: true, force: true });
+    fs.rmSync(path.join(tempNasDir, "escape-source.txt"), { force: true });
+    assert.ok(!fs.existsSync(escapedPath));
+
+    const createRes = await apiPost("/organize/jobs", {
+      sourceType: "archive",
+      sourcePath: archivePath,
+      archiveDisposition: "waiting",
+    });
+    const created = await readJson<{ id: number }>(createRes);
+    assert.strictEqual(created.status, 201, `Traversal job creation failed: ${created.text}`);
+
+    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+    assert.strictEqual(analyzeRes.status, 200, `Traversal analysis failed: ${await analyzeRes.text()}`);
+    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
+    assert.strictEqual(preflightRes.status, 200, `Traversal preflight failed: ${await preflightRes.text()}`);
+
+    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeText = await executeRes.text();
+    assert.strictEqual(executeRes.status, 200);
+    assert.match(executeText, /event: error/, "Traversal must fail during safe extraction");
+    assert.match(executeText, /traversal rejected/i);
+    assert.ok(fs.existsSync(archivePath), "A rejected archive must remain present");
+    assert.ok(!fs.existsSync(escapedPath), "Traversal must not write outside the staging area");
+  });
+
+  // ── Test 7: missing NAS returns a retryable conflict ──────────────────────
 
   test("execute with an empty NAS path returns 409 without consuming the queue", async () => {
     const clearNas = await apiPut("/settings", { nasPath: "" });
@@ -502,7 +629,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     }
   });
 
-  // ── Test 6: execute with unknown ID returns graceful error ────────────────
+  // ── Test 8: execute with unknown ID returns graceful error ────────────────
 
   test("execute with a non-existent file ID returns error entry and recycled=0", async () => {
     const res = await apiPost("/cleanup/execute", {
@@ -521,7 +648,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 7: execute with empty array returns 400 ──────────────────────────
+  // ── Test 9: execute with empty array returns 400 ──────────────────────────
 
   test("execute with an empty deleteFileIds array returns 400", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [] });
@@ -532,7 +659,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 8: second execute on already-moved file reports missing-on-disk ──
+  // ── Test 10: second execute on already-moved file reports missing-on-disk ──
 
   test("executing the same file ID again reports file-not-found error", async () => {
     const res = await apiPost("/cleanup/execute", {
