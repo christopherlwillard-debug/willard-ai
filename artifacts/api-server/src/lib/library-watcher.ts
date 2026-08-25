@@ -223,9 +223,23 @@ function clearPendingScan(): void {
   state.burstAnnounced = false;
 }
 
+function setWatcherMechanism(nasPath: string, mechanism: WatchMechanism): void {
+  if (state.mechanism === mechanism) return;
+  state.mechanism = mechanism;
+  const mechanismLabel = mechanism === "events"
+    ? "native filesystem events"
+    : "periodic verification sweeps";
+  void recordActivity(
+    nasPath,
+    "watcher_mode",
+    `Live library watching switched to ${mechanismLabel}.`,
+    { mechanism },
+  );
+}
+
 function openWatcher(nasPath: string): void {
   if (state.eventsUnsupported) {
-    state.mechanism = "sweep";
+    setWatcherMechanism(nasPath, "sweep");
     return;
   }
   try {
@@ -241,12 +255,12 @@ function openWatcher(nasPath: string): void {
       if (state.fsWatcher === watcher) handleWatcherFailure(nasPath);
     });
     state.fsWatcher = watcher;
-    state.mechanism = "events";
+    setWatcherMechanism(nasPath, "events");
     logger.info({ nasPath }, "Library watcher active (native filesystem events)");
   } catch (err) {
     // Recursive fs.watch unavailable (e.g. some network filesystems) → sweep mode.
     state.eventsUnsupported = true;
-    state.mechanism = "sweep";
+    setWatcherMechanism(nasPath, "sweep");
     logger.info({ err, nasPath }, "Native file watching unavailable — using periodic verification sweeps");
   }
 }
@@ -264,6 +278,7 @@ function handleWatcherFailure(nasPath: string, err?: Error): void {
   const isNetworkError = code === "UNKNOWN" || code === "ENOSYS";
   if (isNetworkError || state.restarts >= 3) {
     state.eventsUnsupported = true;
+    setWatcherMechanism(nasPath, "sweep");
     logger.info({ nasPath, code, restarts: state.restarts },
       "Native file watching unavailable on this path — falling back to periodic sweeps");
     return;

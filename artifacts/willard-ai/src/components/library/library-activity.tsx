@@ -6,6 +6,7 @@ import {
   PauseCircle,
   PlayCircle,
   RefreshCw,
+  Radio,
   Layers,
   FileStack,
 } from "lucide-react";
@@ -40,6 +41,7 @@ function kindIcon(kind: string) {
     case "offline": return <CloudOff className="w-3.5 h-3.5 text-red-400" />;
     case "burst": return <Layers className="w-3.5 h-3.5 text-amber-400" />;
     case "watcher_restart": return <RefreshCw className="w-3.5 h-3.5 text-amber-400" />;
+    case "watcher_mode": return <Radio className="w-3.5 h-3.5 text-violet-400" />;
     case "paused": return <PauseCircle className="w-3.5 h-3.5 text-amber-400" />;
     case "resumed": return <PlayCircle className="w-3.5 h-3.5 text-green-400" />;
     default: return <Activity className="w-3.5 h-3.5 text-muted-foreground" />;

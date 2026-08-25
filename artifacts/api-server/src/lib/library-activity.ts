@@ -7,7 +7,7 @@ import { logger } from "./logger";
  * library engine did: scans, catch-ups after downtime, watcher restarts,
  * bursts, offline/online transitions.
  *
- * Kinds: scan_summary | catchup | reconnected | offline | burst | watcher_restart | paused | resumed
+ * Kinds: scan_summary | catchup | reconnected | offline | burst | watcher_restart | watcher_mode | paused | resumed
  */
 
 export type ActivityKind =
@@ -17,6 +17,7 @@ export type ActivityKind =
   | "offline"
   | "burst"
   | "watcher_restart"
+  | "watcher_mode"
   | "paused"
   | "resumed";
 
