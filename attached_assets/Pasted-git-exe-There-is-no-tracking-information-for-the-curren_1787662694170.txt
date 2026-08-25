@@ -1,0 +1,285 @@
+git.exe : There is no tracking information for the current branch.
+At C:\Willards-Media-Center\scripts\launcher\start.ps1:107 char:9
++         & git -C $Root pull --ff-only *> (Join-Path $LogDir "update.l ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (There is no tra...current branch.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Please specify which branch you want to merge with.
+See git-pull(1) for details.
+
+    git pull <remote> <branch>
+
+If you wish to set tracking information for this branch you can do so with:
+
+    git branch --set-upstream-to=<remote>/<branch> main
+
+Updating 1031151..ba50e58
+Fast-forward
+ artifacts/willard-mobile/package.json |   4 ++
+ e2e/cleanup-scan-states.spec.ts       | 128 ++++++++++++++++++++++++++++++++++
+ e2e/origin-boundary.spec.ts           |  68 ++++++++++++++++++
+ lib/api-spec/openapi.yaml             |  35 ++++++++++
+ pnpm-lock.yaml                        |  86 ++++++++++++++++-------
+ 5 files changed, 295 insertions(+), 26 deletions(-)
+ create mode 100644 e2e/cleanup-scan-states.spec.ts
+ create mode 100644 e2e/origin-boundary.spec.ts
+Updating ba50e58..bad1f64
+Fast-forward
+ .agents/memory/repl-id-local-vs-cloud.md           |   6 +-
+ artifacts/api-server/src/app.ts                    |   3 +
+ artifacts/api-server/src/lib/ai-enrichment.ts      |  11 +-
+ artifacts/api-server/src/lib/face-recognition.ts   |  78 +++++++++----
+ .../src/lib/library-engine/job-engine.ts           |  65 +++++++----
+ artifacts/api-server/src/lib/media-scanner.ts      |  21 ++--
+ artifacts/api-server/src/routes/collections.ts     |   5 +-
+ artifacts/api-server/src/routes/faces.ts           |  77 ++++++++++---
+ artifacts/api-server/src/routes/media-detail.ts    |  29 +++--
+ artifacts/willard-mobile/app/(tabs)/library.tsx    | 125 ++++++++++++++++++++-
+ artifacts/willard-mobile/package.json              |   4 +-
+ lib/api-client-react/src/generated/api.ts          |  77 +++++++++++++
+ lib/api-zod/src/generated/api.ts                   |  10 ++
+ lib/db/src/schema/faces.ts                         |   1 +
+ pnpm-lock.yaml                                     |  76 ++++++-------
+ scripts/launcher/start.ps1                         |   2 +-
+ setup-db.cjs                                       |   3 +
+ 17 files changed, 466 insertions(+), 127 deletions(-)
+Updating bad1f64..c3b5e6d
+Fast-forward
+ LOCAL_SETUP.md                                     |  37 +++-
+ Start Willard AI.bat                               |   2 +-
+ artifacts/api-server/package.json                  |   1 +
+ .../api-server/src/__tests__/cleanup-queue.test.ts |   4 +-
+ .../src/__tests__/optimize-cycle.test.ts           |   2 +-
+ .../src/__tests__/organize-recovery.test.ts        |   2 +-
+ artifacts/api-server/tsconfig.json                 |   3 +
+ artifacts/willard-ai/index.html                    |  22 +-
+ artifacts/willard-ai/package.json                  |   1 +
+ artifacts/willard-ai/public/icons/willard-192.svg  |   6 +
+ artifacts/willard-ai/public/icons/willard-512.svg  |   6 +
+ artifacts/willard-ai/public/manifest.webmanifest   |  46 ++++
+ artifacts/willard-ai/public/sw.js                  |  59 +++++
+ artifacts/willard-ai/src/App.tsx                   |  29 +--
+ .../willard-ai/src/components/layout/sidebar.tsx   |   2 +
+ .../src/components/pwa-install-button.tsx          |  31 +++
+ .../src/components/service-availability.tsx        |  59 +++++
+ artifacts/willard-ai/src/hooks/use-pwa-install.ts  |  48 ++++
+ artifacts/willard-ai/src/lib/cleanup-queue.ts      |  83 +------
+ artifacts/willard-ai/src/main.tsx                  |   8 +
+ artifacts/willard-ai/src/pages/cleanup.tsx         |   2 +-
+ artifacts/willard-ai/src/pages/diagnostics.tsx     |  21 ++
+ artifacts/willard-ai/tsconfig.json                 |   3 +
+ artifacts/willard-mobile/app/(tabs)/chat.tsx       |  29 +--
+ .../willard-mobile/lib/chat-conversation-state.ts  |  36 +++
+ .../src/__tests__/chat-conversation-state.test.ts  |  68 ++++++
+ artifacts/willard-mobile/tsconfig.json             |   1 +
+ lib/cleanup-queue/package.json                     |   9 +
+ lib/cleanup-queue/src/index.ts                     |  60 +++++
+ lib/cleanup-queue/tsconfig.json                    |  11 +
+ pnpm-lock.yaml                                     |   8 +
+ replit.md                                          |  15 +-
+ scripts/launcher/start.ps1                         | 243 ++++++++++++---------
+ 33 files changed, 715 insertions(+), 242 deletions(-)
+ create mode 100644 artifacts/willard-ai/public/icons/willard-192.svg
+ create mode 100644 artifacts/willard-ai/public/icons/willard-512.svg
+ create mode 100644 artifacts/willard-ai/public/manifest.webmanifest
+ create mode 100644 artifacts/willard-ai/public/sw.js
+ create mode 100644 artifacts/willard-ai/src/components/pwa-install-button.tsx
+ create mode 100644 artifacts/willard-ai/src/components/service-availability.tsx
+ create mode 100644 artifacts/willard-ai/src/hooks/use-pwa-install.ts
+ create mode 100644 artifacts/willard-mobile/lib/chat-conversation-state.ts
+ create mode 100644 artifacts/willard-mobile/src/__tests__/chat-conversation-state.test.ts
+ create mode 100644 lib/cleanup-queue/package.json
+ create mode 100644 lib/cleanup-queue/src/index.ts
+ create mode 100644 lib/cleanup-queue/tsconfig.json
+Already up to date.
+Updating c3b5e6d..08d7802
+Fast-forward
+ .../api-server/src/__tests__/media-tags.test.ts    |  98 +++++++++++++
+ artifacts/api-server/src/app.ts                    |  15 ++
+ artifacts/api-server/src/routes/media.ts           |  91 ++++++++++++-
+ .../src/components/media/MediaViewer.tsx           |  70 +++++++++-
+ artifacts/willard-ai/src/pages/media.tsx           |  42 +++++-
+ artifacts/willard-ai/src/types/media.ts            |   7 +
+ artifacts/willard-mobile/app/(tabs)/index.tsx      |  36 ++++-
+ artifacts/willard-mobile/lib/storage-chart.ts      |  43 ++++++
+ .../src/__tests__/storage-chart.test.ts            |  39 ++++++
+ e2e/media-viewer.spec.ts                           |   4 +
+ lib/api-client-react/src/generated/api.schemas.ts  |  23 ++++
+ lib/api-client-react/src/generated/api.ts          | 151 +++++++++++++++++++++
+ lib/api-spec/openapi.yaml                          |  86 ++++++++++++
+ lib/api-zod/src/generated/api.ts                   |  35 +++++
+ lib/api-zod/src/generated/types/index.ts           |   4 +
+ lib/api-zod/src/generated/types/mediaFileTags.ts   |  12 ++
+ lib/api-zod/src/generated/types/mediaTag.ts        |  13 ++
+ lib/api-zod/src/generated/types/mediaTagList.ts    |  12 ++
+ lib/api-zod/src/generated/types/mediaTagsInput.ts  |  15 ++
+ lib/db/src/schema/index.ts                         |   1 +
+ lib/db/src/schema/media_tags.ts                    |  24 ++++
+ setup-db.cjs                                       |  17 +++
+ 22 files changed, 819 insertions(+), 19 deletions(-)
+ create mode 100644 artifacts/api-server/src/__tests__/media-tags.test.ts
+ create mode 100644 artifacts/willard-mobile/lib/storage-chart.ts
+ create mode 100644 artifacts/willard-mobile/src/__tests__/storage-chart.test.ts
+ create mode 100644 lib/api-zod/src/generated/types/mediaFileTags.ts
+ create mode 100644 lib/api-zod/src/generated/types/mediaTag.ts
+ create mode 100644 lib/api-zod/src/generated/types/mediaTagList.ts
+ create mode 100644 lib/api-zod/src/generated/types/mediaTagsInput.ts
+ create mode 100644 lib/db/src/schema/media_tags.ts
+Already up to date.
+Updating 08d7802..344f181
+Fast-forward
+ .agents/memory/MEMORY.md                           |   1 +
+ .agents/memory/place-grid-rounding.md              |  15 +
+ .gitignore                                         |   4 +
+ LOCAL_SETUP.md                                     |  37 +-
+ .../src/__tests__/ai-corrections.test.ts           | 229 ++++++++++
+ .../src/__tests__/collections-engine.test.ts       |  57 +++
+ artifacts/api-server/src/lib/geocode.ts            |   6 +-
+ artifacts/api-server/src/routes/media-detail.ts    |  54 ++-
+ artifacts/api-server/src/routes/search.ts          |   6 +-
+ artifacts/willard-ai/src/App.tsx                   |   2 +
+ .../willard-ai/src/components/layout/sidebar.tsx   |   3 +
+ artifacts/willard-ai/src/index.css                 |  17 +
+ artifacts/willard-ai/src/lib/media-map.ts          |  28 ++
+ artifacts/willard-ai/src/pages/map.tsx             | 474 +++++++++++++++++++++
+ desktop/WillardMediaCenter.ps1                     | 132 ++++++
+ desktop/desktop-web-server.mjs                     |  72 ++++
+ desktop/release-contract.mjs                       |  51 +++
+ desktop/release-contract.test.mjs                  |  25 ++
+ installer/README.md                                |  28 ++
+ installer/WillardMediaCenter.iss                   |  57 +++
+ installer/release-manifest.example.json            |   8 +
+ installer/willard.ico                              | Bin 0 -> 117357 bytes
+ replit.md                                          |   6 +
+ scripts/windows/build-release.mjs                  |  52 +++
+ scripts/windows/installer-config.test.mjs          |  33 ++
+ scripts/windows/make-release.ps1                   |  31 ++
+ 26 files changed, 1406 insertions(+), 22 deletions(-)
+ create mode 100644 .agents/memory/place-grid-rounding.md
+ create mode 100644 artifacts/api-server/src/__tests__/ai-corrections.test.ts
+ create mode 100644 artifacts/willard-ai/src/lib/media-map.ts
+ create mode 100644 artifacts/willard-ai/src/pages/map.tsx
+ create mode 100644 desktop/WillardMediaCenter.ps1
+ create mode 100644 desktop/desktop-web-server.mjs
+ create mode 100644 desktop/release-contract.mjs
+ create mode 100644 desktop/release-contract.test.mjs
+ create mode 100644 installer/README.md
+ create mode 100644 installer/WillardMediaCenter.iss
+ create mode 100644 installer/release-manifest.example.json
+ create mode 100644 installer/willard.ico
+ create mode 100644 scripts/windows/build-release.mjs
+ create mode 100644 scripts/windows/installer-config.test.mjs
+ create mode 100644 scripts/windows/make-release.ps1
+Already up to date.
+Updating 344f181..6fe3fa5
+Fast-forward
+ .../api-server/src/__tests__/ai-search.test.ts     |  14 +++
+ .../src/__tests__/face-recognition.test.ts         |  69 +++++++++++++
+ artifacts/api-server/src/app.ts                    |   2 +
+ artifacts/api-server/src/lib/ai-search.ts          |  42 +++++++-
+ artifacts/api-server/src/lib/face-recognition.ts   |  81 ++++++++++++----
+ artifacts/api-server/src/routes/faces.ts           |  71 ++++++++++++++
+ artifacts/api-server/src/routes/search.ts          |  23 +++++
+ .../src/components/reassign-face-dialog.tsx        | 107 +++++++++++++++++++++
+ artifacts/willard-ai/src/pages/media-detail.tsx    |  38 ++++++--
+ artifacts/willard-ai/src/pages/people.tsx          |  29 +++++-
+ artifacts/willard-ai/src/pages/search.tsx          |   2 +
+ ...-media-library-Checking-for-s_1787530111261.txt |  47 +++++++++
+ replit.md                                          |   2 +-
+ setup-db.cjs                                       |   2 +
+ 14 files changed, 496 insertions(+), 33 deletions(-)
+ create mode 100644 artifacts/api-server/src/__tests__/face-recognition.test.ts
+ create mode 100644 artifacts/willard-ai/src/components/reassign-face-dialog.tsx
+ create mode 100644 attached_assets/Pasted--Willard-AI-Preparing-your-media-library-Checking-for-s_1787530111261.txt
+Already up to date.
+Already up to date.
+Updating 6fe3fa5..3ae49d9
+Fast-forward
+ .github/workflows/windows-release.yml              | 105 ++++++++++++
+ ...in-three-stages-rather-than-t_1787533795049.txt | 186 +++++++++++++++++++++
+ installer/README.md                                |  43 ++++-
+ replit.md                                          |   6 +-
+ replit.nix                                         |   1 +
+ scripts/launcher/common.ps1                        |  26 ++-
+ scripts/launcher/start.ps1                         |  76 ++++++---
+ scripts/windows/build-installer.ps1                |  38 +++++
+ scripts/windows/installer-config.test.mjs          |  36 ++++
+ scripts/windows/validate-release.mjs               |  35 ++++
+ 10 files changed, 518 insertions(+), 34 deletions(-)
+ create mode 100644 .github/workflows/windows-release.yml
+ create mode 100644 attached_assets/Pasted-I-think-we-should-do-this-in-three-stages-rather-than-t_1787533795049.txt
+ create mode 100644 scripts/windows/build-installer.ps1
+ create mode 100644 scripts/windows/validate-release.mjs
+Already up to date.
+Updating 3ae49d9..f8017e7
+Fast-forward
+ .agents/memory/MEMORY.md                  |   1 +
+ .agents/memory/github-workflow-push.md    |  10 ++++++++++
+ attached_assets/image_1787573591598.png   | Bin 0 -> 121251 bytes
+ scripts/launcher/start.ps1                |  13 ++++++++++++-
+ scripts/windows/installer-config.test.mjs |   2 ++
+ 5 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 .agents/memory/github-workflow-push.md
+ create mode 100644 attached_assets/image_1787573591598.png
+Already up to date.
+Updating f8017e7..debc912
+Fast-forward
+ attached_assets/image_1787573686189.png   | Bin 0 -> 84200 bytes
+ scripts/launcher/start.ps1                |  11 +++++++++++
+ scripts/windows/installer-config.test.mjs |   4 ++++
+ 3 files changed, 15 insertions(+)
+ create mode 100644 attached_assets/image_1787573686189.png
+Updating debc912..2cc529c
+Fast-forward
+ attached_assets/image_1787573854742.png   | Bin 0 -> 75159 bytes
+ scripts/launcher/start.ps1                |   3 ++-
+ scripts/windows/installer-config.test.mjs |   3 ++-
+ 3 files changed, 4 insertions(+), 2 deletions(-)
+ create mode 100644 attached_assets/image_1787573854742.png
+Already up to date.
+Already up to date.
+Updating 2cc529c..cb501fb
+Fast-forward
+ ...yright-C-Microsoft-Corporatio_1787574630421.txt | 131 +++++++++++++++++++++
+ attached_assets/image_1787574506763.png            | Bin 0 -> 68953 bytes
+ 2 files changed, 131 insertions(+)
+ create mode 100644 attached_assets/Pasted-Windows-PowerShell-5-1-Copyright-C-Microsoft-Corporatio_1787574630421.txt
+ create mode 100644 attached_assets/image_1787574506763.png
+Updating cb501fb..3841917
+Fast-forward
+ artifacts/api-server/src/index.ts         |  5 ++++-
+ scripts/launcher/start.ps1                | 35 ++++++++++++++++++++++++++-----
+ scripts/windows/installer-config.test.mjs |  3 +++
+ setup-db.cjs                              | 34 ++++++++++++++++++++++++++++++
+ 4 files changed, 71 insertions(+), 6 deletions(-)
+Already up to date.
+Updating 3841917..f94665f
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..f94665f
+Updating 3841917..f94665f
+Updating 3841917..f94665f
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..b35618c
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..8a238be
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..8a238be
+Updating 3841917..2b46309
+Updating 3841917..2b46309
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..bce6ad1
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1dbb737
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1dbb737
+Updating 3841917..1dbb737
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1dbb737
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1dbb737
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1dbb737
+Updating 3841917..1fe38d6
+[launcher] git pull failed; current files were left unchanged.
+Updating 3841917..1fe38d6
