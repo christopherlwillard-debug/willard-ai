@@ -14,6 +14,7 @@ const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
 const startupSmoke = await readFile(new URL("./startup-smoke.ps1", import.meta.url), "utf8");
+const updateSmoke = await readFile(new URL("./update-smoke.ps1", import.meta.url), "utf8");
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
@@ -250,6 +251,18 @@ test("developer updater preserves local data and rolls back failed Git updates",
   assert.match(updater, /previous developer version was restored/);
   assert.match(updater, /--ignore-scripts/);
   assert.match(updater, /api-server run build/);
+});
+
+test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
+  assert.match(updateSmoke, /git clone/);
+  assert.match(updateSmoke, /WILLARD_UPDATE_REPO/);
+  assert.match(updateSmoke, /Local changes were not protected/);
+  assert.match(updateSmoke, /unreachable\/willard-ai/);
+  assert.match(updateSmoke, /failed rebuild did not restore/);
+  assert.match(updateSmoke, /postgres-data\.marker/);
+  assert.match(updateSmoke, /media-path\.txt/);
+  assert.match(updateSmoke, /New-WillardShortcut/);
+  assert.match(updateSmoke, /WScript\.Shell/);
 });
 
 test("developer setup creates identity shortcuts for the batch launcher", () => {

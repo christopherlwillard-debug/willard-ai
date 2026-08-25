@@ -6,9 +6,9 @@ $ErrorActionPreference = "Continue"
 
 # GitHub mirror - this is the only place the URL lives.
 # update.ps1 and setup.ps1 both read these constants.
-$script:GithubRepo    = "https://github.com/christopherlwillard-debug/willard-ai"
-$script:GithubBranch  = "main"
-$script:GithubRawBase = "https://raw.githubusercontent.com/christopherlwillard-debug/willard-ai/main"
+$script:GithubRepo    = if ($env:WILLARD_UPDATE_REPO) { $env:WILLARD_UPDATE_REPO } else { "https://github.com/christopherlwillard-debug/willard-ai" }
+$script:GithubBranch  = if ($env:WILLARD_UPDATE_BRANCH) { $env:WILLARD_UPDATE_BRANCH } else { "main" }
+$script:GithubRawBase = if ($env:WILLARD_UPDATE_RAW_BASE) { $env:WILLARD_UPDATE_RAW_BASE } else { "https://raw.githubusercontent.com/christopherlwillard-debug/willard-ai/main" }
 
 # Project root = two levels up from this script
 $script:Root    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -40,6 +40,7 @@ function Write-Warn($msg) { Write-Host ("  [!]  " + $msg) -ForegroundColor Yello
 function Write-Bad($msg)  { Write-Host ("  [X]  " + $msg) -ForegroundColor Red }
 
 function Pause-BeforeClose {
+    if ($env:WILLARD_NO_PAUSE -eq "1") { return }
     Write-Host ""
     Read-Host "  Press Enter to close this window" | Out-Null
 }

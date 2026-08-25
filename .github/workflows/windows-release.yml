@@ -53,6 +53,10 @@ jobs:
         shell: pwsh
         run: .\scripts\windows\startup-smoke.ps1
 
+      - name: Verify developer one-click updater on Windows
+        shell: pwsh
+        run: .\scripts\windows\update-smoke.ps1
+
       - name: Download the bundled Windows Node runtime
         shell: pwsh
         run: |
