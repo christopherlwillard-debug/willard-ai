@@ -210,7 +210,7 @@ function Start-WillardServices {
     $apiProc = $null
     try {
         $apiProc = Start-Process -FilePath $nodeCommand `
-            -ArgumentList @("--enable-source-maps", "--env-file=$envFile", $apiDist) `
+            -ArgumentList @("--enable-source-maps", "--env-file=`"$envFile`"", "`"$apiDist`"") `
             -WorkingDirectory (Join-Path $Root "artifacts\api-server") `
             -RedirectStandardOutput $ApiLog -RedirectStandardError (Join-Path $LogDir "api-error.log") `
             -WindowStyle Minimized -PassThru

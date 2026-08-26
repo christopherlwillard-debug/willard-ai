@@ -281,9 +281,9 @@ try {
   $env:PORT = "8080"
   $apiProc = $null
   try {
-    $apiProc = Start-Process $Node -ArgumentList @("--env-file=$EnvFile", $Api) -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
+    $apiProc = Start-Process $Node -ArgumentList @("--env-file=`"$EnvFile`"", "`"$Api`"") -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
     Save-Services $apiProc.Id $null
-    $webProc = Start-Process $Node -ArgumentList @($WebServer, "--root=$Web", "--port=5000", "--api=http://127.0.0.1:8080") -WorkingDirectory $InstallRoot -RedirectStandardOutput (Join-Path $LogRoot "web.log") -RedirectStandardError (Join-Path $LogRoot "web-error.log") -WindowStyle Hidden -PassThru
+    $webProc = Start-Process $Node -ArgumentList @("`"$WebServer`"", "--root=`"$Web`"", "--port=5000", "--api=http://127.0.0.1:8080") -WorkingDirectory $InstallRoot -RedirectStandardOutput (Join-Path $LogRoot "web.log") -RedirectStandardError (Join-Path $LogRoot "web-error.log") -WindowStyle Hidden -PassThru
     Save-Services $apiProc.Id $webProc.Id
   } catch {
     Stop-Services
