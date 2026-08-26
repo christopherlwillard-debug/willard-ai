@@ -15,6 +15,14 @@ import {
   getActiveNasPath,
   resolveActiveArchivePath,
 } from "../lib/archive-scope.ts";
+import {
+  ArchiveSafetyError,
+  assertArchiveFileUnchanged,
+  assertBufferedZipFile,
+  createArchiveBudget,
+  snapshotArchiveFile,
+  validateArchiveEntry,
+} from "../lib/archive-safety.ts";
 
 const router: IRouter = Router();
 
@@ -60,10 +68,29 @@ function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean
 async function peekTar(filePath: string, ext: string): Promise<{ entries: any[]; error: string | null }> {
   const entries: any[] = [];
   const isGzipped = ["gz", "tgz", "bz2", "tbz2", "xz", "txz"].includes(ext);
+  const budget = createArchiveBudget();
+  const archiveSnapshot = snapshotArchiveFile(filePath);
   try {
+    let validationError: Error | undefined;
     await tar.list({
       file: filePath,
       ...(isGzipped ? { gzip: ext === "gz" || ext === "tgz" } : {}),
+      preservePaths: true,
+      strict: true,
+      filter: (_path: string, entry: any) => {
+        if (validationError) return false;
+        try {
+          const isDirectory = entry.type === "Directory";
+          if (entry.type === "SymbolicLink" || entry.type === "Link" || entry.type === "HardLink") {
+            throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" in TAR`);
+          }
+          validateArchiveEntry({ path: entry.path, sizeBytes: entry.size, isDirectory }, budget);
+          return true;
+        } catch (error) {
+          validationError = error instanceof Error ? error : new Error(String(error));
+          return false;
+        }
+      },
       onentry: (entry: any) => {
         const fileType = getFileTypeFromName(entry.path);
         entries.push({
@@ -75,8 +102,11 @@ async function peekTar(filePath: string, ext: string): Promise<{ entries: any[];
         });
       }
     });
+    if (validationError) throw validationError;
+    assertArchiveFileUnchanged(filePath, archiveSnapshot);
     return { entries, error: null };
   } catch (e: any) {
+    if (e instanceof ArchiveSafetyError) throw e;
     // Plain .gz (not a tar wrapper) will fail here — that's expected
     return { entries, error: e?.message ?? "Could not parse as TAR archive" };
   }
@@ -86,30 +116,59 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
   const entries: any[] = [];
   let isPasswordProtected = false;
   let format = "7z";
+  const budget = createArchiveBudget();
+  const archiveSnapshot = snapshotArchiveFile(filePath);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const stream = Seven.list(filePath, {
       $bin: path7za,
       $progress: false,
     } as any);
+    let safetyError: Error | undefined;
 
     stream.on("data", (data: any) => {
-      if (data.file !== undefined) {
+      if (data.file !== undefined && !safetyError) {
         const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
-        const fileType = isDir ? "directory" : getFileTypeFromName(data.file);
-        entries.push({
-          name: path.basename(data.file),
-          path: data.file,
-          sizeBytes: typeof data.size === "number" ? data.size : 0,
-          isDirectory: isDir,
-          fileType,
-        });
+        const isLink = typeof data.attributes === "string" &&
+          (data.attributes.includes("L") || data.attributes.includes("l"));
+        if (isLink) {
+          safetyError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`);
+          return;
+        }
+        try {
+          const checked = validateArchiveEntry({
+            path: data.file,
+            sizeBytes: data.size,
+            isDirectory: isDir,
+          }, budget);
+          const fileType = isDir ? "directory" : getFileTypeFromName(data.file);
+          entries.push({
+            name: path.basename(data.file),
+            path: data.file,
+            sizeBytes: checked.sizeBytes,
+            isDirectory: isDir,
+            fileType,
+          });
+        } catch (error) {
+          safetyError = error instanceof Error ? error : new Error(String(error));
+        }
       }
     });
 
     stream.on("format", (fmt: string) => { format = fmt ?? format; });
 
-    stream.on("end", () => resolve({ entries, isPasswordProtected, format, error: null }));
+    stream.on("end", () => {
+      if (safetyError) {
+        reject(safetyError);
+        return;
+      }
+      try {
+        assertArchiveFileUnchanged(filePath, archiveSnapshot);
+        resolve({ entries, isPasswordProtected, format, error: null });
+      } catch (error) {
+        reject(error);
+      }
+    });
 
     stream.on("error", (err: Error) => {
       const msg = err?.message ?? "";
@@ -180,6 +239,7 @@ router.post("/archives/:id/peek", async (req, res) => {
       res.status(422).json({ error: "Archive file not found on disk — re-run a scan" });
       return;
     }
+    const archiveSnapshot = snapshotArchiveFile(archivePath);
 
     const rawExt = path.extname(archive.filename).replace(".", "").toLowerCase();
     // Handle double-extension like .tar.gz
@@ -197,12 +257,22 @@ router.post("/archives/:id/peek", async (req, res) => {
       let photoCount = 0; let videoCount = 0; let documentCount = 0;
 
       try {
+        assertBufferedZipFile(archivePath);
         const zip = new AdmZip(archivePath);
         const zipEntries = zip.getEntries();
+        const budget = createArchiveBudget();
         for (const entry of zipEntries) {
+          if ((entry as any).attr && (((entry as any).attr >>> 16) & 0xF000) === 0xA000) {
+            throw new ArchiveSafetyError(`Archive traversal rejected: symlink entry "${entry.entryName}" in ZIP`);
+          }
           const fileType = getFileTypeFromName(entry.entryName);
           const uncompressedSize: number = (entry.header as any)?.size ?? 0;
-          estimatedExtractionSize += uncompressedSize;
+          const checked = validateArchiveEntry({
+            path: entry.entryName,
+            sizeBytes: uncompressedSize,
+            isDirectory: entry.isDirectory,
+          }, budget);
+          estimatedExtractionSize += checked.sizeBytes;
           const nestedExt = path.extname(entry.entryName).replace(".", "").toLowerCase();
           if (TAR_EXTS.has(nestedExt) || nestedExt === "zip" || BINARY_ONLY_EXTS.has(nestedExt)) hasNestedArchives = true;
           if (fileType === "image") photoCount++;
@@ -211,12 +281,14 @@ router.post("/archives/:id/peek", async (req, res) => {
           entries.push({
             name: path.basename(entry.entryName),
             path: entry.entryName,
-            sizeBytes: uncompressedSize,
+            sizeBytes: checked.sizeBytes,
             isDirectory: entry.isDirectory,
             fileType,
           });
         }
-      } catch {
+        assertArchiveFileUnchanged(archivePath, archiveSnapshot);
+      } catch (error) {
+        if (error instanceof ArchiveSafetyError) throw error;
         isPasswordProtected = true;
       }
 
@@ -338,6 +410,10 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     res.status(422).json({ error: `Unrecognized archive format: .${ext}` });
   } catch (err) {
+    if (err instanceof ArchiveSafetyError) {
+      res.status(422).json({ error: err.message });
+      return;
+    }
     console.error("Peek error:", err);
     res.status(500).json({ error: "Failed to peek archive" });
   }

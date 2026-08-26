@@ -15,6 +15,17 @@ import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
+import {
+  ARCHIVE_LIMITS,
+  ArchiveSafetyError,
+  assertArchiveFileUnchanged,
+  assertBufferedZipFile,
+  createArchiveBudget,
+  inspectExtractedTree,
+  snapshotArchiveFile,
+  validateArchiveEntry,
+  writeArchiveFileAtomically,
+} from "../lib/archive-safety.ts";
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
@@ -204,38 +215,64 @@ function getDiskFreeBytes(dirPath: string): number | null {
 async function peekArchiveEntries(archivePath: string, filename: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
   const ext    = getArchiveExt(filename);
   const entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
+  const budget = createArchiveBudget();
+  const archiveSnapshot = snapshotArchiveFile(archivePath);
 
   if (ZIP_EXTS.has(ext)) {
-    try {
-      const zip = new AdmZip(archivePath);
-      for (const e of zip.getEntries())
-        entries.push({ path: e.entryName, sizeBytes: (e.header as any)?.size ?? 0, isDirectory: e.isDirectory, fileType: getFileTypeFromName(e.entryName) });
-    } catch { /* corrupt or password-protected */ }
+    assertBufferedZipFile(archivePath);
+    const zip = new AdmZip(archivePath);
+    for (const e of zip.getEntries()) {
+      const sizeBytes = (e.header as any)?.size ?? 0;
+      const checked = validateArchiveEntry({ path: e.entryName, sizeBytes, isDirectory: e.isDirectory }, budget);
+      entries.push({ path: e.entryName, sizeBytes: checked.sizeBytes, isDirectory: checked.isDirectory, fileType: getFileTypeFromName(e.entryName) });
+    }
   } else if (TAR_EXTS.has(ext)) {
-    try {
-      await withTarInput(archivePath, filename, undefined, async (tarPath, tarOptions) => {
-        await tar.list({
-          file: tarPath,
-          ...tarOptions,
-          preservePaths: true,
-          strict: true,
-          onentry: (e: any) => entries.push({ path: e.path, sizeBytes: typeof e.size === "number" ? e.size : 0, isDirectory: e.type === "Directory", fileType: getFileTypeFromName(e.path) }),
-        });
+    await withTarInput(archivePath, filename, undefined, async (tarPath, tarOptions) => {
+      let validationError: Error | undefined;
+      await tar.list({
+        file: tarPath,
+        ...tarOptions,
+        preservePaths: true,
+        strict: true,
+        filter: (_p: string, e: any) => {
+          if (validationError) return false;
+          try {
+            validateArchiveEntry({ path: e.path, sizeBytes: e.size, isDirectory: e.type === "Directory" }, budget);
+            return true;
+          } catch (error) {
+            validationError = error instanceof Error ? error : new Error(String(error));
+            return false;
+          }
+        },
+        onentry: (e: any) => entries.push({
+          path: e.path,
+          sizeBytes: typeof e.size === "number" ? e.size : 0,
+          isDirectory: e.type === "Directory",
+          fileType: getFileTypeFromName(e.path),
+        }),
       });
-    } catch { /* corrupt */ }
+      if (validationError) throw validationError;
+    });
   } else if (SEVENZIP_EXTS.has(ext)) {
-    await new Promise<void>(resolve => {
+    let validationError: Error | undefined;
+    await new Promise<void>((resolve, reject) => {
       const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
       s.on("data", (d: any) => {
-        if (d.file !== undefined) {
+        if (d.file !== undefined && !validationError) {
           const isDir = typeof d.attributes === "string" && d.attributes[0] === "D";
-          entries.push({ path: d.file, sizeBytes: typeof d.size === "number" ? d.size : 0, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
+          try {
+            const checked = validateArchiveEntry({ path: d.file, sizeBytes: d.size, isDirectory: isDir }, budget);
+            entries.push({ path: d.file, sizeBytes: checked.sizeBytes, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
+          } catch (error) {
+            validationError = error instanceof Error ? error : new Error(String(error));
+          }
         }
       });
-      s.on("end",   resolve);
-      s.on("error", () => resolve());
+      s.on("end", () => validationError ? reject(validationError) : resolve());
+      s.on("error", (error: Error) => reject(error));
     });
   }
+  assertArchiveFileUnchanged(archivePath, archiveSnapshot);
   return entries;
 }
 
@@ -244,30 +281,70 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
   try {
     const ext    = getArchiveExt(path.basename(archivePath));
     let count = 0;
+    const budget = createArchiveBudget();
+    const archiveSnapshot = snapshotArchiveFile(archivePath);
 
     if (ZIP_EXTS.has(ext)) {
+      assertBufferedZipFile(archivePath);
       const zip = new AdmZip(archivePath);
-      count = zip.getEntries().length;
+      for (const entry of zip.getEntries()) {
+        validateArchiveEntry({
+          path: entry.entryName,
+          sizeBytes: (entry.header as any)?.size ?? 0,
+          isDirectory: entry.isDirectory,
+        }, budget);
+        count++;
+      }
     } else if (TAR_EXTS.has(ext)) {
       await withTarInput(archivePath, path.basename(archivePath), undefined, async (tarPath, tarOptions) => {
+        let validationError: Error | undefined;
         await tar.list({
           file: tarPath,
           ...tarOptions,
           preservePaths: true,
           strict: true,
+          filter: (_p: string, entry: any) => {
+            if (validationError) return false;
+            try {
+              validateArchiveEntry({
+                path: entry.path,
+                sizeBytes: entry.size,
+                isDirectory: entry.type === "Directory",
+              }, budget);
+              return true;
+            } catch (error) {
+              validationError = error instanceof Error ? error : new Error(String(error));
+              return false;
+            }
+          },
           onentry: () => count++,
         });
+        if (validationError) throw validationError;
       });
     } else if (SEVENZIP_EXTS.has(ext)) {
-      await new Promise<void>(resolve => {
+      let validationError: Error | undefined;
+      await new Promise<void>((resolve, reject) => {
         const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
-        s.on("data", () => count++);
-        s.on("end",   resolve);
-        s.on("error", () => resolve());
+        s.on("data", (entry: any) => {
+          if (validationError || entry.file === undefined) return;
+          try {
+            validateArchiveEntry({
+              path: entry.file,
+              sizeBytes: entry.size,
+              isDirectory: typeof entry.attributes === "string" && entry.attributes[0] === "D",
+            }, budget);
+            count++;
+          } catch (error) {
+            validationError = error instanceof Error ? error : new Error(String(error));
+          }
+        });
+        s.on("end", () => validationError ? reject(validationError) : resolve());
+        s.on("error", (error: Error) => reject(error));
       });
     } else {
       return { ok: false, detail: `Unsupported format: .${ext}`, entryCount: 0 };
     }
+    assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     if (count === 0) return { ok: false, detail: "Archive appears empty or unreadable", entryCount: 0 };
     return { ok: true, detail: `${count} entries readable`, entryCount: count };
   } catch (e: any) {
@@ -322,33 +399,42 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
   extractionChecksums: ExtractionChecksumRecord[];
 }> {
   const ext    = getArchiveExt(path.basename(archivePath));
-  fs.mkdirSync(stagingDir, { recursive: true });
+  const archiveSnapshot = snapshotArchiveFile(archivePath);
+  try {
+    const stagingStat = fs.lstatSync(stagingDir);
+    if (stagingStat.isSymbolicLink()) {
+      throw new ArchiveSafetyError("Archive staging path is a symlink");
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  // Staging is disposable. Starting from a fresh directory prevents files
+  // left by an interrupted run from becoming unvalidated extraction input.
+  fs.rmSync(stagingDir, { recursive: true, force: true });
+  fs.mkdirSync(stagingDir, { recursive: true, mode: 0o700 });
+  const pass1Budget = createArchiveBudget();
 
-  /** Validate a single entry path before writing any bytes to disk. */
-  function assertSafeEntryPath(entryPath: string): void {
-    if (!entryPath || entryPath.trim() === "") return; // empty = root dir entry, safe
-    if (entryPath.includes("\0")) throw new Error(`Archive traversal rejected: null byte in entry "${entryPath}"`);
-    const normalised = entryPath.replace(/\\/g, "/");
-    if (path.isAbsolute(normalised) || path.isAbsolute(entryPath))
-      throw new Error(`Archive traversal rejected: absolute path in entry "${entryPath}"`);
-    if (normalised.split("/").some(part => part === ".."))
-      throw new Error(`Archive traversal rejected: ".." traversal component in entry "${entryPath}"`);
-    // Canonical check: resolved join must stay inside stagingDir
-    assertWithinRoot(path.join(stagingDir, entryPath), stagingDir);
+  function assertSafeEntryPath(
+    entryPath: string,
+    sizeBytes: number | string | undefined,
+    isDirectory: boolean,
+    budget = pass1Budget,
+  ): string {
+    return validateArchiveEntry({ path: entryPath, sizeBytes, isDirectory }, budget).normalizedPath;
   }
 
   let entriesExtracted = 0;
 
   if (ZIP_EXTS.has(ext)) {
+    assertBufferedZipFile(archivePath);
     const zip     = new AdmZip(archivePath);
     const entries = zip.getEntries();
 
     // Pass 1: validate all entries before writing anything
     for (const e of entries) {
-      if (e.isDirectory) continue;
       if ((e as any).attr && ((e as any).attr >>> 16) === 0xA000) // Unix symlink mode
         throw new Error(`Archive traversal rejected: symlink entry "${e.entryName}" in ZIP`);
-      assertSafeEntryPath(e.entryName);
+      assertSafeEntryPath(e.entryName, (e.header as any)?.size ?? 0, e.isDirectory);
     }
 
     // Pass 2: extract entry by entry with CRC32 + SHA-256 source→destination verification.
@@ -358,13 +444,26 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
     //   c) Write buffer to disk.
     //   d) Compute SHA-256 of written file (destHash).
     //   e) If hashes differ, throw — catches truncated/corrupted writes.
+    assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     let crcChecked = 0; let crcPassed = 0; let crcSkipped = 0;
     const extractionChecksums: ExtractionChecksumRecord[] = [];
+    const pass2Budget = createArchiveBudget();
     for (const e of entries) {
       if (e.isDirectory) continue;
+      const declaredSize = (e.header as any)?.size ?? 0;
+      assertSafeEntryPath(e.entryName, declaredSize, false, pass2Budget);
+      if (Number(declaredSize) > ARCHIVE_LIMITS.maxBufferedZipEntryBytes) {
+        throw new ArchiveSafetyError(
+          `ZIP entry "${e.entryName}" exceeds the ${ARCHIVE_LIMITS.maxBufferedZipEntryBytes / 1024 ** 2} MiB in-memory extraction limit`,
+        );
+      }
       const outPath = path.join(stagingDir, e.entryName);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
       const data = e.getData(); // throws internally on CRC mismatch
+      if (data.length > ARCHIVE_LIMITS.maxBufferedZipEntryBytes) {
+        throw new ArchiveSafetyError(
+          `ZIP entry "${e.entryName}" exceeds the ${ARCHIVE_LIMITS.maxBufferedZipEntryBytes / 1024 ** 2} MiB in-memory extraction limit`,
+        );
+      }
       const storedCrc = (e.header as any).crc as number | undefined;
       if (typeof storedCrc === "number" && storedCrc !== 0) {
         const computed = crc32(data);
@@ -376,7 +475,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       }
       // SHA-256: hash uncompressed buffer before writing
       const sourceHash = sha256Buffer(data);
-      fs.writeFileSync(outPath, data);
+      writeArchiveFileAtomically(stagingDir, outPath, data);
       // SHA-256: hash written file and compare against buffer hash
       const destHash = await sha256File(outPath);
       if (sourceHash !== destHash) {
@@ -388,6 +487,13 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       }
       extractionChecksums.push({ relativePath: e.entryName, sourceHash, destHash, verificationMethod: "source-vs-dest", verified: true });
       entriesExtracted++;
+    }
+    assertArchiveFileUnchanged(archivePath, archiveSnapshot);
+    const extractedTree = inspectExtractedTree(stagingDir);
+    const expectedPaths = new Set(entries.filter(e => !e.isDirectory).map(e => path.normalize(e.entryName)));
+    const actualPaths = new Set(extractedTree.files.map(file => path.normalize(file.relativePath)));
+    if (expectedPaths.size !== actualPaths.size || [...expectedPaths].some(file => !actualPaths.has(file))) {
+      throw new Error("Archive extraction produced an unexpected file set");
     }
     return {
       entriesExtracted,
@@ -413,7 +519,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
             const t = e.type as string;
             if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
               throw new Error(`Archive traversal rejected: link entry "${e.path}" (type: ${t}) in TAR`);
-            assertSafeEntryPath(e.path);
+            assertSafeEntryPath(e.path, e.size, t === "Directory");
             return true;
           } catch (err) {
             validationError = err instanceof Error ? err : new Error(String(err));
@@ -421,14 +527,16 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
           }
         },
         onentry: (e: any) => {
-          if (e.type !== "Directory") filePaths.push(e.path);
+          if (e.type !== "Directory") filePaths.push(e.path.replace(/\\/g, "/"));
         },
       });
       if (validationError) throw validationError;
+      assertArchiveFileUnchanged(archivePath, archiveSnapshot);
 
       // Pass 2: extract only after every entry passed validation. Preserve raw
       // paths here too, and validate again to defend against a changed archive.
       let extractionValidationError: Error | undefined;
+      const pass2Budget = createArchiveBudget();
       await tar.extract({
         file: tarPath,
         cwd: stagingDir,
@@ -442,7 +550,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
           try {
             if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
               return false;
-            assertSafeEntryPath(_p);
+            assertSafeEntryPath(_p, entry?.size, t === "Directory", pass2Budget);
             return true;
           } catch (err) {
             extractionValidationError = err instanceof Error ? err : new Error(String(err));
@@ -451,15 +559,24 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
         },
       } as any);
       if (extractionValidationError) throw extractionValidationError;
+      assertArchiveFileUnchanged(archivePath, archiveSnapshot);
 
-      entriesExtracted = filePaths.length;
+      const extractedTree = inspectExtractedTree(stagingDir);
+      const expectedPaths = new Set(filePaths.map(fp => path.normalize(fp)));
+      const actualPaths = new Set(extractedTree.files.map(file => path.normalize(file.relativePath)));
+      if (expectedPaths.size !== actualPaths.size || [...expectedPaths].some(file => !actualPaths.has(file))) {
+        throw new Error("Archive extraction produced an unexpected file set");
+      }
+
+      entriesExtracted = extractedTree.files.length;
 
       // Post-extraction SHA-256: TAR archives have no per-file payload hash, so we hash each
       // extracted file as written to disk.  There is no archive-level "source hash" to compare
       // against, so verified=false — but destHash is recorded for rollback auditing.
       const extractionChecksumsTar: ExtractionChecksumRecord[] = [];
-      for (const fp of filePaths) {
-        const outPath = path.join(stagingDir, fp);
+      for (const file of extractedTree.files) {
+        const fp = file.relativePath;
+        const outPath = file.fullPath;
         try {
           const destHash = await sha256File(outPath);
           extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
@@ -479,37 +596,64 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
   } else if (SEVENZIP_EXTS.has(ext)) {
     const filePaths: string[] = [];
     let sevenZipCrcCount = 0;
+    const sevenZipBudget = createArchiveBudget();
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
       const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
+      let failed = false;
+      const fail = (error: unknown) => {
+        if (failed) return;
+        failed = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
       s.on("data", (d: any) => {
-        if (d.file === undefined) return;
+        if (d.file === undefined || failed) return;
         const isDir  = typeof d.attributes === "string" && d.attributes[0] === "D";
         const isLink = typeof d.attributes === "string" && (d.attributes.includes("L") || d.attributes.includes("l"));
-        if (isLink) { reject(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
-        if (!isDir) {
-          try { assertSafeEntryPath(d.file); } catch (e) { reject(e); return; }
-          filePaths.push(d.file);
-          if (typeof d.crc === "number" || typeof d.crc === "string") sevenZipCrcCount++;
+        if (isLink) { fail(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
+        try {
+          const checked = validateArchiveEntry({
+            path: d.file,
+            sizeBytes: d.size,
+            isDirectory: isDir,
+          }, sevenZipBudget);
+          if (!isDir) {
+            filePaths.push(checked.normalizedPath);
+            if (typeof d.crc === "number" || typeof d.crc === "string") sevenZipCrcCount++;
+          }
+        } catch (error) {
+          fail(error);
         }
       });
-      s.on("end",   resolve);
-      s.on("error", (e: any) => reject(new Error(`7z list error: ${e?.message ?? e}`)));
+      s.on("end", () => failed || resolve());
+      s.on("error", (e: any) => fail(new Error(`7z list error: ${e?.message ?? e}`)));
     });
 
     // Pass 2: extract
+    assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.extractFull(archivePath, stagingDir, { $bin: path7za, overwrite: "qs", $progress: false } as any);
+      const s = Seven.extractFull(archivePath, stagingDir, {
+        $bin: path7za,
+        overwrite: "qs",
+        $progress: false,
+      } as any);
       s.on("end",   resolve);
       s.on("error", (e: any) => reject(new Error(`7z extract error: ${e?.message ?? e}`)));
     });
+    assertArchiveFileUnchanged(archivePath, archiveSnapshot);
 
     // Post-extraction canonical check + SHA-256 per extracted file
+    const extractedTree = inspectExtractedTree(stagingDir);
+    const expectedPaths = new Set(filePaths.map(fp => path.normalize(fp)));
+    const actualPaths = new Set(extractedTree.files.map(file => path.normalize(file.relativePath)));
+    if (expectedPaths.size !== actualPaths.size || [...expectedPaths].some(file => !actualPaths.has(file))) {
+      throw new Error("Archive extraction produced an unexpected file set");
+    }
     const extractionChecksums7z: ExtractionChecksumRecord[] = [];
-    for (const fp of filePaths) {
-      assertWithinRoot(path.join(stagingDir, fp), stagingDir);
-      const outPath = path.join(stagingDir, fp);
+    for (const file of extractedTree.files) {
+      const fp = file.relativePath;
+      const outPath = file.fullPath;
       try {
         const destHash = await sha256File(outPath);
         extractionChecksums7z.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
