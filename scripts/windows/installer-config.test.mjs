@@ -215,6 +215,9 @@ test("developer updater is Git-first with a verified archive fallback", () => {
   assert.match(updater, /pull --ff-only origin/);
   assert.match(updater, /sourceArtifactUrl/);
   assert.match(updater, /failed checksum verification/);
+  assert.match(updater, /statusCode -eq 404/);
+  assert.match(updater, /No verified GitHub release is published yet/);
+  assert.match(updater, /current folder was left unchanged/);
 });
 
 test("developer startup launches the API directly and fails when that process exits", () => {

@@ -45,7 +45,18 @@ function Invoke-ArchiveFallback {
 
     try {
         Write-Info "Reading the latest release manifest..."
-        $manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content | ConvertFrom-Json
+        try {
+            $manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content | ConvertFrom-Json
+        } catch {
+            $statusCode = 0
+            try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
+            if ($statusCode -eq 404) {
+                Write-Warn "No verified GitHub release is published yet. Your current folder was left unchanged."
+                Add-Content $updateLog "[update] No release manifest was published at $manifestUrl"
+                return
+            }
+            throw
+        }
         if (-not $manifest.sourceArtifactUrl -or -not $manifest.sourceSha256) {
             throw "This release does not contain a developer-source archive."
         }
