@@ -186,7 +186,7 @@ export default function LoginPage() {
     <div className="relative flex min-h-[100dvh] overflow-hidden bg-[#050617]">
       <video
         className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-80"
-        src="/willard-loading.mp4"
+        src={`${import.meta.env.BASE_URL}willard-loading.mp4`}
         autoPlay
         loop
         muted

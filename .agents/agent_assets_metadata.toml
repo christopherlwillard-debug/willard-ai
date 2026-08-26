@@ -19,3 +19,17 @@ uri = "file://build/WillardMediaCenter-clean-0.1.2-windows-x64.zip"
 type = "unspecified"
 title = "Willard Media Center — Corrected Compact Windows Package"
 description = "155 MB corrected package built with the Windows-specific dependency pruning fix. It includes the packaged app, API runtime, web files, native launcher, and bundled node.exe. Do not use the earlier 1.3 GB archive."
+
+[[outputs]]
+id = "yjmaanpgKcYyu6yy8qHCg"
+uri = "file://artifacts/willard-ai/public/willard-loading.mp4"
+type = "video"
+title = "Willard AI loading video"
+description = "Download the neon loading-loop MP4 used on the Willard AI login and loading screens."
+
+[[outputs]]
+id = "OHVg98hifujArv8rZz4SU"
+uri = "file://willard-ai-laptop-source.zip"
+type = "unspecified"
+title = "Willard AI laptop project folder"
+description = "Download this ZIP, extract it on your laptop, and use the included project folder as the current Willard AI source."
