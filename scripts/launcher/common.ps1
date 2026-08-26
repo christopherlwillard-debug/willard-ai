@@ -79,12 +79,110 @@ function Get-GitRemoteUrl($gitCommand = (Get-WillardGitCommand)) {
     return ([string]$remote).Trim()
 }
 
+function Get-UnsafeDeveloperWorktreeEntries($gitCommand) {
+    $entries = @(& $gitCommand -C $Root status --porcelain=v1 --untracked-files=all --ignored=matching 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git could not inspect this developer folder safely."
+    }
+    $unsafe = @()
+    foreach ($entry in $entries) {
+        if (-not $entry) { continue }
+        $path = ([string]$entry).Substring([Math]::Min(3, ([string]$entry).Length)).Replace("\", "/")
+        # These are launcher-owned runtime outputs/settings. They are ignored
+        # by Git and are explicitly preserved by setup/update flows.
+        if ($entry -match "^!! " -and
+            ($path -match "^\.env(?:\.[^/]*)?$" -or
+             $path -match "^logs(?:/|$)" -or
+             $path -match "^node_modules(?:/|$)")) {
+            continue
+        }
+        $unsafe += $path
+    }
+    return $unsafe
+}
+
+function Restore-SetupQuarantineCompletely($quarantine) {
+    if (-not $quarantine -or -not (Test-Path $quarantine)) { return }
+    foreach ($entry in @(Get-ChildItem $quarantine -Force)) {
+        $target = Join-Path $Root $entry.Name
+        if (Test-Path $target) { continue }
+        Move-Item -LiteralPath $entry.FullName -Destination $target -Force -ErrorAction SilentlyContinue
+    }
+    if (@(Get-ChildItem $quarantine -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+        Remove-Item $quarantine -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Restore-SetupQuarantineNonConflicting($quarantine, $gitCommand) {
+    if (-not $quarantine -or -not (Test-Path $quarantine)) { return }
+    $tracked = @(& $gitCommand -C $Root ls-tree -r --name-only "origin/$GithubBranch" 2>$null) |
+        ForEach-Object { ([string]$_).Replace("\", "/") }
+    $trackedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $tracked) { [void]$trackedSet.Add($path) }
+
+    foreach ($entry in @(Get-ChildItem $quarantine -Force)) {
+        $relative = $entry.Name.Replace("\", "/")
+        $hasTrackedDescendant = $false
+        foreach ($trackedPath in $trackedSet) {
+            if ($trackedPath -eq $relative -or $trackedPath.StartsWith($relative + "/")) {
+                $hasTrackedDescendant = $true
+                break
+            }
+        }
+        if (-not $hasTrackedDescendant) {
+            $target = Join-Path $Root $entry.Name
+            if (-not (Test-Path $target)) {
+                Move-Item -LiteralPath $entry.FullName -Destination $target -Force -ErrorAction SilentlyContinue
+            }
+            continue
+        }
+
+        $files = if ($entry.PSIsContainer) {
+            @(Get-ChildItem $entry.FullName -File -Recurse -Force)
+        } else {
+            @($entry)
+        }
+        foreach ($file in $files) {
+            $fileRelative = $file.FullName.Substring($quarantine.Length + 1).Replace("\", "/")
+            $target = Join-Path $Root ($fileRelative.Replace("/", "\"))
+            if ($trackedSet.Contains($fileRelative)) {
+                if ((Test-Path $target) -and
+                    (Get-FileHash $file.FullName -Algorithm SHA256).Hash -eq
+                    (Get-FileHash $target -Algorithm SHA256).Hash) {
+                    Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
+                }
+                continue
+            }
+            if (Test-Path $target) { continue }
+            New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
+            Move-Item -LiteralPath $file.FullName -Destination $target -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Get-ChildItem $quarantine -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+        Sort-Object { $_.FullName.Length } -Descending |
+        ForEach-Object {
+            if (@(Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    $remaining = @(Get-ChildItem $quarantine -Force -Recurse -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 0) {
+        Remove-Item $quarantine -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Initialize-DeveloperGitCheckout {
     $gitCommand = Get-WillardGitCommand
     if (-not $gitCommand) { return $false }
 
     $gitDir = Join-Path $Root ".git"
     if (Test-Path $gitDir) {
+        $unsafe = @(Get-UnsafeDeveloperWorktreeEntries $gitCommand)
+        if ($unsafe.Count -gt 0) {
+            throw ("Setup stopped before changing local files. Save, move, or remove these files and run setup again: " +
+                (($unsafe | Select-Object -First 8) -join ", "))
+        }
         $remote = Get-GitRemoteUrl $gitCommand
         if ($remote -ne $GithubRepo) {
             & $gitCommand -C $Root remote set-url origin $GithubRepo 2>$null
@@ -97,37 +195,46 @@ function Initialize-DeveloperGitCheckout {
 
     Write-Host ""
     Write-Host "  Connect this developer copy to GitHub for one-click updates? (Y/n)" -ForegroundColor White
-    $answer = Read-Host "  Connect updates"
+    $answer = if ($env:WILLARD_SETUP_CONNECT -eq "1") { "Y" } elseif ($env:WILLARD_SETUP_CONNECT -eq "0") { "N" } else { Read-Host "  Connect updates" }
     if ($answer -match '^[Nn]') {
         Write-Warn "GitHub updates skipped. You can still use the manual Update shortcut."
         return $false
     }
 
-    $envPath = Join-Path $Root ".env"
-    $envBackup = $null
-    if (Test-Path $envPath) { $envBackup = Get-Content $envPath -Raw }
+    $parent = Split-Path -Parent $Root
+    $leaf = Split-Path -Leaf $Root
+    $quarantine = Join-Path $parent ("." + $leaf + ".setup-quarantine-" + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Force $quarantine | Out-Null
+    try {
+        foreach ($entry in @(Get-ChildItem $Root -Force)) {
+            Move-Item -LiteralPath $entry.FullName -Destination $quarantine -Force -ErrorAction Stop
+        }
+        New-Item -ItemType Directory -Force $Root | Out-Null
 
-    Write-Info "Connecting this developer copy to GitHub..."
-    & $gitCommand -C $Root init --quiet
-    if ($LASTEXITCODE -ne 0) { throw "Git could not initialize this developer folder." }
-    & $gitCommand -C $Root remote add origin $GithubRepo 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        & $gitCommand -C $Root remote set-url origin $GithubRepo
+        Write-Info "Connecting this developer copy to GitHub without overwriting local files..."
+        & $gitCommand -C $Root init --quiet
+        if ($LASTEXITCODE -ne 0) { throw "Git could not initialize this developer folder." }
+        & $gitCommand -C $Root remote add origin $GithubRepo 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            & $gitCommand -C $Root remote set-url origin $GithubRepo
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Git could not configure the Willard AI update source." }
+        & $gitCommand -C $Root fetch --quiet origin $GithubBranch
+        if ($LASTEXITCODE -ne 0) { throw "Git could not reach GitHub. Local files remain in the setup quarantine." }
+        & $gitCommand -C $Root checkout --quiet -B $GithubBranch "origin/$GithubBranch"
+        if ($LASTEXITCODE -ne 0) { throw "Git could not attach this folder to the Willard AI source branch." }
+
+        Restore-SetupQuarantineNonConflicting $quarantine $gitCommand
+        Write-Ok "One-click GitHub updates enabled"
+        return $true
+    } catch {
+        Restore-SetupQuarantineCompletely $quarantine
+        throw
+    } finally {
+        if (Test-Path $quarantine) {
+            Write-Warn ("Setup preserved local files in this quarantine for review: " + $quarantine)
+        }
     }
-    if ($LASTEXITCODE -ne 0) { throw "Git could not configure the Willard AI update source." }
-    & $gitCommand -C $Root fetch --quiet origin $GithubBranch
-    if ($LASTEXITCODE -ne 0) { throw "Git could not reach GitHub. Check your internet connection and try again." }
-
-    # ZIP extractions begin as entirely untracked working trees. Capture that
-    # baseline locally so future candidate pulls can align code with origin/main;
-    # .env, logs, node_modules, and other ignored runtime data remain untouched.
-    & $gitCommand -C $Root add -A
-    & $gitCommand -C $Root -c user.name="Willard AI" -c user.email="willard-local@users.noreply.github.com" commit --quiet -m "Local developer installation baseline" 2>$null
-    & $gitCommand -C $Root checkout --quiet -B $GithubBranch "origin/$GithubBranch"
-    if ($LASTEXITCODE -ne 0) { throw "Git could not attach this folder to the Willard AI source branch." }
-    if ($envBackup) { Set-Content $envPath -Value $envBackup -Encoding UTF8 }
-    Write-Ok "One-click GitHub updates enabled"
-    return $true
 }
 
 function Get-WillardPnpmCommand {
@@ -364,27 +471,70 @@ function Ensure-AppDatabase {
     # the connection. Returns $true on success, $false on failure.
     $dbUrl = Get-EnvValue "DATABASE_URL"
     if (-not $dbUrl) { return $false }
-    $createJs = @"
+    $createJs = @'
 const { Client } = require('pg');
 const url = new URL(process.env.WILLARD_DB_URL);
-const dbName = url.pathname.slice(1);
-// Connect to the default 'postgres' maintenance database to run CREATE DATABASE
-url.pathname = '/postgres';
-const c = new Client({ connectionString: url.toString(), connectionTimeoutMillis: 5000 });
-c.connect()
-  .then(() => c.query("SELECT 1 FROM pg_database WHERE datname = '" + dbName + "'"))
-  .then(r => {
-    if (r.rows.length === 0) {
-      return c.query('CREATE DATABASE "' + dbName + '"').then(() => {
-        console.log('created');
-      });
-    } else {
-      console.log('exists');
+let dbName;
+try {
+  dbName = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+} catch {
+  console.error('DATABASE_URL is not a valid PostgreSQL connection string.');
+  process.exit(1);
+}
+if (!dbName || dbName.includes('\0') || Buffer.byteLength(dbName, 'utf8') > 63) {
+  console.error('DATABASE_URL must contain a non-empty PostgreSQL database name no longer than 63 bytes.');
+  process.exit(1);
+}
+function quoteIdentifier(identifier) {
+  return '"' + identifier.replaceAll('"', '""') + '"';
+}
+(async () => {
+  const target = new Client({ connectionString: process.env.WILLARD_DB_URL, connectionTimeoutMillis: 5000 });
+  let targetExists = false;
+  try {
+    await target.connect();
+    targetExists = true;
+  } catch (error) {
+    if (!error || error.code !== '3D000') {
+      console.error('The configured PostgreSQL role could not connect to database "' + dbName + '": ' +
+        (error && error.message ? error.message : 'connection failed'));
+      process.exitCode = 1;
+      return;
     }
-  })
-  .then(() => { process.exit(0); })
-  .catch(e => { console.error(e.message); process.exit(1); });
-"@
+  } finally {
+    try { await target.end(); } catch {}
+  }
+  if (targetExists) return;
+
+  url.pathname = '/postgres';
+  const admin = new Client({ connectionString: url.toString(), connectionTimeoutMillis: 5000 });
+  try {
+    await admin.connect();
+    const result = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
+    if (result.rows.length === 0) {
+      try {
+        await admin.query('CREATE DATABASE ' + quoteIdentifier(dbName));
+      } catch (error) {
+        if (error && (error.code === '42501' || /permission denied.*database/i.test(error.message || ''))) {
+          throw new Error('The configured PostgreSQL role cannot create database "' + dbName +
+            '". Create it with an administrator or grant CREATEDB, then run setup again.');
+        }
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (error && error.code === '42501') {
+      console.error('Database "' + dbName + '" does not exist and the configured PostgreSQL role cannot access ' +
+        'the maintenance database to create it. Ask an administrator to create the database and grant this role access.');
+    } else {
+      console.error(error.message);
+    }
+    process.exitCode = 1;
+  } finally {
+    try { await admin.end(); } catch {}
+  }
+})();
+'@
     $tmp = Join-Path $env:TEMP "willard-db-create.js"
     Set-Content -Path $tmp -Value $createJs
     $env:WILLARD_DB_URL = $dbUrl

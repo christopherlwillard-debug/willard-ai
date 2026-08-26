@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { findHighSeverityImageAdvisories } from "./validate-release.mjs";
 
+const require = createRequire(import.meta.url);
+const { ensureDatabase, getDatabaseName, quoteIdentifier } = require("../../setup-db.cjs");
 const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
 const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
 const developerLauncher = await readFile(new URL("../launcher/start.ps1", import.meta.url), "utf8");
@@ -290,7 +293,113 @@ test("developer setup enables one-click GitHub updates without affecting package
   assert.match(launcherCommon, /init --quiet/);
   assert.match(launcherCommon, /fetch --quiet origin/);
   assert.match(launcherCommon, /One-click GitHub updates enabled/);
+  assert.match(launcherCommon, /Get-UnsafeDeveloperWorktreeEntries/);
+  assert.match(launcherCommon, /setup-quarantine/);
+  assert.match(launcherCommon, /Restore-SetupQuarantineNonConflicting/);
+  assert.doesNotMatch(launcherCommon, /gitCommand -C \$Root add -A/);
   assert.match(updater, /signed release archive remains a fallback/);
+});
+
+test("database setup quotes special names and parameterizes catalog lookup", async () => {
+  const calls = [];
+  let instance = 0;
+  class Client {
+    constructor() { this.instance = instance++; }
+    async connect() {
+      if (this.instance === 0) {
+        const error = new Error("database does not exist");
+        error.code = "3D000";
+        throw error;
+      }
+    }
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.startsWith("SELECT 1 FROM pg_database")) return { rows: [] };
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  const name = 'family archive"2026';
+  assert.equal(getDatabaseName("postgresql://user:pass@localhost:5432/family%20archive%222026"), name);
+  assert.equal(quoteIdentifier(name), '"family archive""2026"');
+  await ensureDatabase("postgresql://user:pass@localhost:5432/family%20archive%222026", Client);
+  assert.deepEqual(calls[0], {
+    sql: "SELECT 1 FROM pg_database WHERE datname = $1",
+    params: [name],
+  });
+  assert.equal(calls[1].sql, 'CREATE DATABASE "family archive""2026"');
+});
+
+test("database setup rejects invalid names and explains restricted roles safely", async () => {
+  assert.throws(
+    () => getDatabaseName("postgresql://user:pass@localhost:5432/%ZZ"),
+    /not a valid PostgreSQL connection string/,
+  );
+  assert.throws(
+    () => getDatabaseName("postgresql://user:pass@localhost:5432/" + "a".repeat(64)),
+    /no longer than 63 bytes/,
+  );
+
+  let ended = false;
+  let restrictedInstance = 0;
+  class RestrictedClient {
+    constructor() { this.instance = restrictedInstance++; }
+    async connect() {
+      if (this.instance === 0) {
+        const error = new Error("database does not exist");
+        error.code = "3D000";
+        throw error;
+      }
+    }
+    async query(sql) {
+      if (sql.startsWith("SELECT 1 FROM pg_database")) return { rows: [] };
+      const error = new Error("permission denied to create database");
+      error.code = "42501";
+      throw error;
+    }
+    async end() { ended = true; }
+  }
+  await assert.rejects(
+    ensureDatabase("postgresql://reader:pass@localhost:5432/family", RestrictedClient),
+    /cannot create databases.*grant CREATEDB/i,
+  );
+  assert.equal(ended, true);
+
+  let clientCount = 0;
+  class ExistingDatabaseClient {
+    constructor() { clientCount += 1; }
+    async connect() {}
+    async query() { throw new Error("existing target should not query maintenance database"); }
+    async end() {}
+  }
+  await ensureDatabase("postgresql://reader:pass@localhost:5432/existing", ExistingDatabaseClient);
+  assert.equal(clientCount, 1);
+
+  let maintenanceDeniedInstance = 0;
+  class MaintenanceDeniedClient {
+    constructor() { this.instance = maintenanceDeniedInstance++; }
+    async connect() {
+      const error = new Error(
+        this.instance === 0 ? "database does not exist" : "permission denied for database postgres",
+      );
+      error.code = this.instance === 0 ? "3D000" : "42501";
+      throw error;
+    }
+    async end() {}
+  }
+  await assert.rejects(
+    ensureDatabase("postgresql://reader:pass@localhost:5432/missing", MaintenanceDeniedClient),
+    /cannot access the maintenance database.*administrator/i,
+  );
+});
+
+test("launcher database helper also uses target-first least-privilege setup", () => {
+  assert.match(launcherCommon, /datname = \$1/);
+  assert.doesNotMatch(launcherCommon, /datname = [`'"]?\s*\+/);
+  assert.match(launcherCommon, /error\.code !== '3D000'/);
+  assert.match(launcherCommon, /if \(targetExists\) return/);
+  assert.match(launcherCommon, /cannot access[\s\S]*maintenance database/);
 });
 
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {

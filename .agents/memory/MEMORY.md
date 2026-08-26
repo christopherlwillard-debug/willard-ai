@@ -43,3 +43,4 @@
 - [Face processing concurrency](face-processing-concurrency.md) — serialize derived face clustering per library and never load an unverified model artifact
 - [Bounded duplicate confirmation](bounded-duplicate-confirmation.md) — full duplicate hashes stop at 500 MiB; oversized or cancelled candidates stay explicitly unconfirmed
 - [Derived-data cleanup boundary](derived-data-cleanup-boundary.md) — purge rebuildable AI/face rows transactionally before permanent catalog deletion, with NAS-scoped crop-path validation
+- [Least-privilege DB bootstrap](least-privilege-db-bootstrap.md) — probe the target first; use /postgres only on 3D000 so existing restricted roles need no maintenance access

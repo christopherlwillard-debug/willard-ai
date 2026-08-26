@@ -38,6 +38,28 @@ function getDatabaseUrl() {
   return value;
 }
 
+function getDatabaseName(databaseUrl) {
+  let dbName;
+  try {
+    const url = new URL(databaseUrl);
+    dbName = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  } catch {
+    throw new Error('DATABASE_URL is not a valid PostgreSQL connection string.');
+  }
+  if (!dbName || dbName.includes('\0') || Buffer.byteLength(dbName, 'utf8') > 63) {
+    throw new Error('DATABASE_URL must contain a non-empty PostgreSQL database name no longer than 63 bytes.');
+  }
+  return dbName;
+}
+
+function quoteIdentifier(identifier) {
+  if (typeof identifier !== 'string' || !identifier || identifier.includes('\0') ||
+      Buffer.byteLength(identifier, 'utf8') > 63) {
+    throw new Error('The PostgreSQL database name is not a valid identifier.');
+  }
+  return '"' + identifier.replaceAll('"', '""') + '"';
+}
+
 // -- 2. Find the pg package in pnpm's virtual store ---------------------------
 function findPg() {
   // Direct (some pnpm configs hoist to root node_modules)
@@ -56,21 +78,55 @@ function findPg() {
 
 // -- 3. Create the willard database if it doesn't exist -----------------------
 async function ensureDatabase(DATABASE_URL, Client) {
+  const dbName = getDatabaseName(DATABASE_URL);
+  const target = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 8000 });
+  try {
+    await target.connect();
+    console.log(`  Database "${dbName}" already exists.`);
+    return;
+  } catch (error) {
+    if (error?.code !== '3D000') {
+      throw new Error(
+        `The configured PostgreSQL role could not connect to database "${dbName}": ${error?.message ?? 'connection failed'}`,
+      );
+    }
+  } finally {
+    try { await target.end(); } catch {}
+  }
+
   const url    = new URL(DATABASE_URL);
-  const dbName = url.pathname.slice(1);
   url.pathname = '/postgres';
 
   const admin = new Client({ connectionString: url.toString(), connectionTimeoutMillis: 8000 });
-  await admin.connect();
-  const { rows } = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName]);
-  if (rows.length === 0) {
-    console.log(`  Creating database "${dbName}"...`);
-    await admin.query(`CREATE DATABASE "${dbName}"`);
-    console.log(`  Database "${dbName}" created.`);
-  } else {
-    console.log(`  Database "${dbName}" already exists.`);
+  try {
+    await admin.connect();
+    const { rows } = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [dbName]);
+    if (rows.length === 0) {
+      console.log(`  Creating database "${dbName}"...`);
+      try {
+        await admin.query(`CREATE DATABASE ${quoteIdentifier(dbName)}`);
+      } catch (error) {
+        if (error?.code === '42501' || /permission denied.*database/i.test(error?.message ?? '')) {
+          throw new Error(
+            `Database "${dbName}" does not exist and the configured PostgreSQL role cannot create databases. ` +
+            'Create it with an administrator or grant CREATEDB, then run setup again.',
+          );
+        }
+        throw error;
+      }
+      console.log(`  Database "${dbName}" created.`);
+    } else console.log(`  Database "${dbName}" already exists.`);
+  } catch (error) {
+    if (error?.code === '42501') {
+      throw new Error(
+        `Database "${dbName}" does not exist and the configured PostgreSQL role cannot access the ` +
+        'maintenance database to create it. Ask an administrator to create the database and grant this role access.',
+      );
+    }
+    throw error;
+  } finally {
+    try { await admin.end(); } catch {}
   }
-  await admin.end();
 }
 
 // -- 4. Optional extensions (failures are non-fatal) --------------------------
@@ -638,6 +694,8 @@ module.exports = {
   SCHEMA_VERSION,
   SETUP_SQL,
   VECTOR_SQL,
+  getDatabaseName,
+  quoteIdentifier,
   ensureDatabase,
   runRequiredSchema,
 };

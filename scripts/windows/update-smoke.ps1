@@ -57,6 +57,40 @@ try {
   & git -C $Remote commit --quiet -m "smoke update"
   if ($LASTEXITCODE -ne 0) { throw "Could not create the update commit." }
 
+  # Existing checkouts must refuse untracked work before changing Git state.
+  $setupExisting = Join-Path $TempRoot "setup-existing"
+  & git clone --quiet $Remote $setupExisting
+  Set-Content (Join-Path $setupExisting "family-notes.txt") "keep me" -Encoding UTF8
+  $script:Root = $setupExisting
+  $script:GithubRepo = $Remote
+  $script:GithubBranch = $remoteBranch
+  $setupRefused = $false
+  try {
+    Initialize-DeveloperGitCheckout | Out-Null
+  } catch {
+    $setupRefused = $_.Exception.Message -match "Setup stopped before changing local files"
+  }
+  Assert-True $setupRefused "Setup did not refuse an existing checkout with untracked work."
+  Assert-True ((Read-Text (Join-Path $setupExisting "family-notes.txt")) -match "keep me") "Setup deleted untracked work."
+
+  # A first-time source folder is moved aside before checkout. Files that do not
+  # conflict return to their original paths; conflicting files stay quarantined.
+  $setupSource = Join-Path $TempRoot "setup-source"
+  New-Item -ItemType Directory -Force $setupSource | Out-Null
+  Set-Content (Join-Path $setupSource "family-notes.txt") "restore me" -Encoding UTF8
+  Set-Content (Join-Path $setupSource ".env") "DATABASE_URL=postgresql://preserved" -Encoding UTF8
+  Set-Content (Join-Path $setupSource "package.json") '{"local":"conflict"}' -Encoding UTF8
+  $script:Root = $setupSource
+  $env:WILLARD_SETUP_CONNECT = "1"
+  Initialize-DeveloperGitCheckout | Out-Null
+  Remove-Item Env:\WILLARD_SETUP_CONNECT -ErrorAction SilentlyContinue
+  Assert-True ((Read-Text (Join-Path $setupSource "family-notes.txt")) -match "restore me") "Setup did not restore a non-conflicting local file."
+  Assert-True ((Read-Text (Join-Path $setupSource ".env")) -match "preserved") "Setup did not restore local settings."
+  Assert-True ((Read-Text (Join-Path $setupSource "package.json")) -notmatch '"local"') "Setup replaced the remote package with a local conflict."
+  $setupQuarantine = Get-ChildItem $TempRoot -Directory -Force | Where-Object { $_.Name -like ".setup-source.setup-quarantine-*" } | Select-Object -First 1
+  Assert-True $setupQuarantine "Setup did not retain a quarantine for conflicting files."
+  Assert-True ((Read-Text (Join-Path $setupQuarantine.FullName "package.json")) -match '"local"') "The conflicting local file was not preserved in quarantine."
+
   & git clone --quiet $Remote $Install
   if ($LASTEXITCODE -ne 0) { throw "Could not create the temporary installation." }
   & git -C $Install reset --quiet --hard HEAD~1
@@ -65,6 +99,9 @@ try {
   $env:WILLARD_UPDATE_REPO = $Remote
   $env:WILLARD_UPDATE_BRANCH = $remoteBranch
   $env:WILLARD_NO_PAUSE = "1"
+  $script:Root = $Install
+  $script:GithubRepo = $Remote
+  $script:GithubBranch = $remoteBranch
   $data = Join-Path $Install "library-data"
   $logs = Join-Path $Install "logs"
   New-Item -ItemType Directory -Force -Path $data, $logs | Out-Null

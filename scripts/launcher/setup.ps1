@@ -83,8 +83,9 @@ $env:DATABASE_URL = Get-EnvValue "DATABASE_URL"
 $dbLog = Join-Path $LogDir "setup-db.log"
 & node (Join-Path $Root "setup-db.cjs") *> $dbLog
 if ($LASTEXITCODE -ne 0) {
-    Show-Failure "Database setup failed. Is PostgreSQL running?" ("setup-db.cjs failed - see " + $dbLog)
-    Write-Host "  Make sure PostgreSQL is running, then try again." -ForegroundColor White
+    Show-Failure "Database setup stopped safely." `
+        ("PostgreSQL may be unavailable, the database name may be invalid, or this role may lack permission. See " + $dbLog)
+    Write-Host "  Check PostgreSQL, DATABASE_URL, and database creation permissions, then try again." -ForegroundColor White
     Pause-BeforeClose; exit 1
 }
 Write-Ok "Database ready"
