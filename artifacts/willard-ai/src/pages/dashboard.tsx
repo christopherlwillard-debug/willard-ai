@@ -12,7 +12,7 @@ import {
   getGetSettingsLogoUrl,
   useListArchives,
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
@@ -22,6 +22,7 @@ import {
   AlertTriangle, Archive, ArrowUpRight, CheckCircle2, ChevronRight, CloudOff,
   FileText, Film, FolderHeart, HardDrive, Image as ImageIcon, Loader2,
   Maximize2, PackageOpen, Search, Sparkles, Users, X,
+  Zap,
 } from "lucide-react";
 import { LibraryStatusBanner } from "@/components/library/library-status";
 import { LibraryActivityFeed } from "@/components/library/library-activity";
@@ -73,6 +74,14 @@ function AttentionCard({ icon: Icon, title, detail, href, onDismiss }: { icon: a
   );
 }
 
+interface OptimizationStatus {
+  available?: boolean;
+  safeFiles?: number;
+  estimatedSavingsBytes?: number;
+  formatCount?: number;
+  recommendationKey?: string;
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const [scanTriggered, setScanTriggered] = useState(false);
@@ -87,6 +96,15 @@ export default function Dashboard() {
   const { data: health } = useGetHealthStatus();
   const { data: scanStatus } = useGetScanStatus({ query: { queryKey: getGetScanStatusQueryKey(), refetchInterval: scanTriggered ? 3000 : 30000 } });
   const { data: archives } = useListArchives({ limit: 1, status: "pending" });
+  const { data: optimization } = useQuery<OptimizationStatus>({
+    queryKey: ["optimization-status"],
+    queryFn: async () => {
+      const response = await fetch(apiUrl("/optimize/status"));
+      if (!response.ok) return { available: false };
+      return response.json() as Promise<OptimizationStatus>;
+    },
+    refetchInterval: 30000,
+  });
   const scanMutation = useStartScan({ mutation: { onSuccess: () => setScanTriggered(true) } });
 
   useEffect(() => {
@@ -104,13 +122,21 @@ export default function Dashboard() {
   const incoming = Number((data as any)?.incomingCount ?? 0);
   const duplicateCount = Number(data?.duplicateCount ?? 0);
   const pendingArchives = Number(archives?.total ?? 0);
+  const optimizationKey = optimization?.recommendationKey ? `optimization:${optimization.recommendationKey}` : "optimization";
   const online = data?.libraryOnline ?? true;
   const issues = !online || health?.database === false || health?.thumbnailsOk === false || Number(health?.missingFiles ?? 0) > 0;
   const attention = useMemo(() => [
     pendingArchives > 0 ? { key: "archives", icon: Archive, title: `${pendingArchives} archive${pendingArchives === 1 ? "" : "s"} worth a look`, detail: "Willard found compressed files and can show you what is inside before anything changes.", href: "/archives" } : null,
     incoming > 0 ? { key: "incoming", icon: PackageOpen, title: `${incoming} item${incoming === 1 ? "" : "s"} waiting to be organized`, detail: "Review these suggestions when you are ready. Nothing moves without your approval.", href: "/organize" } : null,
     duplicateCount > 0 ? { key: "duplicates", icon: FolderHeart, title: `${duplicateCount} duplicate group${duplicateCount === 1 ? "" : "s"} to review`, detail: "Potential copies are grouped for comparison. Your originals stay safe.", href: "/cleanup" } : null,
-  ].filter(Boolean).filter((item: any) => !dismissed.includes(item.key)) as any[], [dismissed, duplicateCount, incoming, pendingArchives]);
+     optimization?.available && Number(optimization.safeFiles) > 0 ? {
+       key: optimizationKey,
+       icon: Zap,
+       title: `${Number(optimization.safeFiles).toLocaleString()} file${Number(optimization.safeFiles) === 1 ? "" : "s"} can be optimized`,
+       detail: `${Number(optimization.formatCount ?? 0)} format${Number(optimization.formatCount) === 1 ? "" : "s"} could free up about ${formatBytes(Number(optimization.estimatedSavingsBytes ?? 0))}. Review first — nothing converts automatically.`,
+       href: "/optimize",
+     } : null,
+   ].filter(Boolean).filter((item: any) => !dismissed.includes(item.key)) as any[], [dismissed, duplicateCount, incoming, optimization, optimizationKey, pendingArchives]);
 
   const dismiss = (key: string) => {
     const next = [...dismissed, key];

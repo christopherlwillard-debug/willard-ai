@@ -813,6 +813,74 @@ function appendConversionLog(nasPath: string, entry: Record<string, unknown>): v
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
 
+/**
+ * Return the cached optimization opportunity for attention-center surfaces.
+ *
+ * This is deliberately read-only: the home page must not start a potentially
+ * expensive NAS scan just to decide whether it has something useful to show.
+ * The full scan page remains responsible for starting and refreshing scans.
+ */
+router.get("/optimize/status", async (_req, res) => {
+  try {
+    const settingsRows = await db.select().from(appSettingsTable).limit(1);
+    const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
+    const nasPath = settings.nasPath;
+    const profile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settings.rawConversionEnabled ?? false;
+
+    if (!nasPath) {
+      res.json({ available: false });
+      return;
+    }
+
+    const cached = readScanCache(nasPath, profile, rawConversionEnabled);
+    if (!cached) {
+      res.json({ available: false });
+      return;
+    }
+
+    const groups = Array.isArray(cached.groups) ? cached.groups as Array<{
+      extension?: string;
+      fileCount?: number;
+      estimatedSavingsBytes?: number;
+      status?: string;
+    }> : [];
+    const safeGroups = groups.filter(group => group.status === "convert" && Number(group.fileCount) > 0);
+    const safeFiles = safeGroups.reduce((total, group) => total + Number(group.fileCount ?? 0), 0);
+    const estimatedSavingsBytes = safeGroups.reduce(
+      (total, group) => total + Number(group.estimatedSavingsBytes ?? 0),
+      0,
+    );
+
+    if (safeFiles === 0) {
+      res.json({ available: false, scannedAt: cached.scannedAt, profile });
+      return;
+    }
+
+    // Counts and savings are part of the identity: dismissing an opportunity
+    // should not hide a materially different recommendation after a rescan.
+    const recommendationKey = [
+      profile,
+      rawConversionEnabled ? "raw-on" : "raw-off",
+      ...safeGroups
+        .map(group => `${group.extension ?? "unknown"}:${Number(group.fileCount ?? 0)}:${Number(group.estimatedSavingsBytes ?? 0)}`)
+        .sort(),
+    ].join("|");
+
+    res.json({
+      available: true,
+      safeFiles,
+      estimatedSavingsBytes,
+      formatCount: safeGroups.length,
+      recommendationKey,
+      scannedAt: cached.scannedAt,
+      profile,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? "Optimization status failed" });
+  }
+});
+
 router.get("/optimize/scan", async (req, res) => {
   try {
     const settingsRows = await db.select().from(appSettingsTable).limit(1);
