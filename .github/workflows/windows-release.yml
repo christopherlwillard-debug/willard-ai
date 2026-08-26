@@ -72,9 +72,6 @@ jobs:
           PGPASSWORD: "postgres"
         run: |
           $ErrorActionPreference = "Stop"
-          $apiLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.log"
-          $apiErrorLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.err.log"
-          $apiProcess = $null
           $psql = Join-Path $env:ProgramFiles "PostgreSQL\16\bin\psql.exe"
           & node (Join-Path $env:GITHUB_WORKSPACE "setup-db.cjs")
           if ($LASTEXITCODE -ne 0) { throw "Could not bootstrap the disposable backend-audit database." }
@@ -90,34 +87,59 @@ jobs:
             -v "nas_path=$env:WILLARD_NAS_PATH" -v "password_hash=$hash" `
             -c "INSERT INTO app_settings (nas_path, password_hash) VALUES (:'nas_path', :'password_hash') ON CONFLICT ((1)) DO UPDATE SET nas_path = EXCLUDED.nas_path, password_hash = EXCLUDED.password_hash;"
           if ($LASTEXITCODE -ne 0) { throw "Could not seed the disposable backend-audit settings." }
+
+      - name: Start API for backend audit and integration tests
+        shell: pwsh
+        env:
+          PORT: "8080"
+          NODE_ENV: development
+          WILLARD_API_URL: "http://127.0.0.1:8080"
+          WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
+          PGPASSWORD: "postgres"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $apiLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.log"
+          $apiErrorLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.err.log"
           $apiProcess = Start-Process pnpm.cmd `
             -ArgumentList @("--filter", "@workspace/api-server", "run", "dev") `
             -WorkingDirectory $env:GITHUB_WORKSPACE `
             -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -PassThru
-          try {
-            $ready = $false
-            $deadline = (Get-Date).AddSeconds(180)
-            while ((Get-Date) -lt $deadline) {
-              try {
-                $response = Invoke-WebRequest -Uri $env:WILLARD_API_URL/api/healthz -UseBasicParsing -TimeoutSec 3
-                if ($response.StatusCode -eq 200 -and $response.Content -match '"status"\s*:\s*"ok"') {
-                  $ready = $true
-                  break
-                }
-              } catch {}
-              Start-Sleep -Seconds 2
-            }
-            if (-not $ready) {
-              $tail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 -Raw } else { "" }
-              $errorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 -Raw } else { "" }
-              throw "Backend audit API did not become ready.`n$tail`n$errorTail"
-            }
-            pnpm run audit:backend
-            if ($LASTEXITCODE -ne 0) { throw "Backend audit and integration tests failed." }
-          } finally {
-            if ($apiProcess -and -not $apiProcess.HasExited) {
-              & taskkill /PID $apiProcess.Id /T /F 2>&1 | Out-Null
-            }
+          "WILLARD_BACKEND_AUDIT_API_PID=$($apiProcess.Id)" >> $env:GITHUB_ENV
+          $ready = $false
+          $deadline = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $response = Invoke-WebRequest -Uri "$env:WILLARD_API_URL/api/healthz" -UseBasicParsing -TimeoutSec 3
+              if ($response.StatusCode -eq 200 -and $response.Content -match '"status"\s*:\s*"ok"') {
+                $ready = $true
+                break
+              }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ready) {
+            $tail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 -Raw } else { "" }
+            $errorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 -Raw } else { "" }
+            throw "Backend audit API did not become ready.`n$tail`n$errorTail"
+          }
+
+      - name: Run backend audit and integration tests
+        shell: pwsh
+        env:
+          WILLARD_API_URL: "http://127.0.0.1:8080"
+          WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
+          PGPASSWORD: "postgres"
+        run: |
+          pnpm run audit:backend
+          if ($LASTEXITCODE -ne 0) { throw "Backend audit and integration tests failed." }
+
+      - name: Stop backend audit API
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:WILLARD_BACKEND_AUDIT_API_PID) {
+            & taskkill /PID $env:WILLARD_BACKEND_AUDIT_API_PID /T /F 2>&1 | Out-Null
           }
 
       - name: Install Chromium for browser release tests
