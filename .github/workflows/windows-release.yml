@@ -62,7 +62,7 @@ jobs:
           & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
           & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
 
-      - name: Gate release on backend audit and integration tests
+      - name: Prepare disposable backend-audit database
         shell: pwsh
         env:
           PORT: "8080"
