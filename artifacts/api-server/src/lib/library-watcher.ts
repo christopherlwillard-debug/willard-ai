@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { db, appSettingsTable } from "@workspace/db";
 import { checkNasReachableAsync } from "./nas-storage.ts";
-import { getActiveJobId, getActiveJobProfile, startJob, waitForUiConnected } from "./library-engine/index.ts";
+import { getActiveJobId, getActiveJobProfile, invalidateDirMtimeCache, startJob, waitForUiConnected } from "./library-engine/index.ts";
 import { recordActivity } from "./library-activity.ts";
 import { logger } from "./logger.ts";
 
@@ -129,6 +129,10 @@ function onFsEvent(nasPath: string, filename: string | Buffer | null): void {
     const rel = filename.toString().replace(/\\/g, "/");
     if (rel === "WillardAI" || rel.startsWith("WillardAI/")) return;
   }
+  // Native events are the strongest signal available on local disks and
+  // supported SMB mounts. Persist the affected directory before scheduling the
+  // debounced scan so a restart cannot resurrect a stale cache hit.
+  invalidateDirMtimeCache(nasPath, filename);
   state.lastChangeAt = new Date();
   state.pendingChanges++;
   if (state.firstPendingAt === null) state.firstPendingAt = Date.now();

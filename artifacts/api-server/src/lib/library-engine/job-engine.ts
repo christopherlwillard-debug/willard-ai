@@ -368,41 +368,142 @@ class ConcurrencyController {
 // directory trees that haven't changed.  Stored in the WillardAI cache folder
 // on the NAS itself.
 
+const DIR_CACHE_VERSION = 4;
+const DIR_CACHE_MAX_AGE_MS = 10 * 60_000;
+const DIR_CACHE_INVALIDATIONS_FILE = "dir-scan-invalidations.json";
+const DIR_CACHE_INVALIDATION_FLUSH_MS = 250;
+
 function dirMtimeCachePath(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", "dir-scan-cache.json");
 }
 
+function dirCacheInvalidationsPath(nasPath: string): string {
+  return path.join(getWillardAIDir(nasPath), "cache", DIR_CACHE_INVALIDATIONS_FILE);
+}
+
+const pendingDirInvalidations = new Map<string, Set<string>>();
+let dirInvalidationFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function normalizeInvalidationPath(nasPath: string, filename: string | Buffer | null): string {
+  if (!filename) return "";
+  const raw = filename.toString().replace(/\\/g, "/");
+  const relative = path.isAbsolute(raw)
+    ? path.relative(nasPath, raw).replace(/\\/g, "/")
+    : raw;
+  return relative.replace(/^\.\/+/, "").replace(/\/+$/, "");
+}
+
+function writeJsonAtomically(filePath: string, value: unknown): void {
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(value));
+  try {
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+function flushDirCacheInvalidations(): void {
+  const pending = [...pendingDirInvalidations.entries()];
+  pendingDirInvalidations.clear();
+  for (const [nasPath, paths] of pending) {
+    try {
+      const markerPath = dirCacheInvalidationsPath(nasPath);
+      fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+      let existing = new Set<string>();
+      try {
+        const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+        if (parsed?.v === 1 && Array.isArray(parsed.dirs)) {
+          existing = new Set(parsed.dirs.filter((value: unknown): value is string => typeof value === "string"));
+        }
+      } catch { /* first invalidation or a partially written marker */ }
+      for (const relPath of paths) existing.add(relPath);
+      writeJsonAtomically(markerPath, {
+        v: 1,
+        updatedAt: new Date().toISOString(),
+        dirs: [...existing].sort(),
+      });
+    } catch {
+      // A failed marker write is safe: the watcher still schedules a QUICK scan,
+      // and the cache age limit forces periodic reconciliation.
+    }
+  }
+}
+
+export function invalidateDirMtimeCache(
+  nasPath: string,
+  filename: string | Buffer | null = null,
+): void {
+  const relPath = normalizeInvalidationPath(nasPath, filename);
+  const parent = relPath ? path.posix.dirname(relPath) : "";
+  const paths = pendingDirInvalidations.get(nasPath) ?? new Set<string>();
+  paths.add(parent === "." ? "" : parent);
+  if (relPath) paths.add(relPath);
+  pendingDirInvalidations.set(nasPath, paths);
+  if (!dirInvalidationFlushTimer) {
+    dirInvalidationFlushTimer = setTimeout(() => {
+      dirInvalidationFlushTimer = null;
+      flushDirCacheInvalidations();
+    }, DIR_CACHE_INVALIDATION_FLUSH_MS);
+    (dirInvalidationFlushTimer as any).unref?.();
+  }
+}
+
 async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheEntry>> {
+  flushDirCacheInvalidations();
   try {
     const raw = await fs.promises.readFile(dirMtimeCachePath(nasPath), "utf8");
     const parsed = JSON.parse(raw);
-    if ((parsed?.v === 2 || parsed?.v === 3) && typeof parsed.dirs === "object") {
-      // v3 adds root — validate it matches to prevent stale caches from a different library path
-      if (parsed.v === 3 && parsed.root && parsed.root !== nasPath) {
+    if (parsed?.v === DIR_CACHE_VERSION && typeof parsed.dirs === "object") {
+      if (parsed.root && parsed.root !== nasPath) {
         console.warn(`[library] Dir cache root mismatch — expected "${nasPath}" got "${parsed.root}" — discarding stale cache`);
         return new Map();
       }
-      return new Map(
+      const updatedAt = typeof parsed.updatedAt === "string" ? Date.parse(parsed.updatedAt) : NaN;
+      if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > DIR_CACHE_MAX_AGE_MS) {
+        console.info(`[library] Dir cache expired for "${nasPath}" — forcing reconciliation`);
+        return new Map();
+      }
+      const cache = new Map(
         Object.entries(parsed.dirs as Record<string, { m: number; c: number }>).map(
           ([k, v]) => [k, { mtimeMs: v.m, entryCount: v.c }],
         ),
       );
+      try {
+        const marker = JSON.parse(await fs.promises.readFile(dirCacheInvalidationsPath(nasPath), "utf8"));
+        if (marker?.v === 1 && Array.isArray(marker.dirs)) {
+          const invalidated = marker.dirs.filter((value: unknown): value is string => typeof value === "string");
+          if (invalidated.some(value => value === "")) return new Map();
+          for (const relPath of invalidated) {
+            for (const key of cache.keys()) {
+              if (key === relPath || key.startsWith(`${relPath}/`)) cache.delete(key);
+            }
+          }
+        }
+      } catch { /* no persisted invalidations */ }
+      return cache;
     }
-    // v1 caches lack entry-count — discard; one extra full walk is acceptable.
+    // Older caches lack the freshness/invalidation contract; discard once.
   } catch { /* no cache yet — first scan */ }
   return new Map();
 }
 
-function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>): void {
+function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>, clearInvalidations = false): void {
   try {
     const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
     fs.mkdirSync(cacheDir, { recursive: true });
     const dirs: Record<string, { m: number; c: number }> = {};
     for (const [k, v] of cache) dirs[k] = { m: v.mtimeMs, c: v.entryCount };
-    fs.writeFileSync(
-      dirMtimeCachePath(nasPath),
-      JSON.stringify({ v: 3, root: nasPath, dirs, updatedAt: new Date().toISOString() }),
-    );
+    writeJsonAtomically(dirMtimeCachePath(nasPath), {
+      v: DIR_CACHE_VERSION,
+      root: nasPath,
+      dirs,
+      updatedAt: new Date().toISOString(),
+    });
+    if (clearInvalidations) {
+      try { fs.unlinkSync(dirCacheInvalidationsPath(nasPath)); } catch { /* already absent */ }
+    }
   } catch { /* non-fatal */ }
 }
 
@@ -1047,7 +1148,7 @@ async function runScanJob(
       if (preCheck.allHit) {
         if (fastPathStreak < MAX_FAST_PATH_STREAK) {
           fastPathStreak++;
-          saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut);
+          saveDirMtimeCache(state.nasPath, preCheck.dirCacheOut, true);
           const elapsedMs = preCheck.dirStatMs;
           const nowTs = new Date().toISOString();
           const summary: JobSummary = {
@@ -1977,7 +2078,7 @@ async function runScanJob(
 
     // Save the current directory mtime cache for the next rescan
     stopIncrementalDirCacheSave();
-    saveDirMtimeCache(state.nasPath, dirCacheOut);
+    saveDirMtimeCache(state.nasPath, dirCacheOut, true);
     sdbg('dir_cache_saved', { entries: dirCacheOut.size });
 
     // ── Phase: detecting deletions ─────────────────────────────────────────

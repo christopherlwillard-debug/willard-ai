@@ -19,10 +19,3 @@ uri = "file://build/WillardMediaCenter-clean-0.1.2-windows-x64.zip"
 type = "unspecified"
 title = "Willard Media Center — Corrected Compact Windows Package"
 description = "155 MB corrected package built with the Windows-specific dependency pruning fix. It includes the packaged app, API runtime, web files, native launcher, and bundled node.exe. Do not use the earlier 1.3 GB archive."
-
-[[outputs]]
-id = "5bf-CXv9SHhyhBYEKr5H0"
-uri = "file://attached_assets/dreamina-2026-08-25-1809-Spoken-language_constraint__All_dialo_1787684036930.mp4"
-type = "video"
-title = "Willard AI loading screen reference"
-description = "5-second 1280×720 MP4 reference clip for the looping loading background."

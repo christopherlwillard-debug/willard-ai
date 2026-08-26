@@ -19,6 +19,7 @@ export {
   stopThumbnailReconciliation,
   addThumbnailPriority,
   clearThumbnailPriority,
+  invalidateDirMtimeCache,
   notifyUiConnected,
   waitForUiConnected,
   getLibrarySeq,
