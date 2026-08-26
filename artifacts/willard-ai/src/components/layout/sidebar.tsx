@@ -1,4 +1,4 @@
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
@@ -76,8 +76,27 @@ const advancedNavigation = [
   { name: "Health Center", href: "/health", icon: ShieldCheck },
 ];
 
+function isNavigationActive(location: string, href: string): boolean {
+  const [pathname, search = ""] = location.split("?");
+  const [targetPathname, targetSearch = ""] = href.split("?");
+
+  if (pathname !== targetPathname) return false;
+
+  const currentParams = new URLSearchParams(search);
+  const targetParams = new URLSearchParams(targetSearch);
+  if (currentParams.size !== targetParams.size) return false;
+
+  for (const [key, value] of targetParams) {
+    if (currentParams.get(key) !== value) return false;
+  }
+
+  return true;
+}
+
 export function Sidebar() {
   const [location] = useLocation();
+  const search = useSearch();
+  const currentUrl = search ? `${location}?${search}` : location;
   const { invalidate } = useAuth();
   const queryClient = useQueryClient();
 
@@ -98,7 +117,7 @@ export function Sidebar() {
       <div className="archive-scrollbar flex-1 overflow-y-auto py-3 md:py-4">
         <nav className="space-y-1 px-2">
           {primaryNavigation.map((item) => {
-            const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+            const isActive = isNavigationActive(currentUrl, item.href);
             return (
               <Link
                 key={item.name}
@@ -131,7 +150,7 @@ export function Sidebar() {
           </p>
           <nav className="space-y-1">
             {advancedNavigation.map((item) => {
-              const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+            const isActive = isNavigationActive(currentUrl, item.href);
               return (
                 <Link
                   key={item.name}

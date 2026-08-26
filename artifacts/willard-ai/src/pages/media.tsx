@@ -1718,8 +1718,26 @@ export default function Media() {
         {/* ── Main grid ── */}
         <div ref={mediaScrollRef} className="flex-1 overflow-y-auto" data-testid="media-library-scroll">
           {filesQuery.isLoading ? (
-            <div className="flex items-center justify-center h-full">
+            <div role="status" aria-label="Loading media files" className="flex items-center justify-center h-full">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : filesQuery.isError && !filesQuery.data ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center" role="alert">
+              <AlertCircle className="w-8 h-8 text-destructive" />
+              <div>
+                <p className="text-sm font-medium">Media files could not be loaded.</p>
+                <p className="mt-1 text-sm text-muted-foreground">Check that the local library service is available, then try again.</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 font-mono text-xs"
+                onClick={() => void filesQuery.refetch()}
+                disabled={filesQuery.isRefetching}
+              >
+                {filesQuery.isRefetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                Try again
+              </Button>
             </div>
           ) : files.length === 0 && total === 0 && !debouncedSearch && activeType === "all" && !selectedFolder && selectedTags.length === 0 ? (
             <EmptyState onScan={handleScan} isScanning={isScanning} />

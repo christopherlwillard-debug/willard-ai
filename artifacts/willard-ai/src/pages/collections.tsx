@@ -20,6 +20,7 @@ import {
   ChevronRight,
   FolderPlus,
   X,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,6 +63,30 @@ function kindBadge(kind: Collection["kind"]) {
     case "smart":  return <Badge variant="secondary" className="gap-1 text-[10px]"><Wand2 className="w-3 h-3" />Smart</Badge>;
     default:       return <Badge variant="secondary" className="gap-1 text-[10px]"><FolderHeart className="w-3 h-3" />Album</Badge>;
   }
+}
+
+function QueryErrorState({
+  description,
+  onRetry,
+  retrying = false,
+}: {
+  description: string;
+  onRetry: () => void;
+  retrying?: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center" role="alert">
+      <AlertCircle className="w-8 h-8 text-destructive" />
+      <div>
+        <p className="text-sm font-medium">This information could not be loaded.</p>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      </div>
+      <Button variant="outline" size="sm" onClick={onRetry} disabled={retrying} className="gap-1.5 font-mono text-xs">
+        {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+        Try again
+      </Button>
+    </div>
+  );
 }
 
 function CoverImage({ fileId, className }: { fileId: number | null; className?: string }) {
@@ -320,7 +345,13 @@ function CollectionDetail({
         <p className="text-sm text-muted-foreground -mt-2">{collection.description}</p>
       )}
       {itemsQuery.isLoading ? (
-        <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+        <div role="status" aria-label="Loading collection items" className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+      ) : itemsQuery.isError && !itemsQuery.data ? (
+        <QueryErrorState
+          description="Check that the local library service is available, then try again."
+          onRetry={() => void itemsQuery.refetch()}
+          retrying={itemsQuery.isRefetching}
+        />
       ) : files.length === 0 ? (
         <p className="text-sm text-muted-foreground py-16 text-center">This collection is empty.</p>
       ) : (
@@ -372,7 +403,13 @@ function FavoritesDetail({
         <span className="text-xs text-muted-foreground font-mono">{total} items</span>
       </div>
       {favQuery.isLoading ? (
-        <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+        <div role="status" aria-label="Loading favorites" className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+      ) : favQuery.isError && !favQuery.data ? (
+        <QueryErrorState
+          description="Your favorites could not be loaded. Try again when the local library service is available."
+          onRetry={() => void favQuery.refetch()}
+          retrying={favQuery.isRefetching}
+        />
       ) : files.length === 0 ? (
         <div className="text-center py-16">
           <Heart className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
@@ -445,6 +482,17 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
         </div>
         {itemsQuery.isLoading ? (
           <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+        ) : itemsQuery.isError && !itemsQuery.data ? (
+          <QueryErrorState
+            description="This part of your timeline could not be loaded. Try again."
+            onRetry={() => void itemsQuery.refetch()}
+            retrying={itemsQuery.isRefetching}
+          />
+        ) : files.length === 0 ? (
+          <div className="text-center py-16">
+            <CalendarDays className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">No files are available for this time period.</p>
+          </div>
         ) : (
           <>
             <FileGrid files={files} onOpen={setViewerIndex} onToggleFavorite={onToggleFavorite} />
@@ -460,6 +508,16 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
 
   if (timelineQuery.isLoading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+  }
+
+  if (timelineQuery.isError && !timelineQuery.data) {
+    return (
+      <QueryErrorState
+        description="Your media timeline could not be loaded. Try again when the local library service is available."
+        onRetry={() => void timelineQuery.refetch()}
+        retrying={timelineQuery.isRefetching}
+      />
+    );
   }
 
   if (buckets.length === 0 && undatedCount === 0) {
@@ -859,6 +917,12 @@ export default function Collections() {
           />
         ) : collectionsQuery.isLoading ? (
           <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+        ) : collectionsQuery.isError && !collectionsQuery.data ? (
+          <QueryErrorState
+            description="Your albums could not be loaded. Try again when the local library service is available."
+            onRetry={() => void collectionsQuery.refetch()}
+            retrying={collectionsQuery.isRefetching}
+          />
         ) : (
           <div className="flex flex-col gap-8">
             {/* Favorites card — always available */}

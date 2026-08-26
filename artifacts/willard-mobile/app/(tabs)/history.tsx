@@ -143,6 +143,34 @@ export default function HistoryScreen() {
         ListEmptyComponent={
           historyQuery.isLoading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
+          ) : historyQuery.isError ? (
+            <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <Feather name="wifi-off" size={26} color={colors.mutedForeground} />
+              <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>Couldn’t load cleanup history</Text>
+              <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                Check that the local library service is available, then try again.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry cleanup history"
+                disabled={historyQuery.isRefetching}
+                onPress={() => void historyQuery.refetch()}
+                style={({ pressed }) => [
+                  styles.retryButton,
+                  { borderColor: colors.border },
+                  pressed && !historyQuery.isRefetching && styles.pressed,
+                ]}
+              >
+                {historyQuery.isRefetching ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <>
+                    <Feather name="refresh-cw" size={14} color={colors.primary} />
+                    <Text style={[styles.retryText, { color: colors.primary, fontFamily: "Inter_500Medium" }]}>Try again</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
           ) : (
             <View style={[styles.empty, { borderColor: colors.border, backgroundColor: colors.card }]}>
               <Feather name="archive" size={26} color={colors.mutedForeground} />
@@ -188,5 +216,7 @@ const styles = StyleSheet.create({
   empty: { alignItems: "center", borderWidth: 1, borderRadius: 14, padding: 28, marginTop: 8 },
   emptyTitle: { fontSize: 16, marginTop: 12 },
   emptyText: { fontSize: 13, textAlign: "center", lineHeight: 19, marginTop: 6 },
+  retryButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, borderWidth: 1, borderRadius: 9, minHeight: 36, paddingHorizontal: 14, marginTop: 14 },
+  retryText: { fontSize: 13 },
   loader: { marginTop: 48 },
 });
