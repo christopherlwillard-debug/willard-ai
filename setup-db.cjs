@@ -487,7 +487,7 @@ const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS cleanup_operations (
     operation_id text PRIMARY KEY,
     nas_path text NOT NULL,
-    media_file_id integer NOT NULL,
+    media_file_id integer,
     operation_type text NOT NULL DEFAULT 'CLEANUP',
     source_path text NOT NULL,
     trash_path text,
@@ -497,6 +497,7 @@ const SETUP_SQL = [
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp NOT NULL DEFAULT now()
   )`,
+  `ALTER TABLE cleanup_operations ALTER COLUMN media_file_id DROP NOT NULL`,
   `CREATE INDEX IF NOT EXISTS cleanup_operations_status_idx ON cleanup_operations (nas_path, status)`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS optimize_profile text NOT NULL DEFAULT 'ARCHIVE'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS raw_conversion_enabled boolean NOT NULL DEFAULT false`,

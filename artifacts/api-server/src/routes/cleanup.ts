@@ -8,6 +8,8 @@ import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
+import { appendTrashManifestEntry, manifestPath, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
+import { sha256File } from "../lib/organize-helpers.ts";
 
 const router: IRouter = Router();
 
@@ -16,10 +18,6 @@ const OLD_FILE_YEARS = 5;
 
 function cleanupLogPath(nasPath: string) {
   return path.join(nasPath, "WillardAI", "logs", "cleanup-history.jsonl");
-}
-
-function trashManifestPath(nasPath: string) {
-  return path.join(nasPath, "WillardAI", "logs", "trash-manifest.jsonl");
 }
 
 async function getConfiguredNasPath(): Promise<string | null> {
@@ -499,25 +497,30 @@ router.post("/cleanup/execute", async (req, res) => {
           await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
           // Record in trash manifest so user can locate the file later
-          const manifestPath = trashManifestPath(nasPath);
-          fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-          fs.appendFileSync(manifestPath, JSON.stringify({
+          appendTrashManifestEntry(nasPath, {
             ts:           new Date().toISOString(),
+            nasPath,
+            mediaFileId:  fileId,
+            relativePath: file.relativePath,
             originalPath: filePath,
             trashPath,
             sizeBytes,
+            contentHash:  file.contentHash ?? undefined,
             expiresAt:    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-          }) + "\n");
+          });
           await db.execute(sql`UPDATE cleanup_operations SET status = 'MANIFESTED', updated_at = NOW() WHERE operation_id = ${operationId}`);
         }
 
         // Mark media_files row as RECYCLED (soft-delete marker)
         // Use chr(92) for backslash to normalize Windows \ vs POSIX / separators
-        await db.execute(sql`
+        const restoredRow = await db.execute(sql`
           UPDATE media_files
           SET last_scan_action = 'RECYCLED'
           WHERE id = ${fileId} AND nas_path = ${nasPath}
         `);
+        if (Number(restoredRow.rowCount ?? restoredRow.rows.length) !== 1) {
+          throw new Error("File moved to trash but its canonical media row could not be marked RECYCLED");
+        }
         await db.execute(sql`UPDATE cleanup_operations SET status = 'RECORDED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
         recycled++;
@@ -561,33 +564,26 @@ router.get("/cleanup/trash", async (_req, res) => {
       return;
     }
 
-    const manifestPath = trashManifestPath(nasPath);
-    if (!fs.existsSync(manifestPath)) {
+    const filePath = manifestPath(nasPath);
+    if (!fs.existsSync(filePath)) {
       res.json({ entries: [] });
       return;
     }
 
-    const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
-    const now   = Date.now();
-    const entries = lines
-      .map(line => {
-        try {
-          const e = JSON.parse(line);
-          return {
-            ts:           e.ts           as string,
-            originalPath: e.originalPath as string,
-            trashPath:    e.trashPath    as string,
-            sizeBytes:    Number(e.sizeBytes ?? 0),
-            expiresAt:    e.expiresAt    as string,
-            filename:     path.basename(e.originalPath ?? ""),
-            expired:      e.expiresAt ? new Date(e.expiresAt).getTime() < now : false,
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .reverse(); // newest first
+    const now = Date.now();
+    const { entries: manifestEntries } = readTrashManifest(nasPath);
+    const entries = manifestEntries.map((e) => ({
+      ts:           e.ts,
+      nasPath:      e.nasPath,
+      mediaFileId:  e.mediaFileId,
+      originalPath: e.originalPath,
+      trashPath:    e.trashPath,
+      sizeBytes:    Number(e.sizeBytes ?? 0),
+      contentHash:  e.contentHash,
+      expiresAt:    e.expiresAt,
+      filename:     path.basename(e.originalPath ?? ""),
+      expired:      e.expiresAt ? new Date(e.expiresAt).getTime() < now : false,
+    })).reverse(); // newest first
 
     res.json({ entries });
   } catch {
@@ -628,16 +624,15 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Require a manifest entry — do NOT trust client-supplied paths ─────────
-    const manifestPath = trashManifestPath(nasPath);
-    if (!fs.existsSync(manifestPath)) {
+    const manifestFilePath = manifestPath(nasPath);
+    if (!fs.existsSync(manifestFilePath)) {
       res.status(404).json({ error: "No trash manifest found" });
       return;
     }
 
-    const lines = fs.readFileSync(manifestPath, "utf8").split("\n").filter(Boolean);
-    const parsed = lines.map(l => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } });
-    const entry = parsed.find(e => {
-      if (!e || typeof e.trashPath !== "string") return false;
+    const { entries: manifestEntries } = readTrashManifest(nasPath);
+    const entry = manifestEntries.find(e => {
+      if (typeof e.nasPath === "string" && e.nasPath !== nasPath) return false;
       try {
         return resolveWithinRoot(e.trashPath, trashDir) === resolvedTrashPath;
       } catch {
@@ -657,7 +652,7 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Derive originalPath from manifest (not client-supplied) ───────────────
-    const originalPath = String(entry.originalPath ?? "");
+    const originalPath = entry.originalPath;
     if (!originalPath) {
       res.status(500).json({ error: "Manifest entry is missing originalPath" });
       return;
@@ -685,7 +680,7 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     const operationId = randomUUID();
-    await db.execute(sql`
+    const inserted = await db.execute(sql`
       INSERT INTO cleanup_operations
         (operation_id, nas_path, media_file_id, operation_type, source_path, trash_path, size_bytes, status)
       SELECT ${operationId}, ${nasPath}, id, 'RESTORE', ${resolvedTrashPath}, ${resolvedOriginalPath},
@@ -694,8 +689,39 @@ router.post("/cleanup/restore", async (req, res) => {
       WHERE nas_path = ${nasPath}
         AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
             REPLACE(${resolvedOriginalPath}, chr(92), '/')
+        AND last_scan_action = 'RECYCLED'
       LIMIT 1
+      RETURNING operation_id, media_file_id, size_bytes, content_hash
     `);
+    if (Number(inserted.rowCount ?? inserted.rows.length) !== 1) {
+      await db.execute(sql`
+        INSERT INTO cleanup_operations
+          (operation_id, nas_path, media_file_id, operation_type, source_path, trash_path, size_bytes, status, error)
+        VALUES
+          (${operationId}, ${nasPath}, NULL, 'RESTORE', ${resolvedTrashPath}, ${resolvedOriginalPath},
+           ${Number(entry.sizeBytes ?? 0)}, 'NEEDS_REVIEW',
+           'Restore manifest has no matching RECYCLED canonical media row')
+      `);
+      res.status(409).json({ error: "Cannot restore — the manifest has no matching RECYCLED canonical media row" });
+      return;
+    }
+    const insertedRow = inserted.rows[0] as {
+      media_file_id: number;
+      size_bytes: number;
+      content_hash: string | null;
+    };
+    const expectedSize = Number(insertedRow.size_bytes ?? entry.sizeBytes ?? 0);
+    const manifestHash = typeof entry.contentHash === "string" ? entry.contentHash : null;
+    if (manifestHash && insertedRow.content_hash && manifestHash !== insertedRow.content_hash) {
+      await db.execute(sql`
+        UPDATE cleanup_operations SET status = 'NEEDS_REVIEW',
+          error = 'Restore manifest hash disagrees with the canonical media row', updated_at = NOW()
+        WHERE operation_id = ${operationId}
+      `);
+      res.status(409).json({ error: "Cannot restore — manifest metadata is stale" });
+      return;
+    }
+    const expectedHash = insertedRow.content_hash ?? manifestHash;
     await db.execute(sql`
       UPDATE cleanup_operations SET status = 'MOVING', updated_at = NOW()
       WHERE operation_id = ${operationId}
@@ -705,31 +731,55 @@ router.post("/cleanup/restore", async (req, res) => {
     const destinationDir = resolveWithinRoot(path.dirname(resolvedOriginalPath), nasPath);
     fs.mkdirSync(destinationDir, { recursive: true });
 
-    // ── Move file back ────────────────────────────────────────────────────────
+    // ── Verify and move file back ──────────────────────────────────────────────
+    const verifyFile = async (filePath: string) => {
+      const stat = fs.statSync(filePath);
+      if (stat.size !== expectedSize) throw new Error("Restored file size does not match the canonical media row");
+      if (expectedHash && await sha256File(filePath) !== expectedHash) {
+        throw new Error("Restored file hash does not match the canonical media row");
+      }
+    };
+    await verifyFile(resolvedTrashPath);
     fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
+    try {
+      await verifyFile(resolvedOriginalPath);
+    } catch (error) {
+      try { fs.renameSync(resolvedOriginalPath, resolvedTrashPath); } catch { /* recovery will flag the conflict */ }
+      await db.execute(sql`
+        UPDATE cleanup_operations SET status = 'NEEDS_REVIEW',
+          error = ${error instanceof Error ? error.message : "Restored file verification failed"},
+          updated_at = NOW() WHERE operation_id = ${operationId}
+      `);
+      res.status(409).json({ error: "Restore verification failed; no canonical state was changed" });
+      return;
+    }
     await db.execute(sql`
       UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW()
       WHERE operation_id = ${operationId}
     `);
 
-    // ── Remove this entry from the manifest (rewrite without the restored line) ─
-    const kept = lines.filter(l => {
-      try {
-        const manifestTrashPath = (JSON.parse(l) as Record<string, unknown>).trashPath;
-        return typeof manifestTrashPath !== "string" ||
-          resolveWithinRoot(manifestTrashPath, trashDir) !== resolvedTrashPath;
-      } catch { return true; }
-    });
-    fs.writeFileSync(manifestPath, kept.length ? kept.join("\n") + "\n" : "");
-
     // ── Clear RECYCLED marker so the next scan re-indexes the file normally ────
-    await db.execute(sql`
+    const cleared = await db.execute(sql`
       UPDATE media_files
       SET last_scan_action = NULL
-      WHERE nas_path = ${nasPath}
-        AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') = REPLACE(${resolvedOriginalPath}, chr(92), '/')
+      WHERE id = ${insertedRow.media_file_id}
+        AND nas_path = ${nasPath}
         AND last_scan_action = 'RECYCLED'
     `);
+    if (Number(cleared.rowCount ?? cleared.rows.length) !== 1) {
+      await db.execute(sql`
+        UPDATE cleanup_operations SET status = 'NEEDS_REVIEW',
+          error = 'Restored file exists but the canonical recycle marker could not be cleared',
+          updated_at = NOW() WHERE operation_id = ${operationId}
+      `);
+      res.status(409).json({ error: "Restore requires review — the canonical media row changed during restore" });
+      return;
+    }
+    await db.execute(sql`
+      UPDATE cleanup_operations SET status = 'DB_RECONCILED', updated_at = NOW()
+      WHERE operation_id = ${operationId}
+    `);
+    removeTrashManifestEntry(nasPath, resolvedTrashPath, operationId);
     await db.execute(sql`
       UPDATE cleanup_operations SET status = 'RECORDED', updated_at = NOW()
       WHERE operation_id = ${operationId}
