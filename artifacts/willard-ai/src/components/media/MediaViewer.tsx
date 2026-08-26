@@ -11,6 +11,7 @@ import {
   AlertTriangle, Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { readJsonOrEmpty } from "@/lib/response-body";
 import type { MediaFile } from "@/types/media";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -47,12 +48,12 @@ async function toggleFav(id: number, fav: boolean) {
     body: JSON.stringify({ favorite: fav }),
   });
   if (!r.ok) throw new Error("Favorite failed");
-  return r.json();
+  return readJsonOrEmpty(r);
 }
 async function softDelete(id: number) {
   const r = await fetch(`${API}/media/files/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error("Delete failed");
-  return r.json();
+  return readJsonOrEmpty(r);
 }
 async function rename(id: number, name: string) {
   const r = await fetch(`${API}/media/files/${id}/rename`, {
@@ -60,7 +61,7 @@ async function rename(id: number, name: string) {
     body: JSON.stringify({ name }),
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Rename failed"); }
-  return r.json();
+  return readJsonOrEmpty(r);
 }
 async function updateTags(id: number, tags: string[]) {
   const r = await fetch(`${API}/media/files/${id}/tags`, {
@@ -68,7 +69,7 @@ async function updateTags(id: number, tags: string[]) {
     body: JSON.stringify({ tags }),
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Tag update failed"); }
-  return r.json() as Promise<{ id: number; tags: string[] }>;
+  return (await readJsonOrEmpty<{ id: number; tags: string[] }>(r)) ?? { id, tags };
 }
 
 // ─── Photo view ──────────────────────────────────────────────────────────────

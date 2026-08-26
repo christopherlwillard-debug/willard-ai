@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { MediaViewer } from "@/components/media/MediaViewer";
 import { cn } from "@/lib/utils";
+import { readJsonOrEmpty } from "@/lib/response-body";
 import { useToast } from "@/hooks/use-toast";
 import type { MediaFile, MediaFilesResponse } from "@/types/media";
 import type {
@@ -560,7 +561,7 @@ export default function Collections() {
         body: JSON.stringify({ favorite }),
       });
       if (!r.ok) throw new Error("Failed to update favorite");
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
@@ -584,7 +585,7 @@ export default function Collections() {
         const body = await r.json().catch(() => ({ error: "Failed to create album" }));
         throw new Error((body as any).error ?? "Failed to create album");
       }
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
@@ -614,11 +615,14 @@ export default function Collections() {
         const body = await r.json().catch(() => ({ error: "Rebuild failed" }));
         throw new Error((body as any).error ?? "Rebuild failed");
       }
-      return r.json() as Promise<{ collections: number; items: number }>;
+      return readJsonOrEmpty<{ collections: number; items: number }>(r);
     },
     onSuccess: (data) => {
       invalidateAll();
-      toast({ title: "Albums refreshed", description: `${data.collections} automatic albums are up to date.` });
+      toast({
+        title: "Albums refreshed",
+        description: data ? `${data.collections} automatic albums are up to date.` : "Albums are up to date.",
+      });
     },
     onError: (err: Error) => toast({ title: "Refresh failed", description: err.message, variant: "destructive" }),
   });
@@ -631,7 +635,7 @@ export default function Collections() {
         body: JSON.stringify({ name }),
       });
       if (!r.ok) throw new Error("Rename failed");
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
@@ -645,7 +649,7 @@ export default function Collections() {
     mutationFn: async (id: number) => {
       const r = await fetch(apiUrl(`/collections/${id}`), { method: "DELETE" });
       if (!r.ok) throw new Error("Delete failed");
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
@@ -667,7 +671,7 @@ export default function Collections() {
         const body = await r.json().catch(() => ({ error: "Merge failed" }));
         throw new Error((body as any).error ?? "Merge failed");
       }
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
@@ -687,7 +691,7 @@ export default function Collections() {
           body: JSON.stringify({ name: smartName, ruleJson: smartRule }),
         });
         if (!r.ok) throw new Error("Failed to update smart folder");
-        return r.json();
+        return readJsonOrEmpty(r);
       }
         const r = await fetch(apiUrl("/collections"), {
         method: "POST",
@@ -698,7 +702,7 @@ export default function Collections() {
         const body = await r.json().catch(() => ({ error: "Failed to create smart folder" }));
         throw new Error((body as any).error ?? "Failed to create smart folder");
       }
-      return r.json();
+      return readJsonOrEmpty(r);
     },
     onSuccess: () => {
       invalidateAll();
