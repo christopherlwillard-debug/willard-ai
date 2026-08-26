@@ -649,6 +649,7 @@ export class ScanPriorityQueue {
 // The caller closes the queue after resolveSkippedDirs finishes.
 
 export const MAX_CONCURRENT_READDIR = 8;
+export const MAX_PENDING_DIRECTORIES = 2048;
 export const SCAN_QUEUE_CAPACITY = 2048;
 
 export async function walkNasAsync(
@@ -677,12 +678,18 @@ export async function walkNasAsync(
   let outstandingDirs = 1;
   let schedulerFinished = false;
 
-  const enqueueDir = (nextDir: string): void => {
-    if (stopSignal?.stop || schedulerFinished) return;
-    outstandingDirs++;
+  const enqueueDir = (nextDir: string): boolean => {
+    if (stopSignal?.stop || schedulerFinished) return false;
     const waiter = dirWaiters.shift();
-    if (waiter) waiter(nextDir);
-    else pendingDirs.push(nextDir);
+    if (waiter) {
+      outstandingDirs++;
+      waiter(nextDir);
+      return true;
+    }
+    if (pendingDirs.length >= MAX_PENDING_DIRECTORIES) return false;
+    outstandingDirs++;
+    pendingDirs.push(nextDir);
+    return true;
   };
 
   const takeDir = async (): Promise<string | null> => {
@@ -693,6 +700,14 @@ export async function walkNasAsync(
   };
 
   const completeDir = (): void => {
+    if (stopSignal?.stop && !schedulerFinished) {
+      schedulerFinished = true;
+      pendingDirs.length = 0;
+      outstandingDirs = 0;
+      const waiters = dirWaiters.splice(0);
+      for (const waiter of waiters) waiter(null);
+      return;
+    }
     outstandingDirs--;
     if (outstandingDirs !== 0 || schedulerFinished) return;
     schedulerFinished = true;
@@ -798,13 +813,16 @@ export async function walkNasAsync(
       if (isSystemDir(entry.name, settings)) { onSkip?.(fullPath, "system_directory"); return; }
       if (skipDirs.has(path.resolve(fullPath))) return;
       onDir?.(fullPath);
-      enqueueDir(fullPath);
+      if (!enqueueDir(fullPath)) await processDirectory(fullPath);
     } else if (entry.isFile() || (settings.followSymlinks && entry.isSymbolicLink())) {
       if (settings.followSymlinks && entry.isSymbolicLink()) {
         try {
           const target = fs.statSync(fullPath);
           if (target.isDirectory()) {
-            if (!skipDirs.has(path.resolve(fullPath))) { onDir?.(fullPath); enqueueDir(fullPath); }
+            if (!skipDirs.has(path.resolve(fullPath))) {
+              onDir?.(fullPath);
+              if (!enqueueDir(fullPath)) await processDirectory(fullPath);
+            }
             return;
           }
           if (!target.isFile()) return;

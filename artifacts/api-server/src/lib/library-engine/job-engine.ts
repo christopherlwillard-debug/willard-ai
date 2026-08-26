@@ -371,6 +371,7 @@ class ConcurrencyController {
 const DIR_CACHE_VERSION = 4;
 const DIR_CACHE_MAX_AGE_MS = 10 * 60_000;
 const DIR_CACHE_INVALIDATIONS_FILE = "dir-scan-invalidations.json";
+const DIR_CACHE_INVALIDATIONS_PREFIX = "dir-scan-invalidations.";
 const DIR_CACHE_INVALIDATION_FLUSH_MS = 250;
 
 function dirMtimeCachePath(nasPath: string): string {
@@ -382,7 +383,9 @@ function dirCacheInvalidationsPath(nasPath: string): string {
 }
 
 const pendingDirInvalidations = new Map<string, Set<string>>();
+const consumedDirInvalidationFiles = new Map<string, string[]>();
 let dirInvalidationFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let dirInvalidationSequence = 0;
 
 function normalizeInvalidationPath(nasPath: string, filename: string | Buffer | null): string {
   if (!filename) return "";
@@ -398,35 +401,88 @@ function writeJsonAtomically(filePath: string, value: unknown): void {
   fs.writeFileSync(tempPath, JSON.stringify(value));
   try {
     fs.renameSync(tempPath, filePath);
-  } catch (error) {
+  } catch (error: any) {
+    // Windows does not always replace an existing destination with renameSync.
+    // Copying over the destination avoids a missing-file window; POSIX keeps
+    // the atomic rename path above.
+    if (error?.code === "EEXIST" || error?.code === "EPERM") {
+      try {
+        fs.copyFileSync(tempPath, filePath);
+        fs.unlinkSync(tempPath);
+        return;
+      } catch (replaceError) {
+        try { fs.unlinkSync(tempPath); } catch { /* best effort */ }
+        throw replaceError;
+      }
+    }
     try { fs.unlinkSync(tempPath); } catch { /* best effort */ }
     throw error;
   }
 }
 
-function flushDirCacheInvalidations(): void {
+interface DirCacheInvalidationSnapshot {
+  files: string[];
+  dirs: string[];
+}
+
+function readDirCacheInvalidations(nasPath: string): DirCacheInvalidationSnapshot | null {
+  const cacheDir = path.dirname(dirCacheInvalidationsPath(nasPath));
+  let names: string[];
+  try {
+    names = fs.readdirSync(cacheDir).filter(name =>
+      name === DIR_CACHE_INVALIDATIONS_FILE ||
+      (name.startsWith(DIR_CACHE_INVALIDATIONS_PREFIX) && name.endsWith(".json")),
+    );
+  } catch {
+    return null;
+  }
+  if (names.length === 0) return null;
+
+  const dirs = new Set<string>();
+  const files: string[] = [];
+  for (const name of names) {
+    const markerPath = path.join(cacheDir, name);
+    files.push(markerPath);
+    try {
+      const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+      if ((parsed?.v === 1 || parsed?.v === 2 || parsed?.v === 3) && Array.isArray(parsed.dirs)) {
+        for (const value of parsed.dirs) {
+          if (typeof value === "string") dirs.add(value);
+        }
+      } else {
+        dirs.add("");
+      }
+    } catch {
+      // A marker that exists but cannot be read must never be treated as no
+      // invalidation. Conservatively force a full reconciliation.
+      dirs.add("");
+    }
+  }
+  return { files, dirs: [...dirs] };
+}
+
+export function flushDirCacheInvalidations(): void {
   const pending = [...pendingDirInvalidations.entries()];
   pendingDirInvalidations.clear();
   for (const [nasPath, paths] of pending) {
     try {
-      const markerPath = dirCacheInvalidationsPath(nasPath);
-      fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-      let existing = new Set<string>();
-      try {
-        const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8"));
-        if (parsed?.v === 1 && Array.isArray(parsed.dirs)) {
-          existing = new Set(parsed.dirs.filter((value: unknown): value is string => typeof value === "string"));
-        }
-      } catch { /* first invalidation or a partially written marker */ }
-      for (const relPath of paths) existing.add(relPath);
+      const cacheDir = path.dirname(dirCacheInvalidationsPath(nasPath));
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const markerPath = path.join(
+        cacheDir,
+        `${DIR_CACHE_INVALIDATIONS_PREFIX}${Date.now()}.${process.pid}.${++dirInvalidationSequence}.json`,
+      );
       writeJsonAtomically(markerPath, {
-        v: 1,
+        v: 3,
         updatedAt: new Date().toISOString(),
-        dirs: [...existing].sort(),
+        dirs: [...paths].sort(),
       });
     } catch {
-      // A failed marker write is safe: the watcher still schedules a QUICK scan,
-      // and the cache age limit forces periodic reconciliation.
+      // Keep failed batches in memory for the next event/load retry. The cache
+      // age limit remains the final reconciliation safety net.
+      const retry = pendingDirInvalidations.get(nasPath) ?? new Set<string>();
+      for (const relPath of paths) retry.add(relPath);
+      pendingDirInvalidations.set(nasPath, retry);
     }
   }
 }
@@ -450,8 +506,14 @@ export function invalidateDirMtimeCache(
   }
 }
 
-async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheEntry>> {
+export async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheEntry>> {
   flushDirCacheInvalidations();
+  const invalidationMarker = readDirCacheInvalidations(nasPath);
+  if (invalidationMarker) {
+    consumedDirInvalidationFiles.set(nasPath, invalidationMarker.files);
+  } else {
+    consumedDirInvalidationFiles.delete(nasPath);
+  }
   try {
     const raw = await fs.promises.readFile(dirMtimeCachePath(nasPath), "utf8");
     const parsed = JSON.parse(raw);
@@ -470,18 +532,14 @@ async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheE
           ([k, v]) => [k, { mtimeMs: v.m, entryCount: v.c }],
         ),
       );
-      try {
-        const marker = JSON.parse(await fs.promises.readFile(dirCacheInvalidationsPath(nasPath), "utf8"));
-        if (marker?.v === 1 && Array.isArray(marker.dirs)) {
-          const invalidated = marker.dirs.filter((value: unknown): value is string => typeof value === "string");
-          if (invalidated.some((value: string) => value === "")) return new Map();
-          for (const relPath of invalidated) {
-            for (const key of cache.keys()) {
-              if (key === relPath || key.startsWith(`${relPath}/`)) cache.delete(key);
-            }
+      if (invalidationMarker) {
+        if (invalidationMarker.dirs.some(value => value === "")) return new Map();
+        for (const relPath of invalidationMarker.dirs) {
+          for (const key of cache.keys()) {
+            if (key === relPath || key.startsWith(`${relPath}/`)) cache.delete(key);
           }
         }
-      } catch { /* no persisted invalidations */ }
+      }
       return cache;
     }
     // Older caches lack the freshness/invalidation contract; discard once.
@@ -489,7 +547,7 @@ async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheE
   return new Map();
 }
 
-function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>, clearInvalidations = false): void {
+export function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>, clearInvalidations = false): void {
   try {
     const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -502,7 +560,14 @@ function saveDirMtimeCache(nasPath: string, cache: Map<string, DirCacheEntry>, c
       updatedAt: new Date().toISOString(),
     });
     if (clearInvalidations) {
-      try { fs.unlinkSync(dirCacheInvalidationsPath(nasPath)); } catch { /* already absent */ }
+      // Flush events that arrived during the scan, then delete only the marker
+      // files snapshotted at scan start. New append-only markers survive for the
+      // catch-up scan and across a process restart.
+      flushDirCacheInvalidations();
+      for (const markerPath of consumedDirInvalidationFiles.get(nasPath) ?? []) {
+        try { fs.unlinkSync(markerPath); } catch { /* already absent */ }
+      }
+      consumedDirInvalidationFiles.delete(nasPath);
     }
   } catch { /* non-fatal */ }
 }
@@ -1767,7 +1832,9 @@ async function runScanJob(
         state.counters.unchanged += unchangedIds.length;
         state.filesProcessed    += unchangedIds.length;
         state.filesTotal        += unchangedIds.length + filesToProcess.length;
-        for (const f of filesToProcess) queue.push(f);
+        for (const f of filesToProcess) {
+          if (!await queue.pushAsync(f, stopSignal)) break;
+        }
         await db.update(libraryJobsTable)
           .set({ totalFiles: state.filesTotal })
           .where(eq(libraryJobsTable.id, jobId));
@@ -1854,11 +1921,11 @@ async function runScanJob(
     const concCtrl = new ConcurrencyController(INITIAL_WORKERS, state.throttle.concurrencyCeiling);
     let targetWorkerCount  = concCtrl.count;
     let activeWorkerCount  = 0;
-    const allWorkerPromises: Promise<void>[] = [];
+    const activeWorkerPromises = new Set<Promise<void>>();
 
     const spawnWorker = (): void => {
       activeWorkerCount++;
-      allWorkerPromises.push((async (): Promise<void> => {
+      const workerPromise = (async (): Promise<void> => {
         try {
           for (;;) {
             // Check BEFORE blocking on queue.pop() — if already signalled, stop
@@ -1963,7 +2030,13 @@ async function runScanJob(
           activeWorkerCount--;
           sdbg('worker_exited', { workersRemaining: activeWorkerCount });
         }
-      })());
+      })();
+      activeWorkerPromises.add(workerPromise);
+      void workerPromise.then(() => {
+        activeWorkerPromises.delete(workerPromise);
+      }, () => {
+        activeWorkerPromises.delete(workerPromise);
+      });
     };
 
     // Spawn initial workers
@@ -2004,8 +2077,13 @@ async function runScanJob(
     // Queue is now closed; drain all remaining work.  Keep the controller
     // alive through the drain so concurrency still adapts while a large
     // post-walk queue empties, then shut it down once all workers finish.
-    await Promise.all(allWorkerPromises);
-    clearInterval(ctrlInterval);
+    try {
+      while (activeWorkerPromises.size > 0) {
+        await Promise.race([...activeWorkerPromises]);
+      }
+    } finally {
+      clearInterval(ctrlInterval);
+    }
     slog('all_workers_done', { workers: 0, pendingWrites: upsertBuf.length + unchangedBuf.length });
 
     // ── Guard: walk-timeout-triggered termination ─────────────────────────

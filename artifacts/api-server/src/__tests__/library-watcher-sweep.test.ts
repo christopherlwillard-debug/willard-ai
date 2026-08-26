@@ -53,6 +53,7 @@ mock.module("../lib/library-engine/index.ts", {
   namedExports: {
     getActiveJobId: () => null,
     getActiveJobProfile: () => null,
+    invalidateDirMtimeCache: () => {},
     startJob: async (input: { nasPath: string; profile: string }) => {
       startedScans.push(input);
       return { jobId: startedScans.length, alreadyRunning: false };
