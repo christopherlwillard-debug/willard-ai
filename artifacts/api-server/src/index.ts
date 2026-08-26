@@ -2,6 +2,11 @@ import app, { bootstrapSessionTable, initializeVectorCapability } from "./app";
 import { logger } from "./lib/logger";
 import { reconcileCleanupOperations } from "./lib/cleanup-recovery";
 import { recoverInterruptedJobs } from "./lib/library-engine";
+import { installShutdownHandlers } from "./lib/shutdown.ts";
+import type { Server } from "node:http";
+
+let server: Server | null = null;
+installShutdownHandlers(() => server);
 
 const rawPort = process.env["PORT"];
 
@@ -22,7 +27,7 @@ const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTabl
 
 startupMigrations
   .then(() => {
-    app.listen(port, (err) => {
+    server = app.listen(port, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");
         process.exit(1);

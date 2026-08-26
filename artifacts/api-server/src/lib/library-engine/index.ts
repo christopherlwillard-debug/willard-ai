@@ -1,5 +1,5 @@
-export * from "./types";
-export * from "./indexer";
+export * from "./types.ts";
+export * from "./indexer.ts";
 export {
   getActiveJobId,
   getActiveJobProfile,
@@ -10,14 +10,16 @@ export {
   requestPause,
   requestCancel,
   forceDiscardActiveJob,
+  stopLibraryJobs,
   startJob,
   resumeJob,
   recoverInterruptedJobs,
   emitStartupHealth,
   startThumbnailReconciliation,
+  stopThumbnailReconciliation,
   addThumbnailPriority,
   clearThumbnailPriority,
   notifyUiConnected,
   waitForUiConnected,
   getLibrarySeq,
-} from "./job-engine";
+} from "./job-engine.ts";

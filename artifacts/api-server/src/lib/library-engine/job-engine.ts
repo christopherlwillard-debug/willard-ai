@@ -9,7 +9,7 @@ import {
   type ActiveJobState, type ProgressEvent, type JobSummary, type JobCounters,
   type ScanPerformance, type ThrottleProfile, type SkippedFile, type ScanDiagnostics,
   EMPTY_COUNTERS, PRIORITY_RANK, THROTTLE_PROFILES, SCANNER_VERSION, MAX_SKIPPED_LISTED,
-} from "./types";
+} from "./types.ts";
 import {
   walkNas, walkNasAsync, classifyMediaType, guessMimeType,
   extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile,
@@ -17,12 +17,13 @@ import {
   PHOTO_EXTS, VIDEO_META_EXTS,
   ScanPriorityQueue,
   type DirCacheEntry, type FileEntry,
-} from "./indexer";
-import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage";
-import { recordActivity, describeChanges } from "../library-activity";
-import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine";
-import { logger } from "../logger";
+} from "./indexer.ts";
+import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
+import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage.ts";
+import { recordActivity, describeChanges } from "../library-activity.ts";
+import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine.ts";
+import { logger } from "../logger.ts";
+import { isShuttingDown } from "../shutdown-state.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
@@ -649,6 +650,9 @@ export interface StartJobOptions {
 }
 
 export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; alreadyRunning: boolean; errorCode?: "NAS_OFFLINE" }> {
+  if (isShuttingDown()) {
+    throw new Error("Server is shutting down");
+  }
   // Fail before preempting another job or starting any worker.  Persist the
   // failed attempt so the history endpoint still explains why it did not run.
   if (!await isNasAvailable(opts.nasPath)) {

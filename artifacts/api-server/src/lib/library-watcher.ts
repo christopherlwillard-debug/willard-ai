@@ -406,6 +406,7 @@ export function startLibraryWatcher(): void {
   // or the 30-second fallback fires.  Prevents the initial sweep from competing
   // with the UI for NAS bandwidth before the user sees the first page.
   waitForUiConnected().then(() => {
+    if (watcherStopped) return;
     if (heartbeatTimer) return; // guard against duplicate calls
     runWatcherHeartbeat().catch(() => {});
     heartbeatTimer = setInterval(() => { runWatcherHeartbeat().catch(() => {}); }, HEARTBEAT_MS);

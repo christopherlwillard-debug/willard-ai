@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
-import { getWillardAIDir } from "./nas-storage";
-import { formatMediaToolError } from "./media-tools";
+import { getWillardAIDir } from "./nas-storage.ts";
+import { formatMediaToolError } from "./media-tools.ts";
 
 // ── Quality presets ────────────────────────────────────────────────────────────
 

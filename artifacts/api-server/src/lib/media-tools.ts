@@ -1,5 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from "child_process";
-import { logger } from "./logger";
+import { logger } from "./logger.ts";
 
 /**
  * Shared helpers for the external media binaries (ffmpeg / ffprobe).

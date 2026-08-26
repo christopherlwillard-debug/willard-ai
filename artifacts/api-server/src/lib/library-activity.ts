@@ -1,6 +1,6 @@
 import { db, libraryActivityTable } from "@workspace/db";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { logger } from "./logger";
+import { logger } from "./logger.ts";
 
 /**
  * Library Activity feed — friendly, plain-English records of what the live

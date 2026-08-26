@@ -1,9 +1,9 @@
 import { db, appSettingsTable } from "@workspace/db";
-import { checkNasReachableAsync } from "./nas-storage";
-import { getActiveJobId, getActiveJobType, requestPause, requestCancel, startJob } from "./library-engine";
-import { recordActivity } from "./library-activity";
-import { logger } from "./logger";
-import { shouldPauseScan } from "./monitor-helpers";
+import { checkNasReachableAsync } from "./nas-storage.ts";
+import { getActiveJobId, getActiveJobType, requestPause, requestCancel, startJob } from "./library-engine/index.ts";
+import { recordActivity } from "./library-activity.ts";
+import { logger } from "./logger.ts";
+import { shouldPauseScan } from "./monitor-helpers.ts";
 
 /**
  * Smart Library Health monitor.
@@ -18,7 +18,7 @@ import { shouldPauseScan } from "./monitor-helpers";
  * State is in-memory (rebuilt after a restart from the first check).
  */
 
-import type { LibraryMonitorStatus } from "./monitor-helpers";
+import type { LibraryMonitorStatus } from "./monitor-helpers.ts";
 export type { LibraryMonitorStatus };
 
 export interface LibraryHealthSnapshot {

@@ -25,6 +25,7 @@ import { startFaceRecognition } from "./lib/face-recognition";
 import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
 import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
 import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-lock";
+import { isShuttingDown } from "./lib/shutdown-state.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
@@ -179,6 +180,13 @@ app.use(
     },
   }),
 );
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "Server is shutting down." });
+    return;
+  }
+  next();
+});
 app.use(cors({
   credentials: true,
   origin: (origin, callback) => {
