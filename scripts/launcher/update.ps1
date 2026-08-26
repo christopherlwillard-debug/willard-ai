@@ -144,9 +144,28 @@ try {
             Write-Ok ("Updated to " + $after.Substring(0, [Math]::Min(8, $after.Length)) + ".")
         }
     } elseif ($gitCommand) {
-        Initialize-DeveloperGitCheckout | Out-Null
-        Write-Ok "This folder is now connected to GitHub."
-        Write-Host "  Run Update Willard AI again to receive the newest code." -ForegroundColor White
+        # A source ZIP has no .git directory. Connect it and finish the same
+        # dependency/API preparation as a normal update instead of stopping
+        # after the first run and making the user repeat the operation.
+        $connected = Initialize-DeveloperGitCheckout
+        if (-not $connected) {
+            throw "This folder is not connected to GitHub. Run Setup Willard AI.bat and allow GitHub updates."
+        }
+        $pnpmCommand = Get-WillardPnpmCommand
+        if (-not $pnpmCommand) { throw "pnpm.cmd or pnpm.exe could not be found." }
+        $installLog = Join-Path $LogDir "update-install.log"
+        $installCode = Invoke-LoggedCommand "Preparing the updated application components..." $installLog {
+            & $pnpmCommand install --ignore-scripts
+        }
+        if ($installCode -ne 0) { throw "Package refresh failed. See $installLog." }
+        $buildLog = Join-Path $LogDir "update-build.log"
+        $buildCode = Invoke-LoggedCommand "Preparing the updated library service..." $buildLog {
+            & $pnpmCommand --filter @workspace/api-server run build
+        }
+        if ($buildCode -ne 0 -or -not (Test-Path (Join-Path $Root "artifacts\api-server\dist\index.mjs"))) {
+            throw "The API rebuild failed. See $buildLog."
+        }
+        Write-Ok "This folder is connected and updated to the latest GitHub version."
     } else {
         Write-Warn "Git is not installed, so the verified ZIP update path will be used."
         Invoke-ArchiveFallback

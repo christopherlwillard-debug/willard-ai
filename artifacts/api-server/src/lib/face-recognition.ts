@@ -6,6 +6,7 @@ import { db, pool, appSettingsTable } from "@workspace/db";
 import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
+import { isThumbnailFileValid } from "./thumbnail-engine.ts";
 
 /**
  * Face Recognition Engine — privacy-first, fully local.
@@ -479,7 +480,7 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
       );
       return;
     }
-    if (!fs.existsSync(thumbnailPath)) {
+    if (!isThumbnailFileValid(thumbnailPath)) {
       // Thumbnail not on disk (yet) — record as scanned-with-error so we do
       // not spin on it; thumbnail regeneration bumps will re-enter via version.
       await pool.query(

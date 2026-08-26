@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "child_process";
+import { execFile, spawnSync, type SpawnSyncReturns } from "child_process";
 import { logger } from "./logger.ts";
 
 /**
@@ -38,6 +38,56 @@ export function formatMediaToolError(
 }
 
 let alreadyChecked = false;
+
+export interface MediaToolsHealth {
+  ffmpegAvailable: boolean;
+  ffprobeAvailable: boolean;
+  thumbnailGenerationAvailable: boolean;
+  message: string | null;
+}
+
+let healthCache: MediaToolsHealth | null = null;
+let healthCacheAt = 0;
+let healthProbe: Promise<MediaToolsHealth> | null = null;
+const HEALTH_CACHE_MS = 30_000;
+
+function probeTool(bin: "ffmpeg" | "ffprobe"): Promise<boolean> {
+  return new Promise(resolve => {
+    execFile(bin, ["-version"], { timeout: 5000 }, (error) => resolve(!error));
+  });
+}
+
+/**
+ * Probe external media capabilities without blocking health requests. The
+ * result is short-lived because an operator may install FFmpeg while the app
+ * is running and should not need to restart just to clear a degraded status.
+ */
+export async function getMediaToolsHealth(): Promise<MediaToolsHealth> {
+  const now = Date.now();
+  if (healthCache && now - healthCacheAt < HEALTH_CACHE_MS) return healthCache;
+  if (!healthProbe) {
+    healthProbe = Promise.all([probeTool("ffmpeg"), probeTool("ffprobe")])
+      .then(([ffmpegAvailable, ffprobeAvailable]) => {
+        const unavailable: string[] = [];
+        if (!ffmpegAvailable) unavailable.push("ffmpeg");
+        if (!ffprobeAvailable) unavailable.push("ffprobe");
+        const message = unavailable.length > 0
+          ? `${unavailable.join(" and ")} unavailable. ${FFMPEG_INSTALL_HINT}`
+          : null;
+        const result = {
+          ffmpegAvailable,
+          ffprobeAvailable,
+          thumbnailGenerationAvailable: ffmpegAvailable,
+          message,
+        };
+        healthCache = result;
+        healthCacheAt = Date.now();
+        return result;
+      })
+      .finally(() => { healthProbe = null; });
+  }
+  return healthProbe;
+}
 
 /**
  * One-time startup probe. Logs a clear warning (not a crash) when ffmpeg/ffprobe

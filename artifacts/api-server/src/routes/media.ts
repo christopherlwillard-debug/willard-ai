@@ -4,7 +4,7 @@ import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
 import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 
@@ -96,7 +96,7 @@ export async function warmThumbnailCache(): Promise<void> {
       if (!row.thumbnailPath) continue;
       try {
         const thumbPath = resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath));
-        if (fs.existsSync(thumbPath)) _thumbCache.set(row.id, { nasPath, path: thumbPath });
+        if (isThumbnailFileValid(thumbPath)) _thumbCache.set(row.id, { nasPath, path: thumbPath });
       } catch {
         // A stale or poisoned thumbnail path is ignored and regenerated on demand.
       }
@@ -481,8 +481,11 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   }
   const cached = _thumbCache.get(id);
   if (cached?.nasPath === nasPath) {
-    serveCachedThumb(res, cached.path, id);
-    return;
+    if (isThumbnailFileValid(cached.path)) {
+      serveCachedThumb(res, cached.path, id);
+      return;
+    }
+    _thumbCache.delete(id);
   }
 
   const [file] = await db
@@ -505,7 +508,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   if (file.thumbnailPath) {
     try {
       const thumbPath = resolveWithinRoot(file.thumbnailPath, getWillardAIDir(nasPath));
-      if (fs.existsSync(thumbPath)) {
+       if (isThumbnailFileValid(thumbPath)) {
         _thumbCache.set(id, { nasPath, path: thumbPath });
         serveCachedThumb(res, thumbPath, id);
         return;
@@ -519,7 +522,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   const thumbDir = getThumbnailDir(nasPath);
   const thumbFile = path.join(thumbDir, thumbnailFilename(id));
   const safeThumbFile = resolveWithinRoot(thumbFile, getWillardAIDir(nasPath));
-  if (fs.existsSync(safeThumbFile)) {
+  if (isThumbnailFileValid(safeThumbFile)) {
     _thumbCache.set(id, { nasPath, path: safeThumbFile });
     db.update(mediaFilesTable)
       .set({ thumbnailPath: safeThumbFile, thumbnailGeneratedAt: new Date() })

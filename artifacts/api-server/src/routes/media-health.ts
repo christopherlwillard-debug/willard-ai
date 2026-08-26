@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 
@@ -109,7 +109,7 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
         const thumb = row.thumbnailPath
           ? resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath))
           : path.join(getThumbnailDir(nasPath), thumbnailFilename(row.id));
-        if (!fs.existsSync(thumb)) missingThumbs.push(row);
+        if (!isThumbnailFileValid(thumb)) missingThumbs.push(row);
       } catch { missingThumbs.push(row); }
     }
   }

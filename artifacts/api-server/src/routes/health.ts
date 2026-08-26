@@ -4,6 +4,7 @@ import { db, appSettingsTable } from "@workspace/db";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkNasReachableAsync } from "../lib/nas-storage";
+import { getMediaToolsHealth } from "../lib/media-tools.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -34,7 +35,10 @@ router.get("/health/status", async (_req, res) => {
   } catch { /* fall through with empty path → offline */ }
 
   // Async NAS check — never blocks the event loop even on slow/hung network drives.
-  const reach = await checkNasReachableAsync(nasPath);
+  const [reach, mediaTools] = await Promise.all([
+    checkNasReachableAsync(nasPath),
+    getMediaToolsHealth(),
+  ]);
 
   // Integrity sweep: verify indexed (non-deleted) files still exist on disk.
   // Missing = row present but file gone; corrupt = file exists but is empty.
@@ -67,12 +71,20 @@ router.get("/health/status", async (_req, res) => {
     } catch { /* leave as null (unknown) */ }
   }
 
+  const thumbnailsOk = reach.online && mediaTools.thumbnailGenerationAvailable;
   res.json({
     database,
     libraryOnline: reach.online,
     libraryPath: reach.path,
     libraryMessage: reach.message,
-    thumbnailsOk: reach.online,
+    thumbnailsOk,
+    thumbnailMessage: !reach.online
+      ? reach.message
+      : mediaTools.message,
+    mediaTools: {
+      ffmpegAvailable: mediaTools.ffmpegAvailable,
+      ffprobeAvailable: mediaTools.ffprobeAvailable,
+    },
     missingFiles,
     corruptFiles,
   });

@@ -6,6 +6,7 @@ import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWit
 import { logger } from "./logger.ts";
 import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
+import { isThumbnailFileValid } from "./thumbnail-engine.ts";
 import {
   getAiPrivacySettings,
   isMediaExcluded,
@@ -346,7 +347,7 @@ export async function enrichOne(file: PendingFile, privacy?: AiPrivacySettings):
         analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null, people: [] };
       }
     } else if ((file.mediaType === "image" || file.mediaType === "photo" || file.mediaType === "video") &&
-               file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
+               file.thumbnailPath && isThumbnailFileValid(file.thumbnailPath)) {
       analysis = await analyzeImage(file.thumbnailPath);
     } else if (file.mediaType === "document") {
       const text = file.fullPath.toLowerCase().endsWith(".pdf")

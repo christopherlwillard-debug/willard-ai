@@ -22,7 +22,7 @@ import {
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
-import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset } from "../thumbnail-engine.ts";
+import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid } from "../thumbnail-engine.ts";
 import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
 
@@ -2956,7 +2956,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
         if (!r.thumbnailPath) return Promise.resolve(false);
         try {
           const safePath = resolveWithinRoot(r.thumbnailPath, getWillardAIDir(nasPath));
-          return fs.promises.access(safePath).then(() => false, () => true);
+          return Promise.resolve(!isThumbnailFileValid(safePath));
         } catch {
           return Promise.resolve(true);
         }
