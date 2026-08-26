@@ -44,6 +44,9 @@ startupMigrations
     });
   })
   .catch((err) => {
-    logger.error({ err }, "Failed to bootstrap session table");
+    logger.error(
+      { err },
+      "Failed to bootstrap database schema; run setup-db.cjs to inspect or repair the database before restarting",
+    );
     process.exit(1);
   });

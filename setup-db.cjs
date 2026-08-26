@@ -1,7 +1,8 @@
 /**
  * Willard AI - one-shot database setup script.
  * Creates all tables from scratch on a fresh PostgreSQL database.
- * Safe to re-run: every statement uses CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
+ * Safe to re-run: schema statements are idempotent and applied in one
+ * transaction; optional capabilities never block the required schema.
  *
  * Usage (from C:\WillardAI):
  *   node setup-db.cjs
@@ -29,10 +30,12 @@ function loadEnv() {
 }
 loadEnv();
 
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) {
-  console.error('ERROR: DATABASE_URL not set and not found in .env');
-  process.exit(1);
+function getDatabaseUrl() {
+  const value = process.env.DATABASE_URL;
+  if (!value) {
+    throw new Error('DATABASE_URL not set and not found in .env');
+  }
+  return value;
 }
 
 // -- 2. Find the pg package in pnpm's virtual store ---------------------------
@@ -51,10 +54,8 @@ function findPg() {
   return require(path.join(pnpmDir, entry, 'node_modules', 'pg'));
 }
 
-const { Client } = findPg();
-
 // -- 3. Create the willard database if it doesn't exist -----------------------
-async function ensureDatabase() {
+async function ensureDatabase(DATABASE_URL, Client) {
   const url    = new URL(DATABASE_URL);
   const dbName = url.pathname.slice(1);
   url.pathname = '/postgres';
@@ -79,7 +80,16 @@ const OPTIONAL_SQL = [
 ];
 
 // -- 5. All SQL to create/migrate every table ---------------------------------
+// Increment this when a new ordered schema step is added. The history table
+// makes the bootstrap contract inspectable without relying on a local marker
+// file, while every step remains idempotent for existing installations.
+const SCHEMA_VERSION = 1;
+
 const SETUP_SQL = [
+  `CREATE TABLE IF NOT EXISTS willard_schema_versions (
+    version    integer PRIMARY KEY,
+    applied_at timestamp NOT NULL DEFAULT now()
+  )`,
 
   // indexed_files (general file index used by dashboard, search, and scan engine)
   `CREATE TABLE IF NOT EXISTS indexed_files (
@@ -483,6 +493,9 @@ const SETUP_SQL = [
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS watcher_poll_interval_seconds integer NOT NULL DEFAULT 60`,
   `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS fingerprint_status text`,
   `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS metadata_status text`,
+  `INSERT INTO willard_schema_versions (version)
+   VALUES (${SCHEMA_VERSION})
+   ON CONFLICT (version) DO NOTHING`,
 ];
 
 // Vector columns are optional and must never prevent a fresh database from
@@ -493,11 +506,42 @@ const VECTOR_SQL = [
   `ALTER TABLE faces ADD COLUMN IF NOT EXISTS embedding vector(512)`,
 ];
 
-// -- 6. Run everything --------------------------------------------------------
+// -- 6. Required schema runner -----------------------------------------------
+// This is the single required-schema path used by both standalone setup and
+// API startup. The caller owns the connection; this function owns the
+// transaction so a failed migration cannot leave a partially-created schema.
+async function runRequiredSchema(client, { log = true } = {}) {
+  let ok = 0;
+  await client.query('BEGIN');
+  try {
+    for (const sql of SETUP_SQL) {
+      const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
+      await client.query(sql);
+      ok++;
+      if (log) process.stdout.write('  [OK] ' + label + '\n');
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    const error = new Error(
+      `Required schema setup rolled back after ${ok} statements: ${e.message}`,
+      { cause: e },
+    );
+    if (log) {
+      console.error('  [FAIL] Required schema setup rolled back');
+      console.error('         ' + e.message);
+    }
+    throw error;
+  }
+}
+
+// -- 7. Standalone setup ------------------------------------------------------
 async function main() {
   console.log('\n  Willard AI - Database Setup\n');
 
-  await ensureDatabase();
+  const DATABASE_URL = getDatabaseUrl();
+  const { Client } = findPg();
+  await ensureDatabase(DATABASE_URL, Client);
 
   const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 8000 });
   await client.connect();
@@ -517,22 +561,9 @@ async function main() {
     }
   }
 
-  // Required tables - run atomically so a failed setup cannot leave a
-  // misleading partially-created schema behind.
-  let ok = 0;
-  await client.query('BEGIN');
   try {
-    for (const sql of SETUP_SQL) {
-      const label = sql.trim().slice(0, 60).replace(/\s+/g, ' ');
-      await client.query(sql);
-      ok++;
-      process.stdout.write('  [OK] ' + label + '\n');
-    }
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.error('  [FAIL] Required schema setup rolled back');
-    console.error('         ' + e.message);
+    await runRequiredSchema(client);
+  } catch {
     await client.end();
     process.exit(1);
   }
@@ -555,7 +586,18 @@ async function main() {
   console.log('  All required tables ready. You can now start Willard AI.\n');
 }
 
-main().catch(e => {
-  console.error('\n  Fatal error:', e.message);
-  process.exit(1);
-});
+module.exports = {
+  OPTIONAL_SQL,
+  SCHEMA_VERSION,
+  SETUP_SQL,
+  VECTOR_SQL,
+  ensureDatabase,
+  runRequiredSchema,
+};
+
+if (require.main === module) {
+  main().catch(e => {
+    console.error('\n  Fatal error:', e.message);
+    process.exit(1);
+  });
+}

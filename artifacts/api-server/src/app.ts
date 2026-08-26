@@ -1,4 +1,8 @@
 import { randomBytes } from "crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -34,6 +38,44 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
 ]);
 
 const pool = dbPool;
+
+type RequiredSchemaBootstrap = {
+  runRequiredSchema: (
+    client: Queryable,
+    options?: { log?: boolean },
+  ) => Promise<void>;
+};
+
+function loadRequiredSchemaBootstrap(): RequiredSchemaBootstrap {
+  const currentFile = fileURLToPath(import.meta.url);
+  const candidates = [
+    process.env["WILLARD_SCHEMA_SCRIPT"],
+    path.resolve(process.cwd(), "setup-db.cjs"),
+    path.resolve(process.cwd(), "../../setup-db.cjs"),
+    path.resolve(path.dirname(currentFile), "../setup-db.cjs"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const bootstrap = createRequire(import.meta.url)(candidate) as Partial<RequiredSchemaBootstrap>;
+      if (typeof bootstrap.runRequiredSchema !== "function") {
+        throw new Error("setup-db.cjs does not export runRequiredSchema");
+      }
+      return bootstrap as RequiredSchemaBootstrap;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Database schema bootstrap could not load ${candidate}: ${detail}`,
+        { cause: error },
+      );
+    }
+  }
+
+  throw new Error(
+    "Database schema bootstrap is unavailable. Run setup-db.cjs or set WILLARD_SCHEMA_SCRIPT before starting the API.",
+  );
+}
 
 function configuredAppOrigins(): Set<string> {
   const origins = new Set(DEFAULT_ALLOWED_ORIGINS);
@@ -89,263 +131,10 @@ export async function initializeVectorCapability(queryable: Queryable = pool): P
 
 export async function bootstrapSessionTable(): Promise<void> {
   await withSchemaBootstrapLock(dbPool, async (client) => {
-    const pool = client;
-    await pool.query(`
-    CREATE TABLE IF NOT EXISTS "session" (
-      "sid"    varchar      NOT NULL COLLATE "default",
-      "sess"   json         NOT NULL,
-      "expire" timestamp(6) NOT NULL,
-      CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
-    ) WITH (OIDS=FALSE);
-    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
-  `);
-  await pool.query(`
-    DELETE FROM app_settings
-    WHERE id NOT IN (
-      SELECT id FROM app_settings
-      ORDER BY (password_hash IS NOT NULL) DESC, id ASC
-      LIMIT 1
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS app_settings_singleton_idx
-      ON app_settings ((1));
-  `);
-  await pool.query(`
-    ALTER TABLE organization_jobs
-      ADD COLUMN IF NOT EXISTS conflict_policy text NOT NULL DEFAULT 'keep_existing';
-    ALTER TABLE organization_jobs
-      ADD COLUMN IF NOT EXISTS last_stage text;
-    ALTER TABLE organization_jobs
-      ADD COLUMN IF NOT EXISTS stage_updated_at timestamp;
-    ALTER TABLE organization_jobs
-      ADD COLUMN IF NOT EXISTS nas_path text;
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS logo_path text;
-    ALTER TABLE conversion_jobs
-      ADD COLUMN IF NOT EXISTS cancelled_at timestamp;
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS cleanup_operations (
-      operation_id text PRIMARY KEY,
-      nas_path text NOT NULL,
-      media_file_id integer NOT NULL,
-      operation_type text NOT NULL DEFAULT 'CLEANUP',
-      source_path text NOT NULL,
-      trash_path text,
-      size_bytes bigint NOT NULL DEFAULT 0,
-      status text NOT NULL,
-      error text,
-      created_at timestamp NOT NULL DEFAULT now(),
-      updated_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS cleanup_operations_status_idx
-      ON cleanup_operations (nas_path, status);
-    ALTER TABLE cleanup_operations
-      ADD COLUMN IF NOT EXISTS operation_type text NOT NULL DEFAULT 'CLEANUP';
-  `);
-  await pool.query(`
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS logo_path text;
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS scan_performance text NOT NULL DEFAULT 'BALANCED';
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS quick_fingerprint text;
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS scanner_version integer NOT NULL DEFAULT 0;
-    CREATE INDEX IF NOT EXISTS media_files_fingerprint_idx ON media_files (quick_fingerprint);
-    CREATE INDEX IF NOT EXISTS media_files_size_idx ON media_files (nas_path, size_bytes);
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS indexing_paused boolean NOT NULL DEFAULT false;
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS onboarding_dismissed_at timestamp;
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS celebration_shown_at timestamp;
-  `);
-  await pool.query(`
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS optimize_profile text NOT NULL DEFAULT 'ARCHIVE';
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS raw_conversion_enabled boolean NOT NULL DEFAULT false;
-  `);
-  await pool.query(`
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS favorite boolean NOT NULL DEFAULT false;
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS favorited_at timestamp;
-    CREATE TABLE IF NOT EXISTS collections (
-      id serial PRIMARY KEY,
-      nas_path text NOT NULL,
-      kind text NOT NULL,
-      name text NOT NULL,
-      description text,
-      auto_key text,
-      removed_at timestamp,
-      rule_json jsonb,
-      cover_file_id integer,
-      created_at timestamp NOT NULL DEFAULT now(),
-      updated_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS collections_nas_auto_key_unique ON collections (nas_path, auto_key);
-    CREATE INDEX IF NOT EXISTS collections_nas_kind_idx ON collections (nas_path, kind);
-    CREATE TABLE IF NOT EXISTS media_tags (
-      id serial PRIMARY KEY,
-      nas_path text NOT NULL,
-      name text NOT NULL,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS media_tags_nas_name_unique ON media_tags (nas_path, name);
-    CREATE INDEX IF NOT EXISTS media_tags_nas_path_idx ON media_tags (nas_path);
-    CREATE TABLE IF NOT EXISTS media_file_tags (
-      media_file_id integer NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
-      tag_id integer NOT NULL REFERENCES media_tags(id) ON DELETE CASCADE,
-      created_at timestamp NOT NULL DEFAULT now(),
-      PRIMARY KEY (media_file_id, tag_id)
-    );
-    CREATE INDEX IF NOT EXISTS media_file_tags_tag_idx ON media_file_tags (tag_id);
-    CREATE TABLE IF NOT EXISTS collection_items (
-      id serial PRIMARY KEY,
-      collection_id integer NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-      media_file_id integer NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
-      added_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS collection_items_unique ON collection_items (collection_id, media_file_id);
-    CREATE INDEX IF NOT EXISTS collection_items_file_idx ON collection_items (media_file_id);
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS library_activity (
-      id serial PRIMARY KEY,
-      nas_path text NOT NULL,
-      kind text NOT NULL,
-      message text NOT NULL,
-      details jsonb,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS library_activity_nas_path_idx ON library_activity (nas_path);
-    CREATE INDEX IF NOT EXISTS library_activity_created_at_idx ON library_activity (created_at);
-  `);
-  // Base tables — no vector dependency
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS media_ai (
-      id serial PRIMARY KEY,
-      media_file_id integer NOT NULL,
-      description text,
-      tags jsonb,
-      objects jsonb,
-      ocr_text text,
-      doc_type text,
-      scene text,
-      ai_version integer NOT NULL DEFAULT 1,
-      analyzed_at timestamp,
-      error text
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS media_ai_file_idx ON media_ai (media_file_id);
-    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS people jsonb;
-    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS user_tags jsonb;
-    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS hidden_tags jsonb;
-    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS user_description text;
-    ALTER TABLE media_ai ADD COLUMN IF NOT EXISTS notes text;
-    ALTER TABLE media_files ADD COLUMN IF NOT EXISTS place_name text;
-    CREATE TABLE IF NOT EXISTS geo_place_cache (
-      lat10 integer NOT NULL,
-      lon10 integer NOT NULL,
-      name text NOT NULL,
-      resolved_at timestamp NOT NULL DEFAULT now(),
-      PRIMARY KEY (lat10, lon10)
-    );
-    CREATE TABLE IF NOT EXISTS search_history (
-      id serial PRIMARY KEY,
-      query text NOT NULL,
-      intent_json jsonb,
-      result_count integer NOT NULL DEFAULT 0,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS search_history_created_idx ON search_history (created_at);
-    CREATE TABLE IF NOT EXISTS saved_searches (
-      id serial PRIMARY KEY,
-      name text NOT NULL,
-      query text NOT NULL,
-      intent_json jsonb,
-      created_at timestamp NOT NULL DEFAULT now(),
-      last_used_at timestamp
-    );
-    CREATE TABLE IF NOT EXISTS people (
-      id serial PRIMARY KEY,
-      nas_path text,
-      name text,
-      cover_face_id integer,
-      face_count integer NOT NULL DEFAULT 0,
-      hidden boolean NOT NULL DEFAULT false,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-    ALTER TABLE people ADD COLUMN IF NOT EXISTS nas_path text;
-    CREATE INDEX IF NOT EXISTS people_nas_path_idx ON people (nas_path);
-    CREATE TABLE IF NOT EXISTS faces (
-      id serial PRIMARY KEY,
-      media_file_id integer NOT NULL,
-      person_id integer,
-      manual_assignment boolean NOT NULL DEFAULT false,
-      box_x real NOT NULL,
-      box_y real NOT NULL,
-      box_w real NOT NULL,
-      box_h real NOT NULL,
-      score real NOT NULL,
-      crop_path text,
-      created_at timestamp NOT NULL DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS faces_file_idx ON faces (media_file_id);
-    CREATE INDEX IF NOT EXISTS faces_person_idx ON faces (person_id);
-    ALTER TABLE faces ADD COLUMN IF NOT EXISTS manual_assignment boolean NOT NULL DEFAULT false;
-    CREATE TABLE IF NOT EXISTS face_scan_state (
-      media_file_id integer PRIMARY KEY,
-      face_version integer NOT NULL DEFAULT 1,
-      face_count integer NOT NULL DEFAULT 0,
-      scanned_at timestamp NOT NULL DEFAULT now(),
-      error text
-    );
-  `);
-
-  // pgvector is optional; probe it after the base schema exists.
-  await initializeVectorCapability(client);
-  await pool.query(`
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS thumbnail_quality text NOT NULL DEFAULT 'BALANCED';
-  `);
-  await pool.query(`
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS ignored_folders    text[]  NOT NULL DEFAULT '{}',
-      ADD COLUMN IF NOT EXISTS ignored_extensions text[]  NOT NULL DEFAULT '{}',
-      ADD COLUMN IF NOT EXISTS ignore_hidden_files  boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS ignore_system_files  boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS ignore_temp_files    boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS ignore_sidecar_files boolean NOT NULL DEFAULT true,
-      ADD COLUMN IF NOT EXISTS ignore_empty_folders boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS follow_symlinks      boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS index_other_files    boolean NOT NULL DEFAULT true;
-  `);
-  await pool.query(`
-    DELETE FROM media_files
-    WHERE
-      LOWER(name) IN (
-        'thumbs.db','thumbs.db:encryptable','ehthumbs.db','ehthumbs_vista.db',
-        'desktop.ini','autorun.inf','.ds_store','.localized','.appledouble','.appledesktop'
-      )
-      OR extension = 'thm'
-      OR name LIKE '._%'
-      OR name LIKE '~$%';
-  `);
-  await pool.query(`
-    ALTER TABLE library_jobs
-      ADD COLUMN IF NOT EXISTS diagnostics jsonb;
-  `);
-  await pool.query(`
-    ALTER TABLE app_settings
-      ADD COLUMN IF NOT EXISTS watcher_poll_interval_seconds integer NOT NULL DEFAULT 60;
-  `);
-  await pool.query(`
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS fingerprint_status text;
-    ALTER TABLE media_files
-      ADD COLUMN IF NOT EXISTS metadata_status text;
-  `);
+    const { runRequiredSchema } = loadRequiredSchemaBootstrap();
+    await runRequiredSchema(client, { log: false });
+    // pgvector is optional; probe it only after all required tables exist.
+    await initializeVectorCapability(client);
   });
 }
 
