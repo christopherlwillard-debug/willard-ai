@@ -80,8 +80,10 @@ PostgreSQL, user media, the database, or FFmpeg. PostgreSQL remains a required
 external service because it stores the user's library and authentication data;
 FFmpeg remains optional.
 
-The single remaining Windows-side action for the first real test is to run the
-published Setup.exe on Windows and verify installation, both shortcuts, startup,
-database setup, and one update from a newer published release. Inno Setup,
-code signing, and real Windows install/upgrade validation cannot be completed
-inside Replit's Linux environment.
+Before publishing a release, the Windows pipeline runs the compiled Setup.exe
+on a disposable Windows runner as a standard local user. It verifies install,
+both shortcuts, first startup against external PostgreSQL, an installer upgrade,
+interrupted packaged-version recovery, actionable database-failure diagnostics,
+uninstall, and preservation of external database, settings, and media markers.
+The runner is intentionally disposable; the first-install checklist above
+remains useful for validating a family’s real PostgreSQL and NAS topology.

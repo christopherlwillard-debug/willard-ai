@@ -136,6 +136,12 @@ jobs:
         shell: pwsh
         run: .\scripts\windows\compile-installer.ps1
 
+      - name: Verify installed Windows lifecycle with external PostgreSQL
+        shell: pwsh
+        env:
+          PGPASSWORD: "postgres"
+        run: .\scripts\windows\installer-lifecycle-smoke.ps1
+
       - name: Publish installer, update ZIP, and manifest
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:

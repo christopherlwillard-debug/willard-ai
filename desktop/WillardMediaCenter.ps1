@@ -64,13 +64,15 @@ function Report-StartupFailure($message) {
   Fail $message
   Write-Host "  Diagnostics: $failureLog" -ForegroundColor DarkGray
   try {
-    Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
-    [void][System.Windows.MessageBox]::Show(
-      ($details -join [Environment]::NewLine),
-      "Willard Media Center",
-      [System.Windows.MessageBoxButton]::OK,
-      [System.Windows.MessageBoxImage]::Error
-    )
+    if ($env:WILLARD_SUPPRESS_STARTUP_DIALOG -ne "1") {
+      Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
+      [void][System.Windows.MessageBox]::Show(
+        ($details -join [Environment]::NewLine),
+        "Willard Media Center",
+        [System.Windows.MessageBoxButton]::OK,
+        [System.Windows.MessageBoxImage]::Error
+      )
+    }
   } catch {}
 }
 function Read-Version {

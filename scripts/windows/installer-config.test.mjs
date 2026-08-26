@@ -22,6 +22,7 @@ const startupSmoke = await readFile(new URL("./startup-smoke.ps1", import.meta.u
 const updateSmoke = await readFile(new URL("./update-smoke.ps1", import.meta.url), "utf8");
 const loaderPage = await readFile(new URL("../../desktop/loading.html", import.meta.url), "utf8");
 const installerCompiler = await readFile(new URL("./compile-installer.ps1", import.meta.url), "utf8");
+const installedLifecycleSmoke = await readFile(new URL("./installer-lifecycle-smoke.ps1", import.meta.url), "utf8");
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
@@ -159,6 +160,27 @@ test("installer compilation stops on warnings", () => {
   assert.match(installerCompiler, /Inno Setup emitted warnings/);
   assert.match(localBuildInstaller, /compile-installer\.ps1/);
   assert.match(workflow, /compile-installer\.ps1/);
+});
+
+test("Windows release gate proves the installed lifecycle with external data", () => {
+  const compileIndex = workflow.indexOf("Compile the Windows installer");
+  const lifecycleIndex = workflow.indexOf("Verify installed Windows lifecycle with external PostgreSQL");
+  const publishIndex = workflow.indexOf("Publish installer, update ZIP, and manifest");
+  assert.ok(compileIndex >= 0 && lifecycleIndex > compileIndex && lifecycleIndex < publishIndex);
+  assert.match(workflow, /installer-lifecycle-smoke\.ps1/);
+  assert.match(installedLifecycleSmoke, /New-LocalUser/);
+  assert.match(installedLifecycleSmoke, /Get-LocalGroupMember -Group "Administrators"/);
+  assert.match(installedLifecycleSmoke, /-Credential \$Credential -LoadUserProfile/);
+  assert.match(installedLifecycleSmoke, /VERYSILENT.*SUPPRESSMSGBOXES.*\/DIR/);
+  assert.match(installedLifecycleSmoke, /Wait-Http "http:\/\/127\.0\.0\.1:8080\/api\/healthz"/);
+  assert.match(installedLifecycleSmoke, /compile-installer\.ps1/);
+  assert.match(installedLifecycleSmoke, /phase = "swapped"/);
+  assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
+  assert.match(installedLifecycleSmoke, /startup-failure\.log/);
+  assert.match(installedLifecycleSmoke, /unins000\.exe/);
+  assert.match(installedLifecycleSmoke, /willard_lifecycle_marker/);
+  assert.match(installedLifecycleSmoke, /Dropdb/);
+  assert.match(launcher, /WILLARD_SUPPRESS_STARTUP_DIALOG/);
 });
 
 test("release payload validation requires the bundled runtime and app entrypoints", () => {

@@ -22,9 +22,12 @@ Node runtime, and the launcher. It does **not** include PostgreSQL, your media,
 the database, or FFmpeg. PostgreSQL remains an external service because it owns
 your library and authentication data; FFmpeg is optional.
 
-The packaged installer is built by the Windows release pipeline. Inno Setup,
-code signing, and real Windows install/upgrade validation must run on a Windows
-build machine; they cannot be completed inside Replit's Linux environment.
+The packaged installer is built and validated by the Windows release pipeline.
+Before publishing, a disposable Windows runner installs it as a standard user,
+starts it against external PostgreSQL, upgrades it, proves interrupted-update
+recovery, checks failure diagnostics, uninstalls it, and confirms external data
+is preserved. A user’s own Windows/NAS topology still needs the first-install
+checklist in `installer/README.md`.
 
 ## Developer-folder setup: update with one click
 
