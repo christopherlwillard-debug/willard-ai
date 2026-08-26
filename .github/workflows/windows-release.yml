@@ -80,14 +80,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $psql = Join-Path $env:ProgramFiles "PostgreSQL\16\bin\psql.exe"
-          $hash = $null
-          Push-Location (Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server")
-          try {
-            $hash = (& node --input-type=module -e "import bcrypt from 'bcryptjs'; console.log(await bcrypt.hash('willard123', 10))").Trim()
-          } finally {
-            Pop-Location
-          }
-          if (-not $hash) { throw "Could not create the disposable backend-audit password hash." }
+          # bcrypt hash for the fixed integration-test password "willard123".
+          $hash = '$2b$10$xlYkF4WUqMGhh7DvFIPKtuIsl0p5Hjh1GhaGvtnxTeKOGYsK.9JhW'
           & $psql -h localhost -U postgres -d willard `
             -v "nas_path=$env:WILLARD_NAS_PATH" -v "password_hash=$hash" `
             -c "DELETE FROM app_settings; INSERT INTO app_settings (nas_path, password_hash) VALUES (:'nas_path', :'password_hash');"
