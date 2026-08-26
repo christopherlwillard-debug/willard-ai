@@ -59,6 +59,7 @@ const state: MonitorState = {
 };
 
 let timer: NodeJS.Timeout | null = null;
+let startupTimer: NodeJS.Timeout | null = null;
 let checking = false;
 let consecutiveFailures = 0;
 
@@ -202,7 +203,23 @@ export function startLibraryMonitor(): void {
   // First check after a 15-second grace period. This prevents a false
   // offline→online trigger during the brief SMB mount delay that occurs on
   // nearly every restart, which would otherwise queue an immediate QUICK scan.
-  setTimeout(() => { runLibraryCheck().catch(() => {}); }, 15_000);
+  startupTimer = setTimeout(() => {
+    startupTimer = null;
+    runLibraryCheck().catch(() => {});
+  }, 15_000);
+  startupTimer.unref?.();
   timer = setInterval(() => { runLibraryCheck().catch(() => {}); }, MONITOR_INTERVAL_MS);
   timer.unref?.();
+}
+
+export async function stopLibraryMonitor(): Promise<void> {
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  while (checking) await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }

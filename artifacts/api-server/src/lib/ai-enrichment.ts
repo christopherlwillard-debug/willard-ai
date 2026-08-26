@@ -406,6 +406,7 @@ export async function enrichOne(file: PendingFile, privacy?: AiPrivacySettings):
 // ── Background loop ───────────────────────────────────────────────────────────
 
 let timer: NodeJS.Timeout | null = null;
+let startupTimer: NodeJS.Timeout | null = null;
 let ticking = false;
 
 export async function runEnrichmentTick(): Promise<void> {
@@ -446,7 +447,23 @@ export async function runEnrichmentTick(): Promise<void> {
 
 export function startAiEnrichment(): void {
   if (timer) return;
-  setTimeout(() => { runEnrichmentTick().catch(() => {}); }, 8_000);
+  startupTimer = setTimeout(() => {
+    startupTimer = null;
+    runEnrichmentTick().catch(() => {});
+  }, 8_000);
+  startupTimer.unref?.();
   timer = setInterval(() => { runEnrichmentTick().catch(() => {}); }, TICK_MS);
   timer.unref?.();
+}
+
+export async function stopAiEnrichment(): Promise<void> {
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  while (ticking) await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }

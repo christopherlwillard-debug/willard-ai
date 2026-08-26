@@ -30,6 +30,7 @@ export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 const activeJobs = new Map<number, ActiveJobState>();
+const activeJobRuns = new Map<number, Promise<void>>();
 
 // ── Fast-path streak guard ────────────────────────────────────────────────────
 // After this many consecutive dir-cache-only exits, force a normal QUICK scan
@@ -565,6 +566,33 @@ export function requestCancel(jobId: number, reason: CancellationReason = "USER_
   return true;
 }
 
+function startJobRun(jobId: number, run: Promise<void>): void {
+  activeJobRuns.set(jobId, run);
+  void run.then(
+    () => { if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId); },
+    () => { if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId); },
+  );
+}
+
+/**
+ * Stop in-process library jobs before the database is closed. Scans are paused
+ * so their durable cursor/summary can be resumed after shutdown; derived
+ * thumbnail and metadata jobs are cancelled because their cursors are not safe
+ * restart checkpoints.
+ */
+export async function stopLibraryJobs(): Promise<void> {
+  const jobs = [...activeJobs.values()];
+  for (const state of jobs) {
+    if (state.jobType === "SCAN") {
+      state.pauseRequested = true;
+    } else {
+      state.cancelRequested = true;
+      state.cancellationReason = "ERROR";
+    }
+  }
+  await Promise.all([...activeJobRuns.values()]);
+}
+
 // ── Force-discard a stuck job ─────────────────────────────────────────────────
 // Immediately removes the job from the in-memory activeJobs map and marks it
 // FAILED in the DB. Use this when a job is stuck and requestCancel() can't
@@ -691,11 +719,11 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
 
   // Run async without blocking the response
   if (opts.jobType === "THUMBNAILS") {
-    void runThumbnailJob(state);
+    startJobRun(job.id, runThumbnailJob(state));
   } else if (opts.jobType === "METADATA") {
-    void runMetadataRefreshJob(state);
+    startJobRun(job.id, runMetadataRefreshJob(state));
   } else {
-    void runScanJob(state, opts.rootPath);
+    startJobRun(job.id, runScanJob(state, opts.rootPath));
   }
 
   return { jobId: job.id, alreadyRunning: false };
@@ -749,11 +777,11 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   activeJobs.set(job.id, state);
 
   if (job.jobType === "THUMBNAILS") {
-    void runThumbnailJob(state);
+    startJobRun(job.id, runThumbnailJob(state));
   } else if (job.jobType === "METADATA") {
-    void runMetadataRefreshJob(state);
+    startJobRun(job.id, runMetadataRefreshJob(state));
   } else {
-    void runScanJob(state, job.rootPath ?? undefined, cursorIndex, scanStartedAt);
+    startJobRun(job.id, runScanJob(state, job.rootPath ?? undefined, cursorIndex, scanStartedAt));
   }
   return true;
 }
@@ -2577,9 +2605,13 @@ async function failJob(jobId: number, reason: CancellationReason, message: strin
 // Self-heals after thumbnail folder deletion, NAS path changes, or failed moves.
 
 let _reconcileTimer: ReturnType<typeof setInterval> | null = null;
+let _reconcileStartupTimer: ReturnType<typeof setTimeout> | null = null;
+let _reconcileInFlight: Promise<void> | null = null;
+let _reconciliationStopped = false;
 
 export function startThumbnailReconciliation(nasPath: string): void {
   if (_reconcileTimer) return;
+  _reconciliationStopped = false;
 
   const BATCH = 250;
   let cursor = 0;
@@ -2660,20 +2692,44 @@ export function startThumbnailReconciliation(nasPath: string): void {
   // First pass starts 10 s after boot, then continues every 30 s until the full
   // table is verified. Subsequent passes run every 5 min (low-priority background).
   let fastMode = true;
-  setTimeout(async () => {
-    await runPass();
-    _reconcileTimer = setInterval(async () => {
-      await runPass();
+  const executePass = (): void => {
+    if (_reconciliationStopped) return;
+    const pass = runPass();
+    _reconcileInFlight = pass;
+    void pass.finally(() => {
+      if (_reconcileInFlight === pass) _reconcileInFlight = null;
+    }).catch(() => {});
+  };
+  _reconcileStartupTimer = setTimeout(() => {
+    _reconcileStartupTimer = null;
+    executePass();
+    if (_reconciliationStopped) return;
+    _reconcileTimer = setInterval(() => {
+      executePass();
       // After the first complete pass (cursor resets to 0), switch to slow cadence
       if (fastMode && cursor === 0) {
         fastMode = false;
         clearInterval(_reconcileTimer!);
-        _reconcileTimer = setInterval(runPass, 5 * 60_000);
+        _reconcileTimer = setInterval(executePass, 5 * 60_000);
         _reconcileTimer.unref?.();
       }
     }, 30_000);
     _reconcileTimer.unref?.();
   }, 10_000);
+  _reconcileStartupTimer.unref?.();
+}
+
+export async function stopThumbnailReconciliation(): Promise<void> {
+  _reconciliationStopped = true;
+  if (_reconcileStartupTimer) {
+    clearTimeout(_reconcileStartupTimer);
+    _reconcileStartupTimer = null;
+  }
+  if (_reconcileTimer) {
+    clearInterval(_reconcileTimer);
+    _reconcileTimer = null;
+  }
+  await _reconcileInFlight;
 }
 
 // ── Interrupt recovery (call on server start) ─────────────────────────────────

@@ -480,6 +480,7 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
 // ── Background loop ───────────────────────────────────────────────────────────
 
 let timer: NodeJS.Timeout | null = null;
+let startupTimer: NodeJS.Timeout | null = null;
 let ticking = false;
 
 export async function runFaceTick(): Promise<void> {
@@ -531,7 +532,23 @@ export async function runFaceTick(): Promise<void> {
 
 export function startFaceRecognition(): void {
   if (timer) return;
-  setTimeout(() => { runFaceTick().catch(() => {}); }, 12_000);
+  startupTimer = setTimeout(() => {
+    startupTimer = null;
+    runFaceTick().catch(() => {});
+  }, 12_000);
+  startupTimer.unref?.();
   timer = setInterval(() => { runFaceTick().catch(() => {}); }, TICK_MS);
   timer.unref?.();
+}
+
+export async function stopFaceRecognition(): Promise<void> {
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  while (ticking) await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }

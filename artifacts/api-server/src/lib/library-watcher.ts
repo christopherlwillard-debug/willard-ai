@@ -82,6 +82,7 @@ const state: WatcherInternalState = {
 
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
+let watcherStopped = false;
 
 
 // ── Public snapshot (for /api/library/health) ────────────────────────────────
@@ -295,6 +296,7 @@ function handleWatcherFailure(nasPath: string, err?: Error): void {
 let beating = false;
 
 export async function runWatcherHeartbeat(): Promise<void> {
+  if (watcherStopped) return;
   if (beating) return;
   beating = true;
   try {
@@ -333,6 +335,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
     }
 
     const reach = await checkNasReachableAsync(nasPath);
+    if (watcherStopped) return;
     const wasOnline = state.online;
     state.online = reach.online;
 
@@ -398,6 +401,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
 
 export function startLibraryWatcher(): void {
   if (heartbeatTimer) return;
+  watcherStopped = false;
   // Defer the first heartbeat until the UI connects (first authenticated request)
   // or the 30-second fallback fires.  Prevents the initial sweep from competing
   // with the UI for NAS bandwidth before the user sees the first page.
@@ -407,4 +411,19 @@ export function startLibraryWatcher(): void {
     heartbeatTimer = setInterval(() => { runWatcherHeartbeat().catch(() => {}); }, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
   }).catch(() => {});
+}
+
+export async function stopLibraryWatcher(): Promise<void> {
+  watcherStopped = true;
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  closeWatcher();
+  clearPendingScan();
+  while (beating) await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }

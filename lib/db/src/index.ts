@@ -13,4 +13,14 @@ if (!process.env.DATABASE_URL) {
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool, { schema });
 
+let poolClosePromise: Promise<void> | null = null;
+
+/** Close the shared pool exactly once during an orderly process shutdown. */
+export function closePool(): Promise<void> {
+  if (!poolClosePromise) {
+    poolClosePromise = pool.end();
+  }
+  return poolClosePromise;
+}
+
 export * from "./schema/index.ts";
