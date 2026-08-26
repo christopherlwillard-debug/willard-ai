@@ -170,6 +170,7 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(workflow, /installer-lifecycle-smoke\.ps1/);
   assert.match(workflow, /setup-db\.cjs/);
   assert.match(workflow, /WILLARD_API_URL: "http:\/\/127\.0\.0\.1:8080"/);
+  assert.match(workflow, /DELETE FROM app_settings/);
   assert.match(installedLifecycleSmoke, /New-LocalUser/);
   assert.match(installedLifecycleSmoke, /Get-LocalGroupMember -Group "Administrators"/);
   assert.match(installedLifecycleSmoke, /-Credential \$Credential -LoadUserProfile/);

@@ -85,7 +85,7 @@ jobs:
           if (-not $hash) { throw "Could not create the disposable backend-audit password hash." }
           & $psql -h localhost -U postgres -d willard `
             -v "nas_path=$env:WILLARD_NAS_PATH" -v "password_hash=$hash" `
-            -c "INSERT INTO app_settings (nas_path, password_hash) VALUES (:'nas_path', :'password_hash') ON CONFLICT ((1)) DO UPDATE SET nas_path = EXCLUDED.nas_path, password_hash = EXCLUDED.password_hash;"
+            -c "DELETE FROM app_settings; INSERT INTO app_settings (nas_path, password_hash) VALUES (:'nas_path', :'password_hash');"
           if ($LASTEXITCODE -ne 0) { throw "Could not seed the disposable backend-audit settings." }
 
       - name: Start API for backend audit and integration tests
