@@ -130,6 +130,26 @@ logs, PostgreSQL data, and media libraries untouched. The shortcut is separate
 from the browser PWA: it starts the local services first, then opens the browser
 at the local app address.
 
+### Protect the PostgreSQL database
+
+PostgreSQL stores your authentication, settings, catalog, people, jobs, search
+history, and annotations. The media files remain on the NAS, so file backups
+alone are not enough. Use the encrypted backup and restore procedure in
+**`docs/database-backups.md`**. A quick backup from this folder is:
+
+```powershell
+node .\desktop\database-backup.mjs backup `
+  --output-dir "Z:\WillardBackups\Database" `
+  --retention-days 30 `
+  --keep 12
+```
+
+The command prompts for a separate backup encryption passphrase and never
+stores it in `.env`. Restore only into a fresh empty PostgreSQL database; the
+utility verifies schema and data before it reports success. After restoring,
+point Willard at the restored database and run a full scan so the catalog is
+reconciled with the NAS. The database backup never includes media files.
+
 ### Existing ZIP-based folders
 
 If this folder came from an older ZIP download, run **Setup Willard AI.bat** again.

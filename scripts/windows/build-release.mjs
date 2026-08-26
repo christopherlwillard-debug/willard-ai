@@ -169,6 +169,7 @@ async function main() {
   await copy(path.join(root, "setup-db.cjs"), path.join(output, "api-runtime/setup-db.cjs"));
   await copy(path.join(root, "desktop/release-contract.mjs"), path.join(output, "desktop/release-contract.mjs"));
   await copy(path.join(root, "desktop/desktop-web-server.mjs"), path.join(output, "desktop/desktop-web-server.mjs"));
+  await copy(path.join(root, "desktop/database-backup.mjs"), path.join(output, "desktop/database-backup.mjs"));
   await copy(path.join(root, "desktop/loading.html"), path.join(output, "desktop/loading.html"));
   await copy(path.join(root, "desktop/WillardMediaCenter.ps1"), path.join(output, "desktop/WillardMediaCenter.ps1"));
   await copy(path.join(root, "desktop/Start Willard Media Center.bat"), path.join(output, "Start Willard Media Center.bat"));

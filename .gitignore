@@ -64,6 +64,9 @@ test-results/
 .env.*.local
 logs/
 
+# Encrypted database backups are operator-managed and must not enter source control.
+/backups/
+
 # Windows release staging and installer output
 /build/
 build/installer/

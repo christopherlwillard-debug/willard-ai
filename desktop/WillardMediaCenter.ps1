@@ -220,7 +220,7 @@ function Try-Update {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
     $required = @("version.json", "payload-manifest.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
-      "desktop\desktop-web-server.mjs", "desktop\loading.html",
+      "desktop\desktop-web-server.mjs", "desktop\database-backup.mjs", "desktop\loading.html",
       "api-runtime\dist\index.mjs", "api-runtime\setup-db.cjs",
       "web\index.html", "web\willard-loading.mp4")
     foreach ($entry in $required) {

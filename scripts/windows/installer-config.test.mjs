@@ -96,6 +96,8 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /payload-manifest\.json/);
   assert.match(releaseValidator, /onnxruntime-node/);
   assert.match(releaseValidator, /web\/index\.html/);
+  assert.match(releaseValidator, /desktop\/database-backup\.mjs/);
+  assert.match(releaseStager, /desktop\/database-backup\.mjs/);
   assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
   assert.match(releaseValidator, /validateReleaseManifest/);
   assert.match(releaseValidator, /sha256.*match/i);
