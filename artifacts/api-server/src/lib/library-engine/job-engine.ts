@@ -474,7 +474,7 @@ async function loadDirMtimeCache(nasPath: string): Promise<Map<string, DirCacheE
         const marker = JSON.parse(await fs.promises.readFile(dirCacheInvalidationsPath(nasPath), "utf8"));
         if (marker?.v === 1 && Array.isArray(marker.dirs)) {
           const invalidated = marker.dirs.filter((value: unknown): value is string => typeof value === "string");
-          if (invalidated.some(value => value === "")) return new Map();
+          if (invalidated.some((value: string) => value === "")) return new Map();
           for (const relPath of invalidated) {
             for (const key of cache.keys()) {
               if (key === relPath || key.startsWith(`${relPath}/`)) cache.delete(key);
@@ -532,11 +532,25 @@ async function dirCachePreCheck(
   async function recurse(currentDir: string): Promise<void> {
     if (!allHit) return; // abort on first miss — rest of tree is irrelevant
 
-    let entries: fs.Dirent[];
+    let entryCount = 0;
+    const childDirs: string[] = [];
     let dStat: fs.Stats;
     try {
       dStat   = await fs.promises.stat(currentDir);
-      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+      const handle = await fs.promises.opendir(currentDir);
+      try {
+        for await (const entry of handle) {
+          entryCount++;
+          if (!entry.isDirectory()) continue;
+          if (settings.ignoreHiddenFiles && entry.name.startsWith(".")) continue;
+          if (isSystemDir(entry.name, settings)) continue;
+          const fullPath = path.join(currentDir, entry.name);
+          if (skipDirs.has(path.resolve(fullPath))) continue;
+          childDirs.push(fullPath);
+        }
+      } finally {
+        try { await handle.close(); } catch { /* iterator may have closed it */ }
+      }
     } catch {
       allHit = false;
       return;
@@ -553,7 +567,6 @@ async function dirCachePreCheck(
       }
 
       const mtimeMs    = dStat.mtimeMs;
-      const entryCount = entries.length;
       dirCacheOut.set(relDir, { mtimeMs, entryCount });
 
       const cached = cacheIn.get(relDir);
@@ -563,14 +576,7 @@ async function dirCachePreCheck(
       }
     }
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (settings.ignoreHiddenFiles && entry.name.startsWith(".")) continue;
-      if (isSystemDir(entry.name, settings)) continue;
-      const fullPath = path.join(currentDir, entry.name);
-      if (skipDirs.has(path.resolve(fullPath))) continue;
-      await recurse(fullPath);
-    }
+    for (const childDir of childDirs) await recurse(childDir);
   }
 
   await recurse(nasPath);
