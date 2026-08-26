@@ -707,10 +707,10 @@ router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
                       sizeParam === "5000"  ? 5000  : 1000;
 
   try {
-    const {
-      walkNas, extractPhotoMeta, extractVideoMeta, hashFile,
-      PHOTO_EXTS, VIDEO_META_EXTS,
-    } = await import("../lib/library-engine/indexer");
+      const {
+       walkNas, extractPhotoMeta, extractVideoMeta, hashFileBounded,
+       DUPLICATE_CONFIRMATION_LIMIT_BYTES, PHOTO_EXTS, VIDEO_META_EXTS,
+      } = await import("../lib/library-engine/indexer");
     const { getWillardAIDir: _wDir } = await import("../lib/nas-storage");
     const { DEFAULT_SCANNER_SETTINGS } = await import("../lib/system-filter");
     const fs   = await import("fs");
@@ -759,9 +759,14 @@ router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
 
     const processOne = async (f: typeof sampled[0]): Promise<void> => {
       const t0   = Date.now();
-      const hash = await hashFile(f.fullPath);
-      latencies.push(Date.now() - t0);
-      if (hash) hashesGenerated++;
+       const hashResult = await hashFileBounded(
+         f.fullPath,
+         f.sizeBytes,
+         DUPLICATE_CONFIRMATION_LIMIT_BYTES,
+       );
+       const hash = hashResult.status === "CONFIRMED" ? hashResult.hash : null;
+       latencies.push(Date.now() - t0);
+       if (hash) hashesGenerated++;
       totalSizeBytes += f.sizeBytes;
 
       if (PHOTO_EXTS.has(f.ext) || VIDEO_META_EXTS.has(f.ext)) {

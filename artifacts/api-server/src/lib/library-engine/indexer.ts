@@ -73,6 +73,73 @@ export async function hashFile(fullPath: string): Promise<string | null> {
   });
 }
 
+export const DUPLICATE_CONFIRMATION_LIMIT_BYTES = 500 * 1024 * 1024;
+
+export type BoundedHashResult =
+  | { status: "CONFIRMED"; hash: string }
+  | { status: "UNCONFIRMED_LARGE"; hash: null }
+  | { status: "UNCONFIRMED_CANCELLED"; hash: null }
+  | { status: "UNCONFIRMED_UNREADABLE"; hash: null };
+
+/**
+ * Confirm a duplicate candidate without ever reading beyond the configured
+ * limit. The catalog size is checked before opening the file, and the stream
+ * enforces the same bound in case a file grows after indexing. Cancellation
+ * destroys the stream instead of waiting for the NAS read to finish.
+ */
+export function hashFileBounded(
+  fullPath: string,
+  sizeBytes: number,
+  maxBytes = DUPLICATE_CONFIRMATION_LIMIT_BYTES,
+  isCancelled?: () => boolean,
+): Promise<BoundedHashResult> {
+  if (sizeBytes > maxBytes) {
+    return Promise.resolve({ status: "UNCONFIRMED_LARGE", hash: null });
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let bytesRead = 0;
+    const hash = createHash("sha256");
+    const stream = fs.createReadStream(fullPath, { highWaterMark: FINGERPRINT_CHUNK });
+
+    const finish = (result: BoundedHashResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    stream.on("data", (chunk: Buffer) => {
+      if (isCancelled?.()) {
+        stream.destroy();
+        finish({ status: "UNCONFIRMED_CANCELLED", hash: null });
+        return;
+      }
+      bytesRead += chunk.length;
+      if (bytesRead > maxBytes) {
+        stream.destroy();
+        finish({ status: "UNCONFIRMED_LARGE", hash: null });
+        return;
+      }
+      hash.update(chunk);
+    });
+    stream.on("end", () => {
+      if (isCancelled?.()) {
+        finish({ status: "UNCONFIRMED_CANCELLED", hash: null });
+      } else {
+        finish({ status: "CONFIRMED", hash: hash.digest("hex") });
+      }
+    });
+    stream.on("error", () => {
+      if (isCancelled?.()) {
+        finish({ status: "UNCONFIRMED_CANCELLED", hash: null });
+      } else if (!settled) {
+        finish({ status: "UNCONFIRMED_UNREADABLE", hash: null });
+      }
+    });
+  });
+}
+
 // ── Fast content fingerprint ──────────────────────────────────────────────────
 
 const FINGERPRINT_CHUNK = 64 * 1024;

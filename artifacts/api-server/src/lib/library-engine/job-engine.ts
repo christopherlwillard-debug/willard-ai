@@ -12,7 +12,8 @@ import {
 } from "./types.ts";
 import {
   walkNas, walkNasAsync, classifyMediaType, guessMimeType,
-  extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile,
+  extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile, hashFileBounded,
+  DUPLICATE_CONFIRMATION_LIMIT_BYTES,
   computeQuickFingerprint, sortFilesByPriority,
   PHOTO_EXTS, VIDEO_META_EXTS,
   ScanPriorityQueue,
@@ -1373,8 +1374,19 @@ async function runScanJob(
 
             // Stage 2: legacy full-hash rows (rows without fingerprints from before v2)
             if (legacySizes.has(f.sizeBytes)) {
-              contentHash = await hashFile(safeFullPath);
-              state.counters.hashed++;
+              const legacyHash = await hashFileBounded(
+                safeFullPath,
+                f.sizeBytes,
+                DUPLICATE_CONFIRMATION_LIMIT_BYTES,
+                () => state.cancelRequested,
+              );
+              if (legacyHash.status === "UNCONFIRMED_CANCELLED") {
+                state.filesProcessed++;
+                tickSpeed(state);
+                return { action: "SKIP", relativePath, name: f.name, skipReason: "Scan cancelled" };
+              }
+              contentHash = legacyHash.hash;
+              if (legacyHash.status === "CONFIRMED") state.counters.hashed++;
               const legacyId = contentHash ? existingByHash.get(contentHash) : undefined;
               if (legacyId !== undefined) {
                 if (contentHash) existingByHash.delete(contentHash);
@@ -2199,6 +2211,8 @@ function buildPartialSummary(state: ActiveJobState, scanStartedAt: Date): Record
 // Stage 1: group by (size, fingerprint) — cheap, no file reads needed here
 // because fingerprints were computed during indexing. Stage 2: for groups with
 // 2+ members, confirm with full SHA-256 (hashing only rows that lack one).
+// Confirmation is bounded at DUPLICATE_CONFIRMATION_LIMIT_BYTES; large files
+// remain explicitly unconfirmed rather than consuming unbounded NAS I/O.
 // Returns the number of confirmed duplicate groups.
 
 async function detectDuplicates(state: ActiveJobState): Promise<number> {
@@ -2228,13 +2242,22 @@ async function detectDuplicates(state: ActiveJobState): Promise<number> {
     if (members.length < 2) continue;
     if (state.cancelRequested) break;
 
-    // Confirm with full hash — only hash members that don't have one yet
+    // Confirm with full hash — only hash members that don't have one yet.
+    // Large files are rejected before opening the stream, and cancellation
+    // stops the active stream at its next chunk.
     const byHash = new Map<string, number>();
     for (const m of members) {
       let hash = m.contentHash;
       if (!hash) {
-        hash = await hashFile(resolveLibraryPath(state.nasPath, m.relativePath));
-        if (hash) {
+        const result = await hashFileBounded(
+          resolveLibraryPath(state.nasPath, m.relativePath),
+          m.sizeBytes,
+          DUPLICATE_CONFIRMATION_LIMIT_BYTES,
+          () => state.cancelRequested,
+        );
+        if (result.status === "UNCONFIRMED_CANCELLED") break;
+        hash = result.hash;
+        if (result.status === "CONFIRMED" && hash) {
           state.counters.hashed++;
           await db.update(mediaFilesTable).set({ contentHash: hash })
             .where(eq(mediaFilesTable.id, m.id));

@@ -515,12 +515,22 @@ export const DuplicateGroupMatchType = {
   PERCEPTUAL_SIMILAR: 'PERCEPTUAL_SIMILAR',
 } as const;
 
+export type DuplicateGroupConfirmationStatus = typeof DuplicateGroupConfirmationStatus[keyof typeof DuplicateGroupConfirmationStatus];
+
+
+export const DuplicateGroupConfirmationStatus = {
+  CONFIRMED: 'CONFIRMED',
+  UNCONFIRMED_FINGERPRINT: 'UNCONFIRMED_FINGERPRINT',
+  UNCONFIRMED_LARGE: 'UNCONFIRMED_LARGE',
+} as const;
+
 export interface DuplicateGroup {
   hash: string;
   fileCount: number;
   totalWastedBytes: number;
   matchType: DuplicateGroupMatchType;
   matchConfidence: number;
+  confirmationStatus: DuplicateGroupConfirmationStatus;
   files: DuplicateFileInfo[];
 }
 

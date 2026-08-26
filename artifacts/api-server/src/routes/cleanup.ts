@@ -10,10 +10,11 @@ import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/n
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 import { appendTrashManifestEntry, manifestPath, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
 import { sha256File } from "../lib/organize-helpers.ts";
+import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 
 const router: IRouter = Router();
 
-const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+const LARGE_FILE_THRESHOLD = DUPLICATE_CONFIRMATION_LIMIT_BYTES;
 const OLD_FILE_YEARS = 5;
 
 function cleanupLogPath(nasPath: string) {
@@ -56,7 +57,11 @@ router.get("/cleanup/duplicates", async (req, res) => {
       SELECT
         m.quick_fingerprint AS group_key,
         COUNT(*) AS file_count,
-        SUM(m.size_bytes) AS total_size
+         SUM(m.size_bytes) AS total_size,
+         COUNT(*) FILTER (
+           WHERE m.content_hash IS NULL
+             AND m.size_bytes > ${DUPLICATE_CONFIRMATION_LIMIT_BYTES}
+         ) AS large_unconfirmed_count
       FROM ${mediaFilesTable} m
       WHERE m.nas_path = ${nasPath}
         AND m.quick_fingerprint IS NOT NULL
@@ -77,6 +82,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       totalSize: number;
       matchType: "HASH_IDENTICAL" | "PERCEPTUAL_SIMILAR";
       matchConfidence: number;
+      confirmationStatus: "CONFIRMED" | "UNCONFIRMED_FINGERPRINT" | "UNCONFIRMED_LARGE";
     };
 
     const allRaw: RawGroup[] = [
@@ -86,13 +92,17 @@ router.get("/cleanup/duplicates", async (req, res) => {
         totalSize:       Number(r.total_size),
         matchType:       "HASH_IDENTICAL" as const,
         matchConfidence: 5,
+        confirmationStatus: "CONFIRMED" as const,
       })),
       ...(perceptualGroups.rows as any[]).map(r => ({
         groupKey:        String(r.group_key),
         fileCount:       parseInt(r.file_count),
         totalSize:       Number(r.total_size),
         matchType:       "PERCEPTUAL_SIMILAR" as const,
-        matchConfidence: 4,
+        matchConfidence: Number(r.large_unconfirmed_count) > 0 ? 2 : 4,
+        confirmationStatus: Number(r.large_unconfirmed_count) > 0
+          ? "UNCONFIRMED_LARGE" as const
+          : "UNCONFIRMED_FINGERPRINT" as const,
       })),
     ].sort((a, b) => {
       const wastedA = (a.fileCount - 1) * (a.totalSize / a.fileCount);
@@ -181,6 +191,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         totalWastedBytes: wastedBytes,
         matchType:        raw.matchType,
         matchConfidence:  raw.matchConfidence,
+        confirmationStatus: raw.confirmationStatus,
         files:            filesResult.rows,
       };
     }));

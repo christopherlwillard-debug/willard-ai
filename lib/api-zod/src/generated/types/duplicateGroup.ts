@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DuplicateFileInfo } from './duplicateFileInfo';
+import type { DuplicateGroupConfirmationStatus } from './duplicateGroupConfirmationStatus';
 import type { DuplicateGroupMatchType } from './duplicateGroupMatchType';
 
 export interface DuplicateGroup {
@@ -14,5 +15,6 @@ export interface DuplicateGroup {
   totalWastedBytes: number;
   matchType: DuplicateGroupMatchType;
   matchConfidence: number;
+  confirmationStatus: DuplicateGroupConfirmationStatus;
   files: DuplicateFileInfo[];
 }

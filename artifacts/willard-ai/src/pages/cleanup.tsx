@@ -122,9 +122,25 @@ const MATCH_TYPE_LABELS: Record<string, string> = {
   PERCEPTUAL_SIMILAR: "Visually Similar",
 };
 
-function DuplicateTypeBadge({ matchType, confidence }: { matchType: string; confidence: number }) {
+const CONFIRMATION_STATUS_LABELS: Record<string, string> = {
+  CONFIRMED:              "Confirmed",
+  UNCONFIRMED_FINGERPRINT: "Fingerprint only",
+  UNCONFIRMED_LARGE:      "Not fully checked — files over 500 MB",
+};
+
+function DuplicateTypeBadge({
+  matchType,
+  confidence,
+  confirmationStatus,
+}: {
+  matchType: string;
+  confidence: number;
+  confirmationStatus: string;
+}) {
   const stars = Math.min(5, Math.max(0, confidence));
   const label = MATCH_TYPE_LABELS[matchType] ?? matchType.replace(/_/g, " ");
+  const confirmationLabel = CONFIRMATION_STATUS_LABELS[confirmationStatus] ?? confirmationStatus.replace(/_/g, " ");
+  const isUnconfirmedLarge = confirmationStatus === "UNCONFIRMED_LARGE";
   return (
     <div className="flex items-center gap-1.5">
       <div className="flex">
@@ -136,6 +152,9 @@ function DuplicateTypeBadge({ matchType, confidence }: { matchType: string; conf
         ))}
       </div>
       <span className="text-xs font-mono text-muted-foreground">{label}</span>
+      <span className={`text-xs font-mono ${isUnconfirmedLarge ? "text-amber-400" : confirmationStatus === "CONFIRMED" ? "text-green-500" : "text-muted-foreground"}`}>
+        · {confirmationLabel}
+      </span>
     </div>
   );
 }
@@ -231,7 +250,11 @@ function DuplicateGroupCard({
       <CardContent className="pt-4 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
-            <DuplicateTypeBadge matchType={group.matchType} confidence={group.matchConfidence} />
+            <DuplicateTypeBadge
+              matchType={group.matchType}
+              confidence={group.matchConfidence}
+              confirmationStatus={group.confirmationStatus}
+            />
             <Badge variant="secondary" className="font-mono text-xs">{group.fileCount} copies</Badge>
             <span className="text-xs text-destructive font-mono bg-destructive/10 px-2 py-0.5 rounded">
               Wastes {formatBytes(group.totalWastedBytes)}
@@ -241,6 +264,16 @@ function DuplicateGroupCard({
             <Badge className="bg-green-600 text-white font-mono text-xs">Staged</Badge>
           )}
         </div>
+
+        {group.confirmationStatus === "UNCONFIRMED_LARGE" && (
+          <div className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs font-mono text-amber-300">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>
+              These files share a quick fingerprint, but at least one is larger than 500 MB.
+              Full confirmation was skipped to protect NAS bandwidth. Review every file before staging cleanup.
+            </span>
+          </div>
+        )}
 
         <div className="flex gap-1.5 flex-wrap">
           {PRESETS.map(p => (

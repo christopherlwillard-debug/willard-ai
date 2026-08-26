@@ -2314,6 +2314,12 @@ components:
             - PERCEPTUAL_SIMILAR
         matchConfidence:
           type: integer
+        confirmationStatus:
+          type: string
+          enum:
+            - CONFIRMED
+            - UNCONFIRMED_FINGERPRINT
+            - UNCONFIRMED_LARGE
         files:
           type: array
           items:
@@ -2324,6 +2330,7 @@ components:
         - totalWastedBytes
         - matchType
         - matchConfidence
+        - confirmationStatus
         - files
 
     DuplicateGroupResult:

@@ -36,6 +36,7 @@ export * from './driveCandidateKind';
 export * from './driveList';
 export * from './duplicateFileInfo';
 export * from './duplicateGroup';
+export * from './duplicateGroupConfirmationStatus';
 export * from './duplicateGroupMatchType';
 export * from './duplicateGroupResult';
 export * from './emptyFolder';

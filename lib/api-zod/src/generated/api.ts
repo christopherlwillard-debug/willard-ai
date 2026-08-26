@@ -635,6 +635,7 @@ export const GetDuplicateFilesResponse = zod.object({
   "totalWastedBytes": zod.number(),
   "matchType": zod.enum(['HASH_IDENTICAL', 'PERCEPTUAL_SIMILAR']),
   "matchConfidence": zod.number(),
+  "confirmationStatus": zod.enum(['CONFIRMED', 'UNCONFIRMED_FINGERPRINT', 'UNCONFIRMED_LARGE']),
   "files": zod.array(zod.object({
   "id": zod.number(),
   "path": zod.string(),
