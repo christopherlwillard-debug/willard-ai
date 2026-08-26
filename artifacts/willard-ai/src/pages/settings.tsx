@@ -32,6 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiUrl } from "@/lib/api";
 import { Settings2, Play, CheckCircle2, XCircle, Activity, Loader2, FolderOpen, AlertCircle, Lock, Shield, Monitor, Trash2, HardDrive, RefreshCw, Image as ImageIcon, UploadCloud, Layers, BarChart2, AlertTriangle, Filter, Plus, X as XIcon, Eye } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -252,6 +253,8 @@ export default function Settings() {
       <ThumbnailManagerSection />
 
       <ScannerSettingsSection />
+
+      <AiPrivacySection />
 
       <OptimizeProfileSection />
 
@@ -567,6 +570,218 @@ interface ScannerSettings {
   followSymlinks:              boolean;
   indexOtherFiles:             boolean;
   watcherPollIntervalSeconds:  number;
+}
+
+function AiPrivacySection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: settings, isLoading } = useGetSettings({
+    query: { queryKey: getGetSettingsQueryKey() },
+  });
+  const [enabled, setEnabled] = useState(false);
+  const [localOnly, setLocalOnly] = useState(true);
+  const [consentAcknowledged, setConsentAcknowledged] = useState(false);
+  const [excludedFolders, setExcludedFolders] = useState<string[]>([]);
+  const [excludedExtensions, setExcludedExtensions] = useState<string[]>([]);
+  const [folderInput, setFolderInput] = useState("");
+  const [extensionInput, setExtensionInput] = useState("");
+
+  useEffect(() => {
+    if (!settings) return;
+    setEnabled(settings.aiEnrichmentEnabled ?? false);
+    setLocalOnly(settings.aiLocalOnly ?? true);
+    setExcludedFolders(settings.aiExcludedFolders ?? []);
+    setExcludedExtensions(settings.aiExcludedExtensions ?? []);
+    setConsentAcknowledged(false);
+  }, [settings]);
+
+  const updateMutation = useUpdateSettings({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "AI privacy settings saved" });
+        setConsentAcknowledged(false);
+        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+      },
+      onError: (error: any) => toast({
+        title: "AI settings were not saved",
+        description: error?.response?.data?.error ?? error?.message ?? "Something went wrong.",
+        variant: "destructive",
+      }),
+    },
+  });
+
+  const addFolder = () => {
+    const value = folderInput.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    if (!value || excludedFolders.includes(value)) return;
+    setExcludedFolders([...excludedFolders, value]);
+    setFolderInput("");
+  };
+
+  const addExtension = () => {
+    const value = extensionInput.trim().replace(/^\./, "").toLowerCase();
+    if (!/^[a-z0-9]{1,16}$/.test(value) || excludedExtensions.includes(value)) return;
+    setExcludedExtensions([...excludedExtensions, value]);
+    setExtensionInput("");
+  };
+
+  const save = () => {
+    updateMutation.mutate({
+      data: {
+        aiEnrichmentEnabled: enabled,
+        aiLocalOnly: localOnly,
+        aiExcludedFolders: excludedFolders,
+        aiExcludedExtensions: excludedExtensions,
+        aiConsentAcknowledged: consentAcknowledged,
+      },
+    });
+  };
+
+  if (isLoading) return <Skeleton className="h-72 w-full" />;
+
+  const cloudMode = enabled && !localOnly;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Shield className="w-5 h-5" /> AI PRIVACY &amp; CONSENT
+        </CardTitle>
+        <CardDescription>
+          Control whether Willard can send personal media or library details to a cloud AI provider.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="rounded-md border border-green-500/30 bg-green-500/5 px-4 py-3 text-sm">
+          <p className="font-medium text-green-600 dark:text-green-400">Default: nothing is sent</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            AI enrichment starts disabled. Embeddings and face recognition run locally and do not use the cloud provider.
+          </p>
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="ai-enrichment-enabled" className="text-sm font-medium">Enable AI enrichment</Label>
+            <p className="text-xs text-muted-foreground mt-1">
+              Analyze new media in the background. Turning this off stops queued provider sends.
+            </p>
+          </div>
+          <Switch
+            id="ai-enrichment-enabled"
+            checked={enabled}
+            onCheckedChange={setEnabled}
+            aria-label="Enable AI enrichment"
+          />
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="ai-local-only" className="text-sm font-medium">Local-only mode</Label>
+            <p className="text-xs text-muted-foreground mt-1">
+              Keep document extraction and semantic indexing on this machine. No OpenAI request is made.
+            </p>
+          </div>
+          <Switch
+            id="ai-local-only"
+            checked={localOnly}
+            onCheckedChange={setLocalOnly}
+            aria-label="Keep AI local only"
+          />
+        </div>
+
+        {cloudMode && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
+            <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+              Cloud provider disclosure
+            </p>
+            <dl className="grid gap-2 text-xs text-muted-foreground">
+              <div><dt className="inline font-semibold text-foreground">Provider: </dt><dd className="inline">OpenAI via the configured Replit AI Integration.</dd></div>
+              <div><dt className="inline font-semibold text-foreground">Data sent: </dt><dd className="inline">a resized thumbnail, selected document text and filename, or a manually requested library summary. Original files are not uploaded by enrichment.</dd></div>
+              <div><dt className="inline font-semibold text-foreground">Retention: </dt><dd className="inline">Willard keeps generated metadata in the local catalog; provider processing and retention follow the provider and integration terms, outside Willard&apos;s control.</dd></div>
+            </dl>
+            <label className="flex items-start gap-2 text-xs cursor-pointer">
+              <Checkbox
+                checked={consentAcknowledged}
+                onCheckedChange={(checked) => setConsentAcknowledged(checked === true)}
+                aria-label="Acknowledge cloud AI disclosure"
+              />
+              <span>I understand what may leave this machine and consent to cloud AI processing.</span>
+            </label>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm font-medium">Excluded folders</Label>
+            <p className="text-xs text-muted-foreground mt-1">Relative NAS folders and everything below them never reach the provider.</p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={folderInput}
+              onChange={(event) => setFolderInput(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addFolder(); } }}
+              placeholder="Private / Documents/Tax"
+              className="font-mono"
+            />
+            <Button type="button" variant="secondary" onClick={addFolder} disabled={!folderInput.trim()}>Add</Button>
+          </div>
+          {excludedFolders.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {excludedFolders.map((folder) => (
+                <Badge key={folder} variant="secondary" className="font-mono text-xs gap-1.5">
+                  {folder}
+                  <button type="button" onClick={() => setExcludedFolders(excludedFolders.filter((value) => value !== folder))} aria-label={`Remove ${folder}`}>
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm font-medium">Excluded file types</Label>
+            <p className="text-xs text-muted-foreground mt-1">Extensions such as <code className="bg-secondary px-1 rounded">pdf</code> or <code className="bg-secondary px-1 rounded">jpg</code> are never sent.</p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              value={extensionInput}
+              onChange={(event) => setExtensionInput(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addExtension(); } }}
+              placeholder="pdf"
+              className="font-mono"
+            />
+            <Button type="button" variant="secondary" onClick={addExtension} disabled={!/^[.]?[a-z0-9]{1,16}$/i.test(extensionInput.trim())}>Add</Button>
+          </div>
+          {excludedExtensions.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {excludedExtensions.map((extension) => (
+                <Badge key={extension} variant="secondary" className="font-mono text-xs gap-1.5">
+                  .{extension}
+                  <button type="button" onClick={() => setExcludedExtensions(excludedExtensions.filter((value) => value !== extension))} aria-label={`Remove .${extension}`}>
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {settings?.aiConsentAt && (
+          <p className="text-xs text-muted-foreground">
+            Cloud consent recorded {formatDate(settings.aiConsentAt)} for {settings.aiConsentProvider ?? "the configured provider"}.
+          </p>
+        )}
+      </CardContent>
+      <CardFooter className="flex justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          {cloudMode ? "Cloud AI is allowed only for non-excluded items." : "No cloud AI requests will be made."}
+        </p>
+        <Button onClick={save} disabled={updateMutation.isPending || (cloudMode && !consentAcknowledged)} className="font-mono">
+          {updateMutation.isPending ? "SAVING…" : "SAVE AI PRIVACY"}
+        </Button>
+      </CardFooter>
+    </Card>
+  );
 }
 
 const SCANNER_DEFAULTS: ScannerSettings = {

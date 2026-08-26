@@ -57,6 +57,7 @@ test("extracts text from PPTX slides", async () => {
 });
 
 const enrichmentQueries: Array<{ sql: string; params: unknown[] }> = [];
+let providerCalls = 0;
 
 mock.module("@workspace/db", {
   namedExports: {
@@ -91,17 +92,20 @@ mock.module("@workspace/integrations-openai-ai-server", {
     openai: {
       chat: {
         completions: {
-          create: async () => ({
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  description: "A warranty for a kitchen appliance",
-                  tags: ["warranty", "appliance"],
-                  doc_type: "manual",
-                }),
-              },
-            }],
-          }),
+          create: async () => {
+            providerCalls++;
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    description: "A warranty for a kitchen appliance",
+                    tags: ["warranty", "appliance"],
+                    doc_type: "manual",
+                  }),
+                },
+              }],
+            };
+          },
         },
       },
     },
@@ -118,6 +122,7 @@ test("saves descriptions, tags, OCR, and document metadata without pgvector", as
   const sourcePath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-enrichment-"));
   fs.writeFileSync(path.join(sourcePath, "warranty.txt"), "source");
   enrichmentQueries.length = 0;
+  providerCalls = 0;
   setVectorAvailable(false);
 
   try {
@@ -134,6 +139,14 @@ test("saves descriptions, tags, OCR, and document metadata without pgvector", as
       userTags: null,
       userDescription: null,
       notes: null,
+    }, {
+      aiEnrichmentEnabled: true,
+      aiLocalOnly: false,
+      aiExcludedFolders: [],
+      aiExcludedExtensions: [],
+      aiConsentAt: new Date(),
+      aiConsentProvider: "test",
+      aiConsentVersion: "test",
     });
     const insert = enrichmentQueries[0];
     assert.ok(insert);
@@ -150,6 +163,7 @@ test("saves descriptions, tags, OCR, and document metadata without pgvector", as
       JSON.stringify([]),
     ]);
     assert.equal(insert.params[8], 3);
+    assert.equal(providerCalls, 1);
   } finally {
     fs.rmSync(sourcePath, { recursive: true, force: true });
     setVectorAvailable(false);
@@ -161,6 +175,7 @@ test("preserves embedding writes when pgvector is available", async () => {
   const sourcePath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-enrichment-"));
   fs.writeFileSync(path.join(sourcePath, "warranty.txt"), "source");
   enrichmentQueries.length = 0;
+  providerCalls = 0;
   setVectorAvailable(true);
 
   try {
@@ -177,6 +192,14 @@ test("preserves embedding writes when pgvector is available", async () => {
       userTags: null,
       userDescription: null,
       notes: null,
+    }, {
+      aiEnrichmentEnabled: true,
+      aiLocalOnly: false,
+      aiExcludedFolders: [],
+      aiExcludedExtensions: [],
+      aiConsentAt: new Date(),
+      aiConsentProvider: "test",
+      aiConsentVersion: "test",
     });
     const insert = enrichmentQueries[0];
     assert.ok(insert);
@@ -196,5 +219,71 @@ test("preserves embedding writes when pgvector is available", async () => {
   } finally {
     fs.rmSync(sourcePath, { recursive: true, force: true });
     setVectorAvailable(false);
+  }
+});
+
+const privacy = (overrides: Partial<{
+  aiEnrichmentEnabled: boolean;
+  aiLocalOnly: boolean;
+  aiExcludedFolders: string[];
+  aiExcludedExtensions: string[];
+}> = {}) => ({
+  aiEnrichmentEnabled: true,
+  aiLocalOnly: false,
+  aiExcludedFolders: [],
+  aiExcludedExtensions: [],
+  aiConsentAt: new Date(),
+  aiConsentProvider: "test",
+  aiConsentVersion: "test",
+  ...overrides,
+});
+
+function testFile(sourcePath: string, relativePath = "private/photo.jpg") {
+  const fullPath = path.join(sourcePath, relativePath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, "source");
+  return {
+    id: 44,
+    name: path.basename(fullPath),
+    relativePath,
+    mediaType: "image",
+    thumbnailPath: null,
+    fullPath,
+    cameraMake: null,
+    cameraModel: null,
+    dateTaken: null,
+    userTags: null,
+    userDescription: null,
+    notes: null,
+  };
+}
+
+test("does not call the provider when AI is disabled", async () => {
+  const { enrichOne } = await import("../lib/ai-enrichment.ts");
+  const sourcePath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-enrichment-disabled-"));
+  enrichmentQueries.length = 0;
+  providerCalls = 0;
+  try {
+    await enrichOne(testFile(sourcePath), privacy({ aiEnrichmentEnabled: false }));
+    assert.equal(providerCalls, 0);
+    assert.equal(enrichmentQueries.length, 0);
+  } finally {
+    fs.rmSync(sourcePath, { recursive: true, force: true });
+  }
+});
+
+test("does not call the provider for local-only or excluded media", async () => {
+  const { enrichOne } = await import("../lib/ai-enrichment.ts");
+  const sourcePath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-enrichment-private-"));
+  enrichmentQueries.length = 0;
+  providerCalls = 0;
+  try {
+    await enrichOne(testFile(sourcePath, "Private/secret.jpg"), privacy({ aiLocalOnly: true }));
+    await enrichOne(testFile(sourcePath, "Family/secret.jpg"), privacy({ aiExcludedFolders: ["family"] }));
+    await enrichOne(testFile(sourcePath, "tax.pdf"), privacy({ aiExcludedExtensions: ["pdf"] }));
+    assert.equal(providerCalls, 0);
+    assert.equal(enrichmentQueries.length, 1);
+  } finally {
+    fs.rmSync(sourcePath, { recursive: true, force: true });
   }
 });

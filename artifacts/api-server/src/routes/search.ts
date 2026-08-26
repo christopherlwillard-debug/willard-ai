@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
-  buildNoResultSuggestions, emptyIntent, type SearchIntent,
+  buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, type SearchIntent,
 } from "../lib/ai-search.ts";
 import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
+import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 
 const router: IRouter = Router();
 
@@ -34,6 +35,13 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
     location: typeof o.location === "string" ? o.location : null,
     personNames: arr(o.personNames),
   };
+}
+
+function localSearchIntent(query: string, previous: SearchIntent | null): SearchIntent {
+  const words = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2).slice(0, 7);
+  const keywords = [query.toLowerCase(), ...words];
+  const fallback: SearchIntent = { ...emptyIntent(), semanticQuery: query, keywords };
+  return previous ? mergeRefinedIntent(previous, fallback) : fallback;
 }
 
 async function findNamedPeople(nasPath: string, query: string): Promise<string[]> {
@@ -66,7 +74,10 @@ router.post("/search/ai", async (req, res) => {
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
-    const intent = await parseIntent(query, refine ? previousIntent : null);
+    const aiPrivacy = await getAiPrivacySettings();
+    const intent = canSendToAiProvider(aiPrivacy)
+      ? await parseIntent(query, refine ? previousIntent : null)
+      : localSearchIntent(query, refine ? previousIntent : null);
     const namedPeople = await findNamedPeople(nasPath, query);
     if (namedPeople.length) {
       intent.personNames = [...new Set([...(intent.personNames ?? []), ...namedPeople])];

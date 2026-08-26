@@ -6,6 +6,12 @@ import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWit
 import { logger } from "./logger.ts";
 import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
+import {
+  getAiPrivacySettings,
+  isMediaExcluded,
+  normalizeAiExclusions,
+  type AiPrivacySettings,
+} from "./ai-privacy.ts";
 
 /**
  * AI Enrichment Engine — builds the "understanding" layer on top of the
@@ -253,7 +259,12 @@ interface PendingFile {
   notes: string | null;
 }
 
-async function fetchPending(nasPath: string, limit: number): Promise<{ rows: PendingFile[]; total: number }> {
+async function fetchPending(
+  nasPath: string,
+  limit: number,
+  privacy: Pick<AiPrivacySettings, "aiExcludedFolders" | "aiExcludedExtensions">,
+): Promise<{ rows: PendingFile[]; total: number }> {
+  const exclusions = normalizeAiExclusions(privacy);
   const { rows } = await pool.query(
     `SELECT f.id, f.name, f.relative_path, f.media_type, f.thumbnail_path,
             f.camera_make, f.camera_model, f.date_taken,
@@ -265,9 +276,22 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
        WHERE f.nas_path = $1
          AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
         AND a.id IS NULL
+       AND (
+         cardinality($3::text[]) = 0
+         OR NOT EXISTS (
+           SELECT 1
+           FROM unnest($3::text[]) AS excluded(folder)
+           WHERE lower(f.relative_path) = excluded.folder
+              OR lower(f.relative_path) LIKE excluded.folder || '/%'
+         )
+       )
+       AND (
+         cardinality($4::text[]) = 0
+         OR COALESCE(substring(lower(f.name) from '\\.([^.]+)$'), '') <> ALL($4::text[])
+       )
       ORDER BY f.id
-      LIMIT $3`,
-    [nasPath, AI_VERSION, limit],
+       LIMIT $5`,
+    [nasPath, AI_VERSION, exclusions.folders, exclusions.extensions, limit],
   );
   return {
     total: rows.length ? Number(rows[0].total) : 0,
@@ -297,14 +321,32 @@ async function fetchPending(nasPath: string, limit: number): Promise<{ rows: Pen
 
 // ── Enrichment of one file ───────────────────────────────────────────────────
 
-export async function enrichOne(file: PendingFile): Promise<void> {
+export async function enrichOne(file: PendingFile, privacy?: AiPrivacySettings): Promise<void> {
+  const effectivePrivacy = privacy ?? await getAiPrivacySettings();
+  if (!effectivePrivacy.aiEnrichmentEnabled ||
+      isMediaExcluded(file.relativePath, file.name, effectivePrivacy)) {
+    return;
+  }
+
   let analysis: AiAnalysis;
   try {
     if (!file.fullPath || !fs.existsSync(file.fullPath) || !fs.statSync(file.fullPath).isFile()) {
       throw new Error("Source file is missing or outside the active library");
     }
-    if ((file.mediaType === "image" || file.mediaType === "photo" || file.mediaType === "video") &&
-        file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
+    if (effectivePrivacy.aiLocalOnly) {
+      if (file.mediaType === "document") {
+        const text = file.fullPath.toLowerCase().endsWith(".pdf")
+          ? await extractPdfText(file.fullPath)
+          : await extractOfficeDocumentText(file.fullPath);
+        analysis = {
+          description: null, tags: [], objects: [], ocrText: text,
+          docType: null, scene: "document", people: [],
+        };
+      } else {
+        analysis = { description: null, tags: [], objects: [], ocrText: null, docType: null, scene: null, people: [] };
+      }
+    } else if ((file.mediaType === "image" || file.mediaType === "photo" || file.mediaType === "video") &&
+               file.thumbnailPath && fs.existsSync(file.thumbnailPath)) {
       analysis = await analyzeImage(file.thumbnailPath);
     } else if (file.mediaType === "document") {
       const text = file.fullPath.toLowerCase().endsWith(".pdf")
@@ -382,14 +424,18 @@ export async function runEnrichmentTick(): Promise<void> {
       paused = row?.indexingPaused ?? false;
     } catch { return; }
     if (!nasPath || paused) return;
+    const privacy = await getAiPrivacySettings();
+    if (!privacy.aiEnrichmentEnabled) return;
     const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
-    const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK);
+    const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK, privacy);
     status.pending = total;
     status.lastRunAt = new Date().toISOString();
     for (const file of rows) {
-      await enrichOne(file);
+      const currentPrivacy = await getAiPrivacySettings();
+      if (!currentPrivacy.aiEnrichmentEnabled) break;
+      await enrichOne(file, currentPrivacy);
     }
     if (rows.length) status.pending = Math.max(0, total - rows.length);
   } finally {

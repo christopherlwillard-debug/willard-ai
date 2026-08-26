@@ -8,6 +8,7 @@
 
 export * from './apiError';
 export * from './appSettings';
+export * from './appSettingsOptimizeProfile';
 export * from './appSettingsScanPerformance';
 export * from './archiveDetail';
 export * from './archiveFile';
@@ -100,6 +101,7 @@ export * from './searchFilesParams';
 export * from './searchFilesSource';
 export * from './sessionsResult';
 export * from './settingsInput';
+export * from './settingsInputOptimizeProfile';
 export * from './settingsInputScanPerformance';
 export * from './storageStats';
 export * from './systemEnvironment';

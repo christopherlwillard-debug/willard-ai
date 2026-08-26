@@ -1612,6 +1612,24 @@ components:
           enum: [ARCHIVE, BALANCED, MAXIMUM]
         rawConversionEnabled:
           type: boolean
+        aiEnrichmentEnabled:
+          type: boolean
+        aiLocalOnly:
+          type: boolean
+        aiExcludedFolders:
+          type: array
+          items:
+            type: string
+        aiExcludedExtensions:
+          type: array
+          items:
+            type: string
+        aiConsentAt:
+          type: ["string", "null"]
+        aiConsentProvider:
+          type: ["string", "null"]
+        aiConsentVersion:
+          type: ["string", "null"]
       required:
         - nasPath
         - lastScanAt
@@ -1645,6 +1663,24 @@ components:
           type: string
           enum: [ARCHIVE, BALANCED, MAXIMUM]
         rawConversionEnabled:
+          type: boolean
+        aiEnrichmentEnabled:
+          type: boolean
+        aiLocalOnly:
+          type: boolean
+        aiExcludedFolders:
+          type: array
+          maxItems: 200
+          items:
+            type: string
+            maxLength: 500
+        aiExcludedExtensions:
+          type: array
+          maxItems: 200
+          items:
+            type: string
+            maxLength: 16
+        aiConsentAcknowledged:
           type: boolean
 
     NasTestInput:

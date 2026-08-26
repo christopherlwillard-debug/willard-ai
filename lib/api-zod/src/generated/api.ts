@@ -194,13 +194,32 @@ export const GetSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish()
 })
 
 
 /**
  * @summary Update settings
  */
+export const updateSettingsBodyAiExcludedFoldersItemMax = 500;
+
+export const updateSettingsBodyAiExcludedFoldersMax = 200;
+
+export const updateSettingsBodyAiExcludedExtensionsItemMax = 16;
+
+export const updateSettingsBodyAiExcludedExtensionsMax = 200;
+
+
+
 export const UpdateSettingsBody = zod.object({
   "nasPath": zod.string().optional(),
   "photosDestination": zod.string().optional(),
@@ -211,7 +230,12 @@ export const UpdateSettingsBody = zod.object({
   "onboardingDismissed": zod.boolean().optional(),
   "celebrationShown": zod.boolean().optional(),
   "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
-  "rawConversionEnabled": zod.boolean().optional()
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string().max(updateSettingsBodyAiExcludedFoldersItemMax)).max(updateSettingsBodyAiExcludedFoldersMax).optional(),
+  "aiExcludedExtensions": zod.array(zod.string().max(updateSettingsBodyAiExcludedExtensionsItemMax)).max(updateSettingsBodyAiExcludedExtensionsMax).optional(),
+  "aiConsentAcknowledged": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({
@@ -226,7 +250,16 @@ export const UpdateSettingsResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish()
 })
 
 
@@ -1107,7 +1140,16 @@ export const UploadSettingsLogoResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish()
 })
 
 
@@ -1126,7 +1168,16 @@ export const DeleteSettingsLogoResponse = zod.object({
   "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
   "indexingPaused": zod.boolean().optional(),
   "onboardingDismissedAt": zod.string().nullish(),
-  "celebrationShownAt": zod.string().nullish()
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish()
 })
 
 

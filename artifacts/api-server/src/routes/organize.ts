@@ -16,6 +16,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
+import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 
 const router: IRouter = Router();
 
@@ -732,13 +733,19 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     }
     const planConflicts = [...filenameGroups.values()].filter(g => g.length > 1).map(g => g[0]);
 
-    const aiResult = await callAiConfidence({
-      totalFiles: fileEntries.length,
-      summary,
-      destinations,
-      conflictCount: planConflicts.length,
-      conflictExamples: planConflicts.slice(0, 5),
-    });
+    const aiPrivacy = await getAiPrivacySettings();
+    const safePlanConflicts = planConflicts.filter((conflictPath) =>
+      !isMediaExcluded(conflictPath, path.basename(conflictPath), aiPrivacy),
+    );
+    const aiResult = canSendToAiProvider(aiPrivacy)
+      ? await callAiConfidence({
+          totalFiles: fileEntries.length,
+          summary,
+          destinations,
+          conflictCount: safePlanConflicts.length,
+          conflictExamples: safePlanConflicts.slice(0, 5),
+        })
+      : null;
     const planJson: any = {
       sourceType: job.sourceType, sourcePath: job.sourcePath,
       totalFiles: fileEntries.length, totalSizeBytes, routes,

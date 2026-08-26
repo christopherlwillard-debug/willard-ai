@@ -7,7 +7,7 @@ import { logger } from "./logger";
  * library engine did: scans, catch-ups after downtime, watcher restarts,
  * bursts, offline/online transitions.
  *
- * Kinds: scan_summary | catchup | reconnected | offline | burst | watcher_restart | watcher_mode | paused | resumed
+ * Kinds: scan_summary | catchup | reconnected | offline | burst | watcher_restart | watcher_mode | paused | resumed | ai_consent
  */
 
 export type ActivityKind =
@@ -19,7 +19,8 @@ export type ActivityKind =
   | "watcher_restart"
   | "watcher_mode"
   | "paused"
-  | "resumed";
+  | "resumed"
+  | "ai_consent";
 
 const MAX_ACTIVITY_ROWS = 500;
 

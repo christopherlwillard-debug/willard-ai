@@ -127,6 +127,15 @@ export const AppSettingsScanPerformance = {
   LOW: 'LOW',
 } as const;
 
+export type AppSettingsOptimizeProfile = typeof AppSettingsOptimizeProfile[keyof typeof AppSettingsOptimizeProfile];
+
+
+export const AppSettingsOptimizeProfile = {
+  ARCHIVE: 'ARCHIVE',
+  BALANCED: 'BALANCED',
+  MAXIMUM: 'MAXIMUM',
+} as const;
+
 export interface AppSettings {
   nasPath: string;
   /** @nullable */
@@ -144,6 +153,18 @@ export interface AppSettings {
   onboardingDismissedAt?: string | null;
   /** @nullable */
   celebrationShownAt?: string | null;
+  optimizeProfile?: AppSettingsOptimizeProfile;
+  rawConversionEnabled?: boolean;
+  aiEnrichmentEnabled?: boolean;
+  aiLocalOnly?: boolean;
+  aiExcludedFolders?: string[];
+  aiExcludedExtensions?: string[];
+  /** @nullable */
+  aiConsentAt?: string | null;
+  /** @nullable */
+  aiConsentProvider?: string | null;
+  /** @nullable */
+  aiConsentVersion?: string | null;
 }
 
 export type SettingsInputScanPerformance = typeof SettingsInputScanPerformance[keyof typeof SettingsInputScanPerformance];
@@ -155,6 +176,15 @@ export const SettingsInputScanPerformance = {
   LOW: 'LOW',
 } as const;
 
+export type SettingsInputOptimizeProfile = typeof SettingsInputOptimizeProfile[keyof typeof SettingsInputOptimizeProfile];
+
+
+export const SettingsInputOptimizeProfile = {
+  ARCHIVE: 'ARCHIVE',
+  BALANCED: 'BALANCED',
+  MAXIMUM: 'MAXIMUM',
+} as const;
+
 export interface SettingsInput {
   nasPath?: string;
   photosDestination?: string;
@@ -164,6 +194,21 @@ export interface SettingsInput {
   scanPerformance?: SettingsInputScanPerformance;
   onboardingDismissed?: boolean;
   celebrationShown?: boolean;
+  optimizeProfile?: SettingsInputOptimizeProfile;
+  rawConversionEnabled?: boolean;
+  aiEnrichmentEnabled?: boolean;
+  aiLocalOnly?: boolean;
+  /**
+     * @maxItems 200
+     * @items.maxLength 500
+     */
+  aiExcludedFolders?: string[];
+  /**
+     * @maxItems 200
+     * @items.maxLength 16
+     */
+  aiExcludedExtensions?: string[];
+  aiConsentAcknowledged?: boolean;
 }
 
 export interface NasTestInput {

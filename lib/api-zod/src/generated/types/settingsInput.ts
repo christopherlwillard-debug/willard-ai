@@ -5,6 +5,7 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+import type { SettingsInputOptimizeProfile } from './settingsInputOptimizeProfile';
 import type { SettingsInputScanPerformance } from './settingsInputScanPerformance';
 
 export interface SettingsInput {
@@ -16,6 +17,19 @@ export interface SettingsInput {
   scanPerformance?: SettingsInputScanPerformance;
   onboardingDismissed?: boolean;
   celebrationShown?: boolean;
-  optimizeProfile?: 'ARCHIVE' | 'BALANCED' | 'MAXIMUM';
+  optimizeProfile?: SettingsInputOptimizeProfile;
   rawConversionEnabled?: boolean;
+  aiEnrichmentEnabled?: boolean;
+  aiLocalOnly?: boolean;
+  /**
+     * @maxItems 200
+     * @items.maxLength 500
+     */
+  aiExcludedFolders?: string[];
+  /**
+     * @maxItems 200
+     * @items.maxLength 16
+     */
+  aiExcludedExtensions?: string[];
+  aiConsentAcknowledged?: boolean;
 }

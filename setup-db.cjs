@@ -133,7 +133,14 @@ const SETUP_SQL = [
     thumbnail_quality       text NOT NULL DEFAULT 'BALANCED',
     indexing_paused         boolean NOT NULL DEFAULT false,
     onboarding_dismissed_at timestamp,
-    celebration_shown_at    timestamp
+    celebration_shown_at    timestamp,
+    ai_enrichment_enabled   boolean NOT NULL DEFAULT false,
+    ai_local_only           boolean NOT NULL DEFAULT true,
+    ai_excluded_folders     text[] NOT NULL DEFAULT '{}',
+    ai_excluded_extensions  text[] NOT NULL DEFAULT '{}',
+    ai_consent_at           timestamp,
+    ai_consent_provider     text,
+    ai_consent_version      text
   )`,
   // Older installs may contain duplicates from concurrent first-run setup.
   // Keep the authenticated/oldest row before enforcing the singleton.
@@ -480,6 +487,13 @@ const SETUP_SQL = [
   `CREATE INDEX IF NOT EXISTS cleanup_operations_status_idx ON cleanup_operations (nas_path, status)`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS optimize_profile text NOT NULL DEFAULT 'ARCHIVE'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS raw_conversion_enabled boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_enrichment_enabled boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_local_only boolean NOT NULL DEFAULT true`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_excluded_folders text[] NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_excluded_extensions text[] NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_consent_at timestamp`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_consent_provider text`,
+  `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ai_consent_version text`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignored_folders text[] NOT NULL DEFAULT '{}'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignored_extensions text[] NOT NULL DEFAULT '{}'`,
   `ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS ignore_hidden_files boolean NOT NULL DEFAULT true`,

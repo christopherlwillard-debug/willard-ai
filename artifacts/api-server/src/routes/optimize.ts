@@ -11,6 +11,7 @@ import { assertWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
+import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 
 const execFileAsync = promisify(execFile);
 
@@ -1083,6 +1084,14 @@ router.get("/optimize/scan", async (req, res) => {
 
 router.post("/optimize/ai-summary", async (req, res) => {
   try {
+    const aiPrivacy = await getAiPrivacySettings();
+    if (!canSendToAiProvider(aiPrivacy)) {
+      res.status(403).json({
+        error: aiProviderBlockedReason(aiPrivacy),
+        code: "AI_CONSENT_REQUIRED",
+      });
+      return;
+    }
     const { groups, totalFiles, totalBytes, totalSavingsBytes } = req.body as {
       groups: Array<{
         extension: string; fileCount: number; totalBytes: number;
@@ -1098,7 +1107,11 @@ router.post("/optimize/ai-summary", async (req, res) => {
       return;
     }
 
-    const convertible = groups.filter(g => g.status === "convert");
+    const excludedExtensions = new Set(aiPrivacy.aiExcludedExtensions ?? []);
+    const convertible = groups.filter(g =>
+      g.status === "convert" &&
+      !excludedExtensions.has(String(g.extension ?? "").replace(/^\./, "").toLowerCase()),
+    );
     const formatSummary = convertible
       .slice(0, 10)
       .map(g => `  - ${g.fileCount} .${g.extension} files (${(g.totalBytes / 1e9).toFixed(2)} GB) → ${g.method ?? g.targetFormat ?? "optimized"}, saves ~${(g.estimatedSavingsBytes / 1e9).toFixed(2)} GB`)

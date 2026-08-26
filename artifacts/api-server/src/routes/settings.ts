@@ -8,6 +8,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
+import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
+import { recordActivity } from "../lib/library-activity";
 
 const router: IRouter = Router();
 
@@ -102,6 +104,34 @@ router.put("/settings", async (req, res) => {
     if (onboardingDismissed === true) extra["onboardingDismissedAt"] = new Date();
     if (celebrationShown === true) extra["celebrationShownAt"] = new Date();
 
+    const aiExcludedFolders = Array.isArray(body.aiExcludedFolders)
+      ? body.aiExcludedFolders.filter((value): value is string => typeof value === "string").map(value => value.trim()).filter(Boolean).slice(0, 200)
+      : undefined;
+    const aiExcludedExtensions = Array.isArray(body.aiExcludedExtensions)
+      ? body.aiExcludedExtensions.filter((value): value is string => typeof value === "string")
+        .map(value => value.trim().replace(/^\./, "").toLowerCase())
+        .filter(value => /^[a-z0-9]{1,16}$/.test(value)).slice(0, 200)
+      : undefined;
+
+    const nextAiEnrichmentEnabled = body.aiEnrichmentEnabled ?? existing.aiEnrichmentEnabled;
+    const nextAiLocalOnly = body.aiLocalOnly ?? existing.aiLocalOnly;
+    if (nextAiEnrichmentEnabled === true && nextAiLocalOnly === false &&
+        !existing.aiConsentAt && body.aiConsentAcknowledged !== true) {
+      res.status(422).json({
+        error: "Confirm the AI provider and retention disclosure before enabling cloud AI.",
+        code: "AI_CONSENT_REQUIRED",
+      });
+      return;
+    }
+    if (aiExcludedFolders !== undefined) rest.aiExcludedFolders = aiExcludedFolders;
+    if (aiExcludedExtensions !== undefined) rest.aiExcludedExtensions = aiExcludedExtensions;
+    delete (rest as Record<string, unknown>).aiConsentAcknowledged;
+    if (nextAiEnrichmentEnabled === true && nextAiLocalOnly === false && !existing.aiConsentAt) {
+      extra["aiConsentAt"] = new Date();
+      extra["aiConsentProvider"] = AI_PROVIDER_NAME;
+      extra["aiConsentVersion"] = AI_CONSENT_VERSION;
+    }
+
     // Validate a changed library location BEFORE persisting anything: a failed
     // save must not commit. Also never auto-create a WillardAI directory for a
     // location we cannot reach (e.g. a Windows "Z:" drive) — doing so creates a
@@ -134,6 +164,25 @@ router.put("/settings", async (req, res) => {
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
 
+    const aiChanged = body.aiEnrichmentEnabled !== undefined ||
+      body.aiLocalOnly !== undefined || aiExcludedFolders !== undefined ||
+      aiExcludedExtensions !== undefined;
+    if (aiChanged) {
+      void recordActivity(
+        updated.nasPath ?? "",
+        "ai_consent",
+        updated.aiEnrichmentEnabled
+          ? updated.aiLocalOnly ? "AI enrichment enabled in local-only mode." : "Cloud AI enrichment enabled after consent."
+          : "Cloud AI enrichment disabled; queued provider sends stopped.",
+        {
+          aiEnrichmentEnabled: updated.aiEnrichmentEnabled,
+          aiLocalOnly: updated.aiLocalOnly,
+          excludedFolderCount: updated.aiExcludedFolders?.length ?? 0,
+          excludedExtensionCount: updated.aiExcludedExtensions?.length ?? 0,
+          consentRecorded: Boolean(updated.aiConsentAt),
+        },
+      );
+    }
     res.json(sanitizeSettings(updated));
   } catch (err) {
     res.status(400).json({ error: "Invalid request" });

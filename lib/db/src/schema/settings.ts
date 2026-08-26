@@ -31,6 +31,13 @@ export const appSettingsTable = pgTable("app_settings", {
   watcherPollIntervalSeconds: integer("watcher_poll_interval_seconds").notNull().default(60),
   optimizeProfile: text("optimize_profile").notNull().default("ARCHIVE"),
   rawConversionEnabled: boolean("raw_conversion_enabled").notNull().default(false),
+  aiEnrichmentEnabled: boolean("ai_enrichment_enabled").notNull().default(false),
+  aiLocalOnly: boolean("ai_local_only").notNull().default(true),
+  aiExcludedFolders: text("ai_excluded_folders").array().notNull().default([]),
+  aiExcludedExtensions: text("ai_excluded_extensions").array().notNull().default([]),
+  aiConsentAt: timestamp("ai_consent_at"),
+  aiConsentProvider: text("ai_consent_provider"),
+  aiConsentVersion: text("ai_consent_version"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

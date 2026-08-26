@@ -7,6 +7,8 @@ import {
   CreateOpenaiConversationBody,
   SendOpenaiMessageBody,
 } from "@workspace/api-zod";
+import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider } from "../../lib/ai-privacy";
+import { isMediaExcluded } from "../../lib/ai-privacy";
 
 const router: IRouter = Router();
 
@@ -129,12 +131,20 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
           .orderBy(desc(mediaFilesTable.sizeBytes))
           .limit(10);
 
-        if (files.length > 0) {
-          const lines = files.map(f =>
+        const safeFiles = files.filter((file) => !isMediaExcluded(
+          file.path,
+          file.filename,
+          {
+            aiExcludedFolders: settings?.aiExcludedFolders ?? [],
+            aiExcludedExtensions: settings?.aiExcludedExtensions ?? [],
+          },
+        ));
+        if (safeFiles.length > 0) {
+          const lines = safeFiles.map(f =>
             `  • ${f.filename} (${f.fileType}, ${Math.round((f.sizeBytes ?? 0) / 1024)}KB) in ${f.folder ?? "/"}`
           );
-          parts.push(`Found ${files.length} local files matching "${keyword}":\n${lines.join("\n")}`);
-          for (const f of files) {
+          parts.push(`Found ${safeFiles.length} local files matching "${keyword}":\n${lines.join("\n")}`);
+          for (const f of safeFiles) {
             matchedFiles.push({
               filename: f.filename ?? "",
               path: f.path,
@@ -271,6 +281,14 @@ router.get("/openai/conversations/:id/messages", async (req, res) => {
 
 router.post("/openai/conversations/:id/messages", async (req, res) => {
   try {
+    const aiPrivacy = await getAiPrivacySettings();
+    if (!canSendToAiProvider(aiPrivacy)) {
+      res.status(403).json({
+        error: aiProviderBlockedReason(aiPrivacy),
+        code: "AI_CONSENT_REQUIRED",
+      });
+      return;
+    }
     const id = parseInt(req.params.id);
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
