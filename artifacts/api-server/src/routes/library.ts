@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { randomUUID } from "crypto";
 import { db } from "@workspace/db";
 import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
 import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
@@ -15,6 +16,8 @@ import { resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router = Router();
+const jobStreamId = randomUUID();
+let jobStreamSequence = 0;
 
 async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
@@ -358,7 +361,12 @@ router.get("/library/jobs/events", async (_req: Request, res: Response) => {
   const send = () => {
     if (res.writableEnded) return;
     const jobs = getAllJobProgress();
-    res.write(`event: jobs\ndata: ${JSON.stringify({ jobs, lastCompleted: jobs.length === 0 ? getLastCompletedProgress() : null })}\n\n`);
+    res.write(`event: jobs\ndata: ${JSON.stringify({
+      streamId: jobStreamId,
+      sequence: ++jobStreamSequence,
+      jobs,
+      lastCompleted: jobs.length === 0 ? getLastCompletedProgress() : null,
+    })}\n\n`);
   };
   send();
   const timer = setInterval(send, 1000);

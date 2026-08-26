@@ -482,12 +482,14 @@ function ScanBanner({
   onPause,
   onResume,
   onCancel,
+  busy = false,
 }: {
   progress: ProgressEvent | null;
   onDismiss: () => void;
   onPause: () => void;
   onResume: () => void;
   onCancel: () => void;
+  busy?: boolean;
 }) {
   if (!progress) return null;
 
@@ -574,7 +576,7 @@ function ScanBanner({
           {progress.counters.thumbnailsFailed > 0 && (
             <span className="text-red-400">{progress.counters.thumbnailsFailed} failed</span>
           )}
-          <button onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 flex items-center gap-1 ml-auto">
+          <button disabled={busy} onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 disabled:opacity-50 flex items-center gap-1 ml-auto">
             <X className="w-3 h-3" /> Cancel
           </button>
         </div>
@@ -658,15 +660,15 @@ function ScanBanner({
       {/* Controls */}
       <div className="flex items-center gap-2 pt-0.5">
         {isPaused ? (
-          <button onClick={onResume} className="text-xs text-blue-300 hover:text-blue-100 flex items-center gap-1">
+          <button disabled={busy} onClick={onResume} className="text-xs text-blue-300 hover:text-blue-100 disabled:opacity-50 flex items-center gap-1">
             <Play className="w-3 h-3" /> Resume
           </button>
         ) : (
-          <button onClick={onPause} className="text-xs text-blue-400 hover:text-blue-200 flex items-center gap-1">
+          <button disabled={busy} onClick={onPause} className="text-xs text-blue-400 hover:text-blue-200 disabled:opacity-50 flex items-center gap-1">
             <Pause className="w-3 h-3" /> Pause
           </button>
         )}
-        <button onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 flex items-center gap-1 ml-2">
+        <button disabled={busy} onClick={onCancel} className="text-xs text-red-400 hover:text-red-200 disabled:opacity-50 flex items-center gap-1 ml-2">
           <X className="w-3 h-3" /> Cancel
         </button>
       </div>
@@ -1380,26 +1382,41 @@ export default function Media() {
 
   const pauseMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(apiUrl(`/library/jobs/${jobId}/pause`), { method: "POST" });
+      const response = await fetch(apiUrl(`/library/jobs/${jobId}/pause`), { method: "POST" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? "Could not pause this job");
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+    onError: (error: Error) => toast({ title: "Pause failed", description: error.message, variant: "destructive" }),
   });
 
   const resumeMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(apiUrl(`/library/jobs/${jobId}/resume`), { method: "POST" });
+      const response = await fetch(apiUrl(`/library/jobs/${jobId}/resume`), { method: "POST" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? "Could not resume this job");
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["library-active-job"] }),
+    onError: (error: Error) => toast({ title: "Resume failed", description: error.message, variant: "destructive" }),
   });
 
   const cancelMutation = useMutation({
     mutationFn: async (jobId: number) => {
-      await fetch(apiUrl(`/library/jobs/${jobId}/cancel`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "USER_CANCELLED" }) });
+      const response = await fetch(apiUrl(`/library/jobs/${jobId}/cancel`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "USER_CANCELLED" }) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? "Could not cancel this job");
+      }
     },
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
       queryClient.invalidateQueries({ queryKey: ["library-jobs"] });
     },
+    onError: (error: Error) => toast({ title: "Cancel failed", description: error.message, variant: "destructive" }),
   });
 
   const favoriteMutation = useMutation({
@@ -1634,6 +1651,7 @@ export default function Media() {
             onPause={() => activeProgress && pauseMutation.mutate(activeProgress.jobId)}
             onResume={() => activeProgress && resumeMutation.mutate(activeProgress.jobId)}
             onCancel={() => activeProgress && cancelMutation.mutate(activeProgress.jobId)}
+            busy={pauseMutation.isPending || resumeMutation.isPending || cancelMutation.isPending}
           />
         </div>
       )}

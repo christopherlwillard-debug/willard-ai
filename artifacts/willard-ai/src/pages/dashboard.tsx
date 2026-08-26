@@ -27,6 +27,7 @@ import { LibraryActivityFeed } from "@/components/library/library-activity";
 import { OnboardingChecklist } from "@/components/library/onboarding-checklist";
 import { BuildingLibraryProgress } from "@/components/library/building-progress";
 import { LibraryReadyCelebration } from "@/components/library/celebration";
+import { useToast } from "@/hooks/use-toast";
 
 function relativeDate(value: string | null | undefined) {
   if (!value) return "Not scanned yet";
@@ -83,6 +84,9 @@ interface OptimizationStatus {
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const [scanTriggered, setScanTriggered] = useState(false);
+  const [scanStartedAt, setScanStartedAt] = useState<number | null>(null);
+  const [scanObservedRunning, setScanObservedRunning] = useState(false);
+  const { toast } = useToast();
   const [dismissed, setDismissed] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("willard-dismissed-attention") ?? "[]"); } catch { return []; }
   });
@@ -103,14 +107,39 @@ export default function Dashboard() {
     },
     refetchInterval: 30000,
   });
-  const scanMutation = useStartLibraryScan({ mutation: { onSuccess: () => setScanTriggered(true) } });
+  const scanMutation = useStartLibraryScan({
+    mutation: {
+      onSuccess: () => {
+        setScanTriggered(true);
+        setScanStartedAt(Date.now());
+        setScanObservedRunning(false);
+      },
+      onError: (error: any) => {
+        toast({
+          title: "Scan did not start",
+          description: error?.data?.error ?? error?.message ?? "Please try again.",
+          variant: "destructive",
+        });
+      },
+    },
+  });
 
   useEffect(() => {
-    if (scanTriggered && data && !data.isScanning) {
+    if (!scanTriggered) return;
+    if (scanStatus?.isRunning || scanStatus?.current) {
+      setScanObservedRunning(true);
+      return;
+    }
+    // A start response can arrive just before the worker is visible to status
+    // queries. Keep polling through that handoff instead of stopping early.
+    if (
+      (scanObservedRunning || (scanStartedAt !== null && Date.now() - scanStartedAt >= 15_000))
+      && !scanStatus?.current
+    ) {
       setScanTriggered(false);
       queryClient.invalidateQueries({ queryKey: getGetDashboardQueryKey() });
     }
-  }, [data, queryClient, scanTriggered]);
+  }, [queryClient, scanObservedRunning, scanStartedAt, scanStatus?.current, scanStatus?.isRunning, scanTriggered]);
 
   const isScanning = Boolean(data?.isScanning || scanTriggered);
   const breakdown = data?.typeBreakdown ?? [];

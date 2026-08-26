@@ -275,6 +275,7 @@ function RunConversionsDialog({
   const [summary, setSummary]              = useState<ConversionSummary | null>(null);
   const [runError, setRunError]            = useState<string | null>(null);
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recoveryFailuresRef = useRef(0);
   const [selectedAction, setSelectedAction] = useState<FinalizeAction>("recycle");
   const [finalizing, setFinalizing]         = useState(false);
   const [finalizeJobId, setFinalizeJobId]   = useState<number | null>(null);
@@ -393,6 +394,7 @@ function RunConversionsDialog({
           message: job.status === "running" ? "Connection interrupted — tracking saved progress…" : (prev?.message ?? ""),
         }));
         if (job.status === "done" || job.status === "cancelled" || job.status === "failed") {
+          recoveryFailuresRef.current = 0;
           const result = (job.resultJson ?? {}) as any;
           setSummary({
             totalFiles: job.totalFiles ?? 0,
@@ -407,9 +409,14 @@ function RunConversionsDialog({
           setPhase(job.status === "done" && (job.succeededFiles ?? 0) > 0 ? "awaiting_action" : "done");
           return;
         }
-        recoveryTimerRef.current = setTimeout(() => void poll(), 2000);
+        recoveryFailuresRef.current = 0;
+        // Keep a low-frequency authoritative check while the SSE transport is
+        // unavailable. The stream remains the primary source of live updates.
+        recoveryTimerRef.current = setTimeout(() => void poll(), 5000);
       } catch {
-        recoveryTimerRef.current = setTimeout(() => void poll(), 3000);
+        const attempt = recoveryFailuresRef.current++;
+        const delay = Math.min(15_000, 2_000 * 2 ** Math.min(attempt, 3));
+        recoveryTimerRef.current = setTimeout(() => void poll(), delay);
       }
     };
     void poll();
