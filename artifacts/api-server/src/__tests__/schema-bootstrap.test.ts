@@ -53,6 +53,10 @@ test("required schema bootstrap is versioned and runs atomically", async () => {
     statements.some((sql) => /library_jobs_active_nas_unique/.test(sql)),
     "fresh bootstrap must create the durable per-library job claim",
   );
+  assert.ok(
+    statements.some((sql) => /organization_jobs[\s\S]*nas_path/.test(sql)),
+    "fresh bootstrap must create organization job library scope",
+  );
 });
 
 test("required schema bootstrap rolls back and rethrows the original failure", async () => {

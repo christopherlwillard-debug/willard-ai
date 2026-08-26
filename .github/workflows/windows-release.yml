@@ -150,8 +150,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:WILLARD_BACKEND_AUDIT_API_PID) {
-            & taskkill /PID $env:WILLARD_BACKEND_AUDIT_API_PID /T /F 2>&1 | Out-Null
+            $null = & taskkill /PID $env:WILLARD_BACKEND_AUDIT_API_PID /T /F 2>&1
           }
+          exit 0
 
       - name: Install Chromium for browser release tests
         run: pnpm exec playwright install chromium

@@ -248,6 +248,7 @@ const SETUP_SQL = [
     status              text NOT NULL DEFAULT 'pending',
     source_type         text NOT NULL,
     source_path         text NOT NULL,
+    nas_path            text,
     archive_id          integer,
     archive_disposition text NOT NULL DEFAULT 'keep',
     conflict_policy     text NOT NULL DEFAULT 'keep_existing',
@@ -262,6 +263,8 @@ const SETUP_SQL = [
     created_at          timestamp NOT NULL DEFAULT now(),
     completed_at        timestamp
   )`,
+
+  `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS nas_path text`,
 
   // conversion_jobs
   `CREATE TABLE IF NOT EXISTS conversion_jobs (
