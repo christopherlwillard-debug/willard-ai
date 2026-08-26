@@ -183,31 +183,34 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-[100dvh] overflow-hidden bg-background">
-      <div className="pointer-events-none absolute inset-0 archive-shell" aria-hidden="true" />
-      <section className="relative hidden w-[45%] max-w-2xl flex-col justify-between overflow-hidden border-r border-border/60 bg-[radial-gradient(circle_at_52%_42%,rgba(38,119,255,.2),transparent_31%),linear-gradient(145deg,#070b1d,#111039_58%,#0a0b20)] p-10 lg:flex xl:p-14">
-        <div className="absolute left-1/2 top-[43%] h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/20 shadow-[0_0_80px_rgba(39,194,255,.12),inset_0_0_80px_rgba(175,78,255,.08)]" />
-        <div className="absolute left-1/2 top-[43%] h-[19rem] w-[19rem] -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[4rem] border border-accent/30" />
-        <div className="absolute left-1/2 top-[43%] h-52 w-52 -translate-x-1/2 -translate-y-1/2 -rotate-12 rounded-[3rem] border-2 border-primary/60 bg-primary/[0.03] shadow-[0_0_32px_rgba(39,222,255,.24)]" />
-        <div className="relative">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-primary/50 bg-primary/10 font-mono text-lg font-bold text-primary shadow-[0_0_22px_rgba(39,222,255,.18)]">W</div>
-            <div>
-              <p className="font-mono text-xs tracking-[0.3em] text-primary">WILLARD / LOCAL NODE</p>
-              <p className="mt-1 text-xs text-muted-foreground">Private media intelligence</p>
-            </div>
+    <div className="relative flex min-h-[100dvh] overflow-hidden bg-[#050617]">
+      <video
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-80"
+        src="/willard-loading.mp4"
+        autoPlay
+        loop
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+      />
+      <div
+        className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(5,6,23,.38),rgba(5,6,23,.72)),radial-gradient(circle_at_center,transparent_12%,rgba(5,6,23,.58)_82%)]"
+        aria-hidden="true"
+      />
+      <section className="relative hidden w-[45%] max-w-2xl flex-col justify-between overflow-hidden border-r border-white/10 bg-slate-950/20 p-10 lg:flex xl:p-14">
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-primary/50 bg-primary/10 font-mono text-lg font-bold text-primary shadow-[0_0_22px_rgba(39,222,255,.18)]">W</div>
+          <div>
+            <p className="font-mono text-xs tracking-[0.3em] text-primary">WILLARD / LOCAL NODE</p>
+            <p className="mt-1 text-xs text-white/70">Private media intelligence</p>
           </div>
         </div>
         <div className="relative max-w-md">
-          <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.35em] text-primary/75">Memory archive // 01</p>
-          <h1 className="text-4xl font-semibold leading-[1.05] tracking-[-0.04em] text-foreground xl:text-5xl">Your memories,<br /><span className="brand-mark">in their orbit.</span></h1>
-          <p className="mt-5 max-w-sm text-sm leading-6 text-muted-foreground">A quiet, intelligent home for the photographs, films, and documents that make a life.</p>
-          <div className="mt-8 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-            <span className="h-px w-10 bg-gradient-to-r from-primary to-accent" />
-            Encrypted on your hardware
-          </div>
+          <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.35em] text-primary/80">Private media archive</p>
+          <p className="text-sm leading-6 text-white/75">Your photos, films, and documents—organized intelligently and kept local.</p>
         </div>
-        <p className="relative font-mono text-[10px] uppercase tracking-[0.25em] text-muted-foreground/70">WILLARD AI MEDIA CENTER · EST. LOCAL</p>
+        <p className="relative font-mono text-[10px] uppercase tracking-[0.25em] text-white/60">WILLARD AI MEDIA CENTER · EST. LOCAL</p>
       </section>
 
       <section className="relative flex flex-1 items-center justify-center p-4 sm:p-8">
