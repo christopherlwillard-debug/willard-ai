@@ -7,6 +7,7 @@ import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzl
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 
 const router = Router();
 
@@ -296,14 +297,17 @@ router.post("/media/files/:id/favorite", async (req: Request, res: Response) => 
 router.delete("/media/files/:id", async (req: Request, res: Response) => {
   const id = parseInt(req.params["id"] as string);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const nasPath = await getNasPath();
+  if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
 
   const [updated] = await db
     .update(mediaFilesTable)
     .set({ lastScanAction: "DELETED" } as any)
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, await getNasPath() ?? ""), ACTIVE_MEDIA))
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .returning({ id: mediaFilesTable.id });
 
   if (!updated) { res.status(404).json({ error: "File not found" }); return; }
+  await purgeDerivedDataForMedia(nasPath, [updated.id]);
   res.json({ id: updated.id, deleted: true });
 });
 

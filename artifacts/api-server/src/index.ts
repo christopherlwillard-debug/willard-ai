@@ -1,6 +1,7 @@
 import app, { bootstrapSessionTable, initializeVectorCapability } from "./app";
 import { logger } from "./lib/logger";
-import { reconcileCleanupOperations } from "./lib/cleanup-recovery";
+import { purgeExpiredTrashEntries, reconcileCleanupOperations } from "./lib/cleanup-recovery";
+import { purgeOrphanedDerivedData } from "./lib/derived-cleanup.ts";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 import { installShutdownHandlers } from "./lib/shutdown.ts";
 import type { Server } from "node:http";
@@ -40,9 +41,19 @@ startupMigrations
       void (async () => {
         if (schemaReady) await initializeVectorCapability();
         await recoverInterruptedJobs();
-        reconcileCleanupOperations().catch((recoveryError) => {
-          logger.error({ err: recoveryError }, "Cleanup operation reconciliation failed");
-        });
+        await reconcileCleanupOperations();
+        const settings = await import("@workspace/db").then(({ db, appSettingsTable }) =>
+          db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1),
+        );
+        const nasPath = settings[0]?.nasPath?.trim();
+        if (nasPath) {
+          purgeExpiredTrashEntries(nasPath).catch((error) =>
+            logger.error({ err: error }, "Expired trash cleanup failed"),
+          );
+          purgeOrphanedDerivedData(nasPath).catch((error) =>
+            logger.error({ err: error }, "Orphaned derived-data cleanup failed"),
+          );
+        }
       })().catch((recoveryError) => {
         logger.error({ err: recoveryError }, "Post-start recovery failed");
       });

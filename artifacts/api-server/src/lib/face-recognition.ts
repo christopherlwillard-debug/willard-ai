@@ -496,7 +496,7 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
 
     // Rebuild this file's faces from scratch (derived data).
     const { rows: old } = await pool.query(
-      `SELECT DISTINCT fc.person_id
+      `SELECT DISTINCT fc.person_id, fc.crop_path
          FROM faces fc JOIN media_files mf ON mf.id = fc.media_file_id
         WHERE fc.media_file_id = $1 AND mf.nas_path = $2 AND fc.person_id IS NOT NULL`,
       [file.id, nasPath],
@@ -506,6 +506,13 @@ async function scanFile(nasPath: string, file: PendingFile): Promise<void> {
         WHERE fc.media_file_id = $1 AND mf.id = fc.media_file_id AND mf.nas_path = $2`,
       [file.id, nasPath],
     );
+    for (const oldFace of old) {
+      if (!oldFace.crop_path) continue;
+      try {
+        const safeCrop = resolveWithinRoot(oldFace.crop_path, getWillardAIDir(nasPath));
+        if (fs.existsSync(safeCrop)) fs.unlinkSync(safeCrop);
+      } catch { /* a stale or poisoned crop path is never followed */ }
+    }
 
     const cropDir = getFaceCropDir(nasPath);
     fs.mkdirSync(cropDir, { recursive: true });

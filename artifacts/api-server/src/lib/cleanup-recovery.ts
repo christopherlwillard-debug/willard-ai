@@ -3,8 +3,10 @@ import * as path from "path";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFile, sha256File } from "./organize-helpers.ts";
+import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
 
 export type TrashManifestEntry = {
   ts?: string;
@@ -198,10 +200,68 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
     await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row is missing");
     return;
   }
+  await purgeDerivedDataForMedia(op.nasPath, [op.mediaFileId]);
   await db.execute(sql`
     UPDATE cleanup_operations SET status = 'RECORDED', error = NULL, updated_at = NOW()
     WHERE operation_id = ${op.operationId}
   `);
+}
+
+export type ExpiredTrashResult = {
+  expired: number;
+  permanentlyRemoved: number;
+  errors: string[];
+};
+
+/**
+ * Permanently remove expired local-trash files and their canonical rows.
+ * Windows' OS recycle bin is intentionally not guessed at: only manifest
+ * entries with a validated WillardAI/.Trash path are eligible here.
+ */
+export async function purgeExpiredTrashEntries(nasPath: string): Promise<ExpiredTrashResult> {
+  const result: ExpiredTrashResult = { expired: 0, permanentlyRemoved: 0, errors: [] };
+  const { entries } = readTrashManifest(nasPath);
+  const trash = trashRoot(nasPath);
+  for (const entry of entries) {
+    if (!entry.expiresAt || new Date(entry.expiresAt).getTime() >= Date.now()) continue;
+    result.expired++;
+    let trashPath: string;
+    try { trashPath = resolveWithinRoot(entry.trashPath, trash); }
+    catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    try {
+      if (fs.existsSync(trashPath)) fs.rmSync(trashPath, { force: true });
+      if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
+      if (entry.mediaFileId != null) {
+        const canonical = await db.execute(sql`
+          SELECT id
+            FROM media_files
+           WHERE id = ${Number(entry.mediaFileId)}
+             AND nas_path = ${nasPath}
+             AND last_scan_action = 'RECYCLED'
+             AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
+                 REPLACE(${entry.originalPath}, chr(92), '/')
+           LIMIT 1
+        `);
+        if (affectedRows(canonical) === 1) {
+          await purgeDerivedDataForMedia(nasPath, [Number(entry.mediaFileId)]);
+          await db.execute(sql`
+            DELETE FROM media_files
+             WHERE id = ${Number(entry.mediaFileId)}
+               AND nas_path = ${nasPath}
+               AND last_scan_action = 'RECYCLED'
+          `);
+        }
+      }
+      removeTrashManifestEntry(nasPath, trashPath, `expiry-${randomUUID()}`);
+      result.permanentlyRemoved++;
+    } catch (error) {
+      result.errors.push(`${entry.trashPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return result;
 }
 
 async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {

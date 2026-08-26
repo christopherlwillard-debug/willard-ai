@@ -26,6 +26,7 @@ const checks = [
 
 const actions = [
   ["orphanedRecords", "Remove orphaned database records"],
+  ["orphanedDerivedData", "Remove orphaned AI and face data"],
   ["orphanedThumbnails", "Delete orphaned thumbnails"],
   ["missingThumbnails", "Regenerate missing thumbnails"],
   ["emptyFolders", "Remove empty folders"],

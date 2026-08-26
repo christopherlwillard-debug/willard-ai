@@ -2,10 +2,11 @@ import { Router } from "express";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 
 const router = Router();
 const ACTIVE = activeMediaCondition;
@@ -120,10 +121,26 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
     return path.extname(file).toLowerCase() === ".webp" && (!Number.isInteger(id) || !validIds.has(id));
   });
   const folders = walkDirectories(nasPath, getWillardAIDir(nasPath));
-  const [metadataRows] = await db.select({ count: sql<number>`count(*)::int` })
+  const [metadataRows, orphanFaceRows, orphanStateRows] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` })
     .from(mediaAiTable)
     .leftJoin(mediaFilesTable, eq(mediaAiTable.mediaFileId, mediaFilesTable.id))
-    .where(isNull(mediaFilesTable.id));
+    .where(sql`${mediaFilesTable.id} IS NULL`),
+    db.execute(sql`
+      SELECT count(*)::int AS count
+        FROM faces fc
+       WHERE NOT EXISTS (SELECT 1 FROM media_files mf WHERE mf.id = fc.media_file_id)
+    `),
+    db.execute(sql`
+      SELECT count(*)::int AS count
+        FROM face_scan_state s
+       WHERE NOT EXISTS (SELECT 1 FROM media_files mf WHERE mf.id = s.media_file_id)
+    `),
+  ]);
+  const orphanedDerivedRows =
+    Number(metadataRows?.[0]?.count ?? 0) +
+    Number((orphanFaceRows.rows[0] as { count?: number | string } | undefined)?.count ?? 0) +
+    Number((orphanStateRows.rows[0] as { count?: number | string } | undefined)?.count ?? 0);
 
   const issues = {
     missingFiles: missing.length,
@@ -131,7 +148,7 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
     missingThumbnails: missingThumbs.length,
     orphanedThumbnails: orphanThumbs.length,
     emptyFolders: folders.empty.filter(dir => path.resolve(dir) !== path.resolve(nasPath)).length,
-    brokenMetadataReferences: Number(metadataRows?.count ?? 0),
+    brokenMetadataReferences: orphanedDerivedRows,
     unusedCacheBytes: cache.unusedBytes,
     unusedCacheFiles: cache.unused.length,
   };
@@ -162,7 +179,7 @@ router.get("/media/health", async (_req, res) => {
 
 router.post("/media/cleanup", async (req, res) => {
   const requested = Array.isArray(req.body?.actions) ? req.body.actions : [];
-  const allowed = new Set(["orphanedRecords", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
+  const allowed = new Set(["orphanedRecords", "orphanedDerivedData", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
   const actions = requested.filter((action: unknown): action is string => typeof action === "string" && allowed.has(action));
   const nasPath = await configuredNas();
   if (!nasPath) return res.status(409).json({ error: "No library is configured" });
@@ -177,12 +194,25 @@ router.post("/media/cleanup", async (req, res) => {
     let done = 0;
     const total = Math.max(1, inspected.missing.length + inspected.orphanThumbs.length + inspected.missingThumbs.length + inspected.emptyFolders.length);
     const progress = (message: string) => send("progress", { processed: done, total, message });
+    let derivedCleanup: Record<string, unknown> | undefined;
 
     if (actions.includes("orphanedRecords")) {
       for (const row of inspected.missing) {
+        await purgeDerivedDataForMedia(nasPath, [row.id]);
         await db.delete(mediaFilesTable).where(and(eq(mediaFilesTable.id, row.id), eq(mediaFilesTable.nasPath, nasPath)));
         done++; progress("Removing orphaned index records…");
       }
+    }
+    if (actions.includes("orphanedDerivedData")) {
+      const cleaned = await purgeOrphanedDerivedData(nasPath);
+      done += cleaned.orphanRows + cleaned.staleCropsRemoved;
+      derivedCleanup = {
+        orphanRows: cleaned.orphanRows,
+        staleCropsRemoved: cleaned.staleCropsRemoved,
+        peopleRows: cleaned.peopleRows,
+        cropErrors: cleaned.cropErrors.length,
+      };
+      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops…`);
     }
     if (actions.includes("orphanedThumbnails")) {
       for (const file of inspected.orphanThumbs) {
@@ -209,7 +239,13 @@ router.post("/media/cleanup", async (req, res) => {
       }
     }
     if (actions.includes("rebuildMetadata")) send("progress", { processed: done, total, message: "Metadata rebuild is queued for the next library scan." });
-    await db.update(libraryJobsTable).set({ status: "DONE", processedFiles: done, totalFiles: total, finishedAt: new Date(), summary: { actions } }).where(eq(libraryJobsTable.id, job.id));
+    await db.update(libraryJobsTable).set({
+      status: "DONE",
+      processedFiles: done,
+      totalFiles: total,
+      finishedAt: new Date(),
+      summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
+    }).where(eq(libraryJobsTable.id, job.id));
     send("done", { ok: true, processed: done, total });
   } catch (error) {
     await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, job.id));

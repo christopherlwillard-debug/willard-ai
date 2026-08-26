@@ -25,6 +25,7 @@ import { recordActivity, describeChanges } from "../library-activity.ts";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid } from "../thumbnail-engine.ts";
 import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
+import { purgeDerivedDataForMedia } from "../derived-cleanup.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
@@ -2927,6 +2928,13 @@ export function startThumbnailReconciliation(nasPath: string): void {
         // A completed scan has already marked files absent from the NAS as
         // DELETED. Remove those stale catalog rows automatically, but never
         // touch RECYCLED rows because restore still needs their metadata.
+        const deletedRows = await db.select({ id: mediaFilesTable.id })
+          .from(mediaFilesTable)
+          .where(and(
+            eq(mediaFilesTable.nasPath, nasPath),
+            eq(mediaFilesTable.lastScanAction, "DELETED"),
+          ));
+        if (deletedRows.length) await purgeDerivedDataForMedia(nasPath, deletedRows.map((row) => row.id));
         await db.delete(mediaFilesTable).where(and(
           eq(mediaFilesTable.nasPath, nasPath),
           eq(mediaFilesTable.lastScanAction, "DELETED"),

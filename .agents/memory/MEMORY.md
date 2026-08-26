@@ -41,3 +41,4 @@
 - [Per-library job claims](per-library-job-claims.md) — in-memory checks are only fast paths; runnable jobs need a database-enforced per-library claim
 - [Face processing concurrency](face-processing-concurrency.md) — serialize derived face clustering per library and never load an unverified model artifact
 - [Bounded duplicate confirmation](bounded-duplicate-confirmation.md) — full duplicate hashes stop at 500 MiB; oversized or cancelled candidates stay explicitly unconfirmed
+- [Derived-data cleanup boundary](derived-data-cleanup-boundary.md) — purge rebuildable AI/face rows transactionally before permanent catalog deletion, with NAS-scoped crop-path validation
