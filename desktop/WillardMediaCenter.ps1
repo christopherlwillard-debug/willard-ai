@@ -185,9 +185,10 @@ function Try-Update {
     $script:UpdateStage = "release validation"
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
-    $required = @("version.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
-      "desktop\desktop-web-server.mjs", "api-runtime\dist\index.mjs",
-      "api-runtime\setup-db.cjs", "web\index.html")
+    $required = @("version.json", "payload-manifest.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
+      "desktop\desktop-web-server.mjs", "desktop\loading.html",
+      "api-runtime\dist\index.mjs", "api-runtime\setup-db.cjs",
+      "web\index.html", "web\willard-loading.mp4")
     foreach ($entry in $required) {
       if (-not (Test-Path (Join-Path $stage $entry))) { throw "The downloaded release is incomplete: $entry" }
     }

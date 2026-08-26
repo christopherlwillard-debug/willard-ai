@@ -21,3 +21,18 @@ The remaining development-tooling finding should be reevaluated when Metro or
 `image-size` publishes a fixed release. Do not replace it with an arbitrary
 major version without testing Expo/Metro asset processing. The exception
 remains intentional until then.
+
+## Windows payload contract
+
+Windows releases are staged only in the ignored `build/windows` directory.
+The release builder deletes that directory before every build, builds the web
+and API outputs from source, dereferences production dependencies, and removes
+application source and package-manager build metadata from the shipped runtime.
+
+Each staged payload contains a deterministic `payload-manifest.json` with the
+size and SHA-256 digest of every other file. `validate-release.mjs` checks that
+manifest, rejects symlinks and payload drift, verifies the launcher and web
+loading assets, and confirms the Windows Node and ONNX runtime files exist.
+`make-release.ps1` is the single workflow entry point: it builds once, creates
+the ZIP, writes its checksum manifest, and validates that exact staged payload
+and ZIP before publication.

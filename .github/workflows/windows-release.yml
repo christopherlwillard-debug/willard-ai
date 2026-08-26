@@ -86,18 +86,11 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
 
-      - name: Stage and validate the packaged payload
+      - name: Create, validate, and package the release
         shell: pwsh
         env:
           PORT: "5000"
           BASE_PATH: "/"
-        run: |
-          node scripts/windows/build-release.mjs
-          node scripts/windows/validate-release.mjs
-
-      - name: Create update ZIP and release manifest
-        shell: pwsh
-        env:
           WILLARD_ARTIFACT_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}
         run: .\scripts\windows\make-release.ps1
 

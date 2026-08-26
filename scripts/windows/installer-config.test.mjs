@@ -41,6 +41,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Set-Content \$UpdateCheckFile/);
   assert.match(launcher, /-Stop/);
   assert.match(launcher, /loading\.html/);
+  assert.match(launcher, /payload-manifest\.json/);
   assert.match(launcher, /Start-Process \$LoadingScreen/);
 });
 
@@ -60,8 +61,7 @@ test("release helper produces a checksum-bearing update artifact", () => {
 
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /runs-on: windows-latest/);
-  assert.match(workflow, /build-release\.mjs/);
-  assert.match(workflow, /validate-release\.mjs/);
+  assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
   assert.match(workflow, /MyAppVersion=\$env:WILLARD_VERSION/);
   assert.match(workflow, /release-manifest\.json/);
@@ -72,6 +72,10 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /runtime\/node\.exe/);
   assert.match(releaseValidator, /api-runtime\/dist\/index\.mjs/);
   assert.match(releaseValidator, /api-runtime\/setup-db\.cjs/);
+  assert.match(releaseValidator, /desktop\/loading\.html/);
+  assert.match(releaseValidator, /web\/willard-loading\.mp4/);
+  assert.match(releaseValidator, /payload-manifest\.json/);
+  assert.match(releaseValidator, /onnxruntime-node/);
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
   assert.match(releaseValidator, /sha256.*match/i);
@@ -149,6 +153,20 @@ test("release validation gates high and critical image parser advisories in both
 test("clean Windows payload includes a one-click launcher", () => {
   assert.match(releaseStager, /Start Willard Media Center\.bat/);
   assert.match(releaseValidator, /Start Willard Media Center\.bat/);
+});
+
+test("release workflow packages the exact payload it validated", () => {
+  assert.doesNotMatch(workflow, /Stage and validate the packaged payload/);
+  assert.match(workflow, /Create, validate, and package the release/);
+  assert.match(releaseBuilder, /build-release\.mjs/);
+  assert.match(releaseBuilder, /validate-release\.mjs/);
+});
+
+test("release staging removes source and package-manager build metadata", () => {
+  assert.match(releaseStager, /pruneBuildOnlyFiles/);
+  assert.match(releaseStager, /"src"/);
+  assert.match(releaseStager, /"tsconfig\.json"/);
+  assert.match(releaseStager, /"willard-api-runtime"/);
 });
 
 test("Windows payload prunes non-Windows native dependencies and bundles only node.exe", () => {

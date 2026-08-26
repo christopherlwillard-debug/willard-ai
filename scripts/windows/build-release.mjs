@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
 
 const run = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -116,9 +117,27 @@ async function compactWindowsDependencies(payloadRoot) {
   await rm(path.join(payloadRoot, "pnpm-lock.yaml"), { force: true });
 }
 
+async function pruneBuildOnlyFiles(apiOutput) {
+  for (const relative of [
+    "src",
+    "build.mjs",
+    "tsconfig.json",
+    ".tsbuildinfo",
+    ".replit-artifact",
+  ]) {
+    await rm(path.join(apiOutput, relative), { recursive: true, force: true });
+  }
+  await writeFile(
+    path.join(apiOutput, "package.json"),
+    `${JSON.stringify({ name: "willard-api-runtime", private: true, type: "module" }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 async function main() {
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("WILLARD_VERSION must be MAJOR.MINOR.PATCH.");
   if (!nodeRuntime) throw new Error("Set WILLARD_NODE_RUNTIME to a directory containing the Windows node.exe runtime.");
+  assertCanonicalReleaseDirectory(output, root);
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
 
@@ -142,6 +161,7 @@ async function main() {
   await pruneWindowsPayload(deployOutput);
   await copyDereferenced(deployOutput, apiOutput);
   await compactWindowsDependencies(apiOutput);
+  await pruneBuildOnlyFiles(apiOutput);
   await rm(deployOutput, { recursive: true, force: true });
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
@@ -159,12 +179,13 @@ async function main() {
     product: "Willard Media Center",
     version,
     artifactName: `WillardMediaCenter-${version}-windows-x64.zip`,
-    builtAt: new Date().toISOString(),
+    payloadManifest: "payload-manifest.json",
     requires: { windows: "10+", postgresql: "14+" },
     optional: { ffmpeg: "enables thumbnails, video metadata, and conversion" },
     update: { manifestPath: "release-manifest.json", atomic: true },
   };
   await writeFile(path.join(output, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writePayloadManifest(output, version);
   console.log(`Windows release staged at ${output}`);
 }
 

@@ -65,5 +65,5 @@ test-results/
 logs/
 
 # Windows release staging and installer output
-build/windows/
+/build/
 build/installer/
