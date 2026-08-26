@@ -32,3 +32,9 @@ Whole-version updates must prepare and validate a candidate directory, journal t
 **Why:** Git-only resets and copy-over installs can leave ignored dependencies, generated output, or partially copied files mismatched with the source revision.
 
 **How to apply:** Keep developer and packaged update paths on the same recoverable lifecycle: external journal, candidate validation, directory swap, interrupted-swap recovery, and health-gated backup retirement.
+
+The packaged loading window must be owned by the launcher and startup branches after it opens must throw into one cleanup/reporting path rather than exiting directly.
+
+**Why:** An early launcher exit can leave the browser-based loading page polling forever, hiding database, API, web, or post-update failures from the person who launched the app.
+
+**How to apply:** Start the loader with a process handle, close it before reporting a startup failure, persist actionable diagnostics, and keep a bounded error state in the loader page for launcher crashes that cannot report normally.

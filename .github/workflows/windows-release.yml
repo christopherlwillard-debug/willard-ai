@@ -134,14 +134,7 @@ jobs:
 
       - name: Compile the Windows installer
         shell: pwsh
-        run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-            "/DMyAppVersion=$env:WILLARD_VERSION" `
-            "installer\WillardMediaCenter.iss"
-          $setup = "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
-          if (-not (Test-Path $setup)) { throw "Inno Setup did not produce $setup." }
-          if ((Get-Item $setup).Length -le 0) { throw "Inno Setup produced an empty installer." }
-          Write-Host "Installer SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())"
+        run: .\scripts\windows\compile-installer.ps1
 
       - name: Publish installer, update ZIP, and manifest
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2

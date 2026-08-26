@@ -40,12 +40,5 @@ $env:WILLARD_NODE_RUNTIME = $Runtime
 node (Join-Path $PSScriptRoot "build-release.mjs")
 node (Join-Path $PSScriptRoot "validate-release.mjs")
 
-$inno = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
-if (-not (Test-Path $inno)) {
-  throw "Install Inno Setup 6, then run this script again."
-}
-& $inno "/DMyAppVersion=$Version" (Join-Path $Root "installer\WillardMediaCenter.iss")
-$setup = Join-Path $Root "build\installer\WillardMediaCenter-$Version-Setup.exe"
-if (-not (Test-Path $setup)) { throw "Installer compilation did not produce $setup." }
-Write-Host "Installer ready: $setup" -ForegroundColor Green
+& (Join-Path $PSScriptRoot "compile-installer.ps1")
 Write-Host "This local build is not published for automatic updates until a release manifest and ZIP are hosted publicly."

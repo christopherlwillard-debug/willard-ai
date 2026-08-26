@@ -24,12 +24,55 @@ $script:UpdateBackup = $null
 $script:UpdateCandidate = $null
 $UpdateJournal = Join-Path $DataRoot "updates\swap-journal.json"
 $script:UpdateStage = "startup"
+$script:LoadingProcess = $null
 
 function Say($message) { Write-Host "  $message" -ForegroundColor Gray }
 function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
 function Warn($message) { Write-Host "  [!]  $message" -ForegroundColor Yellow }
 function Fail($message) { Write-Host "  [X]  $message" -ForegroundColor Red }
 function Ensure-Folders { New-Item -ItemType Directory -Force -Path $DataRoot, $LogRoot | Out-Null }
+function Start-LoadingScreen {
+  if (-not (Test-Path $LoadingScreen)) { return }
+  try {
+    $script:LoadingProcess = Start-Process -FilePath $LoadingScreen -PassThru -ErrorAction Stop
+  } catch {
+    Warn "The startup window could not be opened. Willard will continue in this launcher window."
+  }
+}
+function Close-LoadingScreen {
+  if (-not $script:LoadingProcess) { return }
+  try {
+    if (-not $script:LoadingProcess.HasExited) {
+      [void]$script:LoadingProcess.CloseMainWindow()
+      if (-not $script:LoadingProcess.WaitForExit(2000)) {
+        Stop-Process -Id $script:LoadingProcess.Id -Force -ErrorAction SilentlyContinue
+      }
+    }
+  } catch {}
+  $script:LoadingProcess = $null
+}
+function Report-StartupFailure($message) {
+  $failureLog = Join-Path $LogRoot "startup-failure.log"
+  $details = @(
+    "Willard Media Center could not start.",
+    "Time: $((Get-Date).ToString("o"))",
+    "Reason: $message",
+    "Logs: $LogRoot",
+    "Next: Check database.log, api-error.log, and web-error.log; then launch Willard again."
+  )
+  try { $details | Set-Content $failureLog -Encoding UTF8 } catch {}
+  Fail $message
+  Write-Host "  Diagnostics: $failureLog" -ForegroundColor DarkGray
+  try {
+    Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
+    [void][System.Windows.MessageBox]::Show(
+      ($details -join [Environment]::NewLine),
+      "Willard Media Center",
+      [System.Windows.MessageBoxButton]::OK,
+      [System.Windows.MessageBoxImage]::Error
+    )
+  } catch {}
+}
 function Read-Version {
   if (-not (Test-Path $VersionFile)) { return "0.0.0" }
   try { return ((Get-Content $VersionFile -Raw | ConvertFrom-Json).version) } catch { return "0.0.0" }
@@ -355,11 +398,15 @@ try {
     exit 0
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
-  if (Test-Path $LoadingScreen) { Start-Process $LoadingScreen }
+  Start-LoadingScreen
   Recover-InterruptedUpdateSwap
   Try-Update
-  if (-not (Ensure-Env)) { exit 1 }
-  if (-not (Test-Dependencies)) { exit 1 }
+  if (-not (Ensure-Env)) {
+    throw "Willard needs database connection details before it can start. Update '$EnvFile' and launch again."
+  }
+  if (-not (Test-Dependencies)) {
+    throw "Willard cannot use its database settings yet. Check '$EnvFile' and launch again."
+  }
   Ensure-Schema
   $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
@@ -387,8 +434,8 @@ try {
   if (-not (Test-Path $LoadingScreen)) { Start-Process $WebUrl }
 } catch {
   Stop-Services
-  Restore-UpdateBackup
-  Fail $_.Exception.Message
-  Write-Host "  Logs: $LogRoot" -ForegroundColor DarkGray
+  try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  Close-LoadingScreen
+  Report-StartupFailure $_.Exception.Message
   exit 1
 }

@@ -35,7 +35,6 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "willard.ico"; DestDir: "{app}\icons"; Flags: ignoreversion
 
 [Dirs]
 Name: "{localappdata}\Willard Media Center"

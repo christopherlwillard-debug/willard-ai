@@ -20,11 +20,17 @@ const workflow = await readFile(new URL("../../.github/workflows/windows-release
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
 const startupSmoke = await readFile(new URL("./startup-smoke.ps1", import.meta.url), "utf8");
 const updateSmoke = await readFile(new URL("./update-smoke.ps1", import.meta.url), "utf8");
+const loaderPage = await readFile(new URL("../../desktop/loading.html", import.meta.url), "utf8");
+const installerCompiler = await readFile(new URL("./compile-installer.ps1", import.meta.url), "utf8");
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
   assert.match(config, /Name: "\{autodesktop\}\\\{#MyAppName\}"/);
   assert.match(config, /willard\.ico/);
+  const explicitIconCopies = config.split(/\r?\n/).filter((line) =>
+    /^\s*Source:\s*"willard\.ico"/i.test(line),
+  );
+  assert.equal(explicitIconCopies.length, 0, "the staged icon must be included by the payload wildcard only");
 });
 
 test("installer shortcuts invoke the native launcher, not a developer script", () => {
@@ -56,7 +62,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.ok(launcher.includes('--root=`"$Web`"'));
   assert.match(launcher, /untrusted host/);
   assert.match(launcher, /release-assets\.githubusercontent\.com/);
-  assert.match(launcher, /Start-Process \$LoadingScreen/);
+  assert.match(launcher, /Start-LoadingScreen/);
   assert.match(launcher, /swap-journal\.json/);
   assert.match(launcher, /Invoke-PackagedVersionSwap/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);
@@ -86,7 +92,7 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /runs-on: windows-latest/);
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
-  assert.match(workflow, /MyAppVersion=\$env:WILLARD_VERSION/);
+  assert.match(installerCompiler, /MyAppVersion=\$Version/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /WillardMediaCenter-.*-Setup\.exe/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
@@ -112,7 +118,7 @@ test("Windows release publication is preceded by every required quality gate", (
     ["backend audit and integration tests", "pnpm run audit:backend"],
     ["browser E2E suites", "pnpm exec playwright test"],
     ["payload validation and dependency audit gate", "make-release.ps1"],
-    ["Compile the Windows installer", "ISCC.exe"],
+    ["Compile the Windows installer", "compile-installer.ps1"],
   ]) {
     const stageIndex = workflow.indexOf(stage);
     const commandIndex = workflow.indexOf(command);
@@ -123,7 +129,36 @@ test("Windows release publication is preceded by every required quality gate", (
 
   assert.match(workflow, /pnpm exec playwright install chromium/);
   assert.match(workflow, /WILLARD_START_LOCAL_SERVERS: "true"/);
-  assert.match(workflow, /Get-FileHash \$setup -Algorithm SHA256/);
+  assert.match(installerCompiler, /Get-FileHash \$setup -Algorithm SHA256/);
+});
+
+test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
+  assert.match(launcher, /function Start-LoadingScreen/);
+  assert.match(launcher, /Start-Process -FilePath \$LoadingScreen -PassThru/);
+  assert.match(launcher, /function Close-LoadingScreen/);
+  assert.match(launcher, /CloseMainWindow\(\)/);
+  assert.match(launcher, /startup-failure\.log/);
+  assert.match(launcher, /System\.Windows\.MessageBox/);
+  assert.match(launcher, /Start-LoadingScreen\s*\n\s*Recover-InterruptedUpdateSwap/);
+  assert.doesNotMatch(launcher, /if \(-not \(Ensure-Env\)\) \{ exit 1 \}/);
+  assert.doesNotMatch(launcher, /if \(-not \(Test-Dependencies\)\) \{ exit 1 \}/);
+  assert.match(launcher, /throw "Willard needs database connection details/);
+
+  const failureCatch = launcher.slice(launcher.lastIndexOf("} catch {"));
+  assert.ok(failureCatch.indexOf("Close-LoadingScreen") < failureCatch.indexOf("Report-StartupFailure"));
+  assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 150000/);
+  assert.match(loaderPage, /STARTUP NEEDS ATTENTION/);
+  assert.match(loaderPage, /detail\.hidden = false/);
+  assert.match(loaderPage, /return;\s*\n\s*}\s*\n\s*window\.setTimeout\(waitForWillard, 800\)/);
+});
+
+test("installer compilation stops on warnings", () => {
+  assert.match(installerCompiler, /ISCC\.exe/);
+  assert.match(installerCompiler, /--messages-jsonl/);
+  assert.ok(installerCompiler.includes('"(?:type|kind|severity)"\\s*:\\s*"warning"'));
+  assert.match(installerCompiler, /Inno Setup emitted warnings/);
+  assert.match(localBuildInstaller, /compile-installer\.ps1/);
+  assert.match(workflow, /compile-installer\.ps1/);
 });
 
 test("release payload validation requires the bundled runtime and app entrypoints", () => {

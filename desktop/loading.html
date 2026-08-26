@@ -14,6 +14,8 @@
     main { position: relative; display: grid; justify-items: center; gap: 16px; padding: 24px; text-align: center; }
     h1 { margin: 0; font-size: 20px; letter-spacing: .32em; }
     p { margin: 0; padding: 9px 16px; border: 1px solid rgba(207,246,255,.2); border-radius: 999px; background: rgba(2,8,25,.45); color: rgba(255,255,255,.78); font-size: 10px; letter-spacing: .24em; }
+    #detail { max-width: 460px; border: 0; border-radius: 0; background: none; color: rgba(255,255,255,.64); font-size: 12px; letter-spacing: .04em; line-height: 1.55; }
+    .error { border-color: rgba(255,132,132,.75); color: #ffd6d6; background: rgba(78,9,20,.62); }
   </style>
 </head>
 <body>
@@ -21,12 +23,15 @@
   <div class="shade" aria-hidden="true"></div>
   <main>
     <h1>WILLARD_AI</h1>
-    <p id="status">PREPARING YOUR LIBRARY</p>
+    <p id="status" role="status" aria-live="polite">PREPARING YOUR LIBRARY</p>
+    <p id="detail" hidden>Willard is taking longer than expected. Close this window, then check the launcher message and the logs in your local Willard Media Center folder before trying again.</p>
   </main>
   <script>
     const status = document.getElementById("status");
     const api = "http://127.0.0.1:8080/api/healthz";
     const web = "http://127.0.0.1:5000";
+    const deadline = Date.now() + 150000;
+    const detail = document.getElementById("detail");
     async function ready(url, check) {
       try {
         const response = await fetch(url, { cache: "no-store" });
@@ -39,6 +44,13 @@
     async function waitForWillard() {
       if (await ready(api, true) && await ready(web, false)) {
         window.location.replace(web);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        status.textContent = "STARTUP NEEDS ATTENTION";
+        status.classList.add("error");
+        detail.hidden = false;
+        document.title = "Willard AI - Startup needs attention";
         return;
       }
       window.setTimeout(waitForWillard, 800);
