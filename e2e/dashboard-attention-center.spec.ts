@@ -68,8 +68,8 @@ async function mockDashboardDependencies(page: Page): Promise<() => void> {
         json: { database: true, thumbnailsOk: true, missingFiles: 0, corruptFiles: 0 },
       });
     }
-    if (pathname.endsWith("/api/scan/status")) {
-      return route.fulfill({ json: { isRunning: false, lastFailed: false } });
+    if (pathname.endsWith("/api/library/jobs/history")) {
+      return route.fulfill({ json: { jobs: [] } });
     }
     if (pathname.endsWith("/api/archives")) {
       return route.fulfill({ json: { archives: [], total: 0 } });

@@ -100,8 +100,11 @@ async function mockDashboardApis(page: Page): Promise<{ healthRequests: number[]
     if (path.endsWith("/api/health/status")) {
       return route.fulfill({ json: { status: "healthy", checks: [] } });
     }
-    if (path.endsWith("/api/scan/status")) {
-      return route.fulfill({ json: { isRunning: false, current: null, lastCompleted: null, lastFailed: null } });
+    if (path.endsWith("/api/library/jobs/active")) {
+      return route.fulfill({ json: null });
+    }
+    if (path.endsWith("/api/library/jobs/history")) {
+      return route.fulfill({ json: { jobs: [] } });
     }
     if (path.endsWith("/api/search")) {
       return route.fulfill({ json: { files: [], total: 0 } });

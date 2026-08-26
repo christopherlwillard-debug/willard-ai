@@ -314,6 +314,33 @@ router.get("/library/jobs/active", async (_req: Request, res: Response) => {
   res.json(progress);
 });
 
+// ── GET /api/library/jobs/history — persisted scan history ──────────────────
+
+router.get("/library/jobs/history", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const conditions = [eq(libraryJobsTable.jobType, "SCAN")];
+  if (nasPath) conditions.push(eq(libraryJobsTable.nasPath, nasPath));
+
+  const jobs = await db.select({
+    id: libraryJobsTable.id,
+    jobType: libraryJobsTable.jobType,
+    profile: libraryJobsTable.profile,
+    status: libraryJobsTable.status,
+    nasPath: libraryJobsTable.nasPath,
+    startedAt: libraryJobsTable.startedAt,
+    finishedAt: libraryJobsTable.finishedAt,
+    totalFiles: libraryJobsTable.totalFiles,
+    processedFiles: libraryJobsTable.processedFiles,
+    summary: libraryJobsTable.summary,
+    error: libraryJobsTable.error,
+  }).from(libraryJobsTable)
+    .where(and(...conditions))
+    .orderBy(desc(libraryJobsTable.createdAt), desc(libraryJobsTable.id))
+    .limit(20);
+
+  res.json({ jobs });
+});
+
 // ── GET /api/library/jobs/events — server-pushed live task snapshots ─────────
 // This is intentionally SSE rather than a polling endpoint. A snapshot is
 // pushed once on connect and whenever the stream heartbeat fires; clients can

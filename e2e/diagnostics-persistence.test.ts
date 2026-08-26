@@ -72,8 +72,8 @@ async function pollUntil<T>(
   throw new Error(`Timed out after ${timeoutMs}ms waiting for scan completion`);
 }
 
-interface ScanStatus {
-  isRunning: boolean;
+interface LibraryJobStatus {
+  status?: string;
 }
 
 interface ScanDiagnostics {
@@ -113,17 +113,17 @@ test("completed scan diagnostics survive the scan lifecycle and remain queryable
     const settingsResponse = await apiPut("/settings", { nasPath: NAS_PATH });
     assert.ok(settingsResponse.ok, `Could not set test NAS path: ${await settingsResponse.text()}`);
 
-    const scanResponse = await apiPost("/scan", {});
+    const scanResponse = await apiPost("/library/scan", { profile: "FULL" });
     assert.ok(
       scanResponse.status === 202 || scanResponse.status === 200,
       `Scan trigger returned ${scanResponse.status}: ${await scanResponse.text()}`,
     );
 
     await pollUntil(async () => {
-      const response = await apiGet("/scan/status");
+      const response = await apiGet("/library/jobs/active");
       assert.equal(response.status, 200, "Scan status endpoint should return 200");
-      return response.json() as Promise<ScanStatus>;
-    }, (status) => !status.isRunning);
+      return response.json() as Promise<LibraryJobStatus | null>;
+    }, (status) => status?.status !== "RUNNING");
 
     const diagnosticsResponse = await apiGet("/diagnostics/scans");
     assert.equal(diagnosticsResponse.status, 200, "Diagnostics endpoint should return 200");

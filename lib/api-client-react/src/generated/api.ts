@@ -53,6 +53,10 @@ import type {
   LargeFileResult,
   LibraryHealth,
   LibraryHealthStatus,
+  LibraryJobHistory,
+  LibraryJobProgress,
+  LibraryScanInput,
+  LibraryScanStart,
   ListArchivesParams,
   ListDocumentsParams,
   ListFolderParams,
@@ -4750,6 +4754,230 @@ export function useGetLibraryHealth<TData = Awaited<ReturnType<typeof getLibrary
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetLibraryHealthQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getStartLibraryScanUrl = () => {
+
+
+
+
+  return `/api/library/scan`
+}
+
+/**
+ * @summary Start a durable library scan job
+ */
+export const startLibraryScan = async (libraryScanInput?: LibraryScanInput, options?: RequestInit): Promise<LibraryScanStart> => {
+
+  return customFetch<LibraryScanStart>(getStartLibraryScanUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(libraryScanInput)
+  }
+);}
+
+
+
+
+export const getStartLibraryScanMutationOptions = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startLibraryScan>>, TError,{data?: BodyType<LibraryScanInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof startLibraryScan>>, TError,{data?: BodyType<LibraryScanInput>}, TContext> => {
+
+const mutationKey = ['startLibraryScan'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof startLibraryScan>>, {data?: BodyType<LibraryScanInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  startLibraryScan(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StartLibraryScanMutationResult = NonNullable<Awaited<ReturnType<typeof startLibraryScan>>>
+    export type StartLibraryScanMutationBody = BodyType<LibraryScanInput> | undefined
+    export type StartLibraryScanMutationError = ErrorType<ErrorResult>
+
+    /**
+ * @summary Start a durable library scan job
+ */
+export const useStartLibraryScan = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startLibraryScan>>, TError,{data?: BodyType<LibraryScanInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof startLibraryScan>>,
+        TError,
+        {data?: BodyType<LibraryScanInput>},
+        TContext
+      > => {
+      return useMutation(getStartLibraryScanMutationOptions(options));
+    }
+
+export const getGetLibraryJobsActiveUrl = () => {
+
+
+
+
+  return `/api/library/jobs/active`
+}
+
+/**
+ * @summary Get the active durable library job or the last completion
+ */
+export const getLibraryJobsActive = async ( options?: RequestInit): Promise<LibraryJobProgress | null> => {
+
+  return customFetch<LibraryJobProgress | null>(getGetLibraryJobsActiveUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetLibraryJobsActiveQueryKey = () => {
+    return [
+    `/api/library/jobs/active`
+    ] as const;
+    }
+
+
+export const getGetLibraryJobsActiveQueryOptions = <TData = Awaited<ReturnType<typeof getLibraryJobsActive>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsActive>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetLibraryJobsActiveQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLibraryJobsActive>>> = ({ signal }) => getLibraryJobsActive({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsActive>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetLibraryJobsActiveQueryResult = NonNullable<Awaited<ReturnType<typeof getLibraryJobsActive>>>
+export type GetLibraryJobsActiveQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get the active durable library job or the last completion
+ */
+
+export function useGetLibraryJobsActive<TData = Awaited<ReturnType<typeof getLibraryJobsActive>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsActive>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetLibraryJobsActiveQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetLibraryJobsHistoryUrl = () => {
+
+
+
+
+  return `/api/library/jobs/history`
+}
+
+/**
+ * @summary Get persisted durable library scan history
+ */
+export const getLibraryJobsHistory = async ( options?: RequestInit): Promise<LibraryJobHistory> => {
+
+  return customFetch<LibraryJobHistory>(getGetLibraryJobsHistoryUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetLibraryJobsHistoryQueryKey = () => {
+    return [
+    `/api/library/jobs/history`
+    ] as const;
+    }
+
+
+export const getGetLibraryJobsHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getLibraryJobsHistory>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetLibraryJobsHistoryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLibraryJobsHistory>>> = ({ signal }) => getLibraryJobsHistory({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetLibraryJobsHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getLibraryJobsHistory>>>
+export type GetLibraryJobsHistoryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get persisted durable library scan history
+ */
+
+export function useGetLibraryJobsHistory<TData = Awaited<ReturnType<typeof getLibraryJobsHistory>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryJobsHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetLibraryJobsHistoryQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

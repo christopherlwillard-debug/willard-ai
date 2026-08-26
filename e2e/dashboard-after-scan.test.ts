@@ -214,7 +214,7 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     );
 
     // ── 4. Trigger a scan ─────────────────────────────────────────────────
-    const scanRes = await apiPost("/scan", {});
+    const scanRes = await apiPost("/library/scan", { profile: "FULL" });
     assert.ok(
       scanRes.status === 202 || scanRes.status === 200,
       `Scan trigger returned unexpected status ${scanRes.status}: ${await scanRes.text()}`,
@@ -223,7 +223,7 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
     // ── 5. Wait for the scan to complete (polling, no fixed sleeps) ────────
     await pollUntil<ScanStatusResponse>(
       async () => {
-        const r = await apiGet("/scan/status");
+        const r = await apiGet("/library/jobs/active");
         assert.strictEqual(
           r.status,
           200,
@@ -231,7 +231,7 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
         );
         return r.json() as Promise<ScanStatusResponse>;
       },
-      (s) => !s.isRunning,
+      (s) => s?.status !== "RUNNING",
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
   });

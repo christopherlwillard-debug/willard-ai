@@ -1235,6 +1235,49 @@ export const GetLibraryHealthResponse = zod.object({
 
 
 /**
+ * @summary Start a durable library scan job
+ */
+export const StartLibraryScanBody = zod.object({
+  "profile": zod.enum(['QUICK', 'FULL', 'HEALTH_SCAN']).optional(),
+  "rootPath": zod.string().optional()
+})
+
+export const StartLibraryScanResponse = zod.object({
+  "jobId": zod.number(),
+  "alreadyRunning": zod.boolean()
+})
+
+
+/**
+ * @summary Get the active durable library job or the last completion
+ */
+export const GetLibraryJobsActiveResponse = zod.union([zod.object({
+  "jobId": zod.number(),
+  "jobType": zod.string(),
+  "status": zod.string(),
+  "phase": zod.string(),
+  "profile": zod.string().nullable(),
+  "progress": zod.number(),
+  "filesProcessed": zod.number(),
+  "filesTotal": zod.number(),
+  "currentPath": zod.string(),
+  "currentFileStartedAt": zod.number().nullable(),
+  "etaSeconds": zod.number().nullable(),
+  "speed": zod.number(),
+  "counters": zod.record(zod.string(), zod.unknown()),
+  "summary": zod.record(zod.string(), zod.unknown()).nullable()
+}),zod.null()])
+
+
+/**
+ * @summary Get persisted durable library scan history
+ */
+export const GetLibraryJobsHistoryResponse = zod.object({
+  "jobs": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
  * @summary Immediately re-check library reachability ("Retry Now")
  */
 export const RetryLibraryConnectionResponse = zod.object({

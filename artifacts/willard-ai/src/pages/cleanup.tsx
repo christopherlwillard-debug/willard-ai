@@ -11,9 +11,12 @@ import {
   useGetCleanupHistory, getGetCleanupHistoryQueryKey,
   useGetCleanupTrash, getGetCleanupTrashQueryKey,
   useRestoreFromTrash,
-  useGetScanStatus, getGetScanStatusQueryKey,
-  useStartScan,
 } from "@workspace/api-client-react";
+import {
+  useLibraryScanStatus,
+  useStartLibraryScan,
+  invalidateLibraryScanQueries,
+} from "@/hooks/use-library-scan";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { readQueue, writeQueue, type CleanupQueueEntry } from "@workspace/cleanup-queue";
@@ -413,21 +416,18 @@ export default function Cleanup() {
   const { data: archives, isLoading: archivesLoading } = useListArchives({ limit: 200 }, { query: { queryKey: getListArchivesQueryKey({ limit: 200 }) } });
   const { data: historyData }                          = useGetCleanupHistory({ query: { queryKey: getGetCleanupHistoryQueryKey() } });
   const { data: trashData, isLoading: trashLoading }   = useGetCleanupTrash({ query: { queryKey: getGetCleanupTrashQueryKey() } });
-  const { data: scanStatus, isLoading: scanStatusLoading } = useGetScanStatus({
-    query: {
-      queryKey: getGetScanStatusQueryKey(),
-      refetchInterval: (query) => query.state.data?.isRunning ? 2000 : 10000,
-    },
+  const { data: scanStatus, isLoading: scanStatusLoading } = useLibraryScanStatus({
+    refetchInterval: 2000,
   });
 
   const [restoringPath, setRestoringPath] = useState<string | null>(null);
   const [restoreError,  setRestoreError]  = useState<string | null>(null);
 
   const { mutate: restoreFile } = useRestoreFromTrash();
-  const { mutate: startScan, isPending: isStartingScan } = useStartScan({
+  const { mutate: startScan, isPending: isStartingScan } = useStartLibraryScan({
     mutation: {
       onSuccess: () => {
-        qc.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+        invalidateLibraryScanQueries(qc);
       },
     },
   });
@@ -645,7 +645,7 @@ export default function Cleanup() {
                 </p>
                 <Button
                   className="mt-5 font-mono"
-                  onClick={() => startScan()}
+                  onClick={() => startScan({})}
                   disabled={isStartingScan}
                 >
                   {isStartingScan

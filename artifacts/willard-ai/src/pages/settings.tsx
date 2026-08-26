@@ -3,9 +3,6 @@ import {
   useGetSettings, getGetSettingsQueryKey,
   useUpdateSettings,
   useTestNasPath,
-  useGetScanStatus, getGetScanStatusQueryKey,
-  useGetScanHistory, getGetScanHistoryQueryKey,
-  useStartScan,
   useChangePassword,
   useListSessions, getListSessionsQueryKey,
   useRevokeSession,
@@ -19,6 +16,11 @@ import {
   usePauseIndexing,
   useResumeIndexing,
 } from "@workspace/api-client-react";
+import {
+  invalidateLibraryScanQueries,
+  useLibraryScanStatus,
+  useStartLibraryScan,
+} from "@/hooks/use-library-scan";
 import { LibrarySetup } from "@/components/library/library-setup";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { NasTestResult } from "@workspace/api-client-react";
@@ -44,16 +46,11 @@ export default function Settings() {
     query: { queryKey: getGetSettingsQueryKey() }
   });
 
-  const { data: scanStatus } = useGetScanStatus({
-    query: { 
-      queryKey: getGetScanStatusQueryKey(),
-      refetchInterval: 3000 // poll every 3s
-    }
-  });
-
-  const { data: scanHistory, isLoading: historyLoading } = useGetScanHistory({
-    query: { queryKey: getGetScanHistoryQueryKey() }
-  });
+  const {
+    data: scanStatus,
+    history: scanHistory,
+    historyLoading,
+  } = useLibraryScanStatus({ refetchInterval: 3000 });
 
   const { data: diagScans } = useQuery<{
     scans: Array<{
@@ -106,11 +103,11 @@ export default function Settings() {
     }
   });
 
-  const startScanMutation = useStartScan({
+  const startScanMutation = useStartLibraryScan({
     mutation: {
       onSuccess: () => {
         toast({ title: "Scan started" });
-        queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+        invalidateLibraryScanQueries(queryClient);
       }
     }
   });
@@ -313,7 +310,7 @@ export default function Settings() {
             <Button 
               size="lg"
               disabled={scanStatus?.isRunning || startScanMutation.isPending}
-              onClick={() => startScanMutation.mutate()}
+              onClick={() => startScanMutation.mutate({})}
               className="bg-primary text-primary-foreground hover:bg-primary/90 font-mono font-bold"
             >
               {scanStatus?.isRunning ? (
@@ -376,20 +373,18 @@ function LibrarySection() {
     query: { queryKey: getGetLibraryHealthQueryKey(), refetchInterval: 10000 },
   });
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
-  const { data: scanStatus } = useGetScanStatus({
-    query: { queryKey: getGetScanStatusQueryKey(), refetchInterval: 5000 },
-  });
+  const { data: scanStatus } = useLibraryScanStatus({ refetchInterval: 5000 });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: getGetLibraryHealthQueryKey() });
     queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
   };
 
-  const rescanMutation = useStartScan({
+  const rescanMutation = useStartLibraryScan({
     mutation: {
       onSuccess: () => {
         toast({ title: "Rescan started" });
-        queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+        invalidateLibraryScanQueries(queryClient);
         invalidate();
       },
       onError: (err: any) => toast({ title: "Couldn't start rescan", description: err?.message, variant: "destructive" }),
@@ -424,7 +419,7 @@ function LibrarySection() {
     mutationFn: async (jobId: number) => {
       await fetch(apiUrl(`/library/jobs/${jobId}/resume`), { method: "POST" });
     },
-    onSuccess: () => { toast({ title: "Scan resuming" }); refetchInterrupted(); queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() }); },
+    onSuccess: () => { toast({ title: "Scan resuming" }); refetchInterrupted(); invalidateLibraryScanQueries(queryClient); },
   });
   const discardInterrupted = useMutation({
     mutationFn: async (jobId: number) => {
@@ -534,7 +529,7 @@ function LibrarySection() {
                 variant="secondary"
                 size="sm"
                 disabled={rescanMutation.isPending || scanStatus?.isRunning || offline}
-                onClick={() => rescanMutation.mutate()}
+                onClick={() => rescanMutation.mutate({})}
               >
                 {scanStatus?.isRunning
                   ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Scanning…</>

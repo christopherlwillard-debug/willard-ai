@@ -1356,6 +1356,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/LibraryHealth"
 
+  /library/scan:
+    post:
+      operationId: startLibraryScan
+      tags: [library]
+      summary: Start a durable library scan job
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LibraryScanInput"
+      responses:
+        "200":
+          description: Scan job accepted or already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryScanStart"
+        "400":
+          description: Library path is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
+  /library/jobs/active:
+    get:
+      operationId: getLibraryJobsActive
+      tags: [library]
+      summary: Get the active durable library job or the last completion
+      responses:
+        "200":
+          description: Active job progress, last completion, or null
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/LibraryJobProgress"
+                  - type: "null"
+
+  /library/jobs/history:
+    get:
+      operationId: getLibraryJobsHistory
+      tags: [library]
+      summary: Get persisted durable library scan history
+      responses:
+        "200":
+          description: Recent scan jobs for the active library
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryJobHistory"
+
   /library/retry:
     post:
       operationId: retryLibraryConnection
@@ -1790,6 +1843,83 @@ components:
           type: ["object", "null"]
       required:
         - isRunning
+
+    LibraryScanInput:
+      type: object
+      properties:
+        profile:
+          type: string
+          enum: [QUICK, FULL, HEALTH_SCAN]
+        rootPath:
+          type: string
+
+    LibraryScanStart:
+      type: object
+      properties:
+        jobId:
+          type: integer
+        alreadyRunning:
+          type: boolean
+      required: [jobId, alreadyRunning]
+
+    LibraryJobProgress:
+      type: object
+      properties:
+        jobId:
+          type: integer
+        jobType:
+          type: string
+        status:
+          type: string
+        phase:
+          type: string
+        profile:
+          type: ["string", "null"]
+        progress:
+          type: integer
+        filesProcessed:
+          type: integer
+        filesTotal:
+          type: integer
+        currentPath:
+          type: string
+        currentFileStartedAt:
+          type: ["integer", "null"]
+        etaSeconds:
+          type: ["integer", "null"]
+        speed:
+          type: number
+        counters:
+          type: object
+          additionalProperties: true
+        summary:
+          type: ["object", "null"]
+          additionalProperties: true
+      required:
+        - jobId
+        - jobType
+        - status
+        - phase
+        - profile
+        - progress
+        - filesProcessed
+        - filesTotal
+        - currentPath
+        - currentFileStartedAt
+        - etaSeconds
+        - speed
+        - counters
+        - summary
+
+    LibraryJobHistory:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required: [jobs]
 
     LibraryHealthStatus:
       type: object

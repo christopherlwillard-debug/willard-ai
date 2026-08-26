@@ -28,30 +28,61 @@ async function mockCleanupApi(page: Page, state: ScanState): Promise<{ scanReque
     if (path === "/api/system/environment") {
       return route.fulfill({ json: { isLocal: false } });
     }
-    if (path === "/api/scan/status") {
+    if (path === "/api/library/jobs/active") {
       const running = currentState === "running";
       return route.fulfill({
         json: running
           ? {
-              isRunning: true,
-              current: { stage: "Analyzing duplicate candidates", filesScanned: 37, totalFiles: 120 },
-              lastCompleted: null,
-              lastFailed: null,
+              jobId: 901,
+              jobType: "SCAN",
+              status: "RUNNING",
+              phase: "Analyzing duplicate candidates",
+              profile: "FULL",
+              progress: 30,
+              filesProcessed: 37,
+              filesTotal: 120,
+              currentPath: "",
+              currentFileStartedAt: null,
+              etaSeconds: 10,
+              speed: 3,
+              counters: {},
+              summary: null,
             }
           : {
-              isRunning: false,
-              current: null,
-              lastCompleted: currentState === "completed" ? "2026-08-23T20:00:00.000Z" : null,
-              lastFailed: null,
+              jobId: 901,
+              jobType: "SCAN",
+              status: currentState === "completed" ? "DONE" : "FAILED",
+              phase: "finalizing",
+              profile: "FULL",
+              progress: 100,
+              filesProcessed: 120,
+              filesTotal: 120,
+              currentPath: "",
+              currentFileStartedAt: null,
+              etaSeconds: 0,
+              speed: 0,
+              counters: {},
+              summary: null,
             },
       });
     }
-    if (path === "/api/scan" && request.method() === "POST") {
+    if (path === "/api/library/jobs/history") {
+      return route.fulfill({ json: { jobs: currentState === "completed" ? [{
+        id: 901,
+        status: "DONE",
+        processedFiles: 120,
+        totalFiles: 120,
+        startedAt: "2026-08-23T19:00:00.000Z",
+        finishedAt: "2026-08-23T20:00:00.000Z",
+        error: null,
+      }] : [] } });
+    }
+    if (path === "/api/library/scan" && request.method() === "POST") {
       scanRequests.push(path);
       currentState = "running";
       return route.fulfill({
         status: 202,
-        json: { id: 901, status: "RUNNING", profile: "FULL" },
+        json: { jobId: 901, alreadyRunning: false },
       });
     }
     if (path === "/api/cleanup/duplicates") {
@@ -100,7 +131,7 @@ async function openCleanup(page: Page, state: ScanState): Promise<{ scanRequests
   return fixture;
 }
 
-test("never-scanned page explains the scan and starts it through POST /api/scan", async ({ page }) => {
+test("never-scanned page explains the scan and starts it through POST /api/library/scan", async ({ page }) => {
   const { scanRequests } = await openCleanup(page, "never");
 
   await expect(page.getByRole("heading", { name: "Run a scan first" })).toBeVisible();

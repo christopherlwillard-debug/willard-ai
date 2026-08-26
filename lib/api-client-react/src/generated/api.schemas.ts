@@ -281,6 +281,59 @@ export interface ScanStatus {
   lastFailed?: ScanStatusLastFailed;
 }
 
+export type LibraryScanInputProfile = typeof LibraryScanInputProfile[keyof typeof LibraryScanInputProfile];
+
+
+export const LibraryScanInputProfile = {
+  QUICK: 'QUICK',
+  FULL: 'FULL',
+  HEALTH_SCAN: 'HEALTH_SCAN',
+} as const;
+
+export interface LibraryScanInput {
+  profile?: LibraryScanInputProfile;
+  rootPath?: string;
+}
+
+export interface LibraryScanStart {
+  jobId: number;
+  alreadyRunning: boolean;
+}
+
+export type LibraryJobProgressCounters = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type LibraryJobProgressSummary = { [key: string]: unknown } | null;
+
+export interface LibraryJobProgress {
+  jobId: number;
+  jobType: string;
+  status: string;
+  phase: string;
+  /** @nullable */
+  profile: string | null;
+  progress: number;
+  filesProcessed: number;
+  filesTotal: number;
+  currentPath: string;
+  /** @nullable */
+  currentFileStartedAt: number | null;
+  /** @nullable */
+  etaSeconds: number | null;
+  speed: number;
+  counters: LibraryJobProgressCounters;
+  /** @nullable */
+  summary: LibraryJobProgressSummary;
+}
+
+export type LibraryJobHistoryJobsItem = { [key: string]: unknown };
+
+export interface LibraryJobHistory {
+  jobs: LibraryJobHistoryJobsItem[];
+}
+
 export interface LibraryHealthStatus {
   database: boolean;
   libraryOnline: boolean;

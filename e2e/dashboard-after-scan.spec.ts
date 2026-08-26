@@ -66,16 +66,16 @@ async function runScan(request: APIRequestContext): Promise<void> {
   expect(settingsRes.ok()).toBeTruthy();
 
   // Trigger the scan
-  const scanRes = await request.post("/api/scan");
+  const scanRes = await request.post("/api/library/scan", { data: { profile: "FULL" } });
   expect([200, 202]).toContain(scanRes.status());
 
   // Poll until the scan finishes — no fixed sleeps, check every 2 s, timeout at 90 s
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     await new Promise<void>((r) => setTimeout(r, 2_000));
-    const st = await request.get("/api/scan/status");
-    const body = await st.json() as { isRunning: boolean };
-    if (!body.isRunning) return;
+    const st = await request.get("/api/library/jobs/active");
+    const body = await st.json() as { status?: string } | null;
+    if (body?.status !== "RUNNING") return;
   }
   throw new Error("Timed out waiting for the scan to complete (90 s)");
 }

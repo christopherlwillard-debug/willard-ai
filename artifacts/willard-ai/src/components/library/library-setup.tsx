@@ -4,12 +4,11 @@ import {
   useGetSystemDrives,
   useTestNasPath,
   useUpdateSettings,
-  useStartScan,
   getGetSettingsQueryKey,
   getGetLibraryHealthQueryKey,
-  getGetScanStatusQueryKey,
   getGetSystemDrivesQueryKey,
 } from "@workspace/api-client-react";
+import { invalidateLibraryScanQueries, useStartLibraryScan } from "@/hooks/use-library-scan";
 import type { DriveCandidate, NasTestResult } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -80,10 +79,10 @@ export function LibrarySetup({
     },
   });
 
-  const scanMutation = useStartScan({
+  const scanMutation = useStartLibraryScan({
     mutation: {
       onSettled: () => {
-        queryClient.invalidateQueries({ queryKey: getGetScanStatusQueryKey() });
+        invalidateLibraryScanQueries(queryClient);
       },
     },
   });
@@ -95,7 +94,7 @@ export function LibrarySetup({
         queryClient.invalidateQueries({ queryKey: getGetLibraryHealthQueryKey() });
         // Kick off the initial library build in the background; the user can
         // use the app immediately while it runs.
-        scanMutation.mutate({ data: { type: "QUICK" } } as any);
+        scanMutation.mutate({ data: { profile: "QUICK" } });
         toast({ title: "Building your media library…", description: "You can start using Willard AI right away." });
         setSavingPath(null);
         onDone?.();

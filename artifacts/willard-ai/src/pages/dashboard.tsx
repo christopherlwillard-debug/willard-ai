@@ -3,15 +3,13 @@ import { Link } from "wouter";
 import {
   useGetDashboard,
   getGetDashboardQueryKey,
-  useStartScan,
   useGetSettings,
   useSearchFiles,
   useGetHealthStatus,
-  useGetScanStatus,
-  getGetScanStatusQueryKey,
   getGetSettingsLogoUrl,
   useListArchives,
 } from "@workspace/api-client-react";
+import { useLibraryScanStatus, useStartLibraryScan } from "@/hooks/use-library-scan";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -94,7 +92,7 @@ export default function Dashboard() {
   const { data: settings } = useGetSettings();
   const { data: filesData } = useSearchFiles({ limit: 8 });
   const { data: health } = useGetHealthStatus();
-  const { data: scanStatus } = useGetScanStatus({ query: { queryKey: getGetScanStatusQueryKey(), refetchInterval: scanTriggered ? 3000 : 30000 } });
+  const { data: scanStatus } = useLibraryScanStatus({ refetchInterval: scanTriggered ? 3000 : 30000 });
   const { data: archives } = useListArchives({ limit: 1, status: "pending" });
   const { data: optimization } = useQuery<OptimizationStatus>({
     queryKey: ["optimization-status"],
@@ -105,7 +103,7 @@ export default function Dashboard() {
     },
     refetchInterval: 30000,
   });
-  const scanMutation = useStartScan({ mutation: { onSuccess: () => setScanTriggered(true) } });
+  const scanMutation = useStartLibraryScan({ mutation: { onSuccess: () => setScanTriggered(true) } });
 
   useEffect(() => {
     if (scanTriggered && data && !data.isScanning) {
@@ -177,7 +175,7 @@ export default function Dashboard() {
           {isScanning ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : issues ? <AlertTriangle className="h-5 w-5 text-amber-300" /> : <CheckCircle2 className="h-5 w-5 text-emerald-300" />}
           <div><p className="text-sm font-medium">{isScanning ? "Willard is working quietly" : issues ? "Your library needs a little attention" : "Your library is up to date"}</p><p className="text-xs text-muted-foreground">{isScanning ? "You can keep browsing while background work continues." : online ? `Last checked ${relativeDate(data.lastScanAt)}` : (data.libraryMessage || "Library location is offline")}</p></div>
         </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground"><span>{data.totalFiles.toLocaleString()} items</span><span className="h-1 w-1 rounded-full bg-border" /><span>{formatBytes(data.totalSizeBytes)} indexed</span><Button variant="ghost" size="sm" onClick={() => scanMutation.mutate()} disabled={isScanning || scanMutation.isPending} className="h-8 text-xs text-primary">{isScanning ? "Working…" : "Check for changes"}</Button></div>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground"><span>{data.totalFiles.toLocaleString()} items</span><span className="h-1 w-1 rounded-full bg-border" /><span>{formatBytes(data.totalSizeBytes)} indexed</span><Button variant="ghost" size="sm" onClick={() => scanMutation.mutate({})} disabled={isScanning || scanMutation.isPending} className="h-8 text-xs text-primary">{isScanning ? "Working…" : "Check for changes"}</Button></div>
       </section>
 
       {attention.length > 0 && <section><div className="mb-3 flex items-center justify-between"><div><h2 className="text-lg font-semibold">A few things to review</h2><p className="text-xs text-muted-foreground">Only meaningful work appears here.</p></div><Link href="/settings" className="text-xs text-muted-foreground hover:text-foreground">Manage preferences</Link></div><div className="grid gap-3 md:grid-cols-3">{attention.map((item) => <AttentionCard key={item.key} {...item} onDismiss={() => dismiss(item.key)} />)}</div></section>}

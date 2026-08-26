@@ -3,9 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Search, ScanLine, Loader2, CheckCircle2, Bell, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sidebar } from "./sidebar";
-import {
-  useStartScan,
-} from "@workspace/api-client-react";
+import { useStartLibraryScan } from "@/hooks/use-library-scan";
 import { BackgroundTasksButton, BackgroundTasksPanel } from "@/components/library/background-tasks";
 import { useLibraryJobStream } from "@/hooks/use-library-job-stream";
 
@@ -15,7 +13,7 @@ function TopBar() {
   const [tasksOpen, setTasksOpen] = useState(false);
   const { jobs } = useLibraryJobStream();
 
-  const scanMutation = useStartScan({
+  const scanMutation = useStartLibraryScan({
     mutation: {
       onSuccess: () => {
         setScanTriggered(true);
@@ -79,7 +77,7 @@ function TopBar() {
         <Button
           size="sm"
           variant="default"
-          onClick={() => scanMutation.mutate()}
+          onClick={() => scanMutation.mutate({})}
           disabled={isScanning || scanMutation.isPending}
           className="ml-1 h-8 shrink-0 gap-1.5 rounded-lg border border-primary/40 bg-primary/10 text-xs text-primary shadow-[0_0_18px_rgba(43,218,255,.10)] hover:bg-primary/20 hover:text-primary"
           title="Checks the library for changes. Willard normally keeps it up to date automatically."
