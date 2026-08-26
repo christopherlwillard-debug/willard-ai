@@ -26,3 +26,9 @@ Developer launchers on Windows must resolve `pnpm.cmd` or `pnpm.exe` explicitly 
 **Why:** Windows PowerShell can resolve `pnpm` to `pnpm.ps1`, whose native output is surfaced as `NativeCommandError` even when the underlying pnpm command succeeds.
 
 **How to apply:** Use the executable wrapper for launcher-owned installs, builds, and long-lived web processes; keep readiness failures paired with the relevant log tail.
+
+Whole-version updates must prepare and validate a candidate directory, journal the sibling-directory swap, and retain the prior directory until post-start health succeeds.
+
+**Why:** Git-only resets and copy-over installs can leave ignored dependencies, generated output, or partially copied files mismatched with the source revision.
+
+**How to apply:** Keep developer and packaged update paths on the same recoverable lifecycle: external journal, candidate validation, directory swap, interrupted-swap recovery, and health-gated backup retirement.
