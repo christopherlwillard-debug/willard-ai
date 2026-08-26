@@ -28,6 +28,60 @@ async function mockShell(page: Page, options: { collectionsError?: boolean; medi
         ? route.fulfill({ status: 503, json: { error: "Service unavailable" } })
         : route.fulfill({ json: { files: [], total: 0 } });
     }
+    if (path === "/api/media/files/42/detail") {
+      return route.fulfill({
+        json: {
+          file: {
+            id: 42,
+            name: "archive-photo.jpg",
+            relativePath: "family/archive-photo.jpg",
+            extension: "jpg",
+            mimeType: "image/jpeg",
+            mediaType: "photo",
+            sizeBytes: 1024,
+            modifiedAt: null,
+            dateCreated: null,
+            favorite: false,
+            width: 800,
+            height: 600,
+            orientation: null,
+            durationSeconds: null,
+            dateTaken: null,
+            folder: "family",
+            exif: {
+              cameraMake: null,
+              cameraModel: null,
+              lens: null,
+              iso: null,
+              aperture: null,
+              exposure: null,
+              focalLength: null,
+              flash: null,
+            },
+            gps: null,
+            video: null,
+            pdf: null,
+          },
+          ai: { analyzed: true, tags: [], objects: [], people: [], hiddenTags: [] },
+          notes: null,
+          collections: [],
+          timeline: { prev: null, next: null },
+        },
+      });
+    }
+    if (path === "/api/media/files/42/related") {
+      return route.fulfill({
+        json: {
+          sameEvent: [],
+          sameDay: [],
+          sameLocation: [],
+          samePeople: [],
+          similar: [],
+          sameCollection: [],
+        },
+      });
+    }
+    if (path === "/api/media/files/42/faces") return route.fulfill({ json: { scanned: true, faces: [] } });
     if (path === "/api/media/folders") return route.fulfill({ json: { tree: [] } });
     if (path === "/api/media/tags") return route.fulfill({ json: { tags: [] } });
 
@@ -82,5 +136,9 @@ test("media failure is distinct from empty filters and query navigation activate
   await page.goto("/library?type=audio");
   await expect(page.getByTestId("link-nav-music")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("link-nav-photos")).not.toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("link-nav-videos")).not.toHaveAttribute("aria-current", "page");
+
+  await page.goto("/media/42");
+  await expect(page.getByTestId("link-nav-photos")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("link-nav-videos")).not.toHaveAttribute("aria-current", "page");
 });

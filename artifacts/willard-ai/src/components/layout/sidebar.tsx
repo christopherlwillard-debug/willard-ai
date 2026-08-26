@@ -79,18 +79,33 @@ const advancedNavigation = [
 function isNavigationActive(location: string, href: string): boolean {
   const [pathname, search = ""] = location.split("?");
   const [targetPathname, targetSearch = ""] = href.split("?");
-
-  if (pathname !== targetPathname) return false;
-
   const currentParams = new URLSearchParams(search);
   const targetParams = new URLSearchParams(targetSearch);
-  if (currentParams.size !== targetParams.size) return false;
 
-  for (const [key, value] of targetParams) {
-    if (currentParams.get(key) !== value) return false;
+  if (targetParams.size > 0) {
+    if (pathname !== targetPathname || currentParams.size !== targetParams.size) return false;
+    for (const [key, value] of targetParams) {
+      if (currentParams.get(key) !== value) return false;
+    }
+    return true;
   }
 
-  return true;
+  const pathMatches = pathname === targetPathname
+    || (targetPathname !== "/" && pathname.startsWith(`${targetPathname}/`));
+  if (!pathMatches) return false;
+
+  const hasMoreSpecificQueryMatch = [...primaryNavigation, ...advancedNavigation].some((item) => {
+    const [itemPathname, itemSearch = ""] = item.href.split("?");
+    if (!itemSearch || pathname !== itemPathname) return false;
+    const itemParams = new URLSearchParams(itemSearch);
+    if (currentParams.size !== itemParams.size) return false;
+    for (const [key, value] of itemParams) {
+      if (currentParams.get(key) !== value) return false;
+    }
+    return true;
+  });
+
+  return !hasMoreSpecificQueryMatch;
 }
 
 export function Sidebar() {

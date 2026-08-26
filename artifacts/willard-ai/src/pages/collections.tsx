@@ -481,7 +481,7 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
           <span className="text-xs text-muted-foreground font-mono">{total} items</span>
         </div>
         {itemsQuery.isLoading ? (
-          <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+          <div role="status" aria-label="Loading timeline items" className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
         ) : itemsQuery.isError && !itemsQuery.data ? (
           <QueryErrorState
             description="This part of your timeline could not be loaded. Try again."
@@ -507,7 +507,7 @@ function TimelineView({ onToggleFavorite }: { onToggleFavorite: (file: MediaFile
   }
 
   if (timelineQuery.isLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
+    return <div role="status" aria-label="Loading timeline" className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
   }
 
   if (timelineQuery.isError && !timelineQuery.data) {
@@ -916,7 +916,7 @@ export default function Collections() {
               : undefined}
           />
         ) : collectionsQuery.isLoading ? (
-          <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+          <div role="status" aria-label="Loading collections" className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
         ) : collectionsQuery.isError && !collectionsQuery.data ? (
           <QueryErrorState
             description="Your albums could not be loaded. Try again when the local library service is available."

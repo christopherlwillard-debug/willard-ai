@@ -21,3 +21,5 @@ This project uses `wouter` for routing. `react-router-dom` is NOT installed and 
 // Instead of setSearchParams({})
 setLocation('/current-page'); // navigate to clean URL without query string
 ```
+
+When reconstructing a full URL, remember that this installed wouter version's `useSearch()` value omits the leading `?`; add it explicitly before joining the pathname and search.
