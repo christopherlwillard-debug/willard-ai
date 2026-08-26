@@ -48,6 +48,9 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /signed artifact verification/);
   assert.match(launcher, /--verify-artifact/);
   assert.match(launcher, /-PassThru/);
+  assert.ok(launcher.includes('--env-file=`"$EnvFile`"'));
+  assert.ok(launcher.includes('"`"$Api`""'));
+  assert.ok(launcher.includes('--root=`"$Web`"'));
   assert.match(launcher, /untrusted host/);
   assert.match(launcher, /release-assets\.githubusercontent\.com/);
   assert.match(launcher, /Start-Process \$LoadingScreen/);
@@ -216,7 +219,8 @@ test("developer updater is Git-first with a verified archive fallback", () => {
 
 test("developer startup launches the API directly and fails when that process exits", () => {
   assert.doesNotMatch(developerLauncher, /Start-Process -FilePath "cmd\.exe"/);
-  assert.match(developerLauncher, /--env-file=\$envFile/);
+  assert.ok(developerLauncher.includes('--env-file=`"$envFile`"'));
+  assert.ok(developerLauncher.includes('"`"$apiDist`""'));
   assert.match(developerLauncher, /-FilePath \$nodeCommand/);
   assert.match(developerLauncher, /\$env:PORT = "8080"/);
   assert.match(developerLauncher, /schema-ready\.json/);
