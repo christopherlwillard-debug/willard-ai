@@ -8,6 +8,7 @@
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "check:router": "node scripts/check-wouter-imports.mjs",
+    "check:api-contracts": "node --test scripts/api-contracts/runtime-route-parity.test.mjs && pnpm --filter @workspace/api-spec run codegen && git diff --exit-code -- lib/api-client-react/src/generated lib/api-zod/src/generated",
     "test:database-backup": "node --test desktop/database-backup.test.mjs",
     "test:routed": "node scripts/run-routed-workflows.mjs",
     "audit:backend": "pnpm --filter @workspace/api-server run audit && node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts e2e/cleanup-execute.test.ts"
