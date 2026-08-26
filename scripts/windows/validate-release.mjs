@@ -9,6 +9,7 @@ import {
   assertLocalHtmlReferences,
   validatePayloadManifest,
 } from "./release-payload.mjs";
+import { validateReleaseManifest } from "../../desktop/release-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
@@ -174,11 +175,11 @@ export async function validateRelease() {
     const releaseManifestPath = process.env.WILLARD_RELEASE_MANIFEST
       ? path.resolve(process.env.WILLARD_RELEASE_MANIFEST)
       : path.join(path.dirname(zipPath), "release-manifest.json");
-    const releaseManifest = JSON.parse(await readFile(releaseManifestPath, "utf8"));
-    if (releaseManifest.version !== version) throw new Error("Release manifest version does not match the packaged payload.");
-    if (releaseManifest.artifactName !== path.basename(zipPath)) throw new Error("Release manifest artifact name does not match the ZIP.");
-    if (releaseManifest.sha256?.toLowerCase() !== hash) throw new Error("Release manifest checksum does not match the ZIP.");
-    if (!releaseManifest.artifactUrl?.endsWith("/" + path.basename(zipPath))) throw new Error("Release manifest artifact URL does not match the ZIP.");
+    const releaseManifest = JSON.parse((await readFile(releaseManifestPath, "utf8")).replace(/^\uFEFF/, ""));
+    const verifiedRelease = validateReleaseManifest(releaseManifest);
+    if (verifiedRelease.version !== version) throw new Error("Release manifest version does not match the packaged payload.");
+    if (verifiedRelease.artifactName !== path.basename(zipPath)) throw new Error("Release manifest artifact name does not match the ZIP.");
+    if (verifiedRelease.sha256 !== hash) throw new Error("Release manifest checksum does not match the ZIP.");
   }
 
   await auditResolvedDependencies();

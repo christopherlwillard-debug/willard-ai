@@ -35,4 +35,7 @@ manifest, rejects symlinks and payload drift, verifies the launcher and web
 loading assets, and confirms the Windows Node and ONNX runtime files exist.
 `make-release.ps1` is the single workflow entry point: it builds once, creates
 the ZIP, writes its checksum manifest, and validates that exact staged payload
-and ZIP before publication.
+and ZIP before publication. The published release manifest is Ed25519-signed
+with the private key held in GitHub Actions secrets; installed clients embed
+the matching public key and reject unsigned or mismatched metadata before
+downloading an update.

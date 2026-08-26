@@ -10,6 +10,8 @@ const launcherCommon = await readFile(new URL("../launcher/common.ps1", import.m
 const setupLauncher = await readFile(new URL("../launcher/setup.ps1", import.meta.url), "utf8");
 const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
 const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
+const releaseSigner = await readFile(new URL("./sign-release.mjs", import.meta.url), "utf8");
+const localBuildInstaller = await readFile(new URL("./build-installer.ps1", import.meta.url), "utf8");
 const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
 const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
 const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
@@ -42,6 +44,12 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /-Stop/);
   assert.match(launcher, /loading\.html/);
   assert.match(launcher, /payload-manifest\.json/);
+  assert.match(launcher, /signature verification/);
+  assert.match(launcher, /signed artifact verification/);
+  assert.match(launcher, /--verify-artifact/);
+  assert.match(launcher, /-PassThru/);
+  assert.match(launcher, /untrusted host/);
+  assert.match(launcher, /release-assets\.githubusercontent\.com/);
   assert.match(launcher, /Start-Process \$LoadingScreen/);
 });
 
@@ -57,6 +65,9 @@ test("release helper produces a checksum-bearing update artifact", () => {
   assert.match(releaseBuilder, /sourceArtifactUrl/);
   assert.match(releaseBuilder, /sourceSha256/);
   assert.match(releaseBuilder, /release-manifest\.json/);
+  assert.match(releaseBuilder, /sign-release\.mjs/);
+  assert.match(releaseSigner, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
+  assert.match(releaseSigner, /refusing to publish an unsigned release/);
 });
 
 test("Windows release workflow builds and publishes the versioned package", () => {
@@ -66,6 +77,14 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /MyAppVersion=\$env:WILLARD_VERSION/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /WillardMediaCenter-.*-Setup\.exe/);
+  assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
+  assert.match(workflow, /softprops\/action-gh-release@[0-9a-f]{40}/);
+  assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
+  assert.match(workflow, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
+  assert.match(workflow, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
+  assert.match(localBuildInstaller, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
+  assert.match(localBuildInstaller, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
 });
 
 test("release payload validation requires the bundled runtime and app entrypoints", () => {
@@ -78,6 +97,7 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /onnxruntime-node/);
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
+  assert.match(releaseValidator, /validateReleaseManifest/);
   assert.match(releaseValidator, /sha256.*match/i);
   assert.match(releaseValidator, /sharp.*package\.json/);
   assert.match(releaseValidator, /sharpManifest\.version !== "0\.35\.2"/);

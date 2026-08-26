@@ -52,16 +52,27 @@ The manual release steps performed by the action are:
 
 1. On a Windows build runner, install the supported Node runtime for the
    release pipeline and set `WILLARD_NODE_RUNTIME` to the directory containing
-   `node.exe`.
+   `node.exe`. The helper and CI workflow pin Node 24.13.1 and verify the
+   downloaded archive against its checked-in SHA-256 before extraction.
 2. Run `scripts/windows/make-release.ps1` with `WILLARD_VERSION`,
-   `WILLARD_NODE_RUNTIME`, and `WILLARD_ARTIFACT_BASE_URL` configured. This
-   stages the payload, creates the update ZIP, and writes a checksum-bearing
+   `WILLARD_NODE_RUNTIME`, `WILLARD_ARTIFACT_BASE_URL`, and
+   `WILLARD_RELEASE_SIGNING_PRIVATE_KEY` configured. The signing key is a
+   base64-encoded PKCS#8 Ed25519 private key held only in the CI secret store.
+   This stages the payload, creates the update ZIP, and writes a signed
    `release-manifest.json`.
 3. Run Inno Setup with `installer/WillardMediaCenter.iss`, passing
    `/DMyAppVersion=MAJOR.MINOR.PATCH` when building a release.
 4. Publish the generated installer, packaged update ZIP, developer source
-   update ZIP, and `release-manifest.json` containing `version`, `artifactUrl`,
-   `sha256`, `sourceArtifactUrl`, and `sourceSha256`.
+   update ZIP, and `release-manifest.json`. The manifest is bound to this
+   repository and the exact product/version/artifact names; installed copies
+   reject unsigned, altered, wrong-product, wrong-repository, or redirected
+   update metadata before downloading or installing it.
+
+To create the signing key once, run
+`openssl genpkey -algorithm ED25519 -out release-signing-private.pem`, export the matching public key in
+`desktop/release-contract.mjs`, and store the base64-encoded PKCS#8 private key
+as the `WILLARD_RELEASE_SIGNING_PRIVATE_KEY` GitHub Actions secret. Never
+commit the private key.
 
 The installer includes the application, API production dependencies, web
 output, the bundled Node runtime, and the native launcher. It does not include

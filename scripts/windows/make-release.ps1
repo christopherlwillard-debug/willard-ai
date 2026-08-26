@@ -25,18 +25,23 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sourceZip)) { throw "Could not crea
 $sourceHash = (Get-FileHash $sourceZip -Algorithm SHA256).Hash.ToLowerInvariant()
 $sourceArtifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Version-source.zip"
 @{
+  schema = 2
   product = "Willard Media Center"
+  repository = "christopherlwillard-debug/willard-ai"
   version = $Version
+  artifactName = "WillardMediaCenter-$Version-windows-x64.zip"
   artifactUrl = $artifactUrl
   sha256 = $hash
+  sourceArtifactName = "WillardMediaCenter-$Version-source.zip"
   sourceArtifactUrl = $sourceArtifactUrl
   sourceSha256 = $sourceHash
   notes = "See the release notes for this version."
   minimumWindowsVersion = "10"
 } | ConvertTo-Json | Set-Content $manifest -Encoding UTF8
+node (Join-Path $Root "scripts/windows/sign-release.mjs") $manifest
 $env:WILLARD_RELEASE_ZIP = $zip
 $env:WILLARD_RELEASE_MANIFEST = $manifest
- node (Join-Path $Root "scripts/windows/validate-release.mjs")
+node (Join-Path $Root "scripts/windows/validate-release.mjs")
 Write-Host "Release ZIP: $zip"
 Write-Host "Source update ZIP: $sourceZip"
 Write-Host "Release manifest: $manifest"

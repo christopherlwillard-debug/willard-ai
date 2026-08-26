@@ -15,6 +15,7 @@ $SetupDb = Join-Path $InstallRoot "api-runtime\setup-db.cjs"
 $Web = Join-Path $InstallRoot "web"
 $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
 $LoadingScreen = Join-Path $InstallRoot "desktop\loading.html"
+$ReleaseContract = Join-Path $InstallRoot "desktop\release-contract.mjs"
 $ApiUrl = "http://127.0.0.1:8080/api/healthz"
 $WebUrl = "http://127.0.0.1:5000"
 $UpdateManifest = "https://github.com/christopherlwillard-debug/willard-ai/releases/latest/download/release-manifest.json"
@@ -127,6 +128,18 @@ function Wait-Ready($url, $label) {
   }
   return $false
 }
+function Assert-TrustedDownloadResponse($response) {
+  $finalUri = $null
+  try { $finalUri = $response.BaseResponse.ResponseUri } catch {}
+  if ($finalUri -and $finalUri.Host -notin @(
+      "github.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com",
+      "github-releases.githubusercontent.com"
+    )) {
+    throw "The release download redirected to an untrusted host."
+  }
+}
 function Ensure-Env {
   Ensure-Folders
   if (Test-Path $EnvFile) { return $true }
@@ -161,7 +174,9 @@ function Try-Update {
   try {
     $script:UpdateStage = "manifest check"
     Say "Checking for a newer Willard release..."
-    $remote = Invoke-RestMethod -Uri $UpdateManifest -TimeoutSec 8
+    $manifestResponse = Invoke-WebRequest -Uri $UpdateManifest -UseBasicParsing -TimeoutSec 8
+    Assert-TrustedDownloadResponse $manifestResponse
+    $remote = $manifestResponse.Content | ConvertFrom-Json
     $local = Read-Version
     $remoteVersion = [version]($remote.version -replace "-.*$", "")
     if ($remoteVersion -le [version]($local -replace "-.*$", "")) {
@@ -173,15 +188,34 @@ function Try-Update {
       -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
       throw "The release description is incomplete or unsafe."
     }
+    $remoteManifestFile = Join-Path $DataRoot "updates\release-manifest.json"
+    New-Item -ItemType Directory -Force (Split-Path $remoteManifestFile) | Out-Null
+    $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
+    try {
+      $script:UpdateStage = "manifest signature verification"
+      & $Node $ReleaseContract "--verify" $remoteManifestFile
+      if ($LASTEXITCODE -ne 0) { throw "The release description failed signature verification." }
+    } finally {
+      Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"
     New-Item -ItemType Directory -Force (Split-Path $zip) | Out-Null
     $script:UpdateStage = "release download"
     Say "Downloading Willard Media Center $($remote.version)..."
-    Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $zip -TimeoutSec 120
+    $artifactResponse = Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $zip -PassThru -TimeoutSec 120
+    Assert-TrustedDownloadResponse $artifactResponse
     $script:UpdateStage = "checksum verification"
     $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
+    $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
+    try {
+      $script:UpdateStage = "signed artifact verification"
+      & $Node $ReleaseContract "--verify-artifact" $remoteManifestFile $zip
+      if ($LASTEXITCODE -ne 0) { throw "The downloaded release failed signed artifact verification." }
+    } finally {
+      Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
     $script:UpdateStage = "release validation"
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
