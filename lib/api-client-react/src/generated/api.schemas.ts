@@ -645,6 +645,13 @@ export interface RestoreResult {
   restored: boolean;
 }
 
+/**
+ * Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.
+ */
+export interface RuntimeJsonInput { [key: string]: unknown }
+
+export type RuntimeJsonResult = { [key: string]: unknown } | unknown[] | string | number | boolean | null;
+
 export interface ErrorResult {
   error: string;
 }

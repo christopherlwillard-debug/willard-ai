@@ -39,6 +39,151 @@ tags:
   - name: library
     description: Smart library health and indexing controls
 
+x-runtime-contracts:
+  jsonGet: &runtimeJsonGetOperation
+    tags: [runtime]
+    summary: Runtime JSON endpoint
+    responses:
+      "200":
+        description: Successful JSON response
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeJsonResult"
+      "400":
+        description: Invalid request
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "401":
+        description: Authentication required
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "404":
+        description: Resource not found
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "409":
+        description: Request conflicts with current state
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "500":
+        description: Server error
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+  jsonMutation: &runtimeJsonMutationOperation
+    tags: [runtime]
+    summary: Runtime JSON mutation endpoint
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeJsonInput"
+    responses:
+      "200":
+        description: Successful JSON response
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeJsonResult"
+      "201":
+        description: Resource created
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeJsonResult"
+      "400":
+        description: Invalid request
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "401":
+        description: Authentication required
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "404":
+        description: Resource not found
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "409":
+        description: Request conflicts with current state
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "500":
+        description: Server error
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+  binary: &runtimeBinaryOperation
+    tags: [runtime]
+    summary: Runtime binary media endpoint
+    responses:
+      "200":
+        description: Binary media response
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      "400":
+        description: Invalid request
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "401":
+        description: Authentication required
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "404":
+        description: Media not found
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+      "500":
+        description: Server error
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+  event: &runtimeEventOperation
+    tags: [runtime]
+    summary: Runtime server-sent event endpoint
+    responses:
+      "200":
+        description: Server-sent event stream
+        content:
+          text/event-stream:
+            schema:
+              type: string
+      "401":
+        description: Authentication required
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResult"
+
 paths:
   /media/file/{id}/stream:
     get:
@@ -1461,6 +1606,295 @@ paths:
               schema:
                 $ref: "#/components/schemas/IndexingToggleResult"
 
+  /collections:
+    get: {<<: *runtimeJsonGetOperation, operationId: getCollections}
+    post: {<<: *runtimeJsonMutationOperation, operationId: createCollections}
+
+  /collections/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    patch: {<<: *runtimeJsonMutationOperation, operationId: updateCollectionsId}
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteCollectionsId}
+
+  /collections/{id}/items:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getCollectionsIdItems}
+    post: {<<: *runtimeJsonMutationOperation, operationId: createCollectionsIdItems}
+
+  /collections/{id}/items/{fileId}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: integer}}
+      - {name: fileId, in: path, required: true, schema: {type: integer}}
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteCollectionsIdItemsFileId}
+
+  /collections/{id}/merge:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createCollectionsIdMerge}
+
+  /collections/rebuild:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createCollectionsRebuild}
+
+  /debug/library-state:
+    get: {<<: *runtimeJsonGetOperation, operationId: getDebugLibraryState}
+
+  /diagnostics/scans:
+    get: {<<: *runtimeJsonGetOperation, operationId: getDiagnosticsScans}
+
+  /faces/people:
+    get: {<<: *runtimeJsonGetOperation, operationId: getFacesPeople}
+
+  /faces/people/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    patch: {<<: *runtimeJsonMutationOperation, operationId: updateFacesPeopleId}
+
+  /faces/{faceId}/reassign:
+    parameters: [{name: faceId, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createFacesFaceIdReassign}
+
+  /faces/people/{id}/merge:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createFacesPeopleIdMerge}
+
+  /faces/people/{id}/files:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getFacesPeopleIdFiles}
+
+  /faces/{faceId}/crop:
+    parameters: [{name: faceId, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeBinaryOperation, operationId: getFacesFaceIdCrop}
+
+  /media/files/{id}/faces:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaFilesIdFaces}
+
+  /files/reconcile-legacy:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createFilesReconcileLegacy}
+
+  /library/seq:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibrarySeq}
+
+  /library/activity:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryActivity}
+
+  /library/scan/dry-run:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryScanDryRun}
+
+  /library/jobs/events:
+    get: {<<: *runtimeEventOperation, operationId: getLibraryJobsEvents}
+
+  /library/jobs/background:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryJobsBackground}
+
+  /library/jobs:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryJobs}
+
+  /library/jobs/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryJobsId}
+
+  /library/jobs/{id}/pause:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryJobsIdPause}
+
+  /library/jobs/{id}/resume:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryJobsIdResume}
+
+  /library/jobs/{id}/cancel:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryJobsIdCancel}
+
+  /library/active-job:
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteLibraryActiveJob}
+
+  /library/thumbnails:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnails}
+
+  /library/thumbnails/status:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryThumbnailsStatus}
+
+  /library/thumbnails/prioritize:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsPrioritize}
+
+  /library/thumbnails/cache:
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteLibraryThumbnailsCache}
+
+  /library/thumbnails/rebuild:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsRebuild}
+
+  /library/jobs/{id}/files:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryJobsIdFiles}
+
+  /library/duplicates:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryDuplicates}
+
+  /library/thumbnails/quality:
+    patch: {<<: *runtimeJsonMutationOperation, operationId: updateLibraryThumbnailsQuality}
+
+  /library/scan/benchmark:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryScanBenchmark}
+
+  /library/outdated:
+    get: {<<: *runtimeJsonGetOperation, operationId: getLibraryOutdated}
+
+  /library/reprocess:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryReprocess}
+
+  /library/optimize:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryOptimize}
+
+  /media/map:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaMap}
+
+  /media/files/{id}/detail:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaFilesIdDetail}
+
+  /media/files/{id}/related:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaFilesIdRelated}
+
+  /media/files/{id}/ai:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    patch: {<<: *runtimeJsonMutationOperation, operationId: updateMediaFilesIdAi}
+
+  /media/health:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaHealth}
+
+  /media/cleanup:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createMediaCleanup}
+
+  /media/files:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaFiles}
+
+  /media/folders:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaFolders}
+
+  /media/files/{id}/favorite:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createMediaFilesIdFavorite}
+
+  /media/files/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteMediaFilesId}
+
+  /media/files/{id}/rename:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    patch: {<<: *runtimeJsonMutationOperation, operationId: updateMediaFilesIdRename}
+
+  /media/timeline:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaTimeline}
+
+  /media/timeline/items:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaTimelineItems}
+
+  /media/thumbnail/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeBinaryOperation, operationId: getMediaThumbnailId}
+
+  /optimize/status:
+    get: {<<: *runtimeJsonGetOperation, operationId: getOptimizeStatus}
+
+  /optimize/scan:
+    get: {<<: *runtimeJsonGetOperation, operationId: getOptimizeScan}
+
+  /optimize/ai-summary:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeAiSummary}
+
+  /optimize/run:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeRun}
+
+  /optimize/jobs:
+    get: {<<: *runtimeJsonGetOperation, operationId: getOptimizeJobs}
+
+  /optimize/jobs/{id}/retry:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeJobsIdRetry}
+
+  /optimize/jobs/{id}/cancel:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeJobsIdCancel}
+
+  /optimize/conversion/{jobId}/action:
+    parameters: [{name: jobId, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeConversionJobIdAction}
+
+  /optimize/jobs/{id}/finalize:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeJobsIdFinalize}
+
+  /optimize/jobs/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getOptimizeJobsId}
+
+  /optimize/jobs/{id}/execute-token:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOptimizeJobsIdExecuteToken}
+
+  /optimize/jobs/{id}/execute:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getOptimizeJobsIdExecute}
+
+  /organize/jobs/{id}/dry-run:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getOrganizeJobsIdDryRun}
+
+  /organize/jobs/{id}/execute-token:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOrganizeJobsIdExecuteToken}
+
+  /organize/recovery:
+    get: {<<: *runtimeJsonGetOperation, operationId: getOrganizeRecovery}
+
+  /organize/jobs/{id}/rollback:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOrganizeJobsIdRollback}
+
+  /organize/jobs/{id}/reset:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOrganizeJobsIdReset}
+
+  /organize/jobs/{id}/resume-token:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createOrganizeJobsIdResumeToken}
+
+  /organize/jobs/{id}/resume:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeEventOperation, operationId: getOrganizeJobsIdResume}
+
+  /search/ai:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createSearchAi}
+
+  /search/similar/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getSearchSimilarId}
+
+  /search/suggestions:
+    get: {<<: *runtimeJsonGetOperation, operationId: getSearchSuggestions}
+
+  /search/history:
+    get: {<<: *runtimeJsonGetOperation, operationId: getSearchHistory}
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteSearchHistory}
+
+  /search/saved:
+    get: {<<: *runtimeJsonGetOperation, operationId: getSearchSaved}
+    post: {<<: *runtimeJsonMutationOperation, operationId: createSearchSaved}
+
+  /search/saved/{id}/run:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createSearchSavedIdRun}
+
+  /search/saved/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteSearchSavedId}
+
+  /search/ai-status:
+    get: {<<: *runtimeJsonGetOperation, operationId: getSearchAiStatus}
+
+  /settings/scanner:
+    get: {<<: *runtimeJsonGetOperation, operationId: getSettingsScanner}
+    put: {<<: *runtimeJsonMutationOperation, operationId: updateSettingsScanner}
+
 components:
   schemas:
     MediaTag:
@@ -2604,6 +3038,22 @@ components:
           type: boolean
       required:
         - restored
+
+    RuntimeJsonInput:
+      type: object
+      additionalProperties: true
+      description: Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.
+
+    RuntimeJsonResult:
+      oneOf:
+        - type: object
+          additionalProperties: true
+        - type: array
+          items: {}
+        - type: string
+        - type: number
+        - type: boolean
+        - type: "null"
 
     ErrorResult:
       type: object

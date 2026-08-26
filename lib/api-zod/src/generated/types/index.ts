@@ -101,6 +101,8 @@ export * from './organizePlanUpdateInput';
 export * from './organizePlanUpdateInputExcludeCategoriesItem';
 export * from './restoreRequest';
 export * from './restoreResult';
+export * from './runtimeJsonInput';
+export * from './runtimeJsonResult';
 export * from './scanJob';
 export * from './scanJobStatus';
 export * from './scanStatus';
