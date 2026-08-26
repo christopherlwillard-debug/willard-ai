@@ -62,19 +62,24 @@ jobs:
           & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
           & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
 
-      - name: Prepare disposable backend-audit database
+      - name: Bootstrap disposable backend-audit database schema
         shell: pwsh
         env:
-          PORT: "8080"
-          NODE_ENV: development
-          WILLARD_API_URL: "http://127.0.0.1:8080"
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
+          PGPASSWORD: "postgres"
+        run: |
+          $ErrorActionPreference = "Stop"
+          & node (Join-Path $env:GITHUB_WORKSPACE "setup-db.cjs")
+          if ($LASTEXITCODE -ne 0) { throw "Could not bootstrap the disposable backend-audit database." }
+
+      - name: Seed disposable backend-audit settings
+        shell: pwsh
+        env:
           WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
           PGPASSWORD: "postgres"
         run: |
           $ErrorActionPreference = "Stop"
           $psql = Join-Path $env:ProgramFiles "PostgreSQL\16\bin\psql.exe"
-          & node (Join-Path $env:GITHUB_WORKSPACE "setup-db.cjs")
-          if ($LASTEXITCODE -ne 0) { throw "Could not bootstrap the disposable backend-audit database." }
           $hash = $null
           Push-Location (Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server")
           try {

@@ -168,6 +168,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   const publishIndex = workflow.indexOf("Publish installer, update ZIP, and manifest");
   assert.ok(compileIndex >= 0 && lifecycleIndex > compileIndex && lifecycleIndex < publishIndex);
   assert.match(workflow, /installer-lifecycle-smoke\.ps1/);
+  assert.match(workflow, /Bootstrap disposable backend-audit database schema/);
+  assert.match(workflow, /Seed disposable backend-audit settings/);
   assert.match(workflow, /setup-db\.cjs/);
   assert.match(workflow, /WILLARD_API_URL: "http:\/\/127\.0\.0\.1:8080"/);
   assert.match(workflow, /DELETE FROM app_settings/);
