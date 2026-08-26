@@ -1,4 +1,10 @@
-import { getStreamMediaFileUrl, useListFolder, useSearchFiles } from "@workspace/api-client-react";
+import {
+  getListFolderQueryKey,
+  getSearchFilesQueryKey,
+  getStreamMediaFileUrl,
+  useListFolder,
+  useSearchFiles,
+} from "@workspace/api-client-react";
 import type { FolderEntry, IndexedFile } from "@workspace/api-client-react";
 import { Feather } from "@expo/vector-icons";
 import { VideoView, useVideoPlayer } from "expo-video";
@@ -64,17 +70,21 @@ export default function LibraryScreen() {
   const [returnToSearch, setReturnToSearch] = useState(false);
   const sizeFilter = SIZE_FILTERS[sizeIndex];
   const isSearching = searchQuery.trim().length > 0;
+  const folderParams = { path };
+  const searchParams = {
+    q: searchQuery.trim(),
+    fileType: fileType || undefined,
+    minSize: sizeFilter.minSize,
+    maxSize: sizeFilter.maxSize,
+    limit: 100,
+  };
 
-  const folderQuery = useListFolder({ path }, { query: { enabled: !isSearching, queryKey: ["library-folder", path] } });
+  const folderQuery = useListFolder(folderParams, {
+    query: { enabled: !isSearching, queryKey: getListFolderQueryKey(folderParams) },
+  });
   const searchFilesQuery = useSearchFiles(
-    {
-      q: searchQuery.trim(),
-      fileType: fileType || undefined,
-      minSize: sizeFilter.minSize,
-      maxSize: sizeFilter.maxSize,
-      limit: 100,
-    },
-    { query: { enabled: isSearching, queryKey: ["library-search", searchQuery, fileType, sizeIndex] } },
+    searchParams,
+    { query: { enabled: isSearching, queryKey: getSearchFilesQueryKey(searchParams) } },
   );
 
   const crumbs = useMemo(() => path ? ["Library", ...path.split(/[\\/]/).filter(Boolean)] : ["Library"], [path]);

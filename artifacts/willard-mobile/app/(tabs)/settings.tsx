@@ -1,4 +1,5 @@
 import {
+  getGetSettingsQueryKey,
   useGetSettings,
   useUpdateSettings,
 } from "@workspace/api-client-react";
@@ -88,7 +89,7 @@ export default function SettingsScreen() {
     };
     updateMutation.mutate({ data: input }, {
       onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: ["/settings"] });
+        void queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
         setSaved(true);
         setTimeout(() => setSaved(false), 2500);
       },

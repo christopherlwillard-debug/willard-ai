@@ -4,6 +4,11 @@ import React from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  getGetCollectionsIdItemsQueryKey,
+  getGetCollectionsQueryKey,
+  getGetMediaFilesQueryKey,
+} from "@workspace/api-client-react";
 
 import { API_BASE_URL } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
@@ -23,8 +28,12 @@ export default function CollectionDetailScreen() {
   const queryClient = useQueryClient();
   const params = useLocalSearchParams<{ id: string; name?: string }>();
   const isFavorites = params.id === "favorites";
+  const collectionId = Number(params.id);
+  const collectionQueryKey = isFavorites
+    ? getGetMediaFilesQueryKey()
+    : getGetCollectionsIdItemsQueryKey(collectionId);
   const query = useQuery({
-    queryKey: ["mobile-collection-items", params.id],
+    queryKey: collectionQueryKey,
     queryFn: () => isFavorites ? getJson("/api/media/files?favorites=true&limit=200") as Promise<ItemsResponse> : getJson(`/api/collections/${params.id}/items?limit=200`) as Promise<ItemsResponse>,
   });
   const favoriteMutation = useMutation({
@@ -32,7 +41,10 @@ export default function CollectionDetailScreen() {
       const response = await fetch(`${API_BASE_URL}/api/media/files/${id}/favorite`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ favorite }) });
       if (!response.ok) throw new Error("Could not update favorite");
     },
-    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["mobile-collection-items"] }); void queryClient.invalidateQueries({ queryKey: ["mobile-collections"] }); },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: collectionQueryKey });
+      void queryClient.invalidateQueries({ queryKey: getGetCollectionsQueryKey() });
+    },
   });
   const files = query.data?.files ?? [];
 

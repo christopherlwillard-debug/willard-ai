@@ -1,4 +1,7 @@
 import {
+  getGetOpenaiConversationQueryKey,
+  getListOpenaiConversationsQueryKey,
+  getListOpenaiMessagesQueryKey,
   useListOpenaiConversations,
   useCreateOpenaiConversation,
   useDeleteOpenaiConversation,
@@ -111,7 +114,7 @@ export default function ChatScreen() {
   const conversations = conversationsQuery.data ?? [];
 
   const messagesQuery = useListOpenaiMessages(activeConvId!, {
-    query: { queryKey: ["/openai/conversations", activeConvId, "messages"], enabled: !!activeConvId },
+    query: { queryKey: getListOpenaiMessagesQueryKey(activeConvId ?? 0), enabled: !!activeConvId },
   });
   const messages: OpenaiMessage[] = messagesQuery.data ?? [];
 
@@ -174,7 +177,7 @@ export default function ChatScreen() {
       { data: { title: `Chat ${new Date().toLocaleDateString()}` } },
       {
         onSuccess: (conv) => {
-          void queryClient.invalidateQueries({ queryKey: ["/openai/conversations"] });
+          void queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
           setActiveConvId(conv.id);
           setShowConvPicker(false);
         },
@@ -189,7 +192,8 @@ export default function ChatScreen() {
         { id: convId },
         {
           onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: ["/openai/conversations"] });
+            void queryClient.invalidateQueries({ queryKey: getListOpenaiConversationsQueryKey() });
+            void queryClient.invalidateQueries({ queryKey: getGetOpenaiConversationQueryKey(convId) });
             if (activeConvId === convId) {
               const remaining = conversations.filter((c) => c.id !== convId);
               setActiveConvId(remaining.length > 0 ? remaining[0].id : null);
@@ -259,8 +263,10 @@ export default function ChatScreen() {
       setIsSending(false);
       streamingTextRef.current = "";
       setStreamingText("");
-      void queryClient.invalidateQueries({ queryKey: [`/openai/conversations/${activeConvId}/messages`] });
-      void messagesQuery.refetch();
+      if (activeConvId !== null) {
+        void queryClient.invalidateQueries({ queryKey: getListOpenaiMessagesQueryKey(activeConvId) });
+        void messagesQuery.refetch();
+      }
     }
   }, [inputText, activeConvId, isSending, queryClient, messagesQuery]);
 

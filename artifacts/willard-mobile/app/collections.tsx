@@ -4,6 +4,7 @@ import React from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
+import { getGetCollectionsQueryKey } from "@workspace/api-client-react";
 
 import { API_BASE_URL } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
@@ -15,7 +16,7 @@ export default function CollectionsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const query = useQuery({
-    queryKey: ["mobile-collections"],
+    queryKey: getGetCollectionsQueryKey(),
     queryFn: async () => {
       const response = await fetch(`${API_BASE_URL}/api/collections`, { credentials: "include" });
       if (!response.ok) throw new Error("Could not load collections");
