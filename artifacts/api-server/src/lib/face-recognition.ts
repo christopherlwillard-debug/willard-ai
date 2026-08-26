@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import crypto from "node:crypto";
 import { db, pool, appSettingsTable } from "@workspace/db";
 import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
@@ -36,6 +37,9 @@ const SAME_PERSON_COSINE = 0.42;   // w600k: >= 0.4 is confidently same identity
 const MODEL_DIR = path.join(os.homedir(), ".cache", "willard-face-models");
 const DETECT_URL = "https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx";
 const RECOGNIZE_URL = "https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx";
+const MODEL_MIN_BYTES = 1_000_000;
+const DETECT_SHA256 = "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a";
+const RECOGNIZE_SHA256 = "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f";
 
 interface FaceStatus {
   running: boolean;
@@ -63,16 +67,62 @@ export function getFaceStatus(): FaceStatus {
 
 // ── Model loading (downloaded once, cached locally) ──────────────────────────
 
-async function downloadModel(url: string, dest: string): Promise<void> {
-  if (fs.existsSync(dest) && fs.statSync(dest).size > 1_000_000) return;
+function sha256Buffer(buf: Buffer): string {
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+function isVerifiedModelFile(dest: string, expectedSha256: string): boolean {
+  try {
+    const stat = fs.statSync(dest);
+    if (!stat.isFile() || stat.size < MODEL_MIN_BYTES) return false;
+    return sha256Buffer(fs.readFileSync(dest)) === expectedSha256;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Download to a process-unique temp file, verify the complete payload, then
+ * publish it with rename. A failed or interrupted download never replaces the
+ * last verified model and never leaves a shared `.download` file for another
+ * process to overwrite.
+ */
+export async function downloadModel(url: string, dest: string, expectedSha256: string): Promise<void> {
+  if (isVerifiedModelFile(dest, expectedSha256)) return;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const tmp = `${dest}.download`;
+  const tmp = `${dest}.${process.pid}.${crypto.randomUUID()}.tmp`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Model download failed (${resp.status}) for ${url}`);
   const buf = Buffer.from(await resp.arrayBuffer());
-  if (buf.length < 1_000_000) throw new Error(`Model download suspiciously small (${buf.length} bytes)`);
-  fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, dest);
+  if (buf.length < MODEL_MIN_BYTES) {
+    throw new Error(`Model download suspiciously small (${buf.length} bytes)`);
+  }
+  const actualSha256 = sha256Buffer(buf);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`Model checksum mismatch for ${url}: expected ${expectedSha256}, got ${actualSha256}`);
+  }
+
+  try {
+    const fd = fs.openSync(tmp, "wx");
+    try {
+      fs.writeFileSync(fd, buf);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    try {
+      fs.renameSync(tmp, dest);
+    } catch (error) {
+      // Windows may reject replacing an existing file. Never delete a file
+      // that another process has already published and verified.
+      if (isVerifiedModelFile(dest, expectedSha256)) return;
+      fs.rmSync(dest, { force: true });
+      fs.renameSync(tmp, dest);
+    }
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 type OrtSession = import("onnxruntime-node").InferenceSession;
@@ -84,7 +134,10 @@ function getSessions() {
     sessionsPromise = (async () => {
       const detPath = path.join(MODEL_DIR, "scrfd_500m.onnx");
       const recPath = path.join(MODEL_DIR, "w600k_mbf.onnx");
-      await Promise.all([downloadModel(DETECT_URL, detPath), downloadModel(RECOGNIZE_URL, recPath)]);
+      await Promise.all([
+        downloadModel(DETECT_URL, detPath, DETECT_SHA256),
+        downloadModel(RECOGNIZE_URL, recPath, RECOGNIZE_SHA256),
+      ]);
       const ort = await import("onnxruntime-node");
       const opts = { logSeverityLevel: 3 as const };
       const [det, rec] = await Promise.all([
@@ -336,6 +389,36 @@ async function assignToPerson(nasPath: string, embedding: number[]): Promise<num
   return Number(created[0].id);
 }
 
+/**
+ * Serialize clustering and derived-face replacement for one library across
+ * every API process. The session-bound advisory lock is held on a dedicated
+ * client for the complete tick.
+ */
+export async function withFaceLibraryLock<T>(
+  nasPath: string,
+  work: () => Promise<T>,
+): Promise<T | null> {
+  const client = await pool.connect();
+  let acquired = false;
+  try {
+    const result = await client.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired",
+      [nasPath],
+    );
+    acquired = result.rows[0]?.acquired === true;
+    if (!acquired) return null;
+    return await work();
+  } finally {
+    if (acquired) {
+      await client.query(
+        "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+        [nasPath],
+      ).catch(() => {});
+    }
+    client.release();
+  }
+}
+
 /** Refresh a person's centroid/count from its member faces (used after merges/deletes). */
 export async function refreshPerson(nasPath: string, personId: number): Promise<void> {
   if (!isVectorAvailable()) return;
@@ -503,27 +586,35 @@ export async function runFaceTick(): Promise<void> {
     const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
-    const { rows } = await pool.query(
-      `SELECT f.id, f.thumbnail_path, count(*) OVER () AS total
-         FROM media_files f
-         LEFT JOIN face_scan_state s ON s.media_file_id = f.id AND s.face_version >= $2
-        WHERE f.nas_path = $1
-           AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
-          AND f.media_type IN ('image', 'photo', 'video')
-          AND f.thumbnail_path IS NOT NULL
-          AND s.media_file_id IS NULL
-        ORDER BY f.id
-        LIMIT $3`,
-      [nasPath, FACE_VERSION, BATCH_PER_TICK],
-    );
-    status.pending = rows.length ? Number(rows[0].total) : 0;
-    status.lastRunAt = new Date().toISOString();
-    if (!rows.length) return;
+    await withFaceLibraryLock(nasPath, async () => {
+      const { rows } = await pool.query(
+        `SELECT f.id, f.thumbnail_path, count(*) OVER () AS total
+           FROM media_files f
+           LEFT JOIN face_scan_state s ON s.media_file_id = f.id AND s.face_version >= $2
+          WHERE f.nas_path = $1
+             AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+            AND f.media_type IN ('image', 'photo', 'video')
+            AND f.thumbnail_path IS NOT NULL
+            AND (
+              s.media_file_id IS NULL
+              OR (
+                s.error IS NOT NULL
+                AND s.error NOT IN ('thumbnail missing', 'thumbnail path outside library')
+              )
+            )
+          ORDER BY f.id
+          LIMIT $3`,
+        [nasPath, FACE_VERSION, BATCH_PER_TICK],
+      );
+      status.pending = rows.length ? Number(rows[0].total) : 0;
+      status.lastRunAt = new Date().toISOString();
+      if (!rows.length) return;
 
-    for (const r of rows) {
-      await scanFile(reach.path, { id: r.id, thumbnailPath: r.thumbnail_path });
-    }
-    status.pending = Math.max(0, status.pending - rows.length);
+      for (const r of rows) {
+        await scanFile(reach.path, { id: r.id, thumbnailPath: r.thumbnail_path });
+      }
+      status.pending = Math.max(0, status.pending - rows.length);
+    });
   } finally {
     ticking = false;
     status.running = false;

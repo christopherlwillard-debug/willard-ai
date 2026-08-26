@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   calculateLetterbox,
@@ -9,6 +10,8 @@ import {
   mapBoxToSource,
   nms,
   selectScrfdOutputs,
+  downloadModel,
+  withFaceLibraryLock,
   type DetectedFace,
 } from "../lib/face-recognition.ts";
 
@@ -47,6 +50,93 @@ test("NMS keeps the highest-confidence overlapping face and separate faces", () 
     { x: 250, y: 20, w: 80, h: 80, score: 0.76 },
   ];
   assert.deepEqual(nms(faces).map((face) => face.score), [0.91, 0.76]);
+});
+
+test("model downloads retry after interruption and publish only checksum-verified files", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "willard-face-model-test-"));
+  const dest = path.join(dir, "model.onnx");
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      arrayBuffer: async () => { throw new Error("interrupted response"); },
+    })) as unknown as typeof fetch;
+    await assert.rejects(
+      downloadModel("https://example.invalid/model.onnx", dest, "a".repeat(64)),
+      /interrupted response/,
+    );
+    assert.equal(fs.existsSync(dest), false, "an interrupted response must not publish a model");
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+      [],
+      "failed downloads must not leave temp files behind",
+    );
+
+    const payload = Buffer.alloc(1_000_001, 7);
+    const expectedSha256 = (await import("node:crypto")).createHash("sha256").update(payload).digest("hex");
+    globalThis.fetch = (async () => new Response(payload)) as typeof fetch;
+    await assert.rejects(
+      downloadModel("https://example.invalid/model.onnx", dest, "b".repeat(64)),
+      /checksum mismatch/,
+    );
+    assert.equal(fs.existsSync(dest), false, "a checksum mismatch must not publish a model");
+
+    await downloadModel("https://example.invalid/model.onnx", dest, expectedSha256);
+    assert.equal(fs.statSync(dest).size, payload.length);
+    assert.equal(
+      (await import("node:crypto")).createHash("sha256").update(fs.readFileSync(dest)).digest("hex"),
+      expectedSha256,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("face library advisory lock excludes another client and releases after failure", async (t) => {
+  const reachable = await (async () => {
+    try {
+      const { pool } = await import("@workspace/db");
+      await pool.query("SELECT 1");
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (!reachable) {
+    t.skip("requires the configured PostgreSQL test database");
+    return;
+  }
+
+  const nasPath = `/tmp/willard-face-lock-${Date.now()}-${Math.random()}`;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+
+  const first = withFaceLibraryLock(nasPath, async () => {
+    entered();
+    await releasePromise;
+    return "first";
+  });
+  await enteredPromise;
+  assert.equal(
+    await withFaceLibraryLock(nasPath, async () => "second"),
+    null,
+    "a second API client must skip a library already being processed",
+  );
+  release();
+  assert.equal(await first, "first");
+
+  await assert.rejects(
+    withFaceLibraryLock(nasPath, async () => { throw new Error("worker failed"); }),
+    /worker failed/,
+  );
+  assert.equal(
+    await withFaceLibraryLock(nasPath, async () => "after-failure"),
+    "after-failure",
+    "a failed worker must release the library lock for retry",
+  );
 });
 
 test("checked-in portrait fixtures detect faces and cluster duplicate portraits", {

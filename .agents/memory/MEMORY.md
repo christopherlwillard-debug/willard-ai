@@ -39,3 +39,4 @@
 - [AI consent boundary](ai-consent-boundary.md) — every cloud AI entry point must gate through the shared privacy policy; local fallbacks must not call the provider
 - [API shutdown lifecycle](shutdown-lifecycle.md) — stop producers, persist job state, drain HTTP, then close the shared pool with an idempotent deadline
 - [Per-library job claims](per-library-job-claims.md) — in-memory checks are only fast paths; runnable jobs need a database-enforced per-library claim
+- [Face processing concurrency](face-processing-concurrency.md) — serialize derived face clustering per library and never load an unverified model artifact
