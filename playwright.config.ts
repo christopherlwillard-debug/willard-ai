@@ -10,8 +10,14 @@ const baseURL =
 const usesExternalApp = Boolean(
   process.env["WILLARD_APP_URL"] || process.env["REPLIT_DEV_DOMAIN"],
 );
+const shouldStartLocalServices = !usesExternalApp && (
+  process.env["CI"] !== "true" || process.env["WILLARD_START_LOCAL_SERVERS"] === "true"
+);
 const localWebURL = "http://127.0.0.1:5000";
 const localApiHealthURL = "http://127.0.0.1:8080/api/healthz";
+const localApiCommand = process.platform === "win32"
+  ? "set PORT=8080&& pnpm --filter @workspace/api-server run dev"
+  : "PORT=8080 pnpm --filter @workspace/api-server run dev";
 
 function findLocalChromium(): string | undefined {
   const configuredPath = process.env["PLAYWRIGHT_EXECUTABLE_PATH"];
@@ -50,12 +56,11 @@ export default defineConfig({
   // Local routed checks need both sides of the Vite proxy. Reuse services
   // started from the Replit workflow, but start them for a fresh shell run.
   // External and CI runs supply their own app URL/processes.
-  ...(usesExternalApp || process.env["CI"] === "true"
-    ? {}
-    : {
+  ...(shouldStartLocalServices
+    ? {
         webServer: [
           {
-            command: "PORT=8080 pnpm --filter @workspace/api-server run dev",
+            command: localApiCommand,
             url: localApiHealthURL,
             name: "API server",
             timeout: 120_000,
@@ -69,7 +74,8 @@ export default defineConfig({
             reuseExistingServer: true,
           },
         ],
-      }),
+      }
+    : {}),
   projects: [
     {
       name: "chromium",

@@ -90,6 +90,33 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(localBuildInstaller, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
 });
 
+test("Windows release publication is preceded by every required quality gate", () => {
+  const publishIndex = workflow.indexOf("Publish installer, update ZIP, and manifest");
+  assert.ok(publishIndex > 0, "release workflow must contain a publish step");
+
+  for (const [stage, command] of [
+    ["type checks and generated API contracts", "pnpm run typecheck"],
+    ["type checks and generated API contracts", "pnpm run check:router"],
+    ["type checks and generated API contracts", "pnpm run check:api-contracts"],
+    ["unit and packaging contracts", "pnpm run test:database-backup"],
+    ["unit and packaging contracts", "pnpm run test:release-contracts"],
+    ["backend audit and integration tests", "pnpm run audit:backend"],
+    ["browser E2E suites", "pnpm exec playwright test"],
+    ["payload validation and dependency audit gate", "make-release.ps1"],
+    ["Compile the Windows installer", "ISCC.exe"],
+  ]) {
+    const stageIndex = workflow.indexOf(stage);
+    const commandIndex = workflow.indexOf(command);
+    assert.ok(stageIndex >= 0, `missing release gate stage: ${stage}`);
+    assert.ok(commandIndex >= 0, `missing release gate command: ${command}`);
+    assert.ok(stageIndex < publishIndex && commandIndex < publishIndex, `${stage} must run before publication`);
+  }
+
+  assert.match(workflow, /pnpm exec playwright install chromium/);
+  assert.match(workflow, /WILLARD_START_LOCAL_SERVERS: "true"/);
+  assert.match(workflow, /Get-FileHash \$setup -Algorithm SHA256/);
+});
+
 test("release payload validation requires the bundled runtime and app entrypoints", () => {
   assert.match(releaseValidator, /runtime\/node\.exe/);
   assert.match(releaseValidator, /api-runtime\/dist\/index\.mjs/);
