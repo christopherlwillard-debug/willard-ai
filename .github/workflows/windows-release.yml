@@ -76,6 +76,8 @@ jobs:
           $apiErrorLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.err.log"
           $apiProcess = $null
           $psql = Join-Path $env:ProgramFiles "PostgreSQL\16\bin\psql.exe"
+          & node (Join-Path $env:GITHUB_WORKSPACE "setup-db.cjs")
+          if ($LASTEXITCODE -ne 0) { throw "Could not bootstrap the disposable backend-audit database." }
           $hash = $null
           Push-Location (Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server")
           try {
