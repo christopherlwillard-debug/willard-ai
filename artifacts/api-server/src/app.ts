@@ -145,6 +145,12 @@ const PgStore = connectPgSimple(session);
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
+function destroySession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.destroy((error) => (error ? reject(error) : resolve()));
+  });
+}
+
 const envSecret = process.env["SESSION_SECRET"];
 if (!envSecret) {
   if (process.env["NODE_ENV"] === "production") {
@@ -248,7 +254,7 @@ const PUBLIC_PATHS = new Set([
 // Trips at most once per process; subsequent calls to notifyUiConnected() are no-ops.
 let _firstAuthSeen = false;
 
-app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
   if (PUBLIC_PATHS.has(req.path)) {
     return next();
   }
@@ -260,7 +266,12 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
   if (sess.lastSeenAt) {
     const elapsed = Date.now() - new Date(sess.lastSeenAt as string).getTime();
     if (elapsed > INACTIVITY_TIMEOUT_MS) {
-      req.session.destroy(() => {});
+      try {
+        await destroySession(req);
+      } catch (error) {
+        req.log.warn({ err: error }, "Unable to destroy expired session");
+      }
+      res.clearCookie("willard.sid");
       res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
       return;
     }

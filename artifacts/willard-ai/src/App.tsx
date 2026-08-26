@@ -37,7 +37,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error: any) => {
-        if (error?.response?.status === 401) return false;
+        if (error?.status === 401 || error?.response?.status === 401) return false;
         return failureCount < 1;
       },
       refetchOnWindowFocus: false,

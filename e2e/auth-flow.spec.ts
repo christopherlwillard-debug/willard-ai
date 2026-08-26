@@ -109,3 +109,24 @@ test("first-run setup, login, persistence, logout, and recovery", async ({ page,
   await loginThroughUi(page, RECOVERED_PASSWORD);
   await expect(page.getByRole("button", { name: /^logout$/i })).toBeVisible();
 });
+
+test("a protected API 401 removes the protected shell and restores the login wall", async ({ page }) => {
+  await page.route("**/api/auth/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ setup: false, authenticated: true }),
+    });
+  });
+  await page.route("**/api/settings", async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Session expired due to inactivity. Please log in again." }),
+    });
+  });
+
+  await page.goto("/");
+
+  await expectLoginWall(page);
+  await expect(page.getByRole("button", { name: /^logout$/i })).not.toBeVisible();
+});
