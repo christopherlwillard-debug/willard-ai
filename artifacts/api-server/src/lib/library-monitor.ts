@@ -140,9 +140,9 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
         // Pause scan jobs so they can resume cleanly later.
         // Thumbnail/metadata jobs handle per-file errors gracefully — cancel
         // them so the reconnect scan can auto-restart them with cursor=0.
-        const activeId = getActiveJobId();
+        const activeId = getActiveJobId(nasPath);
         if (activeId !== null) {
-          const activeType = getActiveJobType();
+          const activeType = getActiveJobType(nasPath);
           if (activeType === "THUMBNAILS" || activeType === "METADATA") {
             requestCancel(activeId, "NAS_OFFLINE");
             logger.warn({

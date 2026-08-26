@@ -49,6 +49,10 @@ test("required schema bootstrap is versioned and runs atomically", async () => {
     statements.some((sql) => /CREATE TABLE IF NOT EXISTS media_files/.test(sql)),
     "fresh bootstrap must create the canonical media table",
   );
+  assert.ok(
+    statements.some((sql) => /library_jobs_active_nas_unique/.test(sql)),
+    "fresh bootstrap must create the durable per-library job claim",
+  );
 });
 
 test("required schema bootstrap rolls back and rethrows the original failure", async () => {

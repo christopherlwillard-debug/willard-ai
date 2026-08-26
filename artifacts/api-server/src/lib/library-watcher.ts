@@ -144,7 +144,7 @@ function onFsEvent(nasPath: string, filename: string | Buffer | null): void {
   // M7 conflict guard: if a FULL rescan is running, don't start another scan on
   // top of it. Mark needsCatchUp so the heartbeat triggers a QUICK scan the
   // moment the full scan finishes and the deletion sweep completes cleanly.
-  const activeProfile = getActiveJobProfile();
+  const activeProfile = getActiveJobProfile(nasPath);
   if (activeProfile === "FULL") {
     state.needsCatchUp = true;
     return;
@@ -172,7 +172,7 @@ function scheduleDebouncedScan(nasPath: string): void {
 async function triggerScan(nasPath: string, source: "events" | "sweep" | "recovery"): Promise<void> {
   if (state.paused || !state.online) return; // will retry when unpaused/online (heartbeat)
 
-  const activeProfile = getActiveJobProfile();
+  const activeProfile = getActiveJobProfile(nasPath);
   if (activeProfile !== null) {
     // A scan is already running.
     if (activeProfile === "FULL") {
@@ -371,7 +371,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
     // FULL scan is currently active, fire an immediate QUICK catch-up scan.
     // This is unconditional (not transition-based) so we never miss the replay
     // even when a FULL scan starts and finishes between two heartbeat ticks.
-    const activeProfile = getActiveJobProfile();
+    const activeProfile = getActiveJobProfile(nasPath);
     if (state.needsCatchUp && activeProfile !== "FULL") {
       state.needsCatchUp = false;
       void triggerScan(reach.path, "recovery");
@@ -390,7 +390,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
     // low-frequency safety net in events mode (30 min). A sweep is just a QUICK
     // scan — unchanged files are cheap cache hits and produce no activity noise.
     const sweepInterval = state.mechanism === "events" ? SAFETY_SWEEP_MS : state.sweepIntervalMs;
-    if (getActiveJobId() === null && Date.now() - state.lastSweepAt >= sweepInterval) {
+    if (getActiveJobId(nasPath) === null && Date.now() - state.lastSweepAt >= sweepInterval) {
       state.lastSweepAt = Date.now();
       void triggerScan(reach.path, "sweep");
     }

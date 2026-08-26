@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, libraryJobsTable, appSettingsTable, archivesTable, scanJobsTable } from "@workspace/db";
-import { eq, and, lt, ne, sql, isNull, or, gt, inArray } from "drizzle-orm";
+import { eq, and, lt, ne, sql, isNull, or, gt, inArray, desc } from "drizzle-orm";
 import {
   type JobType, type JobProfile, type JobPriority, type JobStatus,
   type CancellationReason, type ScanPhase, type ScanAction,
@@ -117,27 +117,35 @@ function recordCompletion(state: ActiveJobState, summary: JobSummary): void {
   };
 }
 
-export function getActiveJobId(): number | null {
+const DURABLE_ACTIVE_STATUSES = ["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"] as const;
+
+function matchesLibrary(state: ActiveJobState, nasPath?: string): boolean {
+  return nasPath === undefined || state.nasPath === nasPath;
+}
+
+export function getActiveJobId(nasPath?: string): number | null {
   for (const [id, state] of activeJobs) {
-    if (!state.pauseRequested && !state.cancelRequested) return id;
+    if (matchesLibrary(state, nasPath) && !state.pauseRequested && !state.cancelRequested) return id;
   }
   // Return any paused job if no running ones
-  if (activeJobs.size > 0) return [...activeJobs.keys()][0]!;
+  for (const [id, state] of activeJobs) {
+    if (matchesLibrary(state, nasPath)) return id;
+  }
   return null;
 }
 
 /** Returns the profile of the currently active (non-paused, non-cancelled) job, or null if idle. */
-export function getActiveJobProfile(): import("./types").JobProfile | null {
+export function getActiveJobProfile(nasPath?: string): import("./types").JobProfile | null {
   for (const [, state] of activeJobs) {
-    if (!state.pauseRequested && !state.cancelRequested) return state.profile;
+    if (matchesLibrary(state, nasPath) && !state.pauseRequested && !state.cancelRequested) return state.profile;
   }
   return null;
 }
 
 /** Returns the job type of the currently active (non-paused, non-cancelled) job, or null if idle. */
-export function getActiveJobType(): JobType | null {
+export function getActiveJobType(nasPath?: string): JobType | null {
   for (const [, state] of activeJobs) {
-    if (!state.pauseRequested && !state.cancelRequested) return state.jobType;
+    if (matchesLibrary(state, nasPath) && !state.pauseRequested && !state.cancelRequested) return state.jobType;
   }
   return null;
 }
@@ -673,31 +681,58 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
   const priority: JobPriority = opts.profile === "QUICK" ? "HIGH"
     : opts.profile === "FULL" ? "NORMAL" : "LOW";
 
-  // Check for existing active job
-  const existingId = getActiveJobId();
+  // Check for an existing job for this library only.  The old in-memory
+  // process-wide check allowed two API processes to pass the check together
+  // and also prevented independent libraries from running concurrently.
+  const existingId = getActiveJobId(opts.nasPath);
   if (existingId !== null) {
     const existing = activeJobs.get(existingId)!;
     // Preempt if new job has higher priority
     if (PRIORITY_RANK[priority] > PRIORITY_RANK[existing.priority]) {
       requestPause(existingId);
+      await waitForLocalJobToStop(existingId);
     } else {
       return { jobId: existingId, alreadyRunning: true };
     }
+  } else {
+    // A job may belong to another API process, or may have survived a
+    // restart before it was resumed.  Treat the durable record as the
+    // authority whenever no local worker is present.
+    const durableExisting = await findDurableActiveJob(opts.nasPath);
+    if (durableExisting) {
+      return { jobId: durableExisting.id, alreadyRunning: true };
+    }
   }
 
-  // A new job supersedes the previous completion summary
-  lastCompletedProgress = null;
+  // The partial unique index is the cross-process claim.  The select above is
+  // only a fast path; concurrent callers can both observe no job, so the
+  // insert must still handle the unique-claim race.
+  let job: typeof libraryJobsTable.$inferSelect | undefined;
+  for (let attempt = 0; attempt < 2 && !job; attempt++) {
+    try {
+      const [inserted] = await db.insert(libraryJobsTable).values({
+        jobType:  opts.jobType,
+        profile:  opts.profile,
+        priority,
+        status:   "RUNNING",
+        nasPath:  opts.nasPath,
+        rootPath: opts.rootPath ?? null,
+        startedAt: new Date(),
+      }).returning();
+      job = inserted;
+    } catch (error) {
+      if (!isActiveJobClaimConflict(error)) throw error;
+      const winner = await findDurableActiveJob(opts.nasPath);
+      if (winner) return { jobId: winner.id, alreadyRunning: true };
+      // The winner may have completed between the conflicting insert and the
+      // lookup.  Retry once so a legitimate new request is not lost.
+    }
+  }
+  if (!job) throw new Error("Unable to claim library job");
 
-  // Persist job record
-  const [job] = await db.insert(libraryJobsTable).values({
-    jobType:  opts.jobType,
-    profile:  opts.profile,
-    priority,
-    status:   "RUNNING",
-    nasPath:  opts.nasPath,
-    rootPath: opts.rootPath ?? null,
-    startedAt: new Date(),
-  }).returning();
+  // A new job supersedes the previous completion summary only after its
+  // durable claim has succeeded.
+  lastCompletedProgress = null;
 
   const state: ActiveJobState = {
     id:                   job.id,
@@ -741,14 +776,26 @@ export async function resumeJob(jobId: number): Promise<boolean> {
     .where(eq(libraryJobsTable.id, jobId)).limit(1);
   if (!job || (job.status !== "PAUSED" && job.status !== "INTERRUPTED_BY_RESTART")) return false;
 
-  // Re-create in-memory state and restart
   const priority = (job.priority as JobPriority) ?? "NORMAL";
   const profile  = (job.profile  as JobProfile)  ?? "QUICK";
 
-  // Update DB status back to RUNNING
-  await db.update(libraryJobsTable)
+  // Claim the library atomically.  Two resume requests must not both turn the
+  // same checkpoint into workers, and a resume must not race a fresh start.
+  let claimed;
+  try {
+    [claimed] = await db.update(libraryJobsTable)
     .set({ status: "RUNNING", pausedAt: null, startedAt: new Date() })
-    .where(eq(libraryJobsTable.id, jobId));
+      .where(and(
+        eq(libraryJobsTable.id, jobId),
+        inArray(libraryJobsTable.status, ["PAUSED", "INTERRUPTED_BY_RESTART"]),
+      )).returning();
+  } catch (error) {
+    if (isActiveJobClaimConflict(error)) return false;
+    throw error;
+  }
+  if (!claimed) return false;
+
+  // Re-create in-memory state and restart
 
   // Restore counters + scan anchor persisted at pause time so the resumed run
   // continues exactly where it stopped (never from the beginning).
@@ -817,6 +864,33 @@ async function isNasAvailable(nasPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function findDurableActiveJob(nasPath: string): Promise<{
+  id: number;
+  status: string;
+  priority: string | null;
+} | null> {
+  const [job] = await db.select({
+    id: libraryJobsTable.id,
+    status: libraryJobsTable.status,
+    priority: libraryJobsTable.priority,
+  }).from(libraryJobsTable).where(and(
+    eq(libraryJobsTable.nasPath, nasPath),
+    inArray(libraryJobsTable.status, [...DURABLE_ACTIVE_STATUSES]),
+  )).orderBy(desc(libraryJobsTable.createdAt), desc(libraryJobsTable.id)).limit(1);
+  return job ?? null;
+}
+
+function isActiveJobClaimConflict(error: unknown): boolean {
+  const candidate = error as { code?: string; constraint?: string } | null;
+  return candidate?.code === "23505" &&
+    candidate.constraint === "library_jobs_active_nas_unique";
+}
+
+async function waitForLocalJobToStop(jobId: number): Promise<void> {
+  const run = activeJobRuns.get(jobId);
+  if (run) await run.catch(() => undefined);
 }
 
 // ── Main scan loop ────────────────────────────────────────────────────────────

@@ -55,7 +55,8 @@ router.get("/library/seq", async (_req: Request, res: Response) => {
 
 router.get("/library/health", async (_req: Request, res: Response) => {
   const health = getLibraryHealthSnapshot();
-  const activeId = getActiveJobId();
+  const nasPath = await getNasPath();
+  const activeId = getActiveJobId(nasPath ?? undefined);
   const activeJob = activeId !== null ? getJobProgress(activeId) : null;
   const lastCompleted = activeId === null ? getLastCompletedProgress() : null;
   const [row] = await db.select({ lastScanAt: appSettingsTable.lastScanAt })
@@ -101,9 +102,9 @@ router.post("/library/reconnect-ack", (_req: Request, res: Response) => {
 
 router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
   await db.update(appSettingsTable).set({ indexingPaused: true });
-  const activeId = getActiveJobId();
-  if (activeId !== null) requestPause(activeId);
   const nasPath = await getNasPath();
+  const activeId = getActiveJobId(nasPath ?? undefined);
+  if (activeId !== null) requestPause(activeId);
   if (nasPath) void recordActivity(nasPath, "paused", "Indexing paused — live watching is on hold until you resume.");
   res.json({ ok: true, indexingPaused: true });
 });
@@ -113,8 +114,12 @@ router.post("/library/indexing/resume", async (_req: Request, res: Response) => 
   // Resume the most recent genuinely-PAUSED job (not INTERRUPTED_BY_RESTART).
   // INTERRUPTED_BY_RESTART jobs must be explicitly resumed by the user via
   // POST /api/library/jobs/:id/resume, not auto-resumed on indexing enable.
+  const nasPath = await getNasPath();
   const [paused] = await db.select().from(libraryJobsTable)
-    .where(eq(libraryJobsTable.status, "PAUSED"))
+    .where(and(
+      eq(libraryJobsTable.status, "PAUSED"),
+      ...(nasPath ? [eq(libraryJobsTable.nasPath, nasPath)] : []),
+    ))
     .orderBy(desc(libraryJobsTable.createdAt))
     .limit(1);
   let resumedJobId: number | null = null;
@@ -122,7 +127,6 @@ router.post("/library/indexing/resume", async (_req: Request, res: Response) => 
     const ok = await resumeJob(paused.id);
     if (ok) resumedJobId = paused.id;
   }
-  const nasPath = await getNasPath();
   if (nasPath) void recordActivity(nasPath, "resumed", "Indexing resumed — watching for library changes again.");
   res.json({ ok: true, indexingPaused: false, resumedJobId });
 });
@@ -257,15 +261,19 @@ router.post("/library/scan", async (req: Request, res: Response) => {
 // ── GET /api/library/jobs/active — live progress of the running job ───────────
 
 router.get("/library/jobs/active", async (_req: Request, res: Response) => {
-  const activeId = getActiveJobId();
+  const nasPath = await getNasPath();
+  const activeId = getActiveJobId(nasPath ?? undefined);
   if (activeId === null) {
     // Pausing removes the worker from the in-memory map. Keep the paused job
     // visible to polling clients so the Library UI can render Resume instead
     // of appearing idle.
     const [paused] = await db.select().from(libraryJobsTable)
-      .where(or(
-        eq(libraryJobsTable.status, "PAUSED"),
-        eq(libraryJobsTable.status, "INTERRUPTED_BY_RESTART"),
+      .where(and(
+        ...(nasPath ? [eq(libraryJobsTable.nasPath, nasPath)] : []),
+        or(
+          eq(libraryJobsTable.status, "PAUSED"),
+          eq(libraryJobsTable.status, "INTERRUPTED_BY_RESTART"),
+        ),
       ))
       .orderBy(desc(libraryJobsTable.createdAt))
       .limit(1);
@@ -897,8 +905,9 @@ router.post("/library/reprocess", async (_req: Request, res: Response) => {
 // accept a new job.  Used by the lifecycle proof test (Task #156 §8.3) to
 // verify that no orphaned lock is held after sequential scans settle.
 
-router.post("/library/optimize", (_req: Request, res: Response) => {
-  const activeId = getActiveJobId();
+router.post("/library/optimize", async (_req: Request, res: Response) => {
+  const nasPath = await getNasPath();
+  const activeId = getActiveJobId(nasPath ?? undefined);
   if (activeId !== null) {
     res.json({ alreadyRunning: true, jobId: activeId });
   } else {

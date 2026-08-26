@@ -262,6 +262,25 @@ const SETUP_SQL = [
   `CREATE INDEX IF NOT EXISTS library_jobs_nas_path_idx ON library_jobs (nas_path)`,
   `CREATE INDEX IF NOT EXISTS library_jobs_status_idx ON library_jobs (status)`,
   `CREATE INDEX IF NOT EXISTS library_jobs_job_type_idx ON library_jobs (job_type)`,
+  // Only one job may claim a library while it is runnable.  Keep paused and
+  // restart-interrupted rows out of this index so a higher-priority request
+  // can start after an in-process pause has durably completed.
+  `WITH ranked_active AS (
+     SELECT id,
+            ROW_NUMBER() OVER (PARTITION BY nas_path ORDER BY created_at DESC, id DESC) AS row_num
+     FROM library_jobs
+     WHERE status = 'RUNNING'
+   )
+   UPDATE library_jobs AS jobs
+   SET status = 'FAILED',
+       error = COALESCE(jobs.error, 'Superseded duplicate running job during concurrency migration'),
+       finished_at = COALESCE(jobs.finished_at, NOW())
+   FROM ranked_active
+   WHERE jobs.id = ranked_active.id
+     AND ranked_active.row_num > 1`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS library_jobs_active_nas_unique
+   ON library_jobs (nas_path)
+   WHERE status = 'RUNNING'`,
 
   // media_files
   `CREATE TABLE IF NOT EXISTS media_files (
