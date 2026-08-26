@@ -8,6 +8,8 @@ import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileV
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
+import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 
 const router = Router();
 
@@ -111,6 +113,19 @@ export async function warmThumbnailCache(): Promise<void> {
 // ── GET /api/media/files — paginated, filtered file listing ──────────────────
 
 router.get("/media/files", async (req: Request, res: Response) => {
+  let page: number;
+  let limit: number;
+  try {
+    page = parseBoundedInteger(req.query["page"], { name: "page", min: 1, max: 10_000_000, defaultValue: 1 });
+    limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 60 });
+  } catch (error) {
+    if (error instanceof RequestValidationError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
   const nasPath = await getNasPath();
   if (!nasPath) {
     res.json({ files: [], total: 0 });
@@ -123,8 +138,6 @@ router.get("/media/files", async (req: Request, res: Response) => {
   const search    = req.query["search"]    as string | undefined;
   const tags = normalizeTags(typeof req.query["tags"] === "string" ? (req.query["tags"] as string).split(",") : req.query["tags"]);
   const sort      = (req.query["sort"]     as string) || "indexed_desc";
-  const page      = Math.max(1, parseInt(req.query["page"] as string) || 1);
-  const limit     = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
   const offset    = (page - 1) * limit;
 
   const conditions = [eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA];
@@ -407,16 +420,36 @@ router.get("/media/timeline", async (_req: Request, res: Response) => {
 // ── GET /api/media/timeline/items — files for one month (or undated) ─────────
 
 router.get("/media/timeline/items", async (req: Request, res: Response) => {
+  let page: number;
+  let limit: number;
+  const yearStr = req.query["year"] as string | undefined;
+  const monthStr = req.query["month"] as string | undefined;
+  let year: number | undefined;
+  let month: number | undefined;
+  try {
+    page = parseBoundedInteger(req.query["page"], { name: "page", min: 1, max: 10_000_000, defaultValue: 1 });
+    limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 60 });
+    if ((yearStr === undefined) !== (monthStr === undefined)) {
+      throw new RequestValidationError("Invalid timeline date");
+    }
+    if (yearStr !== undefined && monthStr !== undefined) {
+      year = parseBoundedInteger(yearStr, { name: "year", min: 1, max: 9999 });
+      month = parseBoundedInteger(monthStr, { name: "month", min: 1, max: 12 });
+    }
+  } catch (error) {
+    if (error instanceof RequestValidationError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
   const nasPath = await getNasPath();
   if (!nasPath) {
     res.json({ files: [], total: 0 });
     return;
   }
 
-  const yearStr = req.query["year"] as string | undefined;
-  const monthStr = req.query["month"] as string | undefined;
-  const page = Math.max(1, parseInt(req.query["page"] as string) || 1);
-  const limit = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
   const offset = (page - 1) * limit;
 
   const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated})`;
@@ -426,8 +459,8 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
     activeMediaCondition,
   ];
 
-  if (yearStr && monthStr) {
-    const ym = `${yearStr.padStart(4, "0")}-${monthStr.padStart(2, "0")}`;
+  if (year !== undefined && month !== undefined) {
+    const ym = `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}`;
     conditions.push(sql`to_char(${bestDate}, 'YYYY-MM') = ${ym}`);
   } else {
     conditions.push(sql`${bestDate} IS NULL`);
@@ -603,26 +636,34 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
     return;
   }
 
-  const stat = fs.statSync(sourcePath);
-  const range = req.headers.range;
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    res.status(404).json({ error: "Source file not found on NAS" });
+    return;
+  }
 
+  const requestedRange = req.headers.range;
+  const range = requestedRange === undefined
+    ? null
+    : parseSingleByteRange(requestedRange, stat.size);
+  if (requestedRange !== undefined && range === null) {
+    sendRangeNotSatisfiable(res, stat.size);
+    return;
+  }
+
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
   if (range) {
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end   = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-    const chunkSize = end - start + 1;
-
+    const chunkSize = range.end - range.start + 1;
     res.status(206);
-    res.setHeader("Content-Range",  `bytes ${start}-${end}/${stat.size}`);
-    res.setHeader("Accept-Ranges",  "bytes");
+    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${stat.size}`);
     res.setHeader("Content-Length", chunkSize);
-    res.setHeader("Content-Type",   file.mimeType || "application/octet-stream");
-    fs.createReadStream(sourcePath, { start, end }).pipe(res);
+    streamFileWithErrorHandling(res, sourcePath, range);
   } else {
     res.setHeader("Content-Length", stat.size);
-    res.setHeader("Content-Type",   file.mimeType || "application/octet-stream");
-    res.setHeader("Accept-Ranges",  "bytes");
-    fs.createReadStream(sourcePath).pipe(res);
+    streamFileWithErrorHandling(res, sourcePath);
   }
 });
 

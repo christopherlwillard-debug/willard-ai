@@ -196,6 +196,13 @@ paths:
           required: true
           schema:
             type: integer
+        - name: Range
+          in: header
+          required: false
+          description: One RFC 9110 byte range, including open-ended and suffix forms.
+          schema:
+            type: string
+            pattern: '^bytes=(\d*-\d*)$'
       responses:
         "200":
           description: File contents
@@ -211,6 +218,17 @@ paths:
               schema:
                 type: string
                 format: binary
+        "416":
+          description: Requested range is malformed or cannot be satisfied
+          headers:
+            Content-Range:
+              schema:
+                type: string
+              description: Unsatisfied range in the form bytes */size
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
         "404":
           description: File or NAS not found
           content:
@@ -628,18 +646,22 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 0
         - name: maxSize
           in: query
           schema:
             type: integer
+            minimum: 0
         - name: after
           in: query
           schema:
             type: string
+            format: date-time
         - name: before
           in: query
           schema:
             type: string
+            format: date-time
         - name: source
           in: query
           schema:
@@ -649,10 +671,16 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
         - name: offset
           in: query
           schema:
             type: integer
+            minimum: 0
+            maximum: 10000000
+            default: 0
       responses:
         "200":
           description: Search results
@@ -660,6 +688,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FileSearchResult"
+        "400":
+          description: Invalid pagination, size, or date filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
 
   # ── Explorer ──────────────────────────────────────────────────────────────
   /explorer:

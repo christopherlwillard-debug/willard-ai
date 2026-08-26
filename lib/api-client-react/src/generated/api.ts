@@ -1849,7 +1849,7 @@ export const getSearchFilesQueryKey = (params?: SearchFilesParams,) => {
     }
 
 
-export const getSearchFilesQueryOptions = <TData = Awaited<ReturnType<typeof searchFiles>>, TError = ErrorType<unknown>>(params?: SearchFilesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchFiles>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getSearchFilesQueryOptions = <TData = Awaited<ReturnType<typeof searchFiles>>, TError = ErrorType<ErrorResult>>(params?: SearchFilesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchFiles>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -1868,14 +1868,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type SearchFilesQueryResult = NonNullable<Awaited<ReturnType<typeof searchFiles>>>
-export type SearchFilesQueryError = ErrorType<unknown>
+export type SearchFilesQueryError = ErrorType<ErrorResult>
 
 
 /**
  * @summary Search indexed files
  */
 
-export function useSearchFiles<TData = Awaited<ReturnType<typeof searchFiles>>, TError = ErrorType<unknown>>(
+export function useSearchFiles<TData = Awaited<ReturnType<typeof searchFiles>>, TError = ErrorType<ErrorResult>>(
  params?: SearchFilesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchFiles>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {

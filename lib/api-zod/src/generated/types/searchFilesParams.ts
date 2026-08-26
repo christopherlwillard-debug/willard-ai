@@ -10,11 +10,25 @@ import type { SearchFilesSource } from './searchFilesSource';
 export type SearchFilesParams = {
 q?: string;
 fileType?: string;
+/**
+ * @minimum 0
+ */
 minSize?: number;
+/**
+ * @minimum 0
+ */
 maxSize?: number;
-after?: string;
-before?: string;
+after?: Date;
+before?: Date;
 source?: SearchFilesSource;
+/**
+ * @minimum 1
+ * @maximum 200
+ */
 limit?: number;
+/**
+ * @minimum 0
+ * @maximum 10000000
+ */
 offset?: number;
 };

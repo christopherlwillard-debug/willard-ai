@@ -15,6 +15,13 @@ export const StreamMediaFileParams = zod.object({
   "id": zod.coerce.number()
 })
 
+export const streamMediaFileHeaderRangeRegExp = new RegExp('^bytes=(\\d*-\\d*)$');
+
+
+export const StreamMediaFileHeader = zod.object({
+  "Range": zod.string().regex(streamMediaFileHeaderRangeRegExp).optional().describe('One RFC 9110 byte range, including open-ended and suffix forms.')
+})
+
 export const StreamMediaFileResponse = zod.unknown()
 
 
@@ -397,16 +404,29 @@ export const GetDashboardResponse = zod.object({
 /**
  * @summary Search indexed files
  */
+export const searchFilesQueryMinSizeMin = 0;
+
+export const searchFilesQueryMaxSizeMin = 0;
+
+export const searchFilesQueryLimitDefault = 50;
+export const searchFilesQueryLimitMax = 200;
+
+export const searchFilesQueryOffsetDefault = 0;
+export const searchFilesQueryOffsetMin = 0;
+export const searchFilesQueryOffsetMax = 10000000;
+
+
+
 export const SearchFilesQueryParams = zod.object({
   "q": zod.coerce.string().optional(),
   "fileType": zod.coerce.string().optional(),
-  "minSize": zod.coerce.number().optional(),
-  "maxSize": zod.coerce.number().optional(),
-  "after": zod.coerce.string().optional(),
-  "before": zod.coerce.string().optional(),
+  "minSize": zod.coerce.number().min(searchFilesQueryMinSizeMin).optional(),
+  "maxSize": zod.coerce.number().min(searchFilesQueryMaxSizeMin).optional(),
+  "after": zod.date().optional(),
+  "before": zod.date().optional(),
   "source": zod.enum(['local', 'all']).optional(),
-  "limit": zod.coerce.number().optional(),
-  "offset": zod.coerce.number().optional()
+  "limit": zod.coerce.number().min(1).max(searchFilesQueryLimitMax).default(searchFilesQueryLimitDefault),
+  "offset": zod.coerce.number().min(searchFilesQueryOffsetMin).max(searchFilesQueryOffsetMax).default(searchFilesQueryOffsetDefault)
 })
 
 export const SearchFilesResponse = zod.object({
