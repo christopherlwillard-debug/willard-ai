@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { collectionsTable, collectionItemsTable, mediaFilesTable, appSettingsTable } from "@workspace/db";
 import { and, eq, sql, count, desc, isNull, inArray } from "drizzle-orm";
 import { buildSmartConditions, parseSmartRule, validateSmartRule, rebuildAutoCollections, type SmartRule } from "../lib/collections-engine";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router = Router();
 
@@ -35,8 +36,7 @@ async function collectionCount(c: { id: number; kind: string; ruleJson: unknown 
     .where(and(
       eq(collectionItemsTable.collectionId, c.id),
       eq(mediaFilesTable.nasPath, nasPath),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
     ));
   return Number(row?.total ?? 0);
 }
@@ -93,8 +93,7 @@ router.get("/collections", async (_req: Request, res: Response) => {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       eq(mediaFilesTable.favorite, true),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
     ));
 
   res.json({ collections, favoritesCount: Number(favRow?.total ?? 0) });
@@ -251,8 +250,7 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
     .where(and(
       eq(collectionItemsTable.collectionId, id),
       eq(mediaFilesTable.nasPath, nasPath),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
     ));
   const files = await db
     .select({ file: mediaFilesTable })
@@ -261,8 +259,7 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
     .where(and(
       eq(collectionItemsTable.collectionId, id),
       eq(mediaFilesTable.nasPath, nasPath),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
     ))
     .orderBy(sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.dateCreated}, ${mediaFilesTable.modifiedAt}) DESC NULLS LAST`)
     .limit(limit)
@@ -300,8 +297,7 @@ router.post("/collections/:id/items", async (req: Request, res: Response) => {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       inArray(mediaFilesTable.id, uniqueFileIds),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-        AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
     ));
   if (files.length !== uniqueFileIds.length) {
     res.status(400).json({ error: "One or more files are not active members of this library" });

@@ -1,5 +1,6 @@
 import { pool } from "@workspace/db";
 import { logger } from "./logger.ts";
+import { activeMediaSql } from "./media-scope.ts";
 
 /**
  * Reverse geocoding for GPS-tagged media.
@@ -76,7 +77,7 @@ export async function backfillPlaceNames(nasPath: string): Promise<{ resolved: n
        FROM media_files f
       WHERE f.nas_path = $1
         AND f.gps_latitude IS NOT NULL AND f.gps_longitude IS NOT NULL
-        AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')
+        AND ${activeMediaSql("f")}
        AND NOT EXISTS (
            SELECT 1 FROM geo_place_cache c
             WHERE c.lat10 = floor(f.gps_latitude::numeric * 10 + 0.5)::int

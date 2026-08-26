@@ -11,11 +11,10 @@ import { checkNasReachableAsync, type NasReachability } from "../lib/nas-storage
 import { getEnrichmentStatus } from "../lib/ai-enrichment";
 import { getFaceStatus } from "../lib/face-recognition";
 import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
-
-const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
 
 // ── NAS reachability cache ─────────────────────────────────────────────────────
 // The dashboard is polled every 3 seconds while isScanning = true.  Caching for
@@ -58,7 +57,7 @@ router.get("/dashboard", async (_req, res) => {
     const [totalRow] = await db.select({
       totalFiles: count(),
       totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
-    }).from(mediaFilesTable).where(NOT_DELETED);
+    }).from(mediaFilesTable).where(activeMediaCondition);
 
     const activeNasPath = await getActiveNasPath();
     const [archiveCountRow] = await db.select({ count: count() })
@@ -66,13 +65,13 @@ router.get("/dashboard", async (_req, res) => {
       .where(activeNasPath ? archiveScope(activeNasPath) : sql`FALSE`);
 
     const [docCountRow] = await db.select({ count: count() }).from(mediaFilesTable)
-      .where(and(NOT_DELETED, eq(mediaFilesTable.mediaType, "document")));
+      .where(and(activeMediaCondition, eq(mediaFilesTable.mediaType, "document")));
 
     const typeBreakdown = await db.select({
       fileType: mediaFilesTable.mediaType,
       count: count(),
       sizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
-    }).from(mediaFilesTable).where(NOT_DELETED).groupBy(mediaFilesTable.mediaType);
+    }).from(mediaFilesTable).where(activeMediaCondition).groupBy(mediaFilesTable.mediaType);
 
     const total = Number(totalRow.totalSizeBytes) || 1;
     const breakdown = typeBreakdown.map(r => ({
@@ -83,12 +82,12 @@ router.get("/dashboard", async (_req, res) => {
     }));
 
     const dupQuery = await db.execute(
-      sql`SELECT COUNT(*) as cnt FROM (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND (last_scan_action IS DISTINCT FROM 'DELETED') GROUP BY content_hash HAVING COUNT(*) > 1) t`
+      sql`SELECT COUNT(*) as cnt FROM (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND ${activeMediaCondition} GROUP BY content_hash HAVING COUNT(*) > 1) t`
     );
     const duplicateCount = Number((dupQuery.rows[0] as any)?.cnt ?? 0);
 
     const dupSizeQuery = await db.execute(
-      sql`SELECT COALESCE(SUM(size_bytes), 0) as total_size FROM ${mediaFilesTable} WHERE (last_scan_action IS DISTINCT FROM 'DELETED') AND content_hash IN (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND (last_scan_action IS DISTINCT FROM 'DELETED') GROUP BY content_hash HAVING COUNT(*) > 1)`
+      sql`SELECT COALESCE(SUM(size_bytes), 0) as total_size FROM ${mediaFilesTable} WHERE ${activeMediaCondition} AND content_hash IN (SELECT content_hash FROM ${mediaFilesTable} WHERE content_hash IS NOT NULL AND ${activeMediaCondition} GROUP BY content_hash HAVING COUNT(*) > 1)`
     );
     const duplicateSizeBytes = Number((dupSizeQuery.rows[0] as any)?.total_size ?? 0);
 

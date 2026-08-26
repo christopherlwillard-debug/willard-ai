@@ -3,6 +3,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { embedText, toVectorLiteral } from "./ai-enrichment.ts";
 import { logger } from "./logger.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
+import { activeMediaSql } from "./media-scope.ts";
 
 /**
  * AI Search — natural-language hybrid search over the canonical library index.
@@ -177,7 +178,7 @@ export function buildSearchQuery(
   const params: unknown[] = [nasPath];
   const where: string[] = [
     `f.nas_path = $1`,
-    `(f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`,
+    activeMediaSql("f"),
   ];
   const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
 
@@ -377,7 +378,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
        FROM media_files f LEFT JOIN media_ai a ON a.media_file_id = f.id
       WHERE f.id = $1
         AND f.nas_path = $2
-        AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`,
+         AND ${activeMediaSql("f")}`,
     [fileId, nasPath],
   );
   if (!rows.length) throw Object.assign(new Error("File not found"), { statusCode: 404 });
@@ -393,7 +394,7 @@ export async function findSimilar(nasPath: string, fileId: number, limit = 24): 
        FROM media_files f
        JOIN media_ai a ON a.media_file_id = f.id
       WHERE f.nas_path = $1
-        AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')
+        AND ${activeMediaSql("f")}
         AND f.id <> $2
         AND a.embedding IS NOT NULL
         AND ($3::text IS NULL OR f.content_hash IS NULL OR f.content_hash <> $3)
@@ -440,17 +441,27 @@ export async function getSuggestions(nasPath: string, prefix: string | null): Pr
     `SELECT DISTINCT term FROM (
        SELECT lower(jsonb_array_elements_text(a.tags)) AS term
          FROM media_ai a JOIN media_files f ON f.id = a.media_file_id WHERE f.nas_path = $1
+           AND ${activeMediaSql("f")}
        UNION
        SELECT lower(jsonb_array_elements_text(a.objects))
-         FROM media_ai a JOIN media_files f ON f.id = a.media_file_id WHERE f.nas_path = $1
+          FROM media_ai a JOIN media_files f ON f.id = a.media_file_id WHERE f.nas_path = $1
+           AND ${activeMediaSql("f")}
        UNION
        SELECT lower(a.doc_type) FROM media_ai a JOIN media_files f ON f.id = a.media_file_id
-        WHERE f.nas_path = $1 AND a.doc_type IS NOT NULL
+         WHERE f.nas_path = $1 AND ${activeMediaSql("f")} AND a.doc_type IS NOT NULL
        UNION
-       SELECT lower(f.name) FROM media_files f WHERE f.nas_path = $1
+        SELECT lower(f.name) FROM media_files f WHERE f.nas_path = $1 AND ${activeMediaSql("f")}
        UNION
        SELECT lower(p.name) FROM people p
-        WHERE p.nas_path = $1 AND p.hidden = false AND p.name IS NOT NULL
+         WHERE p.nas_path = $1 AND p.hidden = false AND p.name IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+               FROM faces face_suggestion
+               JOIN media_files mf_suggestion ON mf_suggestion.id = face_suggestion.media_file_id
+              WHERE face_suggestion.person_id = p.id
+                AND mf_suggestion.nas_path = $1
+                AND ${activeMediaSql("mf_suggestion")}
+           )
      ) t WHERE term LIKE $2 ORDER BY term LIMIT 8`,
     [nasPath, like],
   );

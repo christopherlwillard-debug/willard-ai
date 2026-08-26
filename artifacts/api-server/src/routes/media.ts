@@ -6,6 +6,7 @@ import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable }
 import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router = Router();
 
@@ -16,8 +17,7 @@ const router = Router();
 let _nasPathCached: string | null | undefined = undefined;
 let _nasPathCachedAt = 0;
 const NAS_PATH_TTL_MS = 60_000;
-const ACTIVE_MEDIA = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
+const ACTIVE_MEDIA = activeMediaCondition;
 
 async function getNasPath(): Promise<string | null> {
   const now = Date.now();
@@ -252,7 +252,7 @@ router.get("/media/folders", async (_req: Request, res: Response) => {
   const rows = await db
     .selectDistinct({ relativePath: mediaFilesTable.relativePath })
     .from(mediaFilesTable)
-    .where(eq(mediaFilesTable.nasPath, nasPath));
+    .where(and(eq(mediaFilesTable.nasPath, nasPath), activeMediaCondition));
 
   // Collect all unique ancestor folder paths (strip filename from each relative path)
   const folderSet = new Set<string>();
@@ -373,6 +373,7 @@ router.get("/media/timeline", async (_req: Request, res: Response) => {
   const baseWhere = and(
     eq(mediaFilesTable.nasPath, nasPath),
     sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
+    activeMediaCondition,
   );
 
   const rows = await db
@@ -418,6 +419,7 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
   const conditions = [
     eq(mediaFilesTable.nasPath, nasPath),
     sql`${mediaFilesTable.mediaType} IN ('photo', 'video')`,
+    activeMediaCondition,
   ];
 
   if (yearStr && monthStr) {
@@ -461,10 +463,20 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  // ── Fast path: in-memory cache hit — zero DB queries, zero NAS stat calls ──
+  // Confirm the file is still discoverable before using the thumbnail cache.
+  // Recycled files must not remain reachable through an old thumbnail URL.
   const nasPath = await getNasPath();
   if (!nasPath) {
     res.status(404).json({ error: "NAS not configured" });
+    return;
+  }
+  const [activeFile] = await db
+    .select({ id: mediaFilesTable.id })
+    .from(mediaFilesTable)
+    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+    .limit(1);
+  if (!activeFile) {
+    res.status(404).json({ error: "File not found" });
     return;
   }
   const cached = _thumbCache.get(id);
@@ -481,7 +493,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
       extension:     mediaFilesTable.extension,
     })
     .from(mediaFilesTable)
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath)))
+   .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .limit(1);
 
   if (!file) {
@@ -564,7 +576,7 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
   const [file] = await db
     .select()
     .from(mediaFilesTable)
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath)))
+     .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .limit(1);
 
   if (!file) {

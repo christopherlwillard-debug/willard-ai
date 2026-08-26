@@ -4,6 +4,7 @@ import { findSimilar } from "../lib/ai-search.ts";
 import { recomputeEmbedding } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { isVectorAvailable } from "../lib/vector-capability.ts";
+import { activeMediaSql } from "../lib/media-scope.ts";
 
 const router: IRouter = Router();
 
@@ -44,7 +45,7 @@ function toItem(r: any): RelatedItem {
   };
 }
 
-const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
+const NOT_DELETED = activeMediaSql("f");
 
 // ── Library-wide GPS map ─────────────────────────────────────────────────────
 
@@ -247,7 +248,7 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
            AND EXISTS (
              SELECT 1 FROM media_files src
                WHERE src.id = me.media_file_id AND src.nas_path = $2
-                 AND (src.last_scan_action IS NULL OR src.last_scan_action NOT IN ('DELETED', 'RECYCLED'))
+                 AND ${activeMediaSql("src")}
            )
         ORDER BY c.id, f.date_taken DESC NULLS LAST`,
       [id, nasPath],
@@ -286,7 +287,7 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
            JOIN media_files mf ON mf.id = fc.media_file_id
            JOIN people p ON p.id = fc.person_id AND p.nas_path = $2
           WHERE fc.media_file_id = $1 AND mf.nas_path = $2
-            AND (mf.last_scan_action IS NULL OR mf.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
+            AND ${activeMediaSql("mf")}`,
         [id, nasPath]);
       const personIds = myFaces.map((r: any) => Number(r.person_id));
       if (personIds.length) {

@@ -7,6 +7,7 @@ import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
 import { and, eq, sql } from "drizzle-orm";
 import { resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router: IRouter = Router();
 
@@ -84,8 +85,7 @@ router.get("/explorer", async (req, res) => {
       .from(mediaFilesTable)
       .where(and(
         eq(mediaFilesTable.nasPath, nasPath),
-        sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
-        sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+        activeMediaCondition,
       ))
       .groupBy(sql`regexp_replace(${mediaFilesTable.relativePath}, '[^/]+$', '')`);
     const validatedFolderSizes = canonicalFolderSizes.flatMap((row) => {

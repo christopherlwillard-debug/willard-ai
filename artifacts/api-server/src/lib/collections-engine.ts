@@ -4,6 +4,7 @@ import { and, eq, sql, inArray, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { logger } from "./logger.ts";
 import { backfillPlaceNames, getCachedPlaceNames, placeGridCoordinate } from "./geocode.ts";
+import { activeMediaCondition } from "./media-scope.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Smart folder rules — evaluated at query time, never materialized.
@@ -41,8 +42,7 @@ const bestDate = sql`COALESCE(${mediaFilesTable.dateTaken}, ${mediaFilesTable.da
 export function buildSmartConditions(rule: SmartRule, nasPath: string) {
   const conditions = [
     eq(mediaFilesTable.nasPath, nasPath),
-    sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-      AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+    activeMediaCondition,
   ];
   if (rule.mediaTypes && rule.mediaTypes.length > 0) {
     conditions.push(inArray(mediaFilesTable.mediaType, rule.mediaTypes));
@@ -146,6 +146,7 @@ async function computeAutoGroups(nasPath: string): Promise<AutoGroup[]> {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       inArray(mediaFilesTable.mediaType, ["photo", "video"]),
+      activeMediaCondition,
     ));
   for (const row of eventRows) {
     if (!row.d) continue;
@@ -165,6 +166,7 @@ async function computeAutoGroups(nasPath: string): Promise<AutoGroup[]> {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       sql`${mediaFilesTable.gpsLatitude} IS NOT NULL AND ${mediaFilesTable.gpsLongitude} IS NOT NULL`,
+      activeMediaCondition,
     ));
   const cellNames = await getCachedPlaceNames().catch(() => new Map<string, string>());
   for (const row of placeRows) {
@@ -193,6 +195,7 @@ async function computeAutoGroups(nasPath: string): Promise<AutoGroup[]> {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       eq(mediaFilesTable.mediaType, "document"),
+      activeMediaCondition,
     ));
   for (const row of docRows) {
     const cat = docCategory(row.name, row.kw, row.title);

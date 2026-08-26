@@ -7,6 +7,7 @@ import {
 import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
+import { activeMediaSql } from "../lib/media-scope.ts";
 
 const router: IRouter = Router();
 
@@ -235,7 +236,7 @@ router.get("/search/ai-status", async (_req, res) => {
               count(*) AS total
          FROM media_files f
          LEFT JOIN media_ai a ON a.media_file_id = f.id AND a.ai_version >= $2
-        WHERE f.nas_path = $1 AND (f.last_scan_action IS NULL OR f.last_scan_action <> 'DELETED')`,
+         WHERE f.nas_path = $1 AND ${activeMediaSql("f")}`,
       [nasPath, AI_VERSION],
     );
     analyzedCount = Number(rows[0].analyzed);

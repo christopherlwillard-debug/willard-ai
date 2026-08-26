@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable, mediaFilesTable } from "@workspace/db";
 import { eq, ilike, gte, lte, and, sql, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 import { reconcileLegacyCatalog } from "../lib/catalog-reconciliation";
 
 const router: IRouter = Router();
@@ -35,8 +36,7 @@ router.get("/files/search", async (req, res) => {
 
     const conditions: SQL[] = [];
     conditions.push(eq(mediaFilesTable.nasPath, nasPath));
-    conditions.push(sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`);
-    conditions.push(sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`);
+    conditions.push(activeMediaCondition);
     if (q) conditions.push(ilike(mediaFilesTable.name, `%${q}%`));
     if (fileType && fileType !== "all") {
       conditions.push(eq(mediaFilesTable.mediaType, fileType === "image" ? "photo" : fileType));

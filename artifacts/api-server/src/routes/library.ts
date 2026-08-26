@@ -12,6 +12,7 @@ import { getWatcherSnapshot } from "../lib/library-watcher";
 import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/library-activity";
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.get("/library/seq", async (_req: Request, res: Response) => {
     .from(mediaFilesTable)
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+       activeMediaCondition,
     ));
 
   res.json({ seq, total: total ?? 0 });
@@ -459,7 +460,7 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
       eq(mediaFilesTable.mediaType, "video"),
       eq(mediaFilesTable.extension, "pdf"),
     ),
-    sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+    activeMediaCondition,
   );
 
   const [{ total }] = await db
@@ -513,7 +514,7 @@ router.post("/library/thumbnails/prioritize", async (req: Request, res: Response
         eq(mediaFilesTable.mediaType, "video"),
         eq(mediaFilesTable.extension, "pdf"),
       ),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`,
+      activeMediaCondition,
       sql`relative_path LIKE ${folderPrefix + "/%"}`,
     ))
     .limit(500);
@@ -633,12 +634,12 @@ router.get("/library/duplicates", async (_req: Request, res: Response) => {
   }).from(mediaFilesTable)
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+      activeMediaCondition,
       sql`${mediaFilesTable.contentHash} IN (
         SELECT content_hash FROM media_files
         WHERE nas_path = ${nasPath}
           AND content_hash IS NOT NULL
-          AND (last_scan_action IS DISTINCT FROM 'DELETED')
+          AND ${activeMediaCondition}
         GROUP BY content_hash HAVING count(*) > 1
       )`,
     ))
@@ -867,7 +868,7 @@ router.get("/library/outdated", async (_req: Request, res: Response) => {
     .where(and(
       eq(mediaFilesTable.nasPath, nasPath),
       lt(mediaFilesTable.scannerVersion, SCANNER_VERSION),
-      sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`,
+      activeMediaCondition,
     ));
 
   res.json({ count: count ?? 0, scannerVersion: SCANNER_VERSION });

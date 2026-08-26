@@ -5,10 +5,10 @@ import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable }
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router = Router();
-const ACTIVE = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
+const ACTIVE = activeMediaCondition;
 
 type HealthRow = {
   id: number;

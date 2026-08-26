@@ -9,6 +9,7 @@ import {
   type RawRow,
   type SearchIntent,
 } from "../lib/ai-search.ts";
+import { activeMediaSql } from "../lib/media-scope.ts";
 
 const intent = (overrides: Partial<SearchIntent> = {}): SearchIntent => ({
   ...emptyIntent(),
@@ -39,6 +40,12 @@ test("search query normalizes image intent to the stored photo media type", () =
   const query = buildSearchQuery("/nas", intent({ mediaTypes: ["image"] }));
   assert.match(query.sql, /f\.media_type = ANY\(\$2\)/);
   assert.deepEqual(query.params, ["/nas", ["image", "photo"]]);
+});
+
+test("search query excludes both deleted and recycled media", () => {
+  const query = buildSearchQuery("/nas", emptyIntent());
+  assert.match(query.sql, new RegExp(activeMediaSql("f").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(query.sql, /last_scan_action IS NULL OR f\.last_scan_action <> 'DELETED'/);
 });
 
 test("semantic search orders by vector distance for ANN index scans", () => {

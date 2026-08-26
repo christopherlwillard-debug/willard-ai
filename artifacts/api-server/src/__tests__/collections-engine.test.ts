@@ -141,6 +141,36 @@ describe("place grid bucketing", { concurrency: false }, () => {
 });
 
 describe("auto-album rebuilds", { concurrency: false }, () => {
+  test("excludes recycled and deleted files from rebuilt groups and membership", async () => {
+    const ids = await Promise.all(
+      [0, 1, 2, 3, 4].map((i) => addMedia({
+        relativePath: `recycled-check/${i}.jpg`,
+        name: `recycled-check-${i}.jpg`,
+        extension: "jpg",
+        mimeType: "image/jpeg",
+        mediaType: "photo",
+        dateTaken: new Date("2024-06-01T12:00:00Z"),
+      })),
+    );
+
+    await db.update(mediaFilesTable)
+      .set({ lastScanAction: "RECYCLED" })
+      .where(eq(mediaFilesTable.id, ids[0]!));
+    await db.update(mediaFilesTable)
+      .set({ lastScanAction: "DELETED" })
+      .where(eq(mediaFilesTable.id, ids[1]!));
+
+    const result = await rebuildAutoCollections(nasPath);
+    assert.equal(result.collections, 1);
+    assert.equal(result.items, 3);
+
+    const [album] = await autoCollections();
+    assert.ok(album);
+    const items = await db.select().from(collectionItemsTable)
+      .where(eq(collectionItemsTable.collectionId, album.id));
+    assert.deepEqual(items.map((item) => item.mediaFileId).sort(), ids.slice(2).sort());
+  });
+
   test("rebuild is idempotent and replaces membership without duplicating albums", async () => {
     const ids = await Promise.all(
       [0, 1, 2].map((i) => addMedia({

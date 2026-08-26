@@ -2,12 +2,11 @@ import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable } from "@workspace/db";
 import { sql, count, desc, and, eq } from "drizzle-orm";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const router: IRouter = Router();
 
-const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'`;
-const ACTIVE_MEDIA = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
+const ACTIVE_MEDIA = activeMediaCondition;
 
 async function getNasPath(): Promise<string | null> {
   const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);

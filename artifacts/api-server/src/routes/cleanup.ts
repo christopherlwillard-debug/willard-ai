@@ -7,6 +7,7 @@ import * as path from "path";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/nas-storage";
+import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 
 const router: IRouter = Router();
 
@@ -27,9 +28,6 @@ async function getConfiguredNasPath(): Promise<string | null> {
   return nasPath || null;
 }
 
-const ACTIVE_MEDIA = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
-  AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
-
 // ── GET /cleanup/duplicates — enriched with mediaFilesTable data ───────────
 
 router.get("/cleanup/duplicates", async (req, res) => {
@@ -48,9 +46,9 @@ router.get("/cleanup/duplicates", async (req, res) => {
     const exactHashGroups = await db.execute(sql`
       SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size
       FROM ${mediaFilesTable}
-      WHERE nas_path = ${nasPath}
-        AND content_hash IS NOT NULL
-        AND ${ACTIVE_MEDIA}
+       WHERE nas_path = ${nasPath}
+         AND content_hash IS NOT NULL
+         AND ${activeMediaSql("m")}
       GROUP BY content_hash
       HAVING COUNT(*) > 1
     `);
@@ -65,8 +63,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       WHERE m.nas_path = ${nasPath}
         AND m.quick_fingerprint IS NOT NULL
         AND m.quick_fingerprint != ''
-        AND m.last_scan_action IS DISTINCT FROM 'DELETED'
-        AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
+         AND ${activeMediaCondition}
       GROUP BY m.quick_fingerprint
       HAVING COUNT(*) > 1
         AND NOT (
@@ -141,8 +138,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
           FROM media_files m
           WHERE m.nas_path = ${nasPath}
             AND m.content_hash = ${raw.groupKey}
-            AND m.last_scan_action IS DISTINCT FROM 'DELETED'
-            AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
+             AND ${activeMediaSql("m")}
           LIMIT 10
         `);
       } else {
@@ -170,8 +166,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
           FROM media_files m
           WHERE m.nas_path = ${nasPath}
             AND m.quick_fingerprint = ${raw.groupKey}
-            AND m.last_scan_action IS DISTINCT FROM 'DELETED'
-            AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
+             AND ${activeMediaSql("m")}
           LIMIT 10
         `);
       }
@@ -216,7 +211,7 @@ router.get("/cleanup/large-files", async (req, res) => {
              content_hash AS "contentHash", indexed_at AS "indexedAt"
         FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath} AND size_bytes >= ${LARGE_FILE_THRESHOLD}
-         AND ${ACTIVE_MEDIA}
+         AND ${activeMediaCondition}
        ORDER BY size_bytes DESC
        LIMIT ${limit} OFFSET ${offset}
     `);
@@ -224,7 +219,7 @@ router.get("/cleanup/large-files", async (req, res) => {
       SELECT COUNT(*) AS total, COALESCE(SUM(size_bytes), 0) AS total_size
         FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath} AND size_bytes >= ${LARGE_FILE_THRESHOLD}
-         AND ${ACTIVE_MEDIA}
+         AND ${activeMediaCondition}
     `);
     const row = (totals.rows[0] ?? {}) as any;
     res.json({ files: result.rows, total: Number(row.total ?? 0), totalSizeBytes: Number(row.total_size ?? 0) });
@@ -252,7 +247,7 @@ router.get("/cleanup/old-files", async (req, res) => {
              content_hash AS "contentHash", indexed_at AS "indexedAt"
         FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath} AND modified_at <= ${cutoff}
-         AND ${ACTIVE_MEDIA}
+         AND ${activeMediaCondition}
        ORDER BY modified_at ASC
        LIMIT ${limit} OFFSET ${offset}
     `);
@@ -260,7 +255,7 @@ router.get("/cleanup/old-files", async (req, res) => {
       SELECT COUNT(*) AS total
         FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath} AND modified_at <= ${cutoff}
-         AND ${ACTIVE_MEDIA}
+         AND ${activeMediaCondition}
     `);
     res.json({ files: result.rows, total: Number((totals.rows[0] as any)?.total ?? 0) });
   } catch {
@@ -329,7 +324,7 @@ router.get("/cleanup/summary", async (_req, res) => {
       SELECT COUNT(*) as "dupGroups", COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
         SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted
         FROM ${mediaFilesTable}
-        WHERE nas_path = ${nasPath} AND content_hash IS NOT NULL AND ${ACTIVE_MEDIA}
+         WHERE nas_path = ${nasPath} AND content_hash IS NOT NULL AND ${activeMediaCondition}
         GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
@@ -341,8 +336,7 @@ router.get("/cleanup/summary", async (_req, res) => {
         FROM ${mediaFilesTable} m
         WHERE m.nas_path = ${nasPath}
           AND m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
-          AND m.last_scan_action IS DISTINCT FROM 'DELETED'
-          AND m.last_scan_action IS DISTINCT FROM 'RECYCLED'
+           AND ${activeMediaSql("m")}
         GROUP BY m.quick_fingerprint
         HAVING COUNT(DISTINCT m.id) > 1
           AND NOT (
@@ -368,7 +362,7 @@ router.get("/cleanup/summary", async (_req, res) => {
         COALESCE(SUM(size_bytes) FILTER (WHERE size_bytes >= ${LARGE_FILE_THRESHOLD}), 0) AS large_bytes,
         COUNT(*) FILTER (WHERE modified_at <= ${cutoff}) AS old_files
         FROM ${mediaFilesTable}
-       WHERE nas_path = ${nasPath} AND ${ACTIVE_MEDIA}
+       WHERE nas_path = ${nasPath} AND ${activeMediaCondition}
     `);
     const summaryRow = (summaryResult.rows[0] ?? {}) as any;
     const largeFiles = Number(summaryRow.large_files ?? 0);
@@ -380,7 +374,7 @@ router.get("/cleanup/summary", async (_req, res) => {
       const distinctFolders = await db.execute(sql`
         SELECT DISTINCT regexp_replace(relative_path, '[^/]+$', '') AS folder
           FROM ${mediaFilesTable}
-         WHERE nas_path = ${nasPath} AND ${ACTIVE_MEDIA}
+         WHERE nas_path = ${nasPath} AND ${activeMediaCondition}
       `);
       for (const row of distinctFolders.rows as any[]) {
         const relativeFolder = String(row.folder ?? "").replace(/^\/+|\/+$/g, "");
@@ -442,7 +436,7 @@ router.post("/cleanup/execute", async (req, res) => {
           .from(mediaFilesTable)
           .where(sql`${mediaFilesTable.id} = ${fileId}
             AND ${mediaFilesTable.nasPath} = ${nasPath}
-            AND ${ACTIVE_MEDIA}`)
+            AND ${activeMediaCondition}`)
           .limit(1);
 
         if (!file) {

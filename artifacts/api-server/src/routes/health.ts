@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db, appSettingsTable } from "@workspace/db";
+import { activeMediaCondition } from "../lib/media-scope.ts";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkNasReachableAsync } from "../lib/nas-storage";
 import * as fs from "node:fs";
@@ -45,7 +46,7 @@ router.get("/health/status", async (_req, res) => {
       const { rows } = await db.execute(sql`
         SELECT relative_path, size_bytes FROM media_files
          WHERE nas_path = ${nasPath}
-           AND last_scan_action IS DISTINCT FROM 'DELETED'
+           AND ${activeMediaCondition}
          LIMIT ${INTEGRITY_SWEEP_LIMIT + 1}
       `);
       if (rows.length <= INTEGRITY_SWEEP_LIMIT) {
