@@ -75,16 +75,17 @@ jobs:
       - name: Seed disposable backend-audit settings
         shell: pwsh
         env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
           WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
-          PGPASSWORD: "postgres"
+          WILLARD_PASSWORD_HASH: '$2b$10$xlYkF4WUqMGhh7DvFIPKtuIsl0p5Hjh1GhaGvtnxTeKOGYsK.9JhW'
         run: |
           $ErrorActionPreference = "Stop"
-          $psql = Join-Path $env:ProgramFiles "PostgreSQL\16\bin\psql.exe"
-          # bcrypt hash for the fixed integration-test password "willard123".
-          $hash = '$2b$10$xlYkF4WUqMGhh7DvFIPKtuIsl0p5Hjh1GhaGvtnxTeKOGYsK.9JhW'
-          & $psql -h localhost -U postgres -d willard `
-            -v "nas_path=$env:WILLARD_NAS_PATH" -v "password_hash=$hash" `
-            -c "DELETE FROM app_settings; INSERT INTO app_settings (nas_path, password_hash) VALUES (:'nas_path', :'password_hash');"
+          Push-Location (Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server")
+          try {
+            & node --input-type=module -e "import pg from 'pg'; const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL }); await pool.query('DELETE FROM app_settings'); await pool.query('INSERT INTO app_settings (nas_path, password_hash) VALUES ($1, $2)', [process.env.WILLARD_NAS_PATH, process.env.WILLARD_PASSWORD_HASH]); await pool.end();"
+          } finally {
+            Pop-Location
+          }
           if ($LASTEXITCODE -ne 0) { throw "Could not seed the disposable backend-audit settings." }
 
       - name: Start API for backend audit and integration tests
