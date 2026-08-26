@@ -9,6 +9,12 @@ import * as path from "path";
 import * as fs from "fs";
 import Seven from "node-7z";
 import { path7za } from "7zip-bin";
+import {
+  archiveByIdScope,
+  archiveScope,
+  getActiveNasPath,
+  resolveActiveArchivePath,
+} from "../lib/archive-scope.ts";
 
 const router: IRouter = Router();
 
@@ -117,8 +123,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
 
 router.get("/archives", async (req, res) => {
   try {
+    const nasPath = await getActiveNasPath();
+    if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
     const { category, minSize, maxSize, status, dateFrom, dateTo, limit = "50", offset = "0" } = req.query as Record<string, string>;
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [archiveScope(nasPath)];
     if (category) conditions.push(eq(archivesTable.category, category));
     if (minSize) conditions.push(gte(archivesTable.sizeBytes, parseInt(minSize)));
     if (maxSize) conditions.push(lte(archivesTable.sizeBytes, parseInt(maxSize)));
@@ -140,8 +148,10 @@ router.get("/archives", async (req, res) => {
 
 router.get("/archives/:id", async (req, res) => {
   try {
+    const nasPath = await getActiveNasPath();
+    if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
     const id = parseInt(req.params.id);
-    const [archive] = await db.select().from(archivesTable).where(eq(archivesTable.id, id)).limit(1);
+    const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
     const entries = (archive.peekEntries as any[]) ?? [];
     res.json({ ...archive, peekEntries: entries });
@@ -152,11 +162,21 @@ router.get("/archives/:id", async (req, res) => {
 
 router.post("/archives/:id/peek", async (req, res) => {
   try {
+    const nasPath = await getActiveNasPath();
+    if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
     const id = parseInt(req.params.id);
-    const [archive] = await db.select().from(archivesTable).where(eq(archivesTable.id, id)).limit(1);
+    const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
 
-    if (!fs.existsSync(archive.path)) {
+    let archivePath: string;
+    try {
+      archivePath = resolveActiveArchivePath(archive.path, nasPath);
+    } catch {
+      res.status(422).json({ error: "Archive path is outside the active library" });
+      return;
+    }
+
+    if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
       res.status(422).json({ error: "Archive file not found on disk — re-run a scan" });
       return;
     }
@@ -177,7 +197,7 @@ router.post("/archives/:id/peek", async (req, res) => {
       let photoCount = 0; let videoCount = 0; let documentCount = 0;
 
       try {
-        const zip = new AdmZip(archive.path);
+        const zip = new AdmZip(archivePath);
         const zipEntries = zip.getEntries();
         for (const entry of zipEntries) {
           const fileType = getFileTypeFromName(entry.entryName);
@@ -212,7 +232,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         estimatedExtractionSize,
         peekEntries: entries,
         category,
-      }).where(eq(archivesTable.id, id));
+      }).where(archiveByIdScope(id, nasPath));
 
       res.json({
         archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
@@ -224,7 +244,7 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── TAR / GZ / BZ2 / XZ ─────────────────────────────────────────────────
     if (TAR_EXTS.has(ext)) {
-      const { entries, error } = await peekTar(archive.path, rawExt);
+      const { entries, error } = await peekTar(archivePath, rawExt);
 
       if (error && entries.length === 0) {
         // Plain .gz (not a TAR) — provide basic metadata from file size
@@ -236,7 +256,7 @@ router.post("/archives/:id/peek", async (req, res) => {
           estimatedExtractionSize: 0,
           peekEntries: [],
           category: archive.category ?? "General",
-        }).where(eq(archivesTable.id, id));
+        }).where(archiveByIdScope(id, nasPath));
 
         res.json({
           archiveId: id, filename: archive.filename, entries: [], totalEntries: 0,
@@ -269,7 +289,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         estimatedExtractionSize,
         peekEntries: entries,
         category,
-      }).where(eq(archivesTable.id, id));
+      }).where(archiveByIdScope(id, nasPath));
 
       res.json({
         archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
@@ -282,7 +302,7 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── RAR / 7Z / ISO / CAB — full listing via node-7z + 7zip-bin ──────────
     if (BINARY_ONLY_EXTS.has(ext)) {
-      const { entries, isPasswordProtected, format, error } = await peek7z(archive.path);
+      const { entries, isPasswordProtected, format, error } = await peek7z(archivePath);
 
       const hasNestedArchives = entries.some(e => {
         const nestedExt = path.extname(e.path).replace(".", "").toLowerCase();
@@ -305,7 +325,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         estimatedExtractionSize,
         peekEntries: entries,
         category,
-      }).where(eq(archivesTable.id, id));
+      }).where(archiveByIdScope(id, nasPath));
 
       res.json({
         archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,

@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { appSettingsTable, archivesTable, mediaFilesTable } from "@workspace/db";
+import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
 import { and, eq, sql } from "drizzle-orm";
 import { resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
@@ -128,8 +129,13 @@ router.get("/explorer", async (req, res) => {
       }
 
       if (archive) {
-        const archiveRow = await db.select({ containedFileCount: archivesTable.containedFileCount })
-          .from(archivesTable).where(eq(archivesTable.path, fullPath)).limit(1);
+        const activeNasPath = await getActiveNasPath();
+        const archiveRow = activeNasPath
+          ? await db.select({ containedFileCount: archivesTable.containedFileCount })
+            .from(archivesTable)
+            .where(and(archiveScope(activeNasPath), eq(archivesTable.path, fullPath)))
+            .limit(1)
+          : [];
         archiveFileCount = archiveRow[0]?.containedFileCount ?? null;
       }
 

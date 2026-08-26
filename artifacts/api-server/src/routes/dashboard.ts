@@ -10,6 +10,7 @@ import { eq, sql, count, and } from "drizzle-orm";
 import { checkNasReachableAsync, type NasReachability } from "../lib/nas-storage";
 import { getEnrichmentStatus } from "../lib/ai-enrichment";
 import { getFaceStatus } from "../lib/face-recognition";
+import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
 
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
@@ -59,7 +60,10 @@ router.get("/dashboard", async (_req, res) => {
       totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
     }).from(mediaFilesTable).where(NOT_DELETED);
 
-    const [archiveCountRow] = await db.select({ count: count() }).from(archivesTable);
+    const activeNasPath = await getActiveNasPath();
+    const [archiveCountRow] = await db.select({ count: count() })
+      .from(archivesTable)
+      .where(activeNasPath ? archiveScope(activeNasPath) : sql`FALSE`);
 
     const [docCountRow] = await db.select({ count: count() }).from(mediaFilesTable)
       .where(and(NOT_DELETED, eq(mediaFilesTable.mediaType, "document")));

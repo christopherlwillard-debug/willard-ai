@@ -167,6 +167,7 @@ const SETUP_SQL = [
   // archives
   `CREATE TABLE IF NOT EXISTS archives (
     id                       serial PRIMARY KEY,
+    nas_path                 text,
     path                     text NOT NULL UNIQUE,
     filename                 text NOT NULL,
     size_bytes               bigint NOT NULL DEFAULT 0,
@@ -471,6 +472,18 @@ const SETUP_SQL = [
   // here lets the Windows launcher verify the complete schema once and avoid
   // repeating the same round trips when the API starts.
   `ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS cancelled_at timestamp`,
+  `ALTER TABLE archives ADD COLUMN IF NOT EXISTS nas_path text`,
+  `UPDATE archives a
+      SET nas_path = s.nas_path
+     FROM app_settings s
+    WHERE a.nas_path IS NULL
+      AND s.nas_path IS NOT NULL
+      AND (
+        a.path = s.nas_path
+        OR left(a.path, length(rtrim(s.nas_path, '/')) + 1)
+             = rtrim(s.nas_path, '/') || '/'
+      )`,
+  `CREATE INDEX IF NOT EXISTS archives_nas_path_idx ON archives (nas_path)`,
   `CREATE TABLE IF NOT EXISTS cleanup_operations (
     operation_id text PRIMARY KEY,
     nas_path text NOT NULL,

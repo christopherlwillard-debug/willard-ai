@@ -24,6 +24,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { getWillardAIDir, writeScanHistory, getTempDir, cleanTempDir, assertWithinRoot, checkNasReachable } from "../lib/nas-storage";
+import { resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -245,6 +246,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
         sizeBytes: sql`excluded.size_bytes`,
         modifiedAt: sql`excluded.modified_at`,
         category: sql`excluded.category`,
+        nasPath: sql`excluded.nas_path`,
         indexedAt: sql`NOW()`,
       },
     });
@@ -300,6 +302,7 @@ async function scanDirectory(dirPath: string, jobId: number) {
 
         if (fileType === "archive") {
           archiveBatch.push({
+            nasPath: dirPath,
             path: fullPath,
             filename: entry.name,
             sizeBytes: stat.size,
@@ -328,22 +331,32 @@ async function scanDirectory(dirPath: string, jobId: number) {
   return { filesScanned, archivesFound };
 }
 
-async function peekAllArchives(jobId: number) {
+async function peekAllArchives(jobId: number, nasPath: string) {
   // Peek all pending archives discovered during this scan, in batches
   const pending = await db.select({ id: archivesTable.id, path: archivesTable.path, filename: archivesTable.filename })
     .from(archivesTable)
-    .where(eq(archivesTable.peekStatus, "pending"));
+    .where(and(eq(archivesTable.peekStatus, "pending"), eq(archivesTable.nasPath, nasPath)));
 
   let peeked = 0;
   for (const archive of pending) {
-    if (!fs.existsSync(archive.path)) {
-      await db.update(archivesTable).set({ peekStatus: "unsupported" }).where(eq(archivesTable.id, archive.id));
+    let archivePath: string;
+    try {
+      archivePath = resolveActiveArchivePath(archive.path, nasPath);
+    } catch {
+      await db.update(archivesTable).set({ peekStatus: "unsupported" })
+        .where(and(eq(archivesTable.id, archive.id), eq(archivesTable.nasPath, nasPath)));
+      peeked++;
+      continue;
+    }
+    if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
+      await db.update(archivesTable).set({ peekStatus: "unsupported" })
+        .where(and(eq(archivesTable.id, archive.id), eq(archivesTable.nasPath, nasPath)));
       peeked++;
       continue;
     }
     try {
       const { entries, isPasswordProtected, hasNestedArchives, estimatedExtractionSize, category } =
-        await peekArchiveFile(archive.path, archive.filename);
+        await peekArchiveFile(archivePath, archive.filename);
       const files = entries.filter((e: any) => !e.isDirectory);
       const scanPhotoCount = files.filter((e: any) => e.fileType === "image").length;
       const scanVideoCount = files.filter((e: any) => e.fileType === "video").length;
@@ -359,7 +372,7 @@ async function peekAllArchives(jobId: number) {
         estimatedExtractionSize,
         peekEntries: entries,
         category,
-      }).where(eq(archivesTable.id, archive.id));
+      }).where(and(eq(archivesTable.id, archive.id), eq(archivesTable.nasPath, nasPath)));
     } catch {
       // Non-fatal: leave as pending so user can retry manually
     }
@@ -395,10 +408,11 @@ async function runScan(jobId: number, nasPath: string) {
     ({ filesScanned, archivesFound } = await scanDirectory(nasPath, jobId));
 
     await db.update(scanJobsTable).set({ stage: "Peeking archives…", filesScanned }).where(eq(scanJobsTable.id, jobId));
-    await peekAllArchives(jobId);
+    await peekAllArchives(jobId, nasPath);
 
     const finishedAt = new Date();
-    await db.update(appSettingsTable).set({ lastScanAt: finishedAt, totalFilesIndexed: filesScanned });
+    await db.update(appSettingsTable).set({ lastScanAt: finishedAt, totalFilesIndexed: filesScanned })
+      .where(eq(appSettingsTable.nasPath, nasPath));
     await db.update(scanJobsTable).set({ status: "completed", filesScanned, stage: "Complete", finishedAt }).where(eq(scanJobsTable.id, jobId));
 
     writeScanHistory(nasPath, {

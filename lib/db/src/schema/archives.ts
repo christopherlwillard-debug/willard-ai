@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 
 export const archivesTable = pgTable("archives", {
   id: serial("id").primaryKey(),
+  nasPath: text("nas_path"),
   path: text("path").notNull().unique(),
   filename: text("filename").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull().default(0),

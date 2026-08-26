@@ -1556,6 +1556,7 @@ async function runScanJob(
             try {
               const safePath = resolveWithinRoot(f.fullPath, state.nasPath);
               return [{
+                nasPath: state.nasPath,
                 path: safePath, filename: f.name,
                 sizeBytes: f.sizeBytes, modifiedAt: f.modifiedAt,
                 folder: path.dirname(safePath), category: "General", peekStatus: "pending",
@@ -1572,6 +1573,7 @@ async function runScanJob(
               modifiedAt: sql`excluded.modified_at`,
               folder:     sql`excluded.folder`,
               indexedAt:  sql`NOW()`,
+              nasPath:    sql`excluded.nas_path`,
             },
           });
         }

@@ -7,8 +7,8 @@ import {
   CreateOpenaiConversationBody,
   SendOpenaiMessageBody,
 } from "@workspace/api-zod";
-import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider } from "../../lib/ai-privacy";
-import { isMediaExcluded } from "../../lib/ai-privacy";
+import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider, isMediaExcluded } from "../../lib/ai-privacy";
+import { archiveScope } from "../../lib/archive-scope.ts";
 
 const router: IRouter = Router();
 
@@ -70,11 +70,16 @@ async function getLargeFilesContext(): Promise<string> {
 }
 
 /** Query archives context. */
-async function getArchivesContext(): Promise<string> {
-  const [{ archiveCount }] = await db.select({ archiveCount: count() }).from(archivesTable);
+async function getArchivesContext(nasPath: string | null): Promise<string> {
+  if (!nasPath) return "";
+  const [{ archiveCount }] = await db.select({ archiveCount: count() })
+    .from(archivesTable)
+    .where(archiveScope(nasPath));
   const categories = await db.execute(sql`
     SELECT category, COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as total_bytes
-    FROM ${archivesTable} GROUP BY category ORDER BY total_bytes DESC
+    FROM ${archivesTable}
+    WHERE nas_path = ${nasPath}
+    GROUP BY category ORDER BY total_bytes DESC
   `);
   if (archiveCount === 0) return "No archives indexed.";
   const catLines = (categories.rows as any[]).map(r =>
@@ -171,7 +176,7 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 
   // Archive / ZIP intent
   if (msg.includes("archive") || msg.includes("zip") || msg.includes("rar") || msg.includes("compressed")) {
-    const archCtx = await getArchivesContext();
+    const archCtx = await getArchivesContext(settings?.nasPath ?? null);
     if (archCtx) parts.push(archCtx);
   }
 
@@ -201,7 +206,10 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 async function buildSystemPrompt(settings: any): Promise<string> {
   const nasCondition = settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`;
   const [{ totalFiles }] = await db.select({ totalFiles: count() }).from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
-  const [{ archiveCount }] = await db.select({ archiveCount: count() }).from(archivesTable);
+  const [archiveCountRow] = await db.select({ archiveCount: count() })
+    .from(archivesTable)
+    .where(settings?.nasPath ? archiveScope(settings.nasPath) : sql`FALSE`);
+  const archiveCount = archiveCountRow?.archiveCount ?? 0;
   const [{ totalSizeBytes }] = await db.select({ totalSizeBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)` })
     .from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
   const typeBreakdown = await db.select({

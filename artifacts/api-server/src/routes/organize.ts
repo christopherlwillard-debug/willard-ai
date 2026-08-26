@@ -14,6 +14,7 @@ import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
+import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
@@ -602,6 +603,22 @@ router.post("/organize/jobs", async (req, res) => {
       res.status(403).json({ error: "sourcePath must be an existing path inside the configured library" });
       return;
     }
+    if (sourceType === "archive" && archiveId !== undefined && archiveId !== null) {
+      const parsedArchiveId = Number(archiveId);
+      const [archive] = Number.isInteger(parsedArchiveId)
+        ? await db.select({ path: archivesTable.path })
+          .from(archivesTable)
+          .where(archiveByIdScope(parsedArchiveId, nasPath))
+          .limit(1)
+        : [];
+      if (!archive) { res.status(404).json({ error: "Archive not found in the active library" }); return; }
+      let archivePath: string;
+      try { archivePath = resolveActiveArchivePath(archive.path, nasPath); }
+      catch { res.status(403).json({ error: "Archive path is outside the active library" }); return; }
+      if (archivePath !== canonicalSourcePath) {
+        res.status(400).json({ error: "archiveId does not match sourcePath" }); return;
+      }
+    }
     const resolvedDisposition = sourceType === "archive" ? (archiveDisposition ?? "keep") : "keep";
     if (sourceType === "folder" && archiveDisposition && archiveDisposition !== "keep") {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
@@ -667,19 +684,33 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
 
     if (job.sourceType === "archive") {
-      if (!fs.existsSync(job.sourcePath)) {
+      const archivePath = resolveActiveArchivePath(job.sourcePath, nasPath);
+      if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(eq(organizationJobsTable.id, id));
         res.status(422).json({ error: "Archive file not found on disk" }); return;
       }
       if (job.archiveId) {
-        const [arc] = await db.select().from(archivesTable).where(eq(archivesTable.id, job.archiveId)).limit(1);
+        const [arc] = await db.select().from(archivesTable)
+          .where(archiveByIdScope(job.archiveId, nasPath))
+          .limit(1);
+        if (!arc) {
+          res.status(404).json({ error: "Archive record not found in the active library" }); return;
+        }
+        let recordPath: string;
+        try { recordPath = resolveActiveArchivePath(arc.path, nasPath); }
+        catch {
+          res.status(403).json({ error: "Archive record is outside the active library" }); return;
+        }
+        if (recordPath !== archivePath) {
+          res.status(403).json({ error: "Archive record does not belong to this source path" }); return;
+        }
         if (arc?.peekStatus === "peeked" && Array.isArray(arc.peekEntries) && (arc.peekEntries as any[]).length > 0) {
           entries = (arc.peekEntries as any[]).map((e: any) => ({
             path: e.path ?? e.name ?? "", sizeBytes: e.sizeBytes ?? 0, isDirectory: e.isDirectory ?? false, fileType: e.fileType ?? "other",
           }));
         }
       }
-      if (entries.length === 0) entries = await peekArchiveEntries(job.sourcePath, path.basename(job.sourcePath));
+      if (entries.length === 0) entries = await peekArchiveEntries(archivePath, path.basename(archivePath));
     } else {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
@@ -1187,7 +1218,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
     }
-    try { resolveWithinRoot(job.sourcePath, nasPath); }
+    let canonicalJobSourcePath: string;
+    try { canonicalJobSourcePath = resolveActiveArchivePath(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
     // Active routes respect any category/path exclusions set via PATCH /plan
@@ -1240,9 +1272,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     if (job.sourceType === "archive") {
       send("status", { stage: "extracting", message: "Extracting archive to staging area…", progress: 5 });
-      if (!fs.existsSync(job.sourcePath)) throw new Error(`Archive not found: ${job.sourcePath}`);
-      opLog(`EXTRACT: ${job.sourcePath} → ${tempDir}`);
-      const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
+      if (!fs.existsSync(canonicalJobSourcePath) || !fs.statSync(canonicalJobSourcePath).isFile()) {
+        throw new Error(`Archive not found: ${canonicalJobSourcePath}`);
+      }
+      if (job.archiveId) {
+        const [archive] = await db.select({ path: archivesTable.path })
+          .from(archivesTable)
+          .where(archiveByIdScope(job.archiveId, nasPath))
+          .limit(1);
+        if (!archive || resolveActiveArchivePath(archive.path, nasPath) !== canonicalJobSourcePath) {
+          throw new Error("Archive record is not available in the active library");
+        }
+      }
+      opLog(`EXTRACT: ${canonicalJobSourcePath} → ${tempDir}`);
+      const extractResult = await safeExtractArchive(canonicalJobSourcePath, tempDir);
       crcValidation = extractResult.crcValidation;
       archiveExtractionChecksums = extractResult.extractionChecksums ?? [];
       const { entriesExtracted } = extractResult;
