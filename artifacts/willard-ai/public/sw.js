@@ -1,4 +1,7 @@
-const VERSION = "willard-shell-v1";
+// The production build replaces the placeholder with a revision derived from
+// the built shell and this worker. Keep the fallback useful for direct local
+// inspection, although the worker is only registered in production.
+const VERSION = "willard-shell-dev";
 const SHELL = [
   "./",
   "./index.html",

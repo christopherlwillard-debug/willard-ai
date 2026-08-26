@@ -51,7 +51,7 @@ export function ServiceAvailability({ children }: { children: React.ReactNode })
           </Button>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-            Your private media is not cached offline.
+            Offline mode keeps only the app shell available. Private media and library data require the local service.
           </div>
         </div>
       </div>
