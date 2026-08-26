@@ -8,6 +8,13 @@ Ensure-LogDir
 Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
+    try {
+        if (Restore-PendingDeveloperUpdate) {
+            Write-Warn "The previous runnable version was restored after the update did not start."
+        }
+    } catch {
+        $technical = $technical + " Rollback could not complete: " + $_.Exception.Message
+    }
     Write-Bad $friendly
     Write-Host ("  " + $technical) -ForegroundColor DarkGray
     Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
@@ -25,6 +32,11 @@ function Invoke-LoggedCommand($label, $logPath, [scriptblock]$command) {
 }
 
 # -- Existing state -------------------------------------------------------------
+Recover-InterruptedDeveloperUpdate
+$pendingDeveloperUpdate = Read-DeveloperUpdateJournal
+if ($pendingDeveloperUpdate -and $pendingDeveloperUpdate.phase -eq "swapped") {
+    Write-Info "Verifying the updated version before removing its rollback copy..."
+}
 $tracked = Read-TrackedPids
 if ($tracked -and (Test-ProcessAlive $tracked.api) -and (Test-ProcessAlive $tracked.web)) {
     Write-Ok "Willard AI is already running."
@@ -242,6 +254,13 @@ $services = Start-WillardServices
 
 function Fail-And-CleanUp($friendly, $technical) {
     Stop-TrackedProcesses | Out-Null
+    try {
+        if (Restore-PendingDeveloperUpdate) {
+            Write-Warn "The previous runnable version was restored after the update did not become healthy."
+        }
+    } catch {
+        $technical = $technical + " Rollback could not complete: " + $_.Exception.Message
+    }
     Write-Bad $friendly
     Write-Host ("  " + $technical) -ForegroundColor DarkGray
     Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray
@@ -261,6 +280,12 @@ if (-not (Wait-ForUrl $WebUrl "Media Center" 60 $services.web.Id $WebLog)) {
         (($script:LastWaitFailureReason) + " See " + $WebLog + " and " + (Join-Path $LogDir "web-error.log"))
 }
 Write-Ok "Media Center ready"
+
+try {
+    Confirm-DeveloperUpdateHealth
+} catch {
+    Write-Warn ("The updated version is healthy, but its rollback copy was retained: " + $_.Exception.Message)
+}
 
 if (-not (Test-Command "ffmpeg")) {
     Write-Warn "Media previews are limited until FFmpeg is installed."

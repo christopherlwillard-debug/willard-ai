@@ -21,6 +21,8 @@ $WebUrl = "http://127.0.0.1:5000"
 $UpdateManifest = "https://github.com/christopherlwillard-debug/willard-ai/releases/latest/download/release-manifest.json"
 $script:WillardRunToken = [guid]::NewGuid().ToString()
 $script:UpdateBackup = $null
+$script:UpdateCandidate = $null
+$UpdateJournal = Join-Path $DataRoot "updates\swap-journal.json"
 $script:UpdateStage = "startup"
 
 function Say($message) { Write-Host "  $message" -ForegroundColor Gray }
@@ -73,13 +75,90 @@ function Save-Services($apiPid, $webPid) {
   @{ version = 2; runToken = $script:WillardRunToken; api = $api; web = $web; startedAt = (Get-Date).ToString("o") } |
     ConvertTo-Json | Set-Content $PidFile
 }
+function Write-UpdateJournal($phase, $candidate, $backup) {
+  New-Item -ItemType Directory -Force (Split-Path $UpdateJournal) | Out-Null
+  @{
+    version = 1
+    phase = $phase
+    installRoot = $InstallRoot
+    candidate = $candidate
+    backup = $backup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $UpdateJournal -Encoding UTF8
+}
+function Read-UpdateJournal {
+  if (-not (Test-Path $UpdateJournal)) { return $null }
+  try { return Get-Content $UpdateJournal -Raw | ConvertFrom-Json } catch { return $null }
+}
+function Remove-UpdateJournal { Remove-Item $UpdateJournal -Force -ErrorAction SilentlyContinue }
+function Test-PackagedUpdateFault($point) {
+  if ($env:WILLARD_PACKAGED_UPDATE_FAIL_AT -eq $point) {
+    throw "Injected packaged update failure at $point."
+  }
+}
 function Restore-UpdateBackup {
-  if (-not $script:UpdateBackup -or -not (Test-Path $script:UpdateBackup)) { return }
-  Remove-Item (Join-Path $InstallRoot "*") -Recurse -Force -ErrorAction SilentlyContinue
-  Copy-Item (Join-Path $script:UpdateBackup "*") $InstallRoot -Recurse -Force
-  Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
-  $script:UpdateBackup = $null
-  Warn "The previous working release was restored."
+  $journal = Read-UpdateJournal
+  $backup = if ($script:UpdateBackup) { $script:UpdateBackup } elseif ($journal) { $journal.backup } else { $null }
+  if (-not $backup -or -not (Test-Path $backup)) { return $false }
+
+  $failed = $InstallRoot + ".failed-" + [guid]::NewGuid().ToString()
+  $parent = Split-Path -Parent $InstallRoot
+  Push-Location $parent
+  try {
+    if (Test-Path $InstallRoot) { Move-Item -LiteralPath $InstallRoot -Destination $failed -ErrorAction Stop }
+    Move-Item -LiteralPath $backup -Destination $InstallRoot -ErrorAction Stop
+    Remove-Item $failed -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-UpdateJournal
+    $script:UpdateBackup = $null
+    $script:UpdateCandidate = $null
+    Warn "The previous working release was restored."
+    return $true
+  } catch {
+    if (-not (Test-Path $InstallRoot) -and (Test-Path $failed)) {
+      Move-Item -LiteralPath $failed -Destination $InstallRoot -ErrorAction SilentlyContinue
+    }
+    throw
+  } finally {
+    Pop-Location
+  }
+}
+function Recover-InterruptedUpdateSwap {
+  $journal = Read-UpdateJournal
+  if (-not $journal) { return }
+  if ($journal.phase -in @("backup-created", "swapped")) {
+    $script:UpdateBackup = $journal.backup
+    Restore-UpdateBackup | Out-Null
+    if ($journal.candidate -and (Test-Path $journal.candidate)) {
+      Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return
+  }
+  if ($journal.candidate -and (Test-Path $journal.candidate)) {
+    Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Remove-UpdateJournal
+}
+function Invoke-PackagedVersionSwap($candidate, $backup) {
+  if (-not (Test-Path $candidate)) { throw "The verified release candidate is missing." }
+  if (Test-Path $backup) { throw "A previous release backup is still present: $backup" }
+
+  $parent = Split-Path -Parent $InstallRoot
+  Write-UpdateJournal "prepared" $candidate $backup
+  Push-Location $parent
+  try {
+    Move-Item -LiteralPath $InstallRoot -Destination $backup -ErrorAction Stop
+    Write-UpdateJournal "backup-created" $candidate $backup
+    Test-PackagedUpdateFault "swap-after-backup"
+    Move-Item -LiteralPath $candidate -Destination $InstallRoot -ErrorAction Stop
+    Write-UpdateJournal "swapped" $candidate $backup
+    $script:UpdateBackup = $backup
+    $script:UpdateCandidate = $candidate
+  } catch {
+    Restore-UpdateBackup | Out-Null
+    throw
+  } finally {
+    Pop-Location
+  }
 }
 function Get-SchemaFingerprint {
   $parts = @()
@@ -228,25 +307,29 @@ function Try-Update {
     }
     $stagedVersion = (Get-Content (Join-Path $stage "version.json") -Raw | ConvertFrom-Json).version
     if ($stagedVersion -ne $remote.version) { throw "The downloaded release version does not match its manifest." }
-    $script:UpdateStage = "installation backup"
-    Stop-Services
-    $backup = Join-Path $DataRoot "backup-$local"
-    Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
-    Copy-Item $InstallRoot $backup -Recurse -Force
-    $script:UpdateBackup = $backup
-    try {
-      $script:UpdateStage = "release installation"
-      Copy-Item (Join-Path $stage "*") $InstallRoot -Recurse -Force
-      foreach ($entry in $required) {
-        if (-not (Test-Path (Join-Path $InstallRoot $entry))) { throw "Installed update is missing: $entry" }
-      }
-      Good "Willard Media Center was updated safely."
-    } catch {
-      Remove-Item (Join-Path $InstallRoot "*") -Recurse -Force -ErrorAction SilentlyContinue
-      Copy-Item (Join-Path $backup "*") $InstallRoot -Recurse -Force
-      throw "The update could not be installed; the previous version was restored."
+    $script:UpdateStage = "candidate preparation"
+    $installParent = Split-Path -Parent $InstallRoot
+    $installLeaf = Split-Path -Leaf $InstallRoot
+    $candidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Force $candidate | Out-Null
+    Copy-Item (Join-Path $stage "*") $candidate -Recurse -Force -ErrorAction Stop
+    Test-PackagedUpdateFault "candidate-copy"
+    foreach ($entry in $required) {
+      if (-not (Test-Path (Join-Path $candidate $entry))) { throw "Prepared update is missing: $entry" }
     }
+
+    $script:UpdateStage = "atomic version swap"
+    Stop-Services
+    $backup = Join-Path $installParent ("." + $installLeaf + ".previous-" + $local + "-" + (Get-Date -Format "yyyyMMddHHmmss"))
+    Invoke-PackagedVersionSwap $candidate $backup
+    foreach ($entry in $required) {
+      if (-not (Test-Path (Join-Path $InstallRoot $entry))) { throw "Activated update is missing: $entry" }
+    }
+    Good "Willard Media Center was updated safely. The prior runnable version is retained until health checks pass."
   } catch {
+    if ($candidate -and (Test-Path $candidate)) {
+      Remove-Item $candidate -Recurse -Force -ErrorAction SilentlyContinue
+    }
     $statusCode = 0
     try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
     if ($statusCode -ne 404) {
@@ -273,6 +356,7 @@ try {
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
   if (Test-Path $LoadingScreen) { Start-Process $LoadingScreen }
+  Recover-InterruptedUpdateSwap
   Try-Update
   if (-not (Ensure-Env)) { exit 1 }
   if (-not (Test-Dependencies)) { exit 1 }
@@ -296,6 +380,7 @@ try {
   if ($script:UpdateBackup) {
     Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
     $script:UpdateBackup = $null
+    Remove-UpdateJournal
     Set-Content $UpdateCheckFile (Get-Date).ToString("o")
   }
   Good "Media Center is ready."

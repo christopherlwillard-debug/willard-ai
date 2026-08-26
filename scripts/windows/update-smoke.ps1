@@ -103,6 +103,11 @@ try {
   & git -C $Install checkout -- .
 
   # A changed API file with a failing pnpm build must roll back the pulled commit.
+  $runtimeMarker = Join-Path $Install "node_modules\rollback.marker"
+  $generatedMarker = Join-Path $Install "artifacts\api-server\dist\index.mjs.rollback.marker"
+  New-Item -ItemType Directory -Force (Split-Path -Parent $runtimeMarker), (Split-Path -Parent $generatedMarker) | Out-Null
+  Set-Content $runtimeMarker "old dependency tree" -Encoding UTF8
+  Set-Content $generatedMarker "old generated output" -Encoding UTF8
   Set-Content (Join-Path $Remote "artifacts\api-server\smoke-update.txt") "bad build" -Encoding UTF8
   & git -C $Remote add artifacts/api-server/smoke-update.txt
   & git -C $Remote commit --quiet -m "smoke failing build"
@@ -115,7 +120,27 @@ try {
   $after = (& git -C $Install rev-parse HEAD).Trim()
   Assert-True ($after -eq $before) "A failed rebuild did not restore the prior revision."
   Assert-True (-not (Test-Path (Join-Path $Install "artifacts\api-server\smoke-update.txt"))) "Failed update files remained installed."
-  Write-Host "Windows updater smoke passed: update, preservation, dirty-tree guard, and rollback."
+  Assert-True ((Read-Text $runtimeMarker) -match "old dependency tree") "A failed rebuild changed node_modules."
+  Assert-True ((Read-Text $generatedMarker) -match "old generated output") "A failed rebuild changed generated API output."
+
+  # A failure after the old version has been moved must return the exact prior
+  # runnable directory, not a Git-only source reset.
+  $env:PATH = $env:PATH -replace ("^" + [regex]::Escape($TempRoot) + ";"), ""
+  Set-Content (Join-Path $Remote "swap-failure-marker.txt") "must not activate" -Encoding UTF8
+  & git -C $Remote add swap-failure-marker.txt
+  & git -C $Remote commit --quiet -m "smoke swap failure"
+  $swapBefore = (& git -C $Install rev-parse HEAD).Trim()
+  $env:WILLARD_UPDATE_FAIL_AT = "swap-after-backup"
+  Push-Location $Install
+  try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Install "scripts\launcher\update.ps1") } finally { Pop-Location }
+  Remove-Item Env:\WILLARD_UPDATE_FAIL_AT -ErrorAction SilentlyContinue
+  $swapAfter = (& git -C $Install rev-parse HEAD).Trim()
+  Assert-True ($swapAfter -eq $swapBefore) "An interrupted directory swap did not restore the prior revision."
+  Assert-True (-not (Test-Path (Join-Path $Install "swap-failure-marker.txt"))) "Interrupted swap files remained installed."
+  Assert-True ((Read-Text $runtimeMarker) -match "old dependency tree") "Interrupted swap changed node_modules."
+  Assert-True ((Read-Text $generatedMarker) -match "old generated output") "Interrupted swap changed generated API output."
+  Assert-True (-not (Test-Path (Join-Path $TempRoot ".install.willard-update.json"))) "Interrupted swap left an update journal behind."
+  Write-Host "Windows updater smoke passed: full-version update, preservation, and rollback."
 } finally {
   Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -54,6 +54,12 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /untrusted host/);
   assert.match(launcher, /release-assets\.githubusercontent\.com/);
   assert.match(launcher, /Start-Process \$LoadingScreen/);
+  assert.match(launcher, /swap-journal\.json/);
+  assert.match(launcher, /Invoke-PackagedVersionSwap/);
+  assert.match(launcher, /Recover-InterruptedUpdateSwap/);
+  assert.match(launcher, /Move-Item -LiteralPath \$InstallRoot -Destination \$backup/);
+  assert.match(launcher, /prior runnable version is retained until health checks pass/);
+  assert.doesNotMatch(launcher, /Copy-Item \(Join-Path \$stage "\*"\) \$InstallRoot -Recurse -Force/);
 });
 
 test("installer deliberately leaves external services outside its payload", () => {
@@ -316,15 +322,36 @@ test("developer fallback stages a complete source archive", async () => {
   assert.match(updater, /The developer-source archive was empty or malformed/);
   assert.match(updater, /failed checksum verification/);
   assert.match(updater, /robocopy/);
-  assert.match(updater, /previous installation was restored/);
+  assert.match(updater, /Copy-PreservedDeveloperState/);
+  assert.match(updater, /Complete-DeveloperUpdate/);
+  assert.match(launcherCommon, /Invoke-DeveloperVersionSwap/);
+  assert.match(launcherCommon, /Write-DeveloperUpdateJournal/);
 });
 
-test("developer updater preserves local data and rolls back failed Git updates", () => {
+test("developer updater preserves full runnable versions and rolls back failed candidate updates", () => {
   assert.match(updater, /status --porcelain/);
-  assert.match(updater, /reset --hard \$gitBefore/);
-  assert.match(updater, /previous developer version was restored/);
+  assert.match(updater, /New-CandidateDirectory/);
+  assert.match(updater, /Invoke-DeveloperVersionSwap/);
+  assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);
   assert.match(updater, /--ignore-scripts/);
   assert.match(updater, /api-server run build/);
+  assert.match(launcherCommon, /Restore-PendingDeveloperUpdate/);
+  assert.match(launcherCommon, /Recover-InterruptedDeveloperUpdate/);
+  assert.match(launcherCommon, /Confirm-DeveloperUpdateHealth/);
+  assert.match(developerLauncher, /Verifying the updated version before removing its rollback copy/);
+  assert.match(developerLauncher, /previous runnable version was restored after the update did not become healthy/);
+});
+
+test("Windows update swaps are journaled and recoverable across copied, locked, or interrupted versions", () => {
+  assert.match(updater, /candidate-copy/);
+  assert.match(updater, /install/);
+  assert.match(updater, /build/);
+  assert.match(launcherCommon, /swap-after-backup/);
+  assert.match(launcher, /WILLARD_PACKAGED_UPDATE_FAIL_AT/);
+  assert.match(launcher, /candidate-copy/);
+  assert.match(launcher, /swap-after-backup/);
+  assert.match(launcher, /backup-created/);
+  assert.match(launcher, /Remove-UpdateJournal/);
 });
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
@@ -337,6 +364,8 @@ test("Windows update smoke test exercises Git, preservation, and rollback on a r
   assert.match(updateSmoke, /media-path\.txt/);
   assert.match(updateSmoke, /New-WillardShortcut/);
   assert.match(updateSmoke, /WScript\.Shell/);
+  assert.match(updateSmoke, /node_modules/);
+  assert.match(updateSmoke, /dist\\index\.mjs/);
 });
 
 test("developer setup creates identity shortcuts for the batch launcher", () => {

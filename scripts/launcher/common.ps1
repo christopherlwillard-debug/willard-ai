@@ -119,8 +119,8 @@ function Initialize-DeveloperGitCheckout {
     if ($LASTEXITCODE -ne 0) { throw "Git could not reach GitHub. Check your internet connection and try again." }
 
     # ZIP extractions begin as entirely untracked working trees. Capture that
-    # baseline locally so reset can safely align code with origin/main; .env,
-    # logs, node_modules, and other ignored runtime data remain untouched.
+    # baseline locally so future candidate pulls can align code with origin/main;
+    # .env, logs, node_modules, and other ignored runtime data remain untouched.
     & $gitCommand -C $Root add -A
     & $gitCommand -C $Root -c user.name="Willard AI" -c user.email="willard-local@users.noreply.github.com" commit --quiet -m "Local developer installation baseline" 2>$null
     & $gitCommand -C $Root checkout --quiet -B $GithubBranch "origin/$GithubBranch"
@@ -143,6 +143,114 @@ function Get-WillardPnpmCommand {
 
 function Ensure-LogDir {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+}
+
+function Get-DeveloperUpdateJournalPath {
+    $parent = Split-Path -Parent $Root
+    $leaf = Split-Path -Leaf $Root
+    return (Join-Path $parent ("." + $leaf + ".willard-update.json"))
+}
+
+function Read-DeveloperUpdateJournal {
+    $journalPath = Get-DeveloperUpdateJournalPath
+    if (-not (Test-Path $journalPath)) { return $null }
+    try { return Get-Content $journalPath -Raw | ConvertFrom-Json } catch { return $null }
+}
+
+function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
+    $journalPath = Get-DeveloperUpdateJournalPath
+    @{
+        version = 1
+        phase = $phase
+        live = $Root
+        candidate = $candidate
+        backup = $backup
+        updatedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+}
+
+function Remove-DeveloperUpdateJournal {
+    Remove-Item (Get-DeveloperUpdateJournalPath) -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-DeveloperVersionSwap($candidate, $backup) {
+    if (-not (Test-Path $candidate)) { throw "The prepared update version is missing." }
+    if (Test-Path $backup) { throw "A previous update backup is still present: $backup" }
+
+    $parent = Split-Path -Parent $Root
+    $liveMoved = $false
+    Write-DeveloperUpdateJournal "prepared" $candidate $backup
+    Push-Location $parent
+    try {
+        Move-Item -LiteralPath $Root -Destination $backup -ErrorAction Stop
+        $liveMoved = $true
+        Write-DeveloperUpdateJournal "backup-created" $candidate $backup
+        if ($env:WILLARD_UPDATE_FAIL_AT -eq "swap-after-backup") {
+            throw "Injected update failure after the previous version was moved."
+        }
+        Move-Item -LiteralPath $candidate -Destination $Root -ErrorAction Stop
+        Write-DeveloperUpdateJournal "swapped" $candidate $backup
+    } catch {
+        $restored = -not $liveMoved
+        if ($liveMoved -and -not (Test-Path $Root) -and (Test-Path $backup)) {
+            Move-Item -LiteralPath $backup -Destination $Root -ErrorAction Stop
+            $restored = $true
+        }
+        if ($restored) { Remove-DeveloperUpdateJournal }
+        throw
+    } finally {
+        Pop-Location
+    }
+}
+
+function Restore-PendingDeveloperUpdate {
+    $journal = Read-DeveloperUpdateJournal
+    if (-not $journal -or $journal.phase -notin @("backup-created", "swapped") -or
+        -not $journal.backup -or -not (Test-Path $journal.backup)) {
+        return $false
+    }
+
+    $failed = $Root + ".failed-" + [guid]::NewGuid().ToString()
+    $parent = Split-Path -Parent $Root
+    Push-Location $parent
+    try {
+        if (Test-Path $Root) { Move-Item -LiteralPath $Root -Destination $failed -ErrorAction Stop }
+        Move-Item -LiteralPath $journal.backup -Destination $Root -ErrorAction Stop
+        Remove-Item $failed -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-DeveloperUpdateJournal
+        return $true
+    } catch {
+        if (-not (Test-Path $Root) -and (Test-Path $failed)) {
+            Move-Item -LiteralPath $failed -Destination $Root -ErrorAction SilentlyContinue
+        }
+        throw
+    } finally {
+        Pop-Location
+    }
+}
+
+function Recover-InterruptedDeveloperUpdate {
+    $journal = Read-DeveloperUpdateJournal
+    if (-not $journal) { return }
+    if ($journal.phase -in @("backup-created", "swapped")) {
+        if (Restore-PendingDeveloperUpdate) {
+            Write-Warn "An interrupted update was found; the previous runnable version was restored."
+        }
+        return
+    }
+    if ($journal.candidate -and (Test-Path $journal.candidate)) {
+        Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-DeveloperUpdateJournal
+}
+
+function Confirm-DeveloperUpdateHealth {
+    $journal = Read-DeveloperUpdateJournal
+    if (-not $journal -or $journal.phase -ne "swapped") { return }
+    if ($journal.backup -and (Test-Path $journal.backup)) {
+        Remove-Item $journal.backup -Recurse -Force -ErrorAction Stop
+    }
+    Remove-DeveloperUpdateJournal
 }
 
 function Ensure-EnvFile {
