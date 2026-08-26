@@ -4,8 +4,10 @@ import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspa
 import { eq, desc, inArray, or, and, isNotNull } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import * as crypto from "crypto";
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
+import { pipeline } from "stream/promises";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -42,6 +44,75 @@ function getArchiveExt(filename: string): string {
   if (fn.endsWith(".tar.bz2")) return "tar.bz2";
   if (fn.endsWith(".tar.xz"))  return "tar.xz";
   return path.extname(filename).replace(".", "").toLowerCase();
+}
+
+type TarCompression = "none" | "gzip" | "bzip2" | "xz";
+
+function getTarCompression(filename: string): TarCompression {
+  const fn = filename.toLowerCase();
+  if (fn.endsWith(".tar.gz") || fn.endsWith(".tgz") || fn.endsWith(".gz")) return "gzip";
+  if (fn.endsWith(".tar.bz2") || fn.endsWith(".tbz2") || fn.endsWith(".bz2")) return "bzip2";
+  if (fn.endsWith(".tar.xz") || fn.endsWith(".txz") || fn.endsWith(".xz")) return "xz";
+  return "none";
+}
+
+/**
+ * Make a plain TAR file available to the tar library. tar itself supports gzip,
+ * but not bzip2 or xz; those formats are decompressed with argument-array
+ * child processes so archive filenames are never interpreted by a shell.
+ *
+ * The scratch directory is caller-owned when supplied (safe extraction keeps
+ * the temporary TAR beside the extracted files), and is otherwise cleaned up
+ * before this function returns.
+ */
+async function withTarInput<T>(
+  archivePath: string,
+  filename: string,
+  scratchDir: string | undefined,
+  callback: (tarPath: string, options: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  const compression = getTarCompression(filename);
+  if (compression === "none" || compression === "gzip") {
+    return callback(archivePath, compression === "gzip" ? { gzip: true } : {});
+  }
+
+  const ownsScratchDir = !scratchDir;
+  const workDir = scratchDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "willard-tar-"));
+  const tarPath = path.join(workDir, ".willard-input.tar");
+  const decompressor = compression === "bzip2" ? "bzip2" : "xz";
+
+  try {
+    const child = spawn(decompressor, ["-dc", "--", archivePath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+
+    const exit = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => {
+        if (code === 0) resolve();
+        else reject(new Error(
+          `${decompressor} failed${signal ? ` (${signal})` : ""}: ${stderr.trim() || `exit code ${code}`}`,
+        ));
+      });
+    });
+    if (!child.stdout) throw new Error(`${decompressor} did not provide output`);
+    const results = await Promise.allSettled([
+      pipeline(child.stdout, fs.createWriteStream(tarPath, { flags: "wx" })),
+      exit,
+    ]);
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+
+    return await callback(tarPath, {});
+  } finally {
+    try { fs.rmSync(tarPath, { force: true }); } catch { /* best effort */ }
+    if (ownsScratchDir) {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }
 }
 
 function getFileType(ext: string): string {
@@ -129,7 +200,6 @@ function getDiskFreeBytes(dirPath: string): number | null {
 
 async function peekArchiveEntries(archivePath: string, filename: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
   const ext    = getArchiveExt(filename);
-  const rawExt = path.extname(filename).replace(".", "").toLowerCase();
   const entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
 
   if (ZIP_EXTS.has(ext)) {
@@ -140,10 +210,14 @@ async function peekArchiveEntries(archivePath: string, filename: string): Promis
     } catch { /* corrupt or password-protected */ }
   } else if (TAR_EXTS.has(ext)) {
     try {
-      await tar.list({
-        file: archivePath,
-        ...(["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {}),
-        onentry: (e: any) => entries.push({ path: e.path, sizeBytes: typeof e.size === "number" ? e.size : 0, isDirectory: e.type === "Directory", fileType: getFileTypeFromName(e.path) }),
+      await withTarInput(archivePath, filename, undefined, async (tarPath, tarOptions) => {
+        await tar.list({
+          file: tarPath,
+          ...tarOptions,
+          preservePaths: true,
+          strict: true,
+          onentry: (e: any) => entries.push({ path: e.path, sizeBytes: typeof e.size === "number" ? e.size : 0, isDirectory: e.type === "Directory", fileType: getFileTypeFromName(e.path) }),
+        });
       });
     } catch { /* corrupt */ }
   } else if (SEVENZIP_EXTS.has(ext)) {
@@ -166,17 +240,20 @@ async function peekArchiveEntries(archivePath: string, filename: string): Promis
 async function validateArchive(archivePath: string): Promise<{ ok: boolean; detail: string; entryCount: number }> {
   try {
     const ext    = getArchiveExt(path.basename(archivePath));
-    const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
     let count = 0;
 
     if (ZIP_EXTS.has(ext)) {
       const zip = new AdmZip(archivePath);
       count = zip.getEntries().length;
     } else if (TAR_EXTS.has(ext)) {
-      await tar.list({
-        file: archivePath,
-        ...(["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {}),
-        onentry: () => count++,
+      await withTarInput(archivePath, path.basename(archivePath), undefined, async (tarPath, tarOptions) => {
+        await tar.list({
+          file: tarPath,
+          ...tarOptions,
+          preservePaths: true,
+          strict: true,
+          onentry: () => count++,
+        });
       });
     } else if (SEVENZIP_EXTS.has(ext)) {
       await new Promise<void>(resolve => {
@@ -242,7 +319,6 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
   extractionChecksums: ExtractionChecksumRecord[];
 }> {
   const ext    = getArchiveExt(path.basename(archivePath));
-  const rawExt = path.extname(archivePath).replace(".", "").toLowerCase();
   fs.mkdirSync(stagingDir, { recursive: true });
 
   /** Validate a single entry path before writing any bytes to disk. */
@@ -317,57 +393,85 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
     };
 
   } else if (TAR_EXTS.has(ext)) {
-    const gzipOpts = ["gz","tgz","bz2","tbz2","xz","txz"].includes(rawExt) ? { gzip: rawExt === "gz" || rawExt === "tgz" } : {};
     const filePaths: string[] = [];
 
-    // Pass 1: enumerate and validate
-    await tar.list({
-      file: archivePath,
-      ...gzipOpts,
-      onentry: (e: any) => {
-        const t = e.type as string;
-        if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
-          throw new Error(`Archive traversal rejected: link entry "${e.path}" (type: ${t}) in TAR`);
-        if (t !== "Directory") {
-          assertSafeEntryPath(e.path);
-          filePaths.push(e.path);
+    return await withTarInput(archivePath, path.basename(archivePath), stagingDir, async (tarPath, tarOptions) => {
+      // Pass 1: preserve raw archive paths while enumerating so the safety
+      // check sees traversal instead of tar silently sanitizing it.
+      let validationError: Error | undefined;
+      await tar.list({
+        file: tarPath,
+        ...tarOptions,
+        preservePaths: true,
+        strict: true,
+        filter: (_p: string, e: any) => {
+          if (validationError) return false;
+          try {
+            const t = e.type as string;
+            if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
+              throw new Error(`Archive traversal rejected: link entry "${e.path}" (type: ${t}) in TAR`);
+            assertSafeEntryPath(e.path);
+            return true;
+          } catch (err) {
+            validationError = err instanceof Error ? err : new Error(String(err));
+            return false;
+          }
+        },
+        onentry: (e: any) => {
+          if (e.type !== "Directory") filePaths.push(e.path);
+        },
+      });
+      if (validationError) throw validationError;
+
+      // Pass 2: extract only after every entry passed validation. Preserve raw
+      // paths here too, and validate again to defend against a changed archive.
+      let extractionValidationError: Error | undefined;
+      await tar.extract({
+        file: tarPath,
+        cwd: stagingDir,
+        ...tarOptions,
+        preservePaths: true,
+        strict: true,
+        unlink: true,
+        filter: (_p: string, entry: any) => {
+          const t = entry?.type as string | undefined;
+          if (extractionValidationError) return false;
+          try {
+            if (t === "SymbolicLink" || t === "Link" || t === "HardLink")
+              return false;
+            assertSafeEntryPath(_p);
+            return true;
+          } catch (err) {
+            extractionValidationError = err instanceof Error ? err : new Error(String(err));
+            return false;
+          }
+        },
+      } as any);
+      if (extractionValidationError) throw extractionValidationError;
+
+      entriesExtracted = filePaths.length;
+
+      // Post-extraction SHA-256: TAR archives have no per-file payload hash, so we hash each
+      // extracted file as written to disk.  There is no archive-level "source hash" to compare
+      // against, so verified=false — but destHash is recorded for rollback auditing.
+      const extractionChecksumsTar: ExtractionChecksumRecord[] = [];
+      for (const fp of filePaths) {
+        const outPath = path.join(stagingDir, fp);
+        try {
+          const destHash = await sha256File(outPath);
+          extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
+        } catch {
+          // File not found after extraction — will be caught by the count-match check upstream
+          extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash: "", verificationMethod: "post-extract-only", verified: false });
         }
-      },
-    });
-
-    // Pass 2: extract with symlink filter as second defence layer
-    await tar.extract({
-      file: archivePath,
-      cwd: stagingDir,
-      ...gzipOpts,
-      filter: (_p: string, entry: any) => {
-        const t = entry?.type as string | undefined;
-        return t !== "SymbolicLink" && t !== "Link" && t !== "HardLink";
-      },
-    } as any);
-
-    entriesExtracted = filePaths.length;
-
-    // Post-extraction SHA-256: TAR archives have no per-file payload hash, so we hash each
-    // extracted file as written to disk.  There is no archive-level "source hash" to compare
-    // against, so verified=false — but destHash is recorded for rollback auditing.
-    const extractionChecksumsTar: ExtractionChecksumRecord[] = [];
-    for (const fp of filePaths) {
-      const outPath = path.join(stagingDir, fp);
-      try {
-        const destHash = await sha256File(outPath);
-        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash, verificationMethod: "post-extract-only", verified: true });
-      } catch {
-        // File not found after extraction — will be caught by the count-match check upstream
-        extractionChecksumsTar.push({ relativePath: fp, sourceHash: "", destHash: "", verificationMethod: "post-extract-only", verified: false });
       }
-    }
 
-    return {
-      entriesExtracted,
-      crcValidation: { format: "tar-sha256-post-extract", checked: 0, passed: 0, skipped: entriesExtracted, note: "TAR has no per-file payload hash; SHA-256 computed post-extraction for rollback auditing" },
-      extractionChecksums: extractionChecksumsTar,
-    };
+      return {
+        entriesExtracted,
+        crcValidation: { format: "tar-sha256-post-extract", checked: 0, passed: 0, skipped: entriesExtracted, note: "TAR has no per-file payload hash; SHA-256 computed post-extraction for rollback auditing" },
+        extractionChecksums: extractionChecksumsTar,
+      };
+    });
 
   } else if (SEVENZIP_EXTS.has(ext)) {
     const filePaths: string[] = [];

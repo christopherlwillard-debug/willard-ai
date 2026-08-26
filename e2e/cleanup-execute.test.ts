@@ -576,7 +576,185 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 6: traversal protection still applies ───────────────────────────
+  // ── Test 6: TAR archives use the same waiting + integrity safeguards ──────
+
+  test("approved TAR and compressed TAR archives wait safely with verified contents", async () => {
+    const waitingDir = path.join(tempNasDir, "Waiting to be Organized");
+    const variants = [
+      { suffix: "tar", extension: "tar", createFlag: "-cf" },
+      { suffix: "tgz", extension: "tgz", createFlag: "-czf" },
+    ];
+
+    for (const variant of variants) {
+      const archivePath = path.join(tempNasDir, `approved-${variant.suffix}.${variant.extension}`);
+      const archiveInputDir = path.join(tempNasDir, `approved-${variant.suffix}-input`);
+      const files = [
+        { entry: `photos/approved-${variant.suffix}.jpg`, content: Buffer.from(`${variant.suffix}-photo-content`) },
+        { entry: `notes/readme-${variant.suffix}.txt`, content: Buffer.from(`${variant.suffix}-note-content`) },
+      ];
+
+      for (const file of files) {
+        const inputPath = path.join(archiveInputDir, file.entry);
+        fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+        fs.writeFileSync(inputPath, file.content);
+      }
+      execFileSync(
+        "tar",
+        [variant.createFlag, archivePath, "-C", archiveInputDir, "photos", "notes"],
+        { cwd: archiveInputDir },
+      );
+      fs.rmSync(archiveInputDir, { recursive: true, force: true });
+
+      const createRes = await apiPost("/organize/jobs", {
+        sourceType: "archive",
+        sourcePath: archivePath,
+        archiveDisposition: "waiting",
+      });
+      const created = await readJson<{ id: number }>(createRes);
+      assert.strictEqual(created.status, 201, `TAR job creation failed: ${created.text}`);
+
+      const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+      const analyzed = await readJson<{
+        status: string;
+        planJson?: {
+          routes: Array<{ destination: string }>;
+          destinations: { images: string; videos: string; documents: string; other: string };
+        };
+      }>(analyzeRes);
+      assert.strictEqual(analyzed.status, 200, `TAR analysis failed: ${analyzed.text}`);
+      assert.ok(analyzed.body.planJson, "TAR analysis should return the saved plan");
+
+      const plan = analyzed.body.planJson!;
+      const expectedWaiting = path.resolve(waitingDir);
+      assert.deepEqual(
+        plan.routes.map((route) => path.resolve(route.destination)),
+        files.map(() => expectedWaiting),
+        `${variant.extension} routes must use Waiting to be Organized`,
+      );
+      assert.deepEqual(
+        Object.values(plan.destinations).map((destination) => path.resolve(destination)),
+        [expectedWaiting, expectedWaiting, expectedWaiting, expectedWaiting],
+        `${variant.extension} destination summaries must use Waiting to be Organized`,
+      );
+
+      const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
+      assert.strictEqual(preflightRes.status, 200, `TAR preflight failed: ${await preflightRes.text()}`);
+
+      const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+      const executeText = await executeRes.text();
+      assert.strictEqual(executeRes.status, 200);
+      assert.match(executeText, /event: complete/, `${variant.extension} execution did not complete`);
+      assert.doesNotMatch(executeText, /event: error/, `${variant.extension} execution must not report an error`);
+
+      for (const file of files) {
+        const destination = path.join(waitingDir, path.basename(file.entry));
+        assert.ok(fs.existsSync(destination), `Extracted ${variant.extension} file should arrive at ${destination}`);
+        assert.deepEqual(fs.readFileSync(destination), file.content, "TAR extracted bytes must be intact");
+      }
+      assert.ok(fs.existsSync(archivePath), `${variant.extension} source archive must remain present`);
+
+      const jobRes = await apiGet(`/organize/jobs/${created.body.id}`);
+      const job = await jobRes.json() as {
+        status: string;
+        reportJson?: {
+          filesVerified: number;
+          checksumVerifiedCount: number;
+          archiveExtractionChecksums?: Array<{ verified: boolean; verificationMethod: string }>;
+          archiveCrcValidation?: { format: string };
+        };
+      };
+      assert.strictEqual(job.status, "completed");
+      assert.equal(job.reportJson?.filesVerified, files.length);
+      assert.equal(job.reportJson?.checksumVerifiedCount, files.length);
+      assert.equal(
+        job.reportJson?.archiveExtractionChecksums?.filter((checksum) => checksum.verified).length,
+        files.length,
+        "each TAR entry must have a post-extraction checksum",
+      );
+      assert.ok(
+        job.reportJson?.archiveExtractionChecksums?.every((checksum) => checksum.verificationMethod === "post-extract-only"),
+        "TAR checksums must identify their post-extraction verification method",
+      );
+      assert.match(job.reportJson?.archiveCrcValidation?.format ?? "", /tar-sha256-post-extract/);
+    }
+  });
+
+  // ── Test 7: TAR traversal protection rejects before extraction ────────────
+
+  test("TAR traversal is rejected before extraction and the source remains intact", async () => {
+    const archivePath = path.join(tempNasDir, "malicious-archive.tar");
+    const archiveInputDir = path.join(tempNasDir, "malicious-archive-input");
+    const outsidePath = path.join(tempNasDir, "tar-escape.txt");
+    fs.mkdirSync(archiveInputDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveInputDir, "escape.txt"), "must not escape staging");
+    execFileSync(
+      "tar",
+      ["-cf", archivePath, "-C", archiveInputDir, "--transform=s|^|../|", "escape.txt"],
+      { cwd: archiveInputDir },
+    );
+    fs.rmSync(archiveInputDir, { recursive: true, force: true });
+    fs.rmSync(outsidePath, { force: true });
+
+    const createRes = await apiPost("/organize/jobs", {
+      sourceType: "archive",
+      sourcePath: archivePath,
+      archiveDisposition: "waiting",
+    });
+    const created = await readJson<{ id: number }>(createRes);
+    assert.strictEqual(created.status, 201, `TAR traversal job creation failed: ${created.text}`);
+
+    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+    assert.strictEqual(analyzeRes.status, 200, `TAR traversal analysis failed: ${await analyzeRes.text()}`);
+    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
+    assert.strictEqual(preflightRes.status, 200, `TAR traversal preflight failed: ${await preflightRes.text()}`);
+
+    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeText = await executeRes.text();
+    assert.strictEqual(executeRes.status, 200);
+    assert.match(executeText, /event: error/, "TAR traversal must fail during safe extraction");
+    assert.match(executeText, /traversal rejected/i);
+    assert.ok(fs.existsSync(archivePath), "A rejected TAR archive must remain present");
+    assert.ok(!fs.existsSync(outsidePath), "TAR traversal must not write outside the staging area");
+    assert.equal(
+      fs.readdirSync(path.join(tempNasDir, "Waiting to be Organized"), { withFileTypes: true }).length,
+      0,
+      "TAR traversal must not partially move files",
+    );
+  });
+
+  // ── Test 8: extraction failure rolls back without consuming source ────────
+
+  test("TAR extraction failure after approval leaves no partial moves and preserves source", async () => {
+    const archivePath = path.join(tempNasDir, "truncated-archive.tgz");
+    const archiveInputDir = path.join(tempNasDir, "truncated-archive-input");
+    const destination = path.join(tempNasDir, "Waiting to be Organized", "truncated.jpg");
+    fs.mkdirSync(path.join(archiveInputDir, "photos"), { recursive: true });
+    fs.writeFileSync(path.join(archiveInputDir, "photos", "truncated.jpg"), "must not be partially moved");
+    execFileSync("tar", ["-czf", archivePath, "-C", archiveInputDir, "photos"]);
+    fs.rmSync(archiveInputDir, { recursive: true, force: true });
+
+    const createRes = await apiPost("/organize/jobs", {
+      sourceType: "archive",
+      sourcePath: archivePath,
+      archiveDisposition: "waiting",
+    });
+    const created = await readJson<{ id: number }>(createRes);
+    assert.strictEqual(created.status, 201, `Truncated TAR job creation failed: ${created.text}`);
+    assert.strictEqual((await apiPost(`/organize/jobs/${created.body.id}/analyze`, {})).status, 200);
+    assert.strictEqual((await apiPost(`/organize/jobs/${created.body.id}/preflight`, {})).status, 200);
+
+    const originalSize = fs.statSync(archivePath).size;
+    fs.truncateSync(archivePath, Math.max(1, Math.floor(originalSize / 2)));
+    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeText = await executeRes.text();
+    assert.strictEqual(executeRes.status, 200);
+    assert.match(executeText, /event: error/, "A truncated TAR must fail extraction");
+    assert.doesNotMatch(executeText, /event: complete/, "A failed TAR extraction must not complete");
+    assert.ok(fs.existsSync(archivePath), "A failed TAR extraction must preserve the source archive");
+    assert.ok(!fs.existsSync(destination), "A failed TAR extraction must not move partial files");
+  });
+
+  // ── Test 9: traversal protection still applies ───────────────────────────
 
   test("archive traversal is rejected before extraction and the source remains intact", async () => {
     const archivePath = path.join(tempNasDir, "malicious-archive.zip");
@@ -611,7 +789,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(!fs.existsSync(escapedPath), "Traversal must not write outside the staging area");
   });
 
-  // ── Test 7: missing NAS returns a retryable conflict ──────────────────────
+  // ── Test 10: missing NAS returns a retryable conflict ─────────────────────
 
   test("execute with an empty NAS path returns 409 without consuming the queue", async () => {
     const clearNas = await apiPut("/settings", { nasPath: "" });
@@ -629,7 +807,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     }
   });
 
-  // ── Test 8: execute with unknown ID returns graceful error ────────────────
+  // ── Test 11: execute with unknown ID returns graceful error ───────────────
 
   test("execute with a non-existent file ID returns error entry and recycled=0", async () => {
     const res = await apiPost("/cleanup/execute", {
@@ -648,7 +826,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 9: execute with empty array returns 400 ──────────────────────────
+  // ── Test 12: execute with empty array returns 400 ─────────────────────────
 
   test("execute with an empty deleteFileIds array returns 400", async () => {
     const res = await apiPost("/cleanup/execute", { deleteFileIds: [] });
@@ -659,7 +837,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     );
   });
 
-  // ── Test 10: second execute on already-moved file reports missing-on-disk ──
+  // ── Test 13: second execute on already-moved file reports missing-on-disk ─
 
   test("executing the same file ID again reports file-not-found error", async () => {
     const res = await apiPost("/cleanup/execute", {
