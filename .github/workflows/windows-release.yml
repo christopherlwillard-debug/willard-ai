@@ -118,7 +118,7 @@ jobs:
             throw "Backend audit API did not become ready.`n$tail`n$errorTail"
           }
 
-      - name: Run backend audit and integration tests
+      - name: Run API server backend audit
         shell: pwsh
         env:
           WILLARD_API_URL: "http://127.0.0.1:8080"
@@ -126,8 +126,19 @@ jobs:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
           PGPASSWORD: "postgres"
         run: |
-          pnpm run audit:backend
-          if ($LASTEXITCODE -ne 0) { throw "Backend audit and integration tests failed." }
+          pnpm --filter @workspace/api-server run audit
+          if ($LASTEXITCODE -ne 0) { throw "API server backend audit failed." }
+
+      - name: Run backend integration tests
+        shell: pwsh
+        env:
+          WILLARD_API_URL: "http://127.0.0.1:8080"
+          WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
+          PGPASSWORD: "postgres"
+        run: |
+          node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts e2e/cleanup-execute.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Backend integration tests failed." }
 
       - name: Stop backend audit API
         if: always()
