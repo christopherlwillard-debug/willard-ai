@@ -597,13 +597,29 @@ function ExecuteStep({ job, onDone }: { job: OrganizationJob; onDone: (result: a
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [log]);
   useEffect(() => () => { esRef.current?.close(); }, []);
 
-  const startExecute = () => {
+  const startExecute = async () => {
     if (started) return;
     setStarted(true);
     setError(null);
     setLog([]);
 
-    const es = new EventSource(eventUrl(`/organize/jobs/${job.id}/execute`));
+    let token: string;
+    try {
+      const tokenResponse = await fetch(apiUrl(`/organize/jobs/${job.id}/execute-token`), { method: "POST" });
+      const tokenBody = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok || typeof tokenBody.token !== "string") {
+        throw new Error(tokenBody.error ?? "Could not authorize execution");
+      }
+      token = tokenBody.token;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not authorize execution";
+      setError(message);
+      setStarted(false);
+      toast({ title: "Execution could not start", description: message, variant: "destructive" });
+      return;
+    }
+
+    const es = new EventSource(eventUrl(`/organize/jobs/${job.id}/execute`, token));
     esRef.current = es;
 
     es.addEventListener("status", (e: MessageEvent) => {
@@ -1189,11 +1205,26 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
     }
   };
 
-  const handleResume = (jobId: number) => {
+  const handleResume = async (jobId: number) => {
     if (esRefs.current[jobId]) esRefs.current[jobId].close();
     setResumeState(prev => ({ ...prev, [jobId]: { stage: "starting", progress: 0, log: [], done: false, error: null } }));
 
-    const es = new EventSource(eventUrl(`/organize/jobs/${jobId}/resume`));
+    let token: string;
+    try {
+      const tokenResponse = await fetch(apiUrl(`/organize/jobs/${jobId}/resume-token`), { method: "POST" });
+      const tokenBody = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok || typeof tokenBody.token !== "string") {
+        throw new Error(tokenBody.error ?? "Could not authorize resume");
+      }
+      token = tokenBody.token;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not authorize resume";
+      setResumeState(prev => ({ ...prev, [jobId]: { ...prev[jobId], stage: "error", done: true, error: message } }));
+      toast({ title: "Resume could not start", description: message, variant: "destructive" });
+      return;
+    }
+
+    const es = new EventSource(eventUrl(`/organize/jobs/${jobId}/resume`, token));
     esRefs.current[jobId] = es;
 
     es.addEventListener("status", (e: MessageEvent) => {

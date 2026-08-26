@@ -110,6 +110,9 @@ test.describe("routed workflow recovery", () => {
         },
       }),
     );
+    await page.route("**/api/optimize/jobs/77/execute-token", (route) =>
+      route.fulfill({ json: { token: "test-execution-token" } }),
+    );
     await page.route("**/api/optimize/jobs/77/execute", (route) =>
       route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }),
     );

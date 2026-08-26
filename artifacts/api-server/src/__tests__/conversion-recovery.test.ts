@@ -84,7 +84,19 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     const pending = JSON.parse(retryText) as { status: string };
     assert.equal(pending.status, "pending");
 
-    const stream = await fetch(`${API_BASE}/api/optimize/jobs/${jobId}/execute`, {
+    const missingToken = await fetch(`${API_BASE}/api/optimize/jobs/${jobId}/execute`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(missingToken.status, 403);
+    await missingToken.text();
+
+    const tokenResponse = await post(`/optimize/jobs/${jobId}/execute-token`, {});
+    const tokenBody = await tokenResponse.json() as { token?: string; error?: string };
+    assert.equal(tokenResponse.status, 200, tokenBody.error ?? "Execution token request failed");
+    assert.ok(tokenBody.token, "Execution token should be returned");
+
+    const authorizedUrl = `${API_BASE}/api/optimize/jobs/${jobId}/execute?token=${encodeURIComponent(tokenBody.token)}`;
+    const stream = await fetch(authorizedUrl, {
       headers: { Cookie: cookie },
     });
     const text = await stream.text();
@@ -93,5 +105,11 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     assert.match(text, /"totalFiles":0/);
     const done = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
     assert.equal(done[0]?.status, "done");
+
+    const replay = await fetch(authorizedUrl, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(replay.status, 403);
+    await replay.text();
   });
 });

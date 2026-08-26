@@ -10,6 +10,7 @@ import { desc, eq } from "drizzle-orm";
 import { assertWithinRoot, getWillardAIDir } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
+import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 
 const execFileAsync = promisify(execFile);
 
@@ -1434,12 +1435,35 @@ router.get("/optimize/jobs/:id", async (req, res) => {
   }
 });
 
+router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  try {
+    const [job] = await db.select().from(conversionJobsTable)
+      .where(eq(conversionJobsTable.id, id)).limit(1);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (job.status !== "pending") {
+      res.status(409).json({ error: `Job cannot start from status '${job.status}'` });
+      return;
+    }
+    const token = await issueActionToken(req, "optimize-execute", String(id));
+    res.json({ token, expiresInSeconds: 300 });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not authorize conversion" });
+  }
+});
+
 /**
  * GET /optimize/jobs/:id/execute — SSE stream that executes the conversion job.
  * Streams events: status | file_done | summary | error
  */
 router.get("/optimize/jobs/:id/execute", async (req, res) => {
   const id = parseInt(req.params.id);
+
+  if (!await consumeActionToken(req, req.query.token, "optimize-execute", String(id))) {
+    res.status(403).json({ error: "A valid one-time execution token is required." });
+    return;
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

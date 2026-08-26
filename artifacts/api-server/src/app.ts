@@ -193,6 +193,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       res.status(403).json({ error: "Untrusted request origin." });
       return;
     }
+    const fetchSite = req.headers["sec-fetch-site"];
+    if (typeof fetchSite === "string" && fetchSite.toLowerCase() === "cross-site") {
+      res.status(403).json({ error: "Cross-site requests cannot change library state." });
+      return;
+    }
   }
   next();
 });

@@ -123,7 +123,17 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
     assert.equal(run.status, 201);
     jobId = created.id;
 
-    const stream = await request(`/optimize/jobs/${jobId}/execute`);
+    const missingToken = await request(`/optimize/jobs/${jobId}/execute`);
+    assert.equal(missingToken.status, 403);
+    await missingToken.text();
+
+    const tokenResponse = await request(`/optimize/jobs/${jobId}/execute-token`, { method: "POST" });
+    const tokenBody = await tokenResponse.json() as { token?: string; error?: string };
+    assert.equal(tokenResponse.status, 200, tokenBody.error ?? "Execution token request failed");
+    assert.ok(tokenBody.token, "Execution token should be returned");
+
+    const authorizedUrl = `/optimize/jobs/${jobId}/execute?token=${encodeURIComponent(tokenBody.token)}`;
+    const stream = await request(authorizedUrl);
     const sse = await stream.text();
     assert.equal(stream.status, 200, sse);
     assert.match(sse, /event: summary/);
@@ -166,5 +176,9 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
 
     const logPath = path.join(root, "WillardAI", "logs", "conversions.jsonl");
     assert.match(fs.readFileSync(logPath, "utf8"), /"action":"recycle"/);
+
+    const replay = await request(authorizedUrl);
+    assert.equal(replay.status, 403);
+    await replay.text();
   });
 });

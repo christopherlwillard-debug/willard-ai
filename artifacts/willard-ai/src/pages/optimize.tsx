@@ -294,46 +294,67 @@ function RunConversionsDialog({
     setSummary(null);
     setProgress({ stage: "starting", message: "Reconnecting to conversion job…", progress: 1 });
 
-    const es = new EventSource(eventUrl(`/optimize/jobs/${existingJobId}/execute`));
-    esRef.current = es;
+    let cancelled = false;
+    let es: EventSource | null = null;
 
-    es.addEventListener("status", (e) => {
-      setProgress(JSON.parse(e.data) as ConversionProgress);
-    });
-    es.addEventListener("file_done", (e) => {
-      const data = JSON.parse(e.data) as ConversionFileResult & { processed: number; total: number };
-      setFileResults(prev => [data, ...prev].slice(0, 200));
-      setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
-    });
-     es.addEventListener("summary", (e) => {
-      const data = JSON.parse(e.data) as ConversionSummary;
-      setSummary(data);
-      if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
-        setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
-      es.close();
-      esRef.current = null;
-    });
-    es.addEventListener("error", (e) => {
-      const raw = (e as MessageEvent).data;
-      let data: any = null;
-      try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
-      const msg = data?.message ?? "Connection interrupted";
-      if (!data || /already running/i.test(msg)) {
-        setProgress(prev => ({
-          ...(prev ?? { stage: "converting", message: "", progress: 0 }),
-          message: "Connection interrupted — tracking saved progress…",
-        }));
-        recoverFromDisconnect(existingJobId ?? finalizeJobId ?? 0);
-        return;
+    const connect = async () => {
+      try {
+        const tokenResponse = await fetch(apiUrl(`/optimize/jobs/${existingJobId}/execute-token`), { method: "POST" });
+        const tokenBody = await tokenResponse.json().catch(() => ({}));
+        if (!tokenResponse.ok || typeof tokenBody.token !== "string") {
+          throw new Error(tokenBody.error ?? "Could not authorize conversion");
+        }
+        if (cancelled) return;
+
+        es = new EventSource(eventUrl(`/optimize/jobs/${existingJobId}/execute`, tokenBody.token));
+        esRef.current = es;
+
+        es.addEventListener("status", (e) => {
+          setProgress(JSON.parse(e.data) as ConversionProgress);
+        });
+        es.addEventListener("file_done", (e) => {
+          const data = JSON.parse(e.data) as ConversionFileResult & { processed: number; total: number };
+          setFileResults(prev => [data, ...prev].slice(0, 200));
+          setProgress(prev => prev ? { ...prev, processed: data.processed, total: data.total } : prev);
+        });
+        es.addEventListener("summary", (e) => {
+          const data = JSON.parse(e.data) as ConversionSummary;
+          setSummary(data);
+          if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
+          setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
+          es?.close();
+          esRef.current = null;
+        });
+        es.addEventListener("error", (e) => {
+          const raw = (e as MessageEvent).data;
+          let data: any = null;
+          try { data = raw ? JSON.parse(raw) : null; } catch { /* browser transport error */ }
+          const msg = data?.message ?? "Connection interrupted";
+          if (!data || /already running/i.test(msg)) {
+            setProgress(prev => ({
+              ...(prev ?? { stage: "converting", message: "", progress: 0 }),
+              message: "Connection interrupted — tracking saved progress…",
+            }));
+            recoverFromDisconnect(existingJobId ?? finalizeJobId ?? 0);
+            return;
+          }
+          setRunError(msg);
+          setPhase("done");
+          es?.close();
+          esRef.current = null;
+          toast({ title: "Conversion error", description: msg, variant: "destructive" });
+        });
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Could not authorize conversion";
+        setRunError(message);
+        setPhase("done");
+        toast({ title: "Conversion could not start", description: message, variant: "destructive" });
       }
-      setRunError(msg);
-      setPhase("done");
-      es.close();
-      esRef.current = null;
-      toast({ title: "Conversion error", description: msg, variant: "destructive" });
-    });
+    };
+    void connect();
 
-    return () => { es.close(); };
+    return () => { cancelled = true; es?.close(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, existingJobId]);
 
@@ -411,10 +432,16 @@ function RunConversionsDialog({
       }
       const job = await resp.json();
       setFinalizeJobId(job.id);
-      setPhase("running");
       setFileResults([]);
 
-      const es = new EventSource(eventUrl(`/optimize/jobs/${job.id}/execute`));
+      const tokenResp = await fetch(apiUrl(`/optimize/jobs/${job.id}/execute-token`), { method: "POST" });
+      const tokenBody = await tokenResp.json().catch(() => ({}));
+      if (!tokenResp.ok || typeof tokenBody.token !== "string") {
+        throw new Error(tokenBody.error ?? "Could not authorize conversion");
+      }
+
+      setPhase("running");
+      const es = new EventSource(eventUrl(`/optimize/jobs/${job.id}/execute`, tokenBody.token));
       esRef.current = es;
 
       es.addEventListener("status", (e) => {

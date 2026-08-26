@@ -65,4 +65,35 @@ test("unrelated origin gets no credentialed CORS or state-changing access", asyn
   });
   expect(stillAuthenticated.ok()).toBeTruthy();
   expect((await stillAuthenticated.json()).authenticated).toBe(true);
+
+  for (const endpoint of [
+    "/api/cleanup/execute",
+    "/api/cleanup/restore",
+    "/api/optimize/conversion/999999999/action",
+    "/api/media/files/999999999/rename",
+  ]) {
+    const rejected = await request.post(endpoint, {
+      headers: { Origin: unrelatedOrigin },
+      data: {},
+    });
+    expect(rejected.status(), `${endpoint} should reject cross-origin mutation`).toBe(403);
+  }
+});
+
+test("Fetch Metadata blocks cross-site mutations even with a trusted Origin header", async ({ request }, testInfo) => {
+  const configuredUrl = testInfo.project.use.baseURL;
+  expect(configuredUrl, "Set WILLARD_APP_URL to the published app URL for this contract").toBeTruthy();
+  const trustedOrigin = new URL(configuredUrl!).origin;
+
+  await loginOrSetup(request, trustedOrigin);
+  const response = await request.post("/api/cleanup/execute", {
+    headers: {
+      Origin: trustedOrigin,
+      "Sec-Fetch-Site": "cross-site",
+    },
+    data: {},
+  });
+
+  expect(response.status()).toBe(403);
+  expect(await response.json()).toEqual({ error: "Cross-site requests cannot change library state." });
 });

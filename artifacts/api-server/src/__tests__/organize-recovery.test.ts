@@ -225,7 +225,19 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
       [existingMove],
     );
 
-    const response = await fetch(`${API_BASE}/api/organize/jobs/${jobId}/resume`, {
+    const missingToken = await fetch(`${API_BASE}/api/organize/jobs/${jobId}/resume`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(missingToken.status, 403);
+    await missingToken.text();
+
+    const tokenResponse = await post(`/organize/jobs/${jobId}/resume-token`, {});
+    const tokenBody = await tokenResponse.json() as { token?: string; error?: string };
+    assert.equal(tokenResponse.status, 200, tokenBody.error ?? "Resume token request failed");
+    assert.ok(tokenBody.token, "Resume token should be returned");
+
+    const authorizedUrl = `${API_BASE}/api/organize/jobs/${jobId}/resume?token=${encodeURIComponent(tokenBody.token)}`;
+    const response = await fetch(authorizedUrl, {
       headers: { Cookie: cookie },
     });
     const stream = await response.text();
@@ -251,5 +263,9 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
       assert.ok(fs.existsSync(path.join(destination, name)), `${name} moved`);
     }
     assert.equal(finalMoves.filter(move => move.verified).length, 3);
+
+    const replay = await fetch(authorizedUrl, { headers: { Cookie: cookie } });
+    assert.equal(replay.status, 403);
+    await replay.text();
   });
 });

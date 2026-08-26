@@ -71,6 +71,14 @@ async function apiGet(p: string): Promise<Response> {
   return res;
 }
 
+async function apiOrganizeExecute(jobId: number): Promise<Response> {
+  const tokenResponse = await apiPost(`/organize/jobs/${jobId}/execute-token`, {});
+  const tokenResult = await readJson<{ token?: string; error?: string }>(tokenResponse);
+  assert.strictEqual(tokenResult.status, 200, `Could not authorize organize execution: ${tokenResult.text}`);
+  assert.ok(tokenResult.body.token, "Organize execution token should be returned");
+  return apiGet(`/organize/jobs/${jobId}/execute?token=${encodeURIComponent(tokenResult.body.token)}`);
+}
+
 async function apiPost(
   p: string,
   body: Record<string, unknown>,
@@ -542,7 +550,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const preflight = await readJson<{ status: string }>(preflightRes);
     assert.strictEqual(preflight.status, 200, `Archive preflight failed: ${preflight.text}`);
 
-    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200, "Archive execution should return an SSE stream");
     assert.match(executeText, /event: complete/, `Archive execution did not complete: ${executeText}`);
@@ -640,7 +648,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
       assert.strictEqual(preflightRes.status, 200, `TAR preflight failed: ${await preflightRes.text()}`);
 
-      const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+      const executeRes = await apiOrganizeExecute(created.body.id);
       const executeText = await executeRes.text();
       assert.strictEqual(executeRes.status, 200);
       assert.match(executeText, /event: complete/, `${variant.extension} execution did not complete`);
@@ -708,7 +716,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
     assert.strictEqual(preflightRes.status, 200, `TAR traversal preflight failed: ${await preflightRes.text()}`);
 
-    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
     assert.match(executeText, /event: error/, "TAR traversal must fail during safe extraction");
@@ -745,7 +753,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
 
     const originalSize = fs.statSync(archivePath).size;
     fs.truncateSync(archivePath, Math.max(1, Math.floor(originalSize / 2)));
-    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
     assert.match(executeText, /event: error/, "A truncated TAR must fail extraction");
@@ -780,7 +788,7 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
     assert.strictEqual(preflightRes.status, 200, `Traversal preflight failed: ${await preflightRes.text()}`);
 
-    const executeRes = await apiGet(`/organize/jobs/${created.body.id}/execute`);
+    const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
     assert.match(executeText, /event: error/, "Traversal must fail during safe extraction");

@@ -15,6 +15,7 @@ import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
+import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 
 const router: IRouter = Router();
 
@@ -1113,6 +1114,24 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
   }
 });
 
+router.post("/organize/jobs/:id/execute-token", async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  try {
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (job.status !== "verified" || !job.planJson) {
+      res.status(409).json({ error: "Pre-flight must pass before executing" });
+      return;
+    }
+    const token = await issueActionToken(req, "organize-execute", String(id));
+    res.json({ token, expiresInSeconds: 300 });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not authorize execution" });
+  }
+});
+
 /**
  * SSE execution stream.
  * - Folder jobs: COPY to staging first; source is never touched during execute.
@@ -1123,6 +1142,11 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
  */
 router.get("/organize/jobs/:id/execute", async (req, res) => {
   const id = parseInt(req.params.id);
+
+  if (!await consumeActionToken(req, req.query.token, "organize-execute", String(id))) {
+    res.status(403).json({ error: "A valid one-time execution token is required." });
+    return;
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -1656,6 +1680,24 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
   }
 });
 
+router.post("/organize/jobs/:id/resume-token", async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  try {
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!["executing", "failed"].includes(job.status) || !job.planJson) {
+      res.status(409).json({ error: "Only interrupted jobs with a plan can be resumed" });
+      return;
+    }
+    const token = await issueActionToken(req, "organize-resume", String(id));
+    res.json({ token, expiresInSeconds: 300 });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not authorize resume" });
+  }
+});
+
 /**
  * Resume an interrupted job from where it left off (SSE).
  * Re-stages the source, skips files already at their destinations per stored fileMoves,
@@ -1663,6 +1705,11 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
  */
 router.get("/organize/jobs/:id/resume", async (req, res) => {
   const id = parseInt(req.params.id);
+
+  if (!await consumeActionToken(req, req.query.token, "organize-resume", String(id))) {
+    res.status(403).json({ error: "A valid one-time resume token is required." });
+    return;
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

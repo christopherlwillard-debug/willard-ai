@@ -10,8 +10,9 @@ export function assetUrl(path: string): string {
   return `${basePath}${suffix}`;
 }
 
-export function eventUrl(path: string): string {
-  return apiUrl(path);
+export function eventUrl(path: string, token?: string): string {
+  const url = apiUrl(path);
+  return token ? `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}` : url;
 }
 
 export async function apiFetch<T = unknown>(path: string, init?: RequestInit): Promise<T> {
