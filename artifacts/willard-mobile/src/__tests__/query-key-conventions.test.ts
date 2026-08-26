@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const appRoot = resolve(import.meta.dirname, "../../app");
+const mobileLibRoot = resolve(import.meta.dirname, "../../lib");
 const generatedApi = readFileSync(
   resolve(import.meta.dirname, "../../../../lib/api-client-react/src/generated/api.ts"),
   "utf8",
@@ -28,6 +29,7 @@ test("mobile screens use generated keys for reads and mutation refreshes", () =>
   const collections = readAppFile("collections.tsx");
   const collectionDetail = readAppFile("collection/[id].tsx");
   const library = readAppFile("(tabs)/library.tsx");
+  const favoriteCache = readFileSync(resolve(mobileLibRoot, "favorite-cache.ts"), "utf8");
 
   assert.match(settings, /getGetSettingsQueryKey/);
   assert.match(chat, /getListOpenaiConversationsQueryKey/);
@@ -36,6 +38,8 @@ test("mobile screens use generated keys for reads and mutation refreshes", () =>
   assert.match(collections, /getGetCollectionsQueryKey/);
   assert.match(collectionDetail, /getGetCollectionsIdItemsQueryKey/);
   assert.match(collectionDetail, /getGetMediaFilesQueryKey/);
+  assert.match(collectionDetail, /invalidateFavoriteCaches/);
+  assert.match(favoriteCache, /mediaFiles/);
   assert.match(library, /getListFolderQueryKey/);
   assert.match(library, /getSearchFilesQueryKey/);
 

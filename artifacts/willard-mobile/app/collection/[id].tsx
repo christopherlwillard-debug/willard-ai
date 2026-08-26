@@ -11,6 +11,7 @@ import {
 } from "@workspace/api-client-react";
 
 import { API_BASE_URL } from "@/lib/api";
+import { invalidateFavoriteCaches } from "@/lib/favorite-cache";
 import { useColors } from "@/hooks/useColors";
 
 type MediaFile = { id: number; name: string; filename?: string; mediaType?: string; fileType?: string; extension?: string; favorite?: boolean };
@@ -42,8 +43,11 @@ export default function CollectionDetailScreen() {
       if (!response.ok) throw new Error("Could not update favorite");
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: collectionQueryKey });
-      void queryClient.invalidateQueries({ queryKey: getGetCollectionsQueryKey() });
+      void invalidateFavoriteCaches(queryClient, {
+        activeCollection: collectionQueryKey,
+        mediaFiles: getGetMediaFilesQueryKey(),
+        collections: getGetCollectionsQueryKey(),
+      });
     },
   });
   const files = query.data?.files ?? [];
