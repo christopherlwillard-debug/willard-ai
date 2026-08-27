@@ -102,7 +102,7 @@ jobs:
           WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
         run: |
           $ErrorActionPreference = "Stop"
-          & node -e '(async () => { const fs = require("fs"); const path = require("path"); const entry = fs.readdirSync(path.join(process.cwd(), "node_modules", ".pnpm")).find((name) => /^pg@\d/.test(name)); if (!entry) throw new Error("pg package not found in pnpm virtual store"); const { Pool } = require(path.join(process.cwd(), "node_modules", ".pnpm", entry, "node_modules", "pg")); const pool = new Pool({ connectionString: process.env.DATABASE_URL }); try { await pool.query("DELETE FROM app_settings"); await pool.query("INSERT INTO app_settings (nas_path, password_hash) VALUES ($1, NULL)", [process.env.WILLARD_NAS_PATH]); } finally { await pool.end(); } })().catch((error) => { console.error(error); process.exit(1); });'
+          & node -e '(async () => { const fs = require("fs"); const path = require("path"); const pgEntry = fs.readdirSync(path.join(process.cwd(), "node_modules", ".pnpm")).find((name) => /^pg@\d/.test(name)); if (!pgEntry) throw new Error("pg package not found in pnpm virtual store"); const { Pool } = require(path.join(process.cwd(), "node_modules", ".pnpm", pgEntry, "node_modules", "pg")); const bcrypt = require(path.join(process.cwd(), "artifacts", "api-server", "node_modules", "bcryptjs")); const pool = new Pool({ connectionString: process.env.DATABASE_URL }); try { const passwordHash = bcrypt.hashSync("willard123", 12); await pool.query("DELETE FROM app_settings"); await pool.query("INSERT INTO app_settings (nas_path, password_hash) VALUES ($1, $2)", [process.env.WILLARD_NAS_PATH, passwordHash]); } finally { await pool.end(); } })().catch((error) => { console.error(error); process.exit(1); });'
           if ($LASTEXITCODE -ne 0) { throw "Could not seed the disposable backend-audit settings." }
 
       - name: Start API for backend audit and integration tests
@@ -143,12 +143,6 @@ jobs:
             $errorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 -Raw } else { "" }
             throw "Backend audit API did not become ready.`n$tail`n$errorTail"
           }
-          $setupBody = @{ password = "willard123" } | ConvertTo-Json -Compress
-          $setupResponse = Invoke-WebRequest -Uri "$env:WILLARD_API_URL/api/auth/setup" -Method Post `
-            -ContentType "application/json" -Body $setupBody -UseBasicParsing -TimeoutSec 10
-          if ($setupResponse.StatusCode -ne 200) {
-            throw "Backend audit API could not initialize its disposable password: $($setupResponse.Content)"
-          }
 
       - name: Run API server backend audit
         shell: pwsh
@@ -159,6 +153,8 @@ jobs:
           PGPASSWORD: "postgres"
         run: |
           $auditLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit.log"
+          $apiLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.log"
+          $apiErrorLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.err.log"
           $ErrorActionPreference = "Continue"
           $PSNativeCommandUseErrorActionPreference = $false
           & pnpm --filter @workspace/api-server run audit *> $auditLog
