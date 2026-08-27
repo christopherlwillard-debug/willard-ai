@@ -106,8 +106,12 @@ jobs:
           $ErrorActionPreference = "Stop"
           $apiLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.log"
           $apiErrorLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.err.log"
-          $apiProcess = Start-Process pnpm.cmd `
-            -ArgumentList @("--filter", "@workspace/api-server", "run", "dev") `
+          & pnpm --filter @workspace/api-server run build
+          if ($LASTEXITCODE -ne 0) { throw "Could not build the API server for the backend audit." }
+          $nodePath = (Get-Command node.exe).Source
+          $apiEntry = Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server\dist\index.mjs"
+          $apiProcess = Start-Process $nodePath `
+            -ArgumentList @("--enable-source-maps", $apiEntry) `
             -WorkingDirectory $env:GITHUB_WORKSPACE `
             -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -PassThru
           "WILLARD_BACKEND_AUDIT_API_PID=$($apiProcess.Id)" >> $env:GITHUB_ENV
