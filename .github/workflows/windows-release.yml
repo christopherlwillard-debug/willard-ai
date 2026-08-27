@@ -62,6 +62,16 @@ jobs:
           & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
           & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
 
+      - name: Install media fixture tools for backend audit
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --no-progress --yes
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            throw "ffmpeg is required by the Windows optimize-cycle audit fixture."
+          }
+
       - name: Bootstrap disposable backend-audit database schema
         shell: pwsh
         env:

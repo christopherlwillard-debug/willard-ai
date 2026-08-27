@@ -100,6 +100,8 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
   assert.match(workflow, /softprops\/action-gh-release@[0-9a-f]{40}/);
   assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
+  assert.match(workflow, /Install media fixture tools for backend audit/);
+  assert.match(workflow, /choco install ffmpeg/);
   assert.match(workflow, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
   assert.match(workflow, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
   assert.match(localBuildInstaller, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
