@@ -114,6 +114,12 @@ jobs:
           NODE_ENV: development
           WILLARD_API_URL: "http://127.0.0.1:8080"
           WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
+          # The capacity policy has dedicated unit coverage. This disposable
+          # conversion fixture still measures both filesystems and reserves its
+          # operation bytes, but must not depend on a hosted runner retaining
+          # the production 4 GiB floors after PostgreSQL/FFmpeg installation.
+          WILLARD_LOCAL_CAPACITY_FLOOR_BYTES: "0"
+          WILLARD_NAS_SAFETY_MARGIN_BYTES: "0"
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
           PGPASSWORD: "postgres"
         run: |

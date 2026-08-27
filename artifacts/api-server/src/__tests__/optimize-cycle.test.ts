@@ -119,8 +119,13 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approvedExts: ["png", "avi"] }),
     });
-    const created = await run.json() as { id: number };
-    assert.equal(run.status, 201);
+    const created = await run.json() as {
+      id: number;
+      error?: string;
+      message?: string;
+      capacity?: { code?: string; local?: { freeBytes?: number }; nas?: { freeBytes?: number } };
+    };
+    assert.equal(run.status, 201, JSON.stringify(created));
     jobId = created.id;
 
     const missingToken = await request(`/optimize/jobs/${jobId}/execute`);
