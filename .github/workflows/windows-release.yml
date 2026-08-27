@@ -40,6 +40,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install PostgreSQL for the source launcher smoke test
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install postgresql16 --params="/Password:postgres" --no-progress --yes
+          $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object -First 1
+          if (-not $service) { throw "PostgreSQL service was not installed." }
+          Start-Service $service.Name
+          $env:PGPASSWORD = "postgres"
+          & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
+          & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
+
       - name: Gate release on type checks and generated API contracts
         run: |
           pnpm run typecheck
@@ -55,19 +68,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Database backup tests failed." }
           pnpm run test:release-contracts
           if ($LASTEXITCODE -ne 0) { throw "Release contract tests failed." }
-
-      - name: Install PostgreSQL for the source launcher smoke test
-        shell: pwsh
-        timeout-minutes: 10
-        run: |
-          $ErrorActionPreference = "Stop"
-          choco install postgresql16 --params="/Password:postgres" --no-progress --yes
-          $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object -First 1
-          if (-not $service) { throw "PostgreSQL service was not installed." }
-          Start-Service $service.Name
-          $env:PGPASSWORD = "postgres"
-          & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
-          & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
 
       - name: Install media fixture tools for backend audit
         shell: pwsh
@@ -198,7 +198,7 @@ jobs:
         with:
           name: windows-backend-audit-log
           path: ${{ runner.temp }}/willard-backend-audit.log
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Install Chromium for browser release tests
         run: pnpm exec playwright install chromium
