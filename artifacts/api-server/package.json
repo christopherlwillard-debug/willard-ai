@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps --env-file-if-exists=../../.env ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test src/__tests__/organize-helpers.test.ts",
-    "audit": "node --experimental-test-module-mocks --experimental-strip-types --test --test-concurrency=1 src/__tests__/*.test.ts"
+    "audit": "node audit.mjs"
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",
