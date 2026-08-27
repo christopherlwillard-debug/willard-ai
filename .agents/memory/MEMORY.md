@@ -39,6 +39,7 @@
 - [Release payload dependency surface](release-payload-dependency-surface.md) — Windows payloads should exclude workspace lockfiles and package-manager metadata
 - [Loading loop cleanup](loading-loop-text-removal.md) — for baked-in animated labels, crop the lower band rather than using solid blocks or delogo smearing
 - [TAR parser safety](tar-parser-safety.md) — validate raw paths with a non-throwing filter, then throw after parsing; tar 7 needs external bzip2/xz decompression
+- [NAS archive scratch policy](archive-scratch-policy.md) — compressed TAR inspection must use caller-owned NAS scratch, never an OS-temp fallback
 - [AI consent boundary](ai-consent-boundary.md) — every cloud AI entry point must gate through the shared privacy policy; local fallbacks must not call the provider
 - [API shutdown lifecycle](shutdown-lifecycle.md) — stop producers, persist job state, drain HTTP, then close the shared pool with an idempotent deadline
 - [Per-library job claims](per-library-job-claims.md) — in-memory checks are only fast paths; runnable jobs need a database-enforced per-library claim

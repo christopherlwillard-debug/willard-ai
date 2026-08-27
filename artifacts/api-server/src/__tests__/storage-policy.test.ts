@@ -31,9 +31,11 @@ test("policy report is safe and explicit when no NAS is configured", async () =>
     configured: false,
     online: false,
     writable: false,
-    message: "No library location configured",
+    message: "No library location configured at C:\\Users\\private\\Pictures",
   });
   assert.equal(report.state, "UNCONFIGURED");
+  assert.equal(report.stateMessage, "No library location configured.");
+  assert.doesNotMatch(report.stateMessage, /C:\\Users\\private/);
   assert.equal(report.nasConfigured, false);
   assert.equal(report.capacity.known, false);
   assert.equal(report.usage.length, STORAGE_INVENTORY.length);
