@@ -1,0 +1,70 @@
+{
+  "format": 1,
+  "policyVersion": "2026-08-27",
+  "libraryIdentity": {
+    "marker": "WillardAI/config/library-identity.json",
+    "purpose": "Stable identity plus explicit operator attestation prevents a missing, changed, or unrelated NAS from being attached silently to restored catalog state.",
+    "requiredForRestore": true,
+    "operatorAttestationRequired": true
+  },
+  "classes": {
+    "permanent": {
+      "description": "Must survive loss of the laptop and is never automatically reclaimed.",
+      "items": [
+        "original media",
+        "canonical media rows and content hashes",
+        "manual metadata, corrections, notes, and favorites",
+        "tags and manual album membership",
+        "named people and face-to-person assignments",
+        "archive index and cleanup history",
+        "database backup manifests and recovery attempts"
+      ],
+      "recoverySource": "original NAS library plus verified encrypted PostgreSQL backup"
+    },
+    "recoverable": {
+      "description": "Stored in the verified database backup and restored when present; it may be regenerated without changing permanent user decisions.",
+      "items": [
+        "AI results and embeddings",
+        "face scan state and derived face rows",
+        "scan history",
+        "job checkpoints, cursors, and resumable operation state",
+        "saved searches and search history",
+        "operational reports"
+      ],
+      "recoverySource": "verified encrypted PostgreSQL backup"
+    },
+    "rebuildable": {
+      "description": "Optional cache bytes are not required for catalog recovery and may be absent after a laptop loss.",
+      "items": [
+        "thumbnails and previews",
+        "face crop files",
+        "local AI and face model caches",
+        "temporary files",
+        "incomplete conversion or import scratch"
+      ],
+      "recoverySource": "rebuild from the unchanged NAS originals after the library is reattached",
+      "automaticReclaim": "Only bounded, job-owned or explicitly rebuildable derivatives; never originals, recycle contents, protected backups, or permanent metadata."
+    }
+  },
+  "verification": {
+    "requiredAfterRestore": [
+      "library identity and ownership",
+      "canonical media counts, relative identities, and SHA-256 hashes",
+      "manual metadata, corrections, albums, tags, and favorites",
+      "AI results and face assignments",
+      "archive and cleanup history",
+      "resumable job state",
+      "representative search and media opening"
+    ],
+    "faults": [
+      "database loss",
+      "NAS reconnect during restore",
+      "interrupted restore",
+      "duplicate restore attempt",
+      "missing optional caches",
+      "corrupt or incomplete recovery material",
+      "stale, foreign, or incompatible recovery material"
+    ],
+    "evidence": "desktop/database-backup.test.mjs"
+  }
+}

@@ -5,6 +5,9 @@
 The storage inventory in `artifacts/api-server/src/lib/storage-policy.ts` is the
 machine-readable source of truth. This document explains the safety rules and
 the user-visible destinations without including a configured library path.
+`library-durability-manifest.json` is the recovery contract for laptop-loss
+scenarios. It classifies permanent, recoverable, and rebuildable library
+knowledge and names the clean-machine restore evidence.
 
 ## Classes and durability
 
@@ -73,3 +76,8 @@ raw configured path or filenames.
 5. A completed full scan never starts an unbounded derivative sweep. Thumbnail
    requests are lazy, and a user-requested backfill processes at most 500 files
    per job so it can be paused, retried, or resumed safely.
+6. A database backup bound to a configured library records the authenticated
+   `WillardAI/config/library-identity.json` marker. Recovery requires the same
+   marker plus explicit operator attestation of its authenticated library ID.
+   It rejects missing, changed, unrelated, or incompatible material before
+   mutating the empty restore target.

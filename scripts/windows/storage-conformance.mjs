@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertLibraryDurabilityManifest } from "./library-durability.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const STORAGE_CONFORMANCE_PATH = path.join(root, "storage-conformance.json");
@@ -103,6 +104,7 @@ export function assertStorageConformance(matrix = loadStorageConformance(), opti
   if (errors.length > 0) {
     throw new Error(`Storage-policy conformance matrix is incomplete:\n${errors.map((error) => `- ${error}`).join("\n")}`);
   }
+  assertLibraryDurabilityManifest(undefined, options);
   return matrix;
 }
 

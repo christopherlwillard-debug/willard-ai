@@ -13,8 +13,10 @@ import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  createHmac,
   randomBytes,
   scryptSync,
+  timingSafeEqual,
 } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -30,10 +32,19 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DURABLE_JSON_COLUMNS,
+  DURABLE_PATH_COLUMNS,
+  ensureLibraryIdentity,
+  normalizeLibraryRoot,
+  readLibraryIdentity,
+  validateRecoveryAttachment,
+} from "./library-recovery.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+const SUPPORTED_APPLICATION_SCHEMA_VERSION = 2;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_KEEP = 12;
 const DEFAULT_OUTPUT_DIR = path.join(ROOT, "backups", "database");
@@ -216,20 +227,99 @@ function runTool(command, args, environment, label) {
 async function runSql(sql, environment, label = "PostgreSQL query") {
   return runTool(
     resolveBinary("PSQL_BIN", "psql", "psql.exe"),
-    ["-X", "--no-password", "-v", "ON_ERROR_STOP=1", "-At", "-F", "\t", "-c", sql],
+    ["-X", "--no-password", "-q", "-v", "ON_ERROR_STOP=1", "-At", "-F", "\t", "-c", sql],
     environment,
     label,
   );
+}
+
+function runSnapshotSql(sql, environment, snapshot, label) {
+  if (!snapshot) return runSql(sql, environment, label);
+  const snapshotLiteral = sqlLiteral(snapshot);
+  return runSql(
+    `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET TRANSACTION SNAPSHOT ${snapshotLiteral}; ${sql}; COMMIT`,
+    environment,
+    label,
+  );
+}
+
+async function openDatabaseSnapshot(environment) {
+  const command = resolveBinary("PSQL_BIN", "psql", "psql.exe");
+  const args = [
+    "-X",
+    "--no-password",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-At",
+  ];
+  const child = spawn(command, args, {
+    cwd: ROOT,
+    env: environment,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.stdin.write("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();\n");
+  const snapshot = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Timed out while exporting the PostgreSQL backup snapshot."));
+    }, 10_000);
+    const inspect = () => {
+      const exported = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => /^[0-9a-f]+-[0-9a-f]+-\d+$/i.test(line));
+      if (exported) {
+        clearTimeout(timeout);
+        resolve(exported);
+      }
+    };
+    child.stdout.on("data", inspect);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(new Error(`PostgreSQL snapshot holder could not start: ${error.message}`));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`PostgreSQL snapshot holder exited early: ${stderr.trim() || `exit code ${code}`}`));
+    });
+  });
+  return {
+    snapshot,
+    async release() {
+      if (child.exitCode !== null) return;
+      child.stdin.end("ROLLBACK;\n\\q\n");
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve();
+        }, 3000);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    },
+  };
 }
 
 function quoteIdentifier(value) {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
-async function databaseFacts(environment) {
-  const tableOutput = await runSql(
+async function databaseFacts(environment, snapshot = null) {
+  const tableOutput = await runSnapshotSql(
     "SELECT schemaname, tablename FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename",
     environment,
+    snapshot,
     "Database table inspection",
   );
   const rowCounts = {};
@@ -237,9 +327,10 @@ async function databaseFacts(environment) {
     const [schema, table] = line.split("\t");
     if (!schema || !table) fail("PostgreSQL returned an invalid table list during verification.");
     const key = `${schema}.${table}`;
-    const countOutput = await runSql(
+    const countOutput = await runSnapshotSql(
       `SELECT count(*) FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}`,
       environment,
+      snapshot,
       `Row-count inspection for ${key}`,
     );
     const count = countOutput.trim();
@@ -247,9 +338,10 @@ async function databaseFacts(environment) {
     rowCounts[key] = count;
   }
 
-  const schemaOutput = await runSql(
+  const schemaOutput = await runSnapshotSql(
     "SELECT table_schema, table_name, ordinal_position, column_name, data_type, udt_name, is_nullable, COALESCE(column_default, '') FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY table_schema, table_name, ordinal_position",
     environment,
+    snapshot,
     "Database schema inspection",
   );
   return {
@@ -264,6 +356,8 @@ function authenticatedManifestPart(manifest) {
     format: manifest.format,
     createdAt: manifest.createdAt,
     database: manifest.database,
+    compatibility: manifest.compatibility,
+    library: manifest.library,
     encryption: manifest.encryption,
     dump: manifest.dump,
     verification: manifest.verification,
@@ -346,6 +440,37 @@ function validateManifest(manifest) {
   }
   if (!manifest.database || typeof manifest.database.name !== "string") {
     fail("Backup manifest has no database identity.");
+  }
+  if (
+    !manifest.compatibility ||
+    (manifest.compatibility.postgresMajor !== null &&
+      !Number.isSafeInteger(manifest.compatibility.postgresMajor)) ||
+    (manifest.compatibility.applicationSchemaVersion !== null &&
+      !Number.isSafeInteger(manifest.compatibility.applicationSchemaVersion))
+  ) {
+    fail("Backup manifest has no supported compatibility metadata.");
+  }
+  if (manifest.library !== null) {
+    if (
+      !manifest.library ||
+      typeof manifest.library.libraryId !== "string" ||
+      !/^[0-9a-f-]{16,80}$/i.test(manifest.library.libraryId) ||
+      typeof manifest.library.root !== "string" ||
+      !manifest.library.root ||
+      !/^[a-f0-9]{64}$/i.test(manifest.library.markerSha256) ||
+      !Number.isSafeInteger(manifest.library.catalogMediaCount) ||
+      !Array.isArray(manifest.library.mediaSamples) ||
+      manifest.library.mediaSamples.some(
+        (sample) =>
+          !sample ||
+          typeof sample.relativePath !== "string" ||
+          path.isAbsolute(sample.relativePath) ||
+          sample.relativePath.split(/[\\/]+/).includes("..") ||
+          !/^[a-f0-9]{64}$/i.test(sample.sha256),
+      )
+    ) {
+      fail("Backup manifest has invalid NAS library identity metadata.");
+    }
   }
   if (
     !manifest.encryption ||
@@ -458,9 +583,97 @@ async function secureRemove(filePath) {
   await rm(filePath, { force: true }).catch(() => {});
 }
 
-async function sourceDatabaseName(environment) {
-  const output = await runSql("SELECT current_database()", environment, "Database identity inspection");
+async function sourceDatabaseName(environment, snapshot = null) {
+  const output = await runSnapshotSql(
+    "SELECT current_database()", environment, snapshot, "Database identity inspection",
+  );
   return output.trim();
+}
+
+async function sourceCompatibility(environment, snapshot = null) {
+  const output = await runSnapshotSql(
+    "SHOW server_version_num", environment, snapshot, "PostgreSQL compatibility inspection",
+  );
+  const version = Number(output.trim());
+  if (!Number.isSafeInteger(version) || version < 10000) {
+    fail("PostgreSQL returned an invalid server version.");
+  }
+  let applicationSchemaVersion = null;
+  try {
+    const schemaOutput = await runSnapshotSql(
+      "SELECT max(version) FROM willard_schema_versions",
+      environment,
+      snapshot,
+      "Application schema inspection",
+    );
+    const value = schemaOutput.trim();
+    if (value && value !== "\\N") {
+      applicationSchemaVersion = Number(value);
+      if (!Number.isSafeInteger(applicationSchemaVersion) || applicationSchemaVersion < 1) {
+        fail("The application schema version is invalid.");
+      }
+    }
+  } catch (error) {
+    if (!/willard_schema_versions|does not exist/i.test(String(error))) throw error;
+  }
+  return { postgresMajor: Math.floor(version / 10000), applicationSchemaVersion };
+}
+
+async function sourceLibrary(environment, snapshot = null) {
+  let output;
+  try {
+    output = await runSnapshotSql(
+      "SELECT nas_path FROM app_settings WHERE nas_path IS NOT NULL AND btrim(nas_path) <> '' LIMIT 1",
+      environment,
+      snapshot,
+      "Library identity inspection",
+    );
+  } catch (error) {
+    if (/app_settings|does not exist/i.test(String(error))) return null;
+    throw error;
+  }
+  const root = output.trim();
+  if (!root) return null;
+  const identity = await ensureLibraryIdentity(root);
+  const countOutput = await runSnapshotSql(
+    "SELECT count(*)::text || E'\\t' || count(*) FILTER (WHERE content_hash ~ '^[a-fA-F0-9]{64}$')::text FROM media_files",
+    environment,
+    snapshot,
+    "Library catalog identity inspection",
+  );
+  const [totalValue, hashedValue] = countOutput.trim().split("\t");
+  const catalogMediaCount = Number(totalValue);
+  const hashedMediaCount = Number(hashedValue);
+  if (
+    !Number.isSafeInteger(catalogMediaCount) ||
+    catalogMediaCount < 0 ||
+    !Number.isSafeInteger(hashedMediaCount) ||
+    hashedMediaCount !== catalogMediaCount
+  ) {
+    fail("Library-bound backup requires canonical SHA-256 hashes for every media row. Complete a full scan before backup.");
+  }
+  if (!Number.isSafeInteger(catalogMediaCount) || catalogMediaCount < 0) {
+    fail("The library catalog returned an invalid media count.");
+  }
+  const sampleOutput = await runSnapshotSql(
+    "SELECT relative_path, lower(content_hash) FROM media_files WHERE content_hash ~ '^[a-fA-F0-9]{64}$' ORDER BY relative_path LIMIT 32",
+    environment,
+    snapshot,
+    "Library media identity sample",
+  );
+  const mediaSamples = sampleOutput.trim()
+    ? sampleOutput.trim().split(/\r?\n/).map((line) => {
+        const [relativePath, sha256] = line.split("\t");
+        return { relativePath, sha256 };
+      })
+    : [];
+  return {
+    libraryId: identity.libraryId,
+    root: identity.root,
+    markerSha256: identity.markerSha256,
+    catalogMediaCount,
+    mediaSamples,
+  };
 }
 
 async function createBackup(options) {
@@ -474,23 +687,32 @@ async function createBackup(options) {
   const rawDump = path.join(actualWorkRoot, "database.dump");
   const staging = path.join(outputRoot, `.staging-${randomBytes(8).toString("hex")}`);
   let finalDir;
+  let snapshotHolder;
   try {
     await mkdir(outputRoot, { recursive: true });
+    snapshotHolder = await openDatabaseSnapshot(environment);
+    const { snapshot } = snapshotHolder;
+    const createdAt = new Date().toISOString();
+    const databaseName = await sourceDatabaseName(environment, snapshot);
+    const facts = await databaseFacts(environment, snapshot);
+    const compatibility = await sourceCompatibility(environment, snapshot);
+    const library = await sourceLibrary(environment, snapshot);
     await runTool(
       resolveBinary("PGDUMP_BIN", "pg_dump", "pg_dump.exe"),
-      ["--format=custom", "--no-owner", "--no-acl", "--file", rawDump],
+      ["--format=custom", "--no-owner", "--no-acl", "--snapshot", snapshot, "--file", rawDump],
       environment,
       "PostgreSQL backup",
     );
+    await snapshotHolder.release();
+    snapshotHolder = null;
     const dump = await readFile(rawDump);
-    const createdAt = new Date().toISOString();
-    const databaseName = await sourceDatabaseName(environment);
-    const facts = await databaseFacts(environment);
     const manifest = {
       schema: SCHEMA_VERSION,
       format: FORMAT,
       createdAt,
       database: { name: databaseName },
+      compatibility,
+      library,
       encryption: {
         algorithm: ALGORITHM,
         kdf: SCRYPT,
@@ -527,6 +749,7 @@ async function createBackup(options) {
     if (removed.length) console.log(`Retention removed ${removed.length} older backup(s).`);
     return finalDir;
   } finally {
+    await snapshotHolder?.release().catch(() => {});
     await secureRemove(rawDump);
     await rm(actualWorkRoot, { recursive: true, force: true }).catch(() => {});
     await rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -576,6 +799,265 @@ async function cleanTarget(environment) {
   }
 }
 
+function recoveryJournalPath(targetRoot, manifest) {
+  return path.join(
+    normalizeLibraryRoot(targetRoot),
+    "WillardAI",
+    "config",
+    "recovery-attempts",
+    `${manifest.integrity.encryptedSha256}.json`,
+  );
+}
+
+function recoveryJournalKey(manifest, secret) {
+  return scryptSync(secret, Buffer.from(manifest.encryption.salt, "base64"), 32, {
+    N: SCRYPT.N,
+    r: SCRYPT.r,
+    p: SCRYPT.p,
+    maxmem: 64 * 1024 * 1024,
+  });
+}
+
+function signRecoveryJournal(journal, manifest, secret) {
+  return createHmac("sha256", recoveryJournalKey(manifest, secret))
+    .update(stableJson(journal))
+    .digest("hex");
+}
+
+async function createRecoveryTargetIdentity(environment, manifest) {
+  const targetDatabase = await sourceDatabaseName(environment);
+  const recoveryToken = `willard-recovery:${manifest.integrity.encryptedSha256}:${randomBytes(16).toString("hex")}`;
+  await runSql(
+    `COMMENT ON DATABASE ${quoteIdentifier(targetDatabase)} IS ${sqlLiteral(recoveryToken)}`,
+    environment,
+    "Recovery target identity creation",
+  );
+  const output = await runSql(
+    "SELECT oid::text || E'\\t' || COALESCE(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = current_database()",
+    environment,
+    "Recovery target identity inspection",
+  );
+  const [databaseOid, comment] = output.trim().split("\t");
+  if (!/^\d+$/.test(databaseOid) || comment !== recoveryToken) {
+    fail("Could not bind the recovery journal to the empty target database.");
+  }
+  return { targetDatabase, databaseOid, recoveryToken };
+}
+
+async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity, state, detail = null) {
+  const filePath = recoveryJournalPath(targetRoot, manifest);
+  const authenticated = {
+    format: 1,
+    backupSha256: manifest.integrity.encryptedSha256,
+    libraryId: manifest.library.libraryId,
+    targetIdentity,
+    state,
+    updatedAt: new Date().toISOString(),
+    detail,
+  };
+  const journal = { ...authenticated, hmacSha256: signRecoveryJournal(authenticated, manifest, secret) };
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.partial`;
+  await writeFile(temporary, `${JSON.stringify(journal, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporary, filePath);
+  return journal;
+}
+
+async function validateRecoveryJournal(targetRoot, manifest, secret, environment) {
+  let journal;
+  try {
+    journal = JSON.parse(await readFile(recoveryJournalPath(targetRoot, manifest), "utf8"));
+  } catch {
+    fail("Recovery resume refused: no matching recovery journal exists on the attached NAS.");
+  }
+  const { hmacSha256, ...authenticated } = journal || {};
+  const expected = signRecoveryJournal(authenticated, manifest, secret);
+  if (
+    typeof hmacSha256 !== "string" ||
+    hmacSha256.length !== expected.length ||
+    !timingSafeEqual(Buffer.from(hmacSha256), Buffer.from(expected))
+  ) {
+    fail("Recovery resume refused: the NAS recovery journal authentication failed.");
+  }
+  const targetDatabase = await sourceDatabaseName(environment);
+  const identityOutput = await runSql(
+    "SELECT oid::text || E'\\t' || COALESCE(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = current_database()",
+    environment,
+    "Recovery resume target identity inspection",
+  );
+  const [databaseOid, recoveryToken] = identityOutput.trim().split("\t");
+  if (
+    journal?.format !== 1 ||
+    journal.backupSha256 !== manifest.integrity.encryptedSha256 ||
+    journal.libraryId !== manifest.library.libraryId ||
+    journal.targetIdentity?.targetDatabase !== targetDatabase ||
+    journal.targetIdentity?.databaseOid !== databaseOid ||
+    journal.targetIdentity?.recoveryToken !== recoveryToken ||
+    !["RESTORING", "RESTORED", "REMAP_FAILED", "COMPLETE"].includes(journal.state)
+  ) {
+    fail("Recovery resume refused: the NAS recovery journal does not match this backup and target database.");
+  }
+  return journal;
+}
+
+async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
+  for (const sample of manifestLibrary.mediaSamples) {
+    const candidate = path.resolve(targetLibrary.root, sample.relativePath);
+    const relative = path.relative(targetLibrary.root, candidate);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      fail(`Recovery refused: invalid sampled media path ${sample.relativePath}.`);
+    }
+    let bytes;
+    try {
+      bytes = await readFile(candidate);
+    } catch {
+      fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
+    }
+    if (sha256Bytes(bytes) !== sample.sha256) {
+      fail(`Recovery refused: sampled canonical media hash does not match: ${sample.relativePath}.`);
+    }
+  }
+}
+
+async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary) {
+  const output = await runSql(
+    "SELECT relative_path, lower(content_hash) FROM media_files ORDER BY relative_path",
+    environment,
+    "Restored canonical media inventory",
+  );
+  const rows = output.trim()
+    ? output.trim().split(/\r?\n/).map((line) => line.split("\t"))
+    : [];
+  if (rows.length !== manifestLibrary.catalogMediaCount) {
+    fail(
+      `Recovery refused: restored catalog has ${rows.length} media rows but the authenticated backup records ` +
+      `${manifestLibrary.catalogMediaCount}.`,
+    );
+  }
+  for (const [relativePath, expectedHash] of rows) {
+    if (
+      !relativePath ||
+      path.isAbsolute(relativePath) ||
+      relativePath.split(/[\\/]+/).includes("..") ||
+      !/^[a-f0-9]{64}$/i.test(expectedHash || "")
+    ) {
+      fail("Recovery refused: the restored catalog contains an invalid canonical media identity.");
+    }
+    const candidate = path.resolve(targetLibrary.root, relativePath);
+    const relative = path.relative(targetLibrary.root, candidate);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      fail(`Recovery refused: invalid catalog media path ${relativePath}.`);
+    }
+    let bytes;
+    try {
+      bytes = await readFile(candidate);
+    } catch {
+      fail(`Recovery refused: cataloged original is missing from the attached NAS: ${relativePath}.`);
+    }
+    if (sha256Bytes(bytes) !== expectedHash) {
+      fail(`Recovery refused: cataloged original hash does not match the attached NAS: ${relativePath}.`);
+    }
+  }
+}
+
+function sqlLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function pathPrefixCondition(column, sourceLiteral, sourceHasTrailingSeparator) {
+  if (sourceHasTrailingSeparator) {
+    return `left(${column}, length(${sourceLiteral})) = ${sourceLiteral}`;
+  }
+  return `(${column} = ${sourceLiteral} OR (left(${column}, length(${sourceLiteral})) = ${sourceLiteral} AND substring(${column}, length(${sourceLiteral}) + 1, 1) IN ('/', E'\\\\')))`;
+}
+
+function remapExpression(column, sourceLiteral, targetLiteral) {
+  return `${targetLiteral} || substring(${column} from length(${sourceLiteral}) + 1)`;
+}
+
+function buildLibraryRemapSql(sourceRoot, targetRoot) {
+  const source = normalizeLibraryRoot(sourceRoot);
+  const target = normalizeLibraryRoot(targetRoot);
+  if (source === target) return "";
+  const sourceHasTrailingSeparator = /[\\/]$/.test(source);
+  const sourceLiteral = sqlLiteral(source);
+  const targetLiteral = sqlLiteral(target);
+  const statements = ["BEGIN"];
+  for (const [table, column, mode] of DURABLE_PATH_COLUMNS) {
+    const identifier = `"${table.replaceAll('"', '""')}"`;
+    const field = `"${column.replaceAll('"', '""')}"`;
+    const condition = mode === "exact"
+      ? `${field} = ${sourceLiteral}`
+      : pathPrefixCondition(field, sourceLiteral, sourceHasTrailingSeparator);
+    statements.push(`UPDATE ${identifier} SET ${field} = ${remapExpression(field, sourceLiteral, targetLiteral)} WHERE ${condition}`);
+  }
+  statements.push(`
+CREATE FUNCTION pg_temp.willard_remap_jsonb(input jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS $willard$
+DECLARE
+  text_value text;
+BEGIN
+  CASE jsonb_typeof(input)
+    WHEN 'object' THEN
+      RETURN (SELECT jsonb_object_agg(key, pg_temp.willard_remap_jsonb(value)) FROM jsonb_each(input));
+    WHEN 'array' THEN
+      RETURN (SELECT jsonb_agg(pg_temp.willard_remap_jsonb(value)) FROM jsonb_array_elements(input));
+    WHEN 'string' THEN
+      text_value := input #>> '{}';
+      IF ${
+        sourceHasTrailingSeparator
+          ? `left(text_value, length(${sourceLiteral})) = ${sourceLiteral}`
+          : `text_value = ${sourceLiteral}
+         OR (left(text_value, length(${sourceLiteral})) = ${sourceLiteral}
+             AND substring(text_value, length(${sourceLiteral}) + 1, 1) IN ('/', E'\\\\'))`
+      } THEN
+        RETURN to_jsonb((${targetLiteral} || substring(text_value from length(${sourceLiteral}) + 1))::text);
+      END IF;
+  END CASE;
+  RETURN input;
+END
+$willard$`);
+  for (const [table, column] of DURABLE_JSON_COLUMNS) {
+    const identifier = `"${table.replaceAll('"', '""')}"`;
+    const field = `"${column.replaceAll('"', '""')}"`;
+    statements.push(
+      `UPDATE ${identifier} SET ${field} = pg_temp.willard_remap_jsonb(${field}) WHERE ${field} IS NOT NULL AND pg_temp.willard_remap_jsonb(${field}) IS DISTINCT FROM ${field}`,
+    );
+  }
+  statements.push("COMMIT");
+  return `${statements.join(";\n")};`;
+}
+
+async function remapRestoredLibrary(environment, sourceRoot, targetRoot) {
+  const sql = buildLibraryRemapSql(sourceRoot, targetRoot);
+  if (sql) await runSql(sql, environment, "Restored library path reconciliation");
+}
+
+async function assertTargetCompatibility(environment, manifest) {
+  if (
+    manifest.compatibility?.applicationSchemaVersion !== null &&
+    manifest.compatibility?.applicationSchemaVersion !== SUPPORTED_APPLICATION_SCHEMA_VERSION
+  ) {
+    fail(
+      `Backup application schema ${manifest.compatibility.applicationSchemaVersion} is not supported by this recovery utility ` +
+      `(expected ${SUPPORTED_APPLICATION_SCHEMA_VERSION}).`,
+    );
+  }
+  if (manifest.compatibility?.postgresMajor == null) return;
+  const output = await runSql("SHOW server_version_num", environment, "Restore target compatibility inspection");
+  const version = Number(output.trim());
+  const targetMajor = Math.floor(version / 10000);
+  if (!Number.isSafeInteger(version) || targetMajor !== manifest.compatibility.postgresMajor) {
+    fail(
+      `Restore target PostgreSQL major ${Number.isFinite(targetMajor) ? targetMajor : "unknown"} ` +
+      `does not match backup major ${manifest.compatibility.postgresMajor}.`,
+    );
+  }
+}
+
 function compareFacts(expected, actual) {
   if (expected.schemaSha256 !== actual.schemaSha256) {
     fail("Restored database schema verification failed.");
@@ -599,27 +1081,93 @@ async function restoreBackup(options) {
     fail("Decrypted database dump failed its SHA-256 integrity check.");
   }
   const environment = databaseConnection(options, true);
-  await cleanTarget(environment);
+  const targetRoot = options["library-root"];
+  let targetLibrary = null;
+  if (manifest.library) {
+    if (typeof targetRoot !== "string" || !targetRoot.trim()) {
+      fail("This backup is library-bound. Restore it with --library-root pointing at the existing NAS library.");
+    }
+    if (options["confirm-library-id"] !== manifest.library.libraryId) {
+      fail(
+        "Recovery requires --confirm-library-id with the authenticated library ID. " +
+        "This operator attestation prevents an identity marker copied by itself from silently authorizing a restore.",
+      );
+    }
+    try {
+      targetLibrary = await readLibraryIdentity(targetRoot);
+    } catch (error) {
+      fail(`Recovery refused: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    validateRecoveryAttachment(manifest.library, targetLibrary);
+    await verifyLibraryMediaSamples(manifest.library, targetLibrary);
+  }
+  await assertTargetCompatibility(environment, manifest);
+  let targetEmpty = true;
+  let recoveryTargetIdentity = null;
+  try {
+    await cleanTarget(environment);
+  } catch (error) {
+    targetEmpty = false;
+    if (!options["resume-recovery"] || !manifest.library || !targetLibrary) throw error;
+    const journal = await validateRecoveryJournal(targetLibrary.root, manifest, secret, environment);
+    recoveryTargetIdentity = journal.targetIdentity;
+    const currentFacts = await databaseFacts(environment);
+    compareFacts(manifest.verification, currentFacts);
+  }
   const temporaryDump = path.join(os.tmpdir(), `willard-db-restore-${randomBytes(8).toString("hex")}.dump`);
   try {
-    await writeFile(temporaryDump, dump, { mode: 0o600 });
-    const targetDatabase = environment.PGDATABASE || "postgres";
-    await runTool(
-      resolveBinary("PGRESTORE_BIN", "pg_restore", "pg_restore.exe"),
-      [
-        "--exit-on-error",
-        "--single-transaction",
-        "--no-owner",
-        "--no-acl",
-        "--dbname",
-        targetDatabase,
-        temporaryDump,
-      ],
-      environment,
-      "PostgreSQL restore",
-    );
+    if (targetEmpty) {
+      if (manifest.library && targetLibrary) {
+        recoveryTargetIdentity = await createRecoveryTargetIdentity(environment, manifest);
+        await writeRecoveryJournal(
+          targetLibrary.root, manifest, secret, recoveryTargetIdentity, "RESTORING",
+        );
+      }
+      await writeFile(temporaryDump, dump, { mode: 0o600 });
+      const targetDatabase = environment.PGDATABASE || "postgres";
+      await runTool(
+        resolveBinary("PGRESTORE_BIN", "pg_restore", "pg_restore.exe"),
+        [
+          "--exit-on-error",
+          "--single-transaction",
+          "--no-owner",
+          "--no-acl",
+          "--dbname",
+          targetDatabase,
+          temporaryDump,
+        ],
+        environment,
+        "PostgreSQL restore",
+      );
+      if (manifest.library && targetLibrary) {
+        await writeRecoveryJournal(
+          targetLibrary.root, manifest, secret, recoveryTargetIdentity, "RESTORED",
+        );
+      }
+    }
+    if (manifest.library && targetLibrary) {
+      await verifyRestoredLibraryInventory(environment, manifest.library, targetLibrary);
+      try {
+        await remapRestoredLibrary(environment, manifest.library.root, targetLibrary.root);
+      } catch (error) {
+        await writeRecoveryJournal(
+          targetLibrary.root,
+          manifest,
+          secret,
+          recoveryTargetIdentity,
+          "REMAP_FAILED",
+          error instanceof Error ? error.message : String(error),
+        ).catch(() => {});
+        throw error;
+      }
+    }
     const actualFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, actualFacts);
+    if (manifest.library && targetLibrary) {
+      await writeRecoveryJournal(
+        targetLibrary.root, manifest, secret, recoveryTargetIdentity, "COMPLETE",
+      );
+    }
     console.log(`Database restored and verified: ${backupDir}`);
   } finally {
     await secureRemove(temporaryDump);
@@ -641,7 +1189,8 @@ function printHelp() {
 
 Commands:
   backup [--output-dir DIR] [--retention-days N] [--keep N]
-  restore --backup-dir DIR
+  restore --backup-dir DIR [--library-root NAS_LIBRARY] [--confirm-library-id ID]
+          [--resume-recovery]
   verify --backup-dir DIR
 
 Connection:
@@ -651,7 +1200,9 @@ Connection:
   PGDUMP_BIN, PGRESTORE_BIN, and PSQL_BIN override PostgreSQL tool paths.
 
 Backups contain database metadata only; media files remain on the NAS and must
-be reconciled by scanning the active library after a restore.`);
+be reconciled by scanning the active library after a restore. Library-bound
+backups require the existing NAS identity marker and safely remap path-bearing
+catalog references when the clean machine uses a different mount path.`);
 }
 
 async function main() {
@@ -687,8 +1238,10 @@ export {
   ALGORITHM,
   FORMAT,
   SCHEMA_VERSION,
+  SUPPORTED_APPLICATION_SCHEMA_VERSION,
   authenticatedManifestPart,
   compareFacts,
+  buildLibraryRemapSql,
   decryptDump,
   encryptDump,
   stableJson,

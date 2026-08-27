@@ -10,11 +10,19 @@ The supported backup format is an encrypted directory containing:
 - `database.dump.enc`: a PostgreSQL custom-format dump encrypted with
   AES-256-GCM;
 - `manifest.json`: authenticated encryption metadata, SHA-256 digests, the
-  source database name, a schema fingerprint, and exact table row counts.
+  source database name, PostgreSQL/application compatibility, the stable NAS
+  library identity, a schema fingerprint, and exact table row counts.
 
 The manifest metadata and ciphertext are authenticated. A restore refuses an
 altered backup, a wrong passphrase, a non-empty target database, a schema
 mismatch, or a row-count mismatch.
+When a configured library exists, backup also creates or validates
+`WillardAI/config/library-identity.json` on that NAS. The marker contains no
+credentials or media paths. Its authenticated identity prevents a restored
+catalog from being attached to a stale or foreign library.
+The dump, schema/row facts, active library root, and canonical hash inventory
+are all read through one exported PostgreSQL snapshot. A library-path switch or
+catalog write cannot bind the encrypted dump to later database state.
 
 ## Backup policy
 
@@ -123,33 +131,51 @@ database; the utility refuses to overwrite an existing user table.
    $env:WILLARD_RESTORE_DATABASE_URL =
      "postgresql://willard_app:password@localhost:5432/willard_restore"
    node .\desktop\database-backup.mjs restore `
-     --backup-dir "Z:\WillardBackups\Database\backup-<timestamp>-<id>"
+      --backup-dir "Z:\WillardBackups\Database\backup-<timestamp>-<id>" `
+      --library-root "Z:\MediaLibrary" `
+      --confirm-library-id "<libraryId from authenticated manifest.json>"
    Remove-Item Env:\WILLARD_RESTORE_DATABASE_URL
    ```
 
    If the target URL is omitted, `DATABASE_URL` is used. The source database
    is never modified by the restore command.
-4. The command decrypts to a short-lived protected temporary file, runs
+4. The command checks the backup format, application schema, PostgreSQL major
+   version, and NAS identity before target mutation. The library path may be a
+   different drive letter or UNC mount on the clean machine; path-bearing rows
+   are remapped transactionally after restore. Because the identity marker is a
+   portable NAS file, the operator must also attest the authenticated library
+   ID with `--confirm-library-id`; a copied marker by itself is not authorization.
+   A bounded hash sample is checked before restore, then every cataloged
+   original is SHA-256 verified against the restored catalog before recovery is
+   marked complete. Missing or mismatched originals fail closed.
+5. The command decrypts to a short-lived protected temporary file, runs
    `pg_restore --single-transaction --no-owner --no-acl`, removes the temporary
    plaintext dump, then checks the schema fingerprint and every recorded table
    row count.
-5. Point the app's `.env` at the verified restored database, run the normal
+6. Point the app's `.env` at the verified restored database, run the normal
    database setup/readiness step, and start Willard.
 
-If row counts do not match, stop the app and retry from a new clean database
-after quiescing catalog writes. Never use `--clean` against the production
-database and never restore over a database that contains user tables.
+If interruption happens during `pg_restore`, its single transaction leaves the
+target empty and a normal retry is safe. If interruption happens after the dump
+commits but before path reconciliation completes, rerun the same command with
+`--resume-recovery`. Resume requires the matching NAS recovery journal and
+exact source schema/table counts; it never accepts an arbitrary non-empty
+database. For any other mismatch, retry from a new clean database after
+quiescing catalog writes. Never use `--clean` against the production database
+and never restore over an unrelated database that contains user tables.
 
 ## Media reconciliation after restore
 
 The database backup does not contain photos, videos, documents, archives,
-thumbnails, or other media derivatives. Those files remain on the NAS. After
+thumbnails, or other media derivatives. Those files remain on the NAS. The
+full durability contract is `library-durability-manifest.json`. After
 the restored database is selected:
 
 1. Open **Settings → Libraries** and confirm the active library points to the
    same NAS path.
 2. Confirm the NAS is online and accessible to the account running Willard.
-3. Run a full library scan.
+3. Confirm representative media opens and its recorded SHA-256 identity still
+   matches the unchanged NAS original, then run a full library scan.
 4. Review the scan result for missing files and newly discovered files.
 5. Allow thumbnails, embeddings, face data, and other rebuildable derived data
    to regenerate when the restored catalog does not contain them.
@@ -161,8 +187,17 @@ recovery remain separate procedures.
 ## Restore drill
 
 The repository's `pnpm run test:database-backup` test starts a disposable
-PostgreSQL cluster, creates representative catalog rows, creates and verifies
-an encrypted backup, restores it into a separate clean database, checks the
-recovered values, proves ciphertext tampering is rejected, and checks
-retention pruning. This is an automated safety net, not a substitute for a
-Windows/NAS drill using the actual operator backup destination.
+PostgreSQL cluster and representative NAS fixture. It records canonical hashes,
+manual metadata, favorites, albums, tags, AI corrections, people/face
+assignments, archive/cleanup history, search state, and a paused job cursor. It
+then creates and verifies an encrypted backup, removes optional local/NAS
+caches, restores into a separate clean database, opens the unchanged original,
+and proves all protected decisions survived.
+
+The drill also proves missing/disconnected and foreign NAS identities, copied
+markers without operator attestation, different-root path remapping,
+ciphertext or manifest tampering, incompatible backup formats, and duplicate
+restore attempts fail closed. It also proves the recovery journal can safely
+resume the post-restore reconciliation phase without rerunning `pg_restore`.
+This automated safety net is not a substitute for a Windows/NAS drill using the
+actual operator backup destination.

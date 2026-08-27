@@ -101,7 +101,7 @@
     {
       "id": "clean-machine-nas-recovery",
       "mode": "windows-packaged",
-      "evidence": "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+      "evidence": "desktop/database-backup.test.mjs"
     },
     {
       "id": "pwa-private-media-cache",
@@ -291,6 +291,9 @@
         "artifacts/api-server/src/__tests__/shutdown.test.ts",
         "artifacts/api-server/src/__tests__/library-watcher-path-switch.test.ts",
         "artifacts/api-server/src/__tests__/storage-migration.test.ts",
+        "library-durability-manifest.json",
+        "desktop/database-backup.mjs",
+        "desktop/database-backup.test.mjs",
         "scripts/windows/installer-lifecycle-smoke.ps1",
         "scripts/windows/startup-smoke.ps1",
         "scripts/windows/update-smoke.ps1"
