@@ -22,7 +22,10 @@ import {
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensurePrivateDir } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
-import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid } from "../thumbnail-engine.ts";
+import {
+  getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
+  getThumbnailCacheStats, cleanStaleThumbnailPartials, enforceThumbnailCacheQuota,
+} from "../thumbnail-engine.ts";
 import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
 import { purgeDerivedDataForMedia } from "../derived-cleanup.ts";
@@ -2380,39 +2383,9 @@ async function runScanJob(
       diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
     }).where(eq(libraryJobsTable.id, jobId));
 
-    // ── Auto-start thumbnail backfill after scan ───────────────────────────
-    try {
-      const [{ missing }] = await db
-        .select({ missing: sql<number>`count(*)::int` })
-        .from(mediaFilesTable)
-        .where(and(
-          eq(mediaFilesTable.nasPath, state.nasPath),
-          isNull(mediaFilesTable.thumbnailPath),
-          or(
-            eq(mediaFilesTable.mediaType, "photo"),
-            eq(mediaFilesTable.mediaType, "video"),
-            eq(mediaFilesTable.extension, "pdf"),
-          ),
-        ));
-      const [settingsRow] = await db.select({ paused: appSettingsTable.indexingPaused })
-        .from(appSettingsTable).limit(1);
-      const isThumbRunning = [...activeJobs.values()].some(
-        j => j.jobType === "THUMBNAILS" && j.nasPath === state.nasPath,
-      );
-      // Also check the DB — catches a THUMBNAILS job that survived a server restart
-      // (still RUNNING in the DB) but is no longer in activeJobs (in-memory cleared).
-      const [dbThumbRunning] = isThumbRunning ? [] : await db
-        .select({ id: libraryJobsTable.id })
-        .from(libraryJobsTable)
-        .where(and(
-          eq(libraryJobsTable.nasPath, state.nasPath),
-          eq(libraryJobsTable.jobType, "THUMBNAILS"),
-          eq(libraryJobsTable.status, "RUNNING"),
-        )).limit(1);
-      if ((missing ?? 0) > 0 && !isThumbRunning && !dbThumbRunning && !settingsRow?.paused) {
-        void startJob({ jobType: "THUMBNAILS", profile: "FULL", nasPath: state.nasPath });
-      }
-    } catch { /* non-fatal */ }
+    // Thumbnail generation remains lazy after a scan. A user can request an
+    // explicitly bounded backfill, while normal browsing generates only the
+    // derivatives that are actually viewed.
 
     // ── Library Activity feed entry (only when something actually changed) ──
     const changeText = describeChanges({
@@ -2669,6 +2642,18 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
 // ── Thumbnail backfill job ────────────────────────────────────────────────────
 
 const THUMB_BATCH = 50;
+/** Explicit thumbnail jobs process a bounded slice; browsing stays lazy. */
+export const THUMBNAIL_JOB_MAX_FILES = 500;
+
+class ThumbnailStorageUnavailable extends Error {
+  constructor(
+    readonly reason: "NAS_OFFLINE" | "NAS_READ_ONLY",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ThumbnailStorageUnavailable";
+  }
+}
 
 async function runThumbnailJob(state: ActiveJobState): Promise<void> {
   const jobId   = state.id;
@@ -2677,9 +2662,14 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
   state.phase = "thumbnailing";
 
   try {
-    // Check NAS
-    if (!(await checkNasReachableAsync(nasPath)).online) {
-      await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
+    // Check NAS before creating or publishing any derivative.
+    const initialReach = await checkNasReachableAsync(nasPath);
+    if (!initialReach.online || !initialReach.writable) {
+      await failJob(
+        jobId,
+        initialReach.online ? "NAS_READ_ONLY" : "NAS_OFFLINE",
+        initialReach.message,
+      );
       return;
     }
 
@@ -2704,11 +2694,17 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         ),
       ));
 
-    state.filesTotal = totalCount ?? 0;
+    state.filesTotal = Math.min(totalCount ?? 0, THUMBNAIL_JOB_MAX_FILES);
     state.filesProcessed = 0;
 
     await db.update(libraryJobsTable)
-      .set({ totalFiles: state.filesTotal, startedAt: state.startedAt })
+      .set({
+        totalFiles: state.filesTotal,
+        startedAt: state.startedAt,
+        diagnostics: {
+          storagePolicy: { requiresNas: true, bounded: true, maxFiles: THUMBNAIL_JOB_MAX_FILES },
+        },
+      })
       .where(eq(libraryJobsTable.id, jobId));
 
     // Only resume cursor from jobs interrupted by a server restart.
@@ -2745,6 +2741,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       resumeMode,
       cursor,
       eligibleFiles: totalCount ?? 0,
+      boundedTo: THUMBNAIL_JOB_MAX_FILES,
     }, resumeMode
       ? `[thumbnail-job] Resuming from cursor=${cursor} after server restart — eligibleFiles=${totalCount ?? 0}`
       : `[thumbnail-job] Starting fresh from cursor=0 — eligibleFiles=${totalCount ?? 0}`);
@@ -2782,12 +2779,21 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
     // Helper: process a single file
     const processFile = async (file: { id: number; relativePath: string; extension: string }): Promise<void> => {
+      if (state.filesProcessed >= THUMBNAIL_JOB_MAX_FILES) return;
+      const currentReach = await checkNasReachableAsync(nasPath);
+      if (!currentReach.online || !currentReach.writable) {
+        throw new ThumbnailStorageUnavailable(
+          currentReach.online ? "NAS_READ_ONLY" : "NAS_OFFLINE",
+          currentReach.message,
+        );
+      }
       let sourcePath: string;
       try {
         sourcePath = resolveLibraryPath(nasPath, file.relativePath);
       } catch {
         state.counters.thumbnailsFailed++;
         recordSkip(state, file.relativePath, "Rejected unsafe library path");
+        state.filesProcessed++;
         return;
       }
       state.currentPath = file.relativePath;
@@ -2842,7 +2848,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       const priorityList = [...prioritySet];
       clearThumbnailPriority(nasPath);
 
-      for (let i = 0; i < priorityList.length; i += THUMB_BATCH) {
+    for (let i = 0; i < priorityList.length && state.filesProcessed < THUMBNAIL_JOB_MAX_FILES; i += THUMB_BATCH) {
         if (await handlePauseCancel()) return;
 
         const batchIds = priorityList.slice(i, i + THUMB_BATCH);
@@ -2869,7 +2875,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
     }
 
     // ── Phase 2: cursor-based sweep (favorites first, then photos/videos/docs) ─
-    while (true) {
+    while (state.filesProcessed < THUMBNAIL_JOB_MAX_FILES) {
       if (await handlePauseCancel()) return;
 
       // Fetch next batch — favorites first, then by media type priority, then by id
@@ -2890,7 +2896,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
           ),
         ))
         .orderBy(mediaFilesTable.id)
-        .limit(THUMB_BATCH);
+        .limit(Math.min(THUMB_BATCH, THUMBNAIL_JOB_MAX_FILES - state.filesProcessed));
 
       if (batch.length === 0) break;
 
@@ -2911,23 +2917,40 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0, unchangedFiles: 0,
       hashedFiles: 0,
       thumbnailsGenerated: state.counters.thumbnails,
+      thumbnailsFailed: state.counters.thumbnailsFailed,
       elapsedMs,
       previousElapsedMs: null,
     };
 
+    const cacheStats = getThumbnailCacheStats(nasPath);
     await db.update(libraryJobsTable).set({
       status:         "DONE",
       finishedAt:     new Date(),
       processedFiles: state.filesProcessed,
       totalFiles:     state.filesTotal,
       summary,
+      diagnostics: {
+        storagePolicy: {
+          requiresNas: true,
+          bounded: true,
+          maxFiles: THUMBNAIL_JOB_MAX_FILES,
+          cacheBytes: cacheStats.bytes,
+          cacheFiles: cacheStats.files,
+          reclaimableBytes: cacheStats.reclaimableBytes,
+          incompleteBytes: cacheStats.incompleteBytes,
+        },
+      },
     }).where(eq(libraryJobsTable.id, jobId));
 
     recordCompletion(state, summary);
     activeJobs.delete(jobId);
 
   } catch (err: any) {
-    await failJob(jobId, "ERROR", err?.message ?? "Unknown error");
+    await failJob(
+      jobId,
+      err instanceof ThumbnailStorageUnavailable ? err.reason : "ERROR",
+      err?.message ?? "Unknown error",
+    );
   }
 }
 
@@ -2966,6 +2989,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
   const runPass = async (): Promise<void> => {
     try {
       if (!(await checkNasReachableAsync(nasPath)).online) return;
+      cleanStaleThumbnailPartials(nasPath);
 
       const rows = await db.select({
         id: mediaFilesTable.id,
@@ -3013,6 +3037,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
             }
           }
         } catch { /* cache cleanup is best effort */ }
+        enforceThumbnailCacheQuota(nasPath);
         cursor = 0;
         passResets = 0;
         return;

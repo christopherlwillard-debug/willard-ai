@@ -1319,8 +1319,8 @@ export default function Media() {
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      // Fast poll while a job is running; slow-poll while idle so we pick up
-      // auto-started follow-up jobs (e.g. thumbnail backfill after scan).
+       // Job progress is delivered by the durable event stream; this query is
+       // intentionally not a second polling loop.
       return false;
     },
   });

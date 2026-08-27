@@ -31,11 +31,15 @@ the owning operation ends.
 | Verified database backups | NAS-required | `WillardAI/backups/` / filesystem | Never automatically reclaim |
 | Catalog and manual metadata | Control-plane-local | PostgreSQL + NAS-backed encrypted backup | Never automatically reclaim |
 | Jobs and recovery state | Control-plane-local | PostgreSQL + NAS-backed encrypted backup | Never automatically reclaim |
-| Thumbnail derivatives | NAS-required | `WillardAI/cache/thumbnails/` / filesystem | Rebuildable, but only by an explicit cache action |
+| Thumbnail derivatives | NAS-required | `WillardAI/cache/thumbnails/` / filesystem | Rebuildable; bounded to 1 GiB and oldest valid files are reclaimed |
+| Preview derivatives | NAS-required | `WillardAI/cache/previews/` / filesystem | Rebuildable; bounded cache |
+| PDF and document previews | NAS-required | `WillardAI/cache/documents/` / filesystem | Rebuildable; bounded cache |
+| Transcode derivatives | NAS-required | `WillardAI/cache/transcodes/` / filesystem | Rebuildable; bounded cache |
 | Face derivatives | NAS-required | `WillardAI/cache/faces/` / filesystem | Rebuildable, but remain NAS-scoped |
 | AI-derived metadata and embeddings | Control-plane-local | PostgreSQL | Rebuildable; no media-byte fallback |
 | Conversion staging and backups | NAS-required | `WillardAI/ConversionBackups/` / filesystem | Never as a capacity shortcut |
-| Archive/import/media-processing work | NAS-required | `WillardAI/temp/` / filesystem | Remove only after owner completion/cancellation |
+| Conversion working staging | NAS-required | `WillardAI/conversions/` / filesystem | Rebuildable; cleaned by job recovery and bounded in policy |
+| Archive-derived media and archive/import/media-processing work | NAS-required | `WillardAI/temp/` / filesystem | Bounded scratch; remove only after owner completion/cancellation |
 | Archive indexes and reports | NAS-required | `WillardAI/archive-index/`, `reports/` | Bounded retention, never originals |
 | Logs and scan history | NAS-required | `WillardAI/logs/`, `scan-history/` | Bounded retention only |
 | Face model cache | Bounded-local | `~/.cache/willard-face-models/` / filesystem | Re-download after verified removal |
@@ -66,3 +70,6 @@ raw configured path or filenames.
    diagnostics retain only redacted operational data.
 4. Browser and mobile persistence contains only app state or explicit
    user-initiated exports. Media bytes and library knowledge remain server-side.
+5. A completed full scan never starts an unbounded derivative sweep. Thumbnail
+   requests are lazy, and a user-requested backfill processes at most 500 files
+   per job so it can be paused, retried, or resumed safely.

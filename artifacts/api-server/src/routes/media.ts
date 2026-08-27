@@ -5,6 +5,7 @@ import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
 import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
+import { StoragePolicyError } from "../lib/storage-policy.ts";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
@@ -583,7 +584,16 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
-  const result = await generateThumbnail(id, sourcePath, file.extension, nasPath);
+  let result;
+  try {
+    result = await generateThumbnail(id, sourcePath, file.extension, nasPath);
+  } catch (error) {
+    if (error instanceof StoragePolicyError) {
+      res.status(503).json({ error: "NAS storage is unavailable for thumbnail generation" });
+      return;
+    }
+    throw error;
+  }
   if (result.error || !result.destPath || !fs.existsSync(result.destPath)) {
     res.status(500).json({ error: result.error ?? "Thumbnail generation failed" });
     return;

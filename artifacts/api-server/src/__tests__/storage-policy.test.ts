@@ -19,6 +19,25 @@ test("storage inventory is unique and covers every supported storage class", () 
   assert.ok(STORAGE_INVENTORY.some((entry) => entry.storageClass === "NAS_REQUIRED" && entry.durability === "NAS_BACKED"));
 });
 
+test("every derivative family has an explicit NAS destination and bounded reclaim rule", () => {
+  const byId = new Map(STORAGE_INVENTORY.map((entry) => [entry.id, entry]));
+  for (const id of [
+    "thumbnail-derivatives",
+    "preview-derivatives",
+    "document-derivatives",
+    "transcode-derivatives",
+    "archive-derived-media",
+    "conversion-working-staging",
+  ]) {
+    const entry = byId.get(id);
+    assert.ok(entry, `missing inventory entry: ${id}`);
+    assert.equal(entry.storageClass, "NAS_REQUIRED");
+    assert.equal(entry.destination, "NAS_LIBRARY");
+    assert.equal(entry.reclaimable, true);
+    assert.match(entry.pathPattern, /<LIBRARY>\/WillardAI\//);
+  }
+});
+
 test("NAS-required policy has explicit safe states", () => {
   assert.equal(getStoragePolicyState({ configured: false, online: false, writable: false, message: "not configured" }), "UNCONFIGURED");
   assert.equal(getStoragePolicyState({ online: false, writable: false, message: "offline" }), "PAUSED");

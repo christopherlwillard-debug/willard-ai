@@ -58,6 +58,7 @@ export interface JobSummary {
   scanStartedAt?:     string; // ISO — key for querying per-action file subsets
   categories?:        Record<string, number>; // files per media type in this scan
   reprocessedFiles?:  number; // METADATA jobs
+  thumbnailsFailed?:  number;
 }
 
 // ── Progress event structure (stable contract — never break clients) ───────────

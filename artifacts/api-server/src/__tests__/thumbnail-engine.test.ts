@@ -4,7 +4,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { generateThumbnail, getThumbnailDir, isThumbnailFileValid } from "../lib/thumbnail-engine.ts";
+import {
+  generateThumbnail,
+  getThumbnailDir,
+  isThumbnailFileValid,
+  getThumbnailCacheStats,
+  enforceThumbnailCacheQuota,
+  cleanStaleThumbnailPartials,
+} from "../lib/thumbnail-engine.ts";
 
 let roots: string[] = [];
 
@@ -62,5 +69,48 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.ok(result.error);
     assert.equal(result.destPath, "");
     assert.deepEqual(fs.readdirSync(getThumbnailDir(root)), []);
+  });
+
+  test("excludes locks, partials, and invalid files from durable cache accounting", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const result = await generateThumbnail(44, source, "jpg", root);
+    assert.equal(result.error, null);
+
+    const dir = getThumbnailDir(root);
+    fs.writeFileSync(path.join(dir, "45.webp.lock"), "lock");
+    fs.writeFileSync(path.join(dir, "45.webp.1.tmp.webp"), Buffer.alloc(400));
+    fs.writeFileSync(path.join(dir, "45.webp.frame.png"), Buffer.alloc(500));
+    fs.writeFileSync(path.join(dir, "invalid.webp"), Buffer.alloc(500));
+
+    const stats = getThumbnailCacheStats(root);
+    assert.equal(stats.files, 1);
+    assert.equal(stats.bytes, fs.statSync(result.destPath!).size);
+    assert.equal(stats.incompleteFiles, 3);
+    assert.equal(stats.incompleteBytes, 904);
+  });
+
+  test("removes abandoned partials and evicts oldest valid files over quota", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const first = await generateThumbnail(51, source, "jpg", root);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await generateThumbnail(52, source, "jpg", root);
+    assert.equal(first.error, null);
+    assert.equal(second.error, null);
+
+    const dir = getThumbnailDir(root);
+    const stale = path.join(dir, "old.1.tmp.webp");
+    fs.writeFileSync(stale, Buffer.alloc(17));
+    const oldTime = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(stale, oldTime, oldTime);
+    assert.deepEqual(cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
+
+    const kept = enforceThumbnailCacheQuota(root, fs.statSync(second.destPath!).size, second.destPath!);
+    assert.equal(fs.existsSync(second.destPath!), true);
+    assert.equal(fs.existsSync(first.destPath!), false);
+    assert.equal(kept.files, 1);
   });
 });

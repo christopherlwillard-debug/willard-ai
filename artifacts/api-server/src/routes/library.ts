@@ -7,7 +7,11 @@ import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
   forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq, getAllJobProgress,
 } from "../lib/library-engine";
-import { getThumbnailCacheSizeBytes, clearThumbnailCache } from "../lib/thumbnail-engine";
+import {
+  getThumbnailCacheStats,
+  clearThumbnailCache,
+  THUMBNAIL_CACHE_MAX_BYTES,
+} from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
 import { getWatcherSnapshot } from "../lib/library-watcher";
 import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/library-activity";
@@ -492,7 +496,19 @@ router.post("/library/thumbnails", async (req: Request, res: Response) => {
 router.get("/library/thumbnails/status", async (_req: Request, res: Response) => {
   const nasPath = await getNasPath();
   if (!nasPath) {
-    res.json({ total: 0, built: 0, missing: 0, cacheSizeBytes: 0, activeJob: null });
+    res.json({
+      total: 0,
+      built: 0,
+      missing: 0,
+      pending: 0,
+      failed: 0,
+      cacheSizeBytes: 0,
+      cacheQuotaBytes: THUMBNAIL_CACHE_MAX_BYTES,
+      reclaimableBytes: 0,
+      incompleteFiles: 0,
+      incompleteBytes: 0,
+      activeJob: null,
+    });
     return;
   }
 
@@ -516,7 +532,19 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
     .from(mediaFilesTable)
     .where(and(eligibleFilter, sql`${mediaFilesTable.thumbnailPath} IS NOT NULL`));
 
-  const cacheSizeBytes = getThumbnailCacheSizeBytes(nasPath);
+  const cacheStats = getThumbnailCacheStats(nasPath);
+  const activeJob = getAllJobProgress().find(
+    (job) => job.jobType === "THUMBNAILS" && job.status === "RUNNING",
+  ) ?? null;
+  const [lastThumbnailJob] = await db.select({ summary: libraryJobsTable.summary })
+    .from(libraryJobsTable)
+    .where(and(
+      eq(libraryJobsTable.nasPath, nasPath),
+      eq(libraryJobsTable.jobType, "THUMBNAILS"),
+    ))
+    .orderBy(desc(libraryJobsTable.createdAt))
+    .limit(1);
+  const lastSummary = (lastThumbnailJob?.summary ?? {}) as { thumbnailsFailed?: number };
 
   const totalNum = total ?? 0;
   const builtNum = built ?? 0;
@@ -525,8 +553,15 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
     total: totalNum,
     built: builtNum,
     missing: Math.max(0, totalNum - builtNum),
-    cacheSizeBytes,
-    activeJob: null,
+    cacheSizeBytes: cacheStats.bytes,
+    cacheQuotaBytes: THUMBNAIL_CACHE_MAX_BYTES,
+    cacheFiles: cacheStats.files,
+    reclaimableBytes: cacheStats.reclaimableBytes,
+    incompleteFiles: cacheStats.incompleteFiles,
+    incompleteBytes: cacheStats.incompleteBytes,
+    pending: Math.max(0, totalNum - builtNum),
+    failed: activeJob?.counters.thumbnailsFailed ?? lastSummary.thumbnailsFailed ?? 0,
+    activeJob,
   });
 });
 

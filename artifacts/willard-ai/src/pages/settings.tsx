@@ -1120,7 +1120,17 @@ function ThumbnailManagerSection() {
   const [localQuality, setLocalQuality] = useState<string | null>(null);
   const displayQuality = localQuality ?? thumbnailQuality;
 
-  const [thumbStats, setThumbStats] = useState<{ total: number; built: number; missing: number; cacheSizeBytes: number } | null>(null);
+  const [thumbStats, setThumbStats] = useState<{
+    total: number;
+    built: number;
+    missing: number;
+    pending?: number;
+    failed?: number;
+    cacheSizeBytes: number;
+    reclaimableBytes?: number;
+    incompleteFiles?: number;
+    incompleteBytes?: number;
+  } | null>(null);
   const [thumbLoading, setThumbLoading] = useState(true);
   const [thumbError, setThumbError] = useState<string | null>(null);
 
@@ -1212,7 +1222,7 @@ function ThumbnailManagerSection() {
           THUMBNAIL_CACHE
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage thumbnail generation quality and cache. Thumbnails speed up the media library browser.
+           Manage lazy thumbnail generation and its NAS cache. Explicit backfills are bounded to 500 files per job.
         </p>
       </div>
 
@@ -1257,7 +1267,7 @@ function ThumbnailManagerSection() {
               </div>
 
               {/* Stats grid */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
                   <span className="text-lg font-bold tabular-nums">{thumbStats.built.toLocaleString()}</span>
                   <span className="text-[10px] text-muted-foreground font-mono mt-0.5">BUILT</span>
@@ -1272,7 +1282,19 @@ function ThumbnailManagerSection() {
                   <span className="text-lg font-bold tabular-nums">{formatBytes(thumbStats.cacheSizeBytes)}</span>
                   <span className="text-[10px] text-muted-foreground font-mono mt-0.5">CACHE SIZE</span>
                 </div>
+                <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
+                  <span className="text-lg font-bold tabular-nums">{(thumbStats.pending ?? thumbStats.missing).toLocaleString()}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono mt-0.5">PENDING</span>
+                </div>
+                <div className="flex flex-col items-center p-3 rounded-lg bg-secondary/30 border border-border">
+                  <span className={`text-lg font-bold tabular-nums ${(thumbStats.failed ?? 0) > 0 ? "text-amber-400" : ""}`}>{(thumbStats.failed ?? 0).toLocaleString()}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono mt-0.5">FAILED</span>
+                </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Reclaimable NAS cache: {formatBytes(thumbStats.reclaimableBytes ?? thumbStats.cacheSizeBytes)}
+                {thumbStats.incompleteFiles ? ` · ${thumbStats.incompleteFiles} partial files (${formatBytes(thumbStats.incompleteBytes ?? 0)}) ignored` : ""}
+              </p>
             </>
           ) : null}
 
