@@ -53,7 +53,9 @@ jobs:
 
       - name: Install PostgreSQL for the source launcher smoke test
         shell: pwsh
+        timeout-minutes: 10
         run: |
+          $ErrorActionPreference = "Stop"
           choco install postgresql16 --params="/Password:postgres" --no-progress --yes
           $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object -First 1
           if (-not $service) { throw "PostgreSQL service was not installed." }
