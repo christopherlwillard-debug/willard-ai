@@ -1,0 +1,222 @@
+{
+  "format": 1,
+  "policyVersion": "2026-08-27",
+  "modes": [
+    "linux-replit",
+    "windows-developer",
+    "windows-packaged",
+    "web-pwa",
+    "mobile"
+  ],
+  "requiredPipelines": [
+    "scan-and-index",
+    "search-and-index-enrichment",
+    "archive-peek-and-extract",
+    "cleanup-and-restore",
+    "optimization-and-conversion",
+    "ai-enrichment",
+    "face-recognition",
+    "imports",
+    "exports",
+    "thumbnail-reconciliation",
+    "nas-loss-recovery",
+    "operational-logs-and-reports"
+  ],
+  "entries": [
+    {
+      "pipeline": "scan-and-index",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY",
+      "retention": "Originals stay on the configured library; directory cache is bounded and rebuildable.",
+      "capacityGuard": "NAS reachability plus re-probed capacity admission before writes.",
+      "nasOffline": "Pause the job and persist its cursor; never switch to local media storage.",
+      "resume": "Durable job cursor resumes only after the same library is reachable.",
+      "duplicateProtection": "Canonical active-library path and fingerprint rules prevent duplicate catalog rows.",
+      "automaticReclaimSource": "none",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/library-job-claims.test.ts",
+        "artifacts/api-server/src/__tests__/library-monitor-topology.test.ts",
+        "artifacts/api-server/src/lib/library-engine/job-engine.ts"
+      ]
+    },
+    {
+      "pipeline": "search-and-index-enrichment",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY + API_CONTROL_PLANE",
+      "retention": "Source and thumbnails remain NAS-backed; searchable rows are rebuildable database state.",
+      "capacityGuard": "NAS source access and capacity admission for generated derivatives; database writes are bounded.",
+      "nasOffline": "Pause source reads and enrichment writes; local model cache may remain bounded and rebuildable.",
+      "resume": "Retry from durable media identity without re-copying source bytes.",
+      "duplicateProtection": "Upsert by canonical media identity and normalized embedding dimensions.",
+      "automaticReclaimSource": "rebuildable AI rows only after explicit derived-data cleanup",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/ai-enrichment.test.ts",
+        "artifacts/api-server/src/__tests__/ai-search.test.ts",
+        "artifacts/api-server/src/lib/ai-enrichment.ts"
+      ]
+    },
+    {
+      "pipeline": "archive-peek-and-extract",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY/WillardAI/temp",
+      "retention": "Scratch is owned by the job; archive indexes and reports remain NAS-backed.",
+      "capacityGuard": "NAS temp directory and reserved capacity are required before extraction.",
+      "nasOffline": "Stop before or during extraction; do not use OS temp or delete the source archive.",
+      "resume": "Discard incomplete scratch and restart from the unchanged archive.",
+      "duplicateProtection": "Archive identity, path validation, and verified extracted-file hashes.",
+      "automaticReclaimSource": "job-owned incomplete scratch only",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/archive-safety.test.ts",
+        "artifacts/api-server/src/__tests__/archive-isolation.test.ts",
+        "artifacts/api-server/src/routes/organize.ts"
+      ]
+    },
+    {
+      "pipeline": "cleanup-and-restore",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged", "web-pwa"],
+      "destination": "NAS_LIBRARY/WillardAI/.Trash",
+      "retention": "Recycle contents are recoverable and never reclaimed by capacity housekeeping.",
+      "capacityGuard": "NAS write admission before recycle; cleanup manifests stay in control-plane/NAS recovery state.",
+      "nasOffline": "Pause and leave originals untouched; interrupted cleanup remains retryable.",
+      "resume": "Manifest-backed actions retry idempotently and preserve completed moves.",
+      "duplicateProtection": "Canonical catalog scope, cleanup manifest identity, and explicit confirmation.",
+      "automaticReclaimSource": "none; permanent deletion is explicit",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/cleanup-queue.test.ts",
+        "artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts",
+        "artifacts/api-server/src/routes/cleanup.ts",
+        "artifacts/willard-ai/src/pages/cleanup.tsx"
+      ]
+    },
+    {
+      "pipeline": "optimization-and-conversion",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged", "web-pwa"],
+      "destination": "NAS_LIBRARY/WillardAI/{conversions,ConversionBackups,.Trash}",
+      "retention": "Verified backups and protected originals are retained; working output is disposable until applied.",
+      "capacityGuard": "NAS working directory plus reservation; protected backup creation fails closed.",
+      "nasOffline": "Pause conversion and keep the original and verified backup intact.",
+      "resume": "Recovery inspects durable conversion state and never treats partial output as complete.",
+      "duplicateProtection": "Format classification, canonical source identity, and verified output hashes.",
+      "automaticReclaimSource": "unapplied working output only after recovery rules",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/optimize-cycle.test.ts",
+        "artifacts/api-server/src/__tests__/conversion-recovery.test.ts",
+        "artifacts/api-server/src/routes/optimize.ts",
+        "artifacts/willard-ai/src/pages/optimize.tsx"
+      ]
+    },
+    {
+      "pipeline": "ai-enrichment",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY + API_CONTROL_PLANE",
+      "retention": "AI metadata is rebuildable; source media and derivatives remain NAS-backed.",
+      "capacityGuard": "Capacity admission for any derivative or staged output; cloud calls also require privacy consent.",
+      "nasOffline": "Pause NAS reads and writes; local fallback may not send data to a cloud provider.",
+      "resume": "Durable media identity allows retry without creating a second enrichment record.",
+      "duplicateProtection": "Database uniqueness and per-library job claims.",
+      "automaticReclaimSource": "rebuildable AI rows only through derived-data cleanup",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/ai-enrichment.test.ts",
+        "artifacts/api-server/src/__tests__/ai-privacy.test.ts",
+        "artifacts/api-server/src/lib/ai-enrichment.ts"
+      ]
+    },
+    {
+      "pipeline": "face-recognition",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY/WillardAI/cache/faces + bounded local model cache",
+      "retention": "Face crops are NAS-scoped rebuildable derivatives; verified model artifacts are bounded local cache.",
+      "capacityGuard": "NAS capacity admission for crops and checksum verification for model downloads.",
+      "nasOffline": "Pause derived face work; never copy face crops into OS temp or an unverified model path.",
+      "resume": "Advisory per-library lock and durable derived state make retries idempotent.",
+      "duplicateProtection": "Verified model artifacts, canonical media identity, and derived-row cleanup boundary.",
+      "automaticReclaimSource": "rebuildable face rows/crops only through explicit derived cleanup",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/face-recognition.test.ts",
+        "artifacts/api-server/src/__tests__/derived-cleanup.test.ts",
+        "artifacts/api-server/src/lib/face-recognition.ts"
+      ]
+    },
+    {
+      "pipeline": "imports",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged", "web-pwa"],
+      "destination": "NAS_LIBRARY/{configured media destinations,WillardAI/temp}",
+      "retention": "Imported originals and operation history remain NAS-backed; temporary import scratch is job-owned.",
+      "capacityGuard": "NAS path validation and capacity reservation before copy or extraction.",
+      "nasOffline": "Fail closed before mutation or pause an interrupted import; never stage media locally.",
+      "resume": "Verified move/copy state and hashes permit safe retry without duplicate originals.",
+      "duplicateProtection": "Canonical library scope, path safety, and SHA-256 verification.",
+      "automaticReclaimSource": "job-owned incomplete scratch only",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/organize-pipeline.test.ts",
+        "artifacts/api-server/src/__tests__/organize-recovery.test.ts",
+        "artifacts/api-server/src/lib/organize-helpers.ts"
+      ]
+    },
+    {
+      "pipeline": "exports",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged", "web-pwa", "mobile"],
+      "destination": "BROWSER_DEVICE or MOBILE_DEVICE only after explicit user download",
+      "retention": "Device downloads and Blob URLs are user-owned ephemeral exports, not library persistence.",
+      "capacityGuard": "Browser/mobile OS controls device space; the server does not claim downloaded bytes as NAS storage.",
+      "nasOffline": "Existing device export may be opened locally; new server export requires the source NAS to be reachable.",
+      "resume": "User retries the download; no server-side local-media staging is implied.",
+      "duplicateProtection": "Download names are client concerns; server source identity remains canonical.",
+      "automaticReclaimSource": "browser/mobile device cache under platform controls",
+      "automatedChecks": [
+        "artifacts/willard-ai/src/pages/media.tsx",
+        "artifacts/willard-ai/src/pages/cleanup.tsx",
+        "artifacts/willard-mobile/app/(tabs)/library.tsx"
+      ]
+    },
+    {
+      "pipeline": "thumbnail-reconciliation",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged", "web-pwa", "mobile"],
+      "destination": "NAS_LIBRARY/WillardAI/cache/thumbnails",
+      "retention": "Lazy/reconciled thumbnails are bounded by the NAS cache policy and rebuildable.",
+      "capacityGuard": "NAS-only cache directory, quota, partial-file exclusion, and capacity admission.",
+      "nasOffline": "Cancel or pause the thumbnail job without falling back to local cache.",
+      "resume": "Only restart-interrupted failed jobs resume; partial files are ignored and cleaned safely.",
+      "duplicateProtection": "Per-file lock, canonical media identity, and atomic publication.",
+      "automaticReclaimSource": "stale rebuildable thumbnail cache entries only",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/thumbnail-engine.test.ts",
+        "artifacts/api-server/src/__tests__/scan-cache-bounds.test.ts",
+        "artifacts/api-server/src/lib/thumbnail-engine.ts"
+      ]
+    },
+    {
+      "pipeline": "nas-loss-recovery",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "DATABASE control state + NAS-backed recovery artifacts",
+      "retention": "Job state, manifests, and verified backups survive restart; originals are never capacity fallbacks.",
+      "capacityGuard": "Unknown capacity, missing paths, permissions, and disconnected NAS fail closed.",
+      "nasOffline": "Persist PAUSED/READ_ONLY state and stop producers before shutdown or reconnect handling.",
+      "resume": "Restart/reconnect recovers durable job state and re-probes the active library before writes.",
+      "duplicateProtection": "Per-library database claims, manifest states, and canonical active-library scope.",
+      "automaticReclaimSource": "none for permanent archive or recovery knowledge",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/shutdown.test.ts",
+        "artifacts/api-server/src/__tests__/library-watcher-path-switch.test.ts",
+        "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+      ]
+    },
+    {
+      "pipeline": "operational-logs-and-reports",
+      "modes": ["linux-replit", "windows-developer", "windows-packaged"],
+      "destination": "NAS_LIBRARY/WillardAI/{logs,reports,archive-index} + bounded launcher logs",
+      "retention": "NAS operational history is bounded and redacted; launcher diagnostics remain local and bounded.",
+      "capacityGuard": "NAS log/report writes are bounded and skip unsafe writes; launcher log rotation caps local usage.",
+      "nasOffline": "Keep sensitive diagnostics private and report the failure without writing media-sized data locally.",
+      "resume": "Later operations append to the bounded stream; reports are atomic and independently recoverable.",
+      "duplicateProtection": "Atomic report names and operation identity; no source replacement.",
+      "automaticReclaimSource": "expired bounded logs only, never originals or verified backups",
+      "automatedChecks": [
+        "artifacts/api-server/src/__tests__/log-redaction.test.ts",
+        "artifacts/api-server/src/lib/logger.ts",
+        "scripts/launcher/common.ps1",
+        "desktop/WillardMediaCenter.ps1"
+      ]
+    }
+  ]
+}

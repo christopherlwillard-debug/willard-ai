@@ -10,6 +10,7 @@ import {
   validatePayloadManifest,
 } from "./release-payload.mjs";
 import { validateReleaseManifest } from "../../desktop/release-contract.mjs";
+import { assertStorageConformance } from "./storage-conformance.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
@@ -93,6 +94,7 @@ async function auditResolvedDependencies() {
 export async function validateRelease() {
   const releaseDir = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
   const version = process.env.WILLARD_VERSION || "0.1.0";
+  assertStorageConformance();
   assertCanonicalReleaseDirectory(releaseDir, root);
 
   const requiredFiles = [

@@ -33,7 +33,12 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   // Never cache authenticated API responses, media bytes, or mutation requests.
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.includes("/api/")) {
+  if (
+    request.method !== "GET"
+    || url.origin !== self.location.origin
+    || url.pathname.includes("/api/")
+    || url.pathname.includes("/media/")
+  ) {
     return;
   }
 
