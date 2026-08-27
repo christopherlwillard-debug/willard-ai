@@ -166,11 +166,25 @@ jobs:
           Get-Content $auditLog
           if ($auditExitCode -ne 0) {
             $rawTail = Get-Content $auditLog -Tail 80 | Out-String
+            $apiTail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 | Out-String } else { "(API stdout log was not created)" }
+            $apiErrorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 | Out-String } else { "(API stderr log was not created)" }
             @"
           ## Windows backend audit failure
 
           ````text
           $rawTail
+          ````
+
+          ### API stdout
+
+          ````text
+          $apiTail
+          ````
+
+          ### API stderr
+
+          ````text
+          $apiErrorTail
           ````
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             $tail = ((Get-Content $auditLog -Tail 40 | Out-String).Trim()).Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
@@ -203,7 +217,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-backend-audit-log
-          path: ${{ runner.temp }}/willard-backend-audit.log
+          path: |
+            ${{ runner.temp }}/willard-backend-audit.log
+            ${{ runner.temp }}/willard-backend-audit-api.log
+            ${{ runner.temp }}/willard-backend-audit-api.err.log
           if-no-files-found: ignore
 
       - name: Install Chromium for browser release tests
