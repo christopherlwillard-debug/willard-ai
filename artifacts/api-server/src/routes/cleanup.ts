@@ -67,7 +67,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       WHERE m.nas_path = ${nasPath}
         AND m.quick_fingerprint IS NOT NULL
         AND m.quick_fingerprint != ''
-         AND ${activeMediaCondition}
+         AND ${sql.raw(activeMediaSql("m"))}
       GROUP BY m.quick_fingerprint
       HAVING COUNT(*) > 1
         AND NOT (
