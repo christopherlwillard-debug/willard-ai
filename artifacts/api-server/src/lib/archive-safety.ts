@@ -151,13 +151,20 @@ export function assertBufferedZipFile(archivePath: string): fs.Stats {
 export interface ArchiveFileSnapshot {
   size: number;
   mtimeMs: number;
+  ctimeMs: number;
   dev: number;
   ino: number;
 }
 
 export function snapshotArchiveFile(archivePath: string): ArchiveFileSnapshot {
   const stat = assertArchiveFileWithinLimit(archivePath);
-  return { size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino };
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    dev: stat.dev,
+    ino: stat.ino,
+  };
 }
 
 /**
@@ -173,6 +180,7 @@ export function assertArchiveFileUnchanged(
   if (
     current.size !== snapshot.size ||
     current.mtimeMs !== snapshot.mtimeMs ||
+    current.ctimeMs !== snapshot.ctimeMs ||
     (snapshot.dev !== 0 && current.dev !== snapshot.dev) ||
     (snapshot.ino !== 0 && current.ino !== snapshot.ino)
   ) {

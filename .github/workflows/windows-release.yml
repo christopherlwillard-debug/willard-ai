@@ -154,7 +154,7 @@ jobs:
           $auditExitCode = $LASTEXITCODE
           Get-Content $auditLog
           if ($auditExitCode -ne 0) {
-            $rawTail = Get-Content $auditLog -Tail 80 -Raw
+            $rawTail = Get-Content $auditLog -Tail 80 | Out-String
             @"
           ## Windows backend audit failure
 
@@ -162,7 +162,7 @@ jobs:
           $rawTail
           ````
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            $tail = (Get-Content $auditLog -Tail 40 -Raw).Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            $tail = ((Get-Content $auditLog -Tail 40 | Out-String).Trim()).Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
             Write-Output "::error title=API server backend audit failed::$tail"
             exit $auditExitCode
           }
