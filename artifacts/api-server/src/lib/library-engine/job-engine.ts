@@ -2734,11 +2734,14 @@ const THUMB_BATCH = 50;
 export const THUMBNAIL_JOB_MAX_FILES = 500;
 
 class ThumbnailStorageUnavailable extends Error {
+  readonly reason: "NAS_OFFLINE" | "NAS_READ_ONLY";
+
   constructor(
-    readonly reason: "NAS_OFFLINE" | "NAS_READ_ONLY",
+    reason: "NAS_OFFLINE" | "NAS_READ_ONLY",
     message: string,
   ) {
     super(message);
+    this.reason = reason;
     this.name = "ThumbnailStorageUnavailable";
   }
 }
