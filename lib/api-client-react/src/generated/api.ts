@@ -89,6 +89,7 @@ import type {
   SearchFilesParams,
   SessionsResult,
   SettingsInput,
+  StoragePolicyStatus,
   StorageStats,
   SystemEnvironment,
   TrashListResult
@@ -488,6 +489,83 @@ export function useGetHealthStatus<TData = Awaited<ReturnType<typeof getHealthSt
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetHealthStatusQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetStoragePolicyDiagnosticsUrl = () => {
+
+
+
+
+  return `/api/diagnostics/storage-policy`
+}
+
+/**
+ * @summary Get storage policy classification and capacity
+ */
+export const getStoragePolicyDiagnostics = async ( options?: RequestInit): Promise<StoragePolicyStatus> => {
+
+  return customFetch<StoragePolicyStatus>(getGetStoragePolicyDiagnosticsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetStoragePolicyDiagnosticsQueryKey = () => {
+    return [
+    `/api/diagnostics/storage-policy`
+    ] as const;
+    }
+
+
+export const getGetStoragePolicyDiagnosticsQueryOptions = <TData = Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetStoragePolicyDiagnosticsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>> = ({ signal }) => getStoragePolicyDiagnostics({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetStoragePolicyDiagnosticsQueryResult = NonNullable<Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>>
+export type GetStoragePolicyDiagnosticsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get storage policy classification and capacity
+ */
+
+export function useGetStoragePolicyDiagnostics<TData = Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStoragePolicyDiagnostics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetStoragePolicyDiagnosticsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

@@ -26,6 +26,7 @@ import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, i
 import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
 import { purgeDerivedDataForMedia } from "../derived-cleanup.ts";
+import { getStoragePolicyState } from "../storage-policy.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
@@ -848,7 +849,7 @@ export interface StartJobOptions {
 export async function startJob(opts: StartJobOptions): Promise<{
   jobId: number;
   alreadyRunning: boolean;
-  errorCode?: "NAS_OFFLINE";
+  errorCode?: "NAS_OFFLINE" | "NAS_READ_ONLY";
   errorMessage?: string;
 }> {
   if (isShuttingDown()) {
@@ -861,22 +862,36 @@ export async function startJob(opts: StartJobOptions): Promise<{
     throw new Error("Library path changed; refusing to start a job against a stale NAS root");
   }
   const reach = await checkNasReachableAsync(opts.rootPath ?? opts.nasPath);
-  if (!reach.online) {
+  const storageState = getStoragePolicyState({
+    online: reach.online,
+    writable: reach.writable,
+    message: reach.message,
+  });
+  if (!reach.online || !reach.writable) {
+    const isReadOnly = reach.online && !reach.writable;
+    const cancellationReason = isReadOnly ? "NAS_READ_ONLY" : "NAS_OFFLINE";
     const [failedJob] = await db.insert(libraryJobsTable).values({
       jobType: opts.jobType,
       profile: opts.profile,
       priority: opts.profile === "QUICK" ? "HIGH" : opts.profile === "FULL" ? "NORMAL" : "LOW",
       status: "FAILED",
-      cancellationReason: "NAS_OFFLINE",
+      cancellationReason,
       nasPath: opts.nasPath,
       rootPath: opts.rootPath ?? null,
-      error: `NAS path is not accessible: ${reach.message}`,
+      error: `NAS storage policy is ${storageState}: ${reach.message}`,
+      diagnostics: {
+        storagePolicy: {
+          state: storageState,
+          message: reach.message,
+          requiresNas: true,
+        },
+      },
       finishedAt: new Date(),
     }).returning({ id: libraryJobsTable.id });
     return {
       jobId: failedJob.id,
       alreadyRunning: false,
-      errorCode: "NAS_OFFLINE",
+      errorCode: isReadOnly ? "NAS_READ_ONLY" : "NAS_OFFLINE",
       errorMessage: reach.message,
     };
   }
@@ -921,6 +936,13 @@ export async function startJob(opts: StartJobOptions): Promise<{
         nasPath:  opts.nasPath,
         rootPath: opts.rootPath ?? null,
         startedAt: new Date(),
+        diagnostics: {
+          storagePolicy: {
+            state: storageState,
+            message: reach.message,
+            requiresNas: true,
+          },
+        },
       }).returning();
       job = inserted;
     } catch (error) {

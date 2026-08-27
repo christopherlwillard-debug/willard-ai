@@ -1,9 +1,9 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { Writable } from "stream";
 import { Worker } from "worker_threads";
 import { redactOperationalData } from "./log-redaction.ts";
+import { StoragePolicyError } from "./storage-policy.ts";
 
 export const WILLARD_SUBDIRS = [
   "config",
@@ -441,22 +441,23 @@ export function bootstrapWillardAIDir(nasPath: string): NasDirStatusResult {
 }
 
 export function getTempDir(nasPath: string | null | undefined, jobId?: string): string {
-  const suffix = jobId ?? "default";
-  if (nasPath) {
-    try {
-      const tempDir = path.join(getWillardAIDir(nasPath), "temp", suffix);
-      fs.mkdirSync(tempDir, { recursive: true });
-      return tempDir;
-    } catch {
-      // Fall through to the OS temp dir
-    }
+  if (!nasPath || !nasPath.trim()) {
+    throw new StoragePolicyError(
+      "NAS storage is required for temporary media work; no library location is configured.",
+    );
   }
-  // Cross-platform local fallback. os.tmpdir() is the OS temp directory on every
-  // platform (e.g. /tmp on Linux/macOS, %TEMP% on Windows) so this works when the
-  // server runs locally on a user's machine, not just on Replit's Linux host.
-  const localDir = path.join(os.tmpdir(), "willard-ai", suffix);
-  try { fs.mkdirSync(localDir, { recursive: true }); } catch { /* ignore */ }
-  return localDir;
+  const suffix = (jobId ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  const tempDir = path.join(getWillardAIDir(nasPath), "temp", suffix);
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+    return tempDir;
+  } catch (err) {
+    throw new StoragePolicyError(
+      `NAS storage is required for temporary media work; the NAS temp directory could not be created: ${
+        err instanceof Error ? err.message : "unknown error"
+      }`,
+    );
+  }
 }
 
 export function cleanTempDir(tempDir: string): void {

@@ -4,7 +4,6 @@ import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspa
 import { eq, desc, inArray, or, and, isNotNull } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import * as crypto from "crypto";
 import { spawn, spawnSync } from "child_process";
 import { pipeline } from "stream/promises";
@@ -31,6 +30,7 @@ import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
+import { StoragePolicyError } from "../lib/storage-policy.ts";
 
 const router: IRouter = Router();
 
@@ -77,14 +77,14 @@ function getTarCompression(filename: string): TarCompression {
  * but not bzip2 or xz; those formats are decompressed with argument-array
  * child processes so archive filenames are never interpreted by a shell.
  *
- * The scratch directory is caller-owned when supplied (safe extraction keeps
- * the temporary TAR beside the extracted files), and is otherwise cleaned up
- * before this function returns.
+ * The scratch directory is caller-owned. Compressed archive bytes must never
+ * be decompressed into the OS temp directory because the result can be large
+ * and is part of a NAS-required media operation.
  */
 async function withTarInput<T>(
   archivePath: string,
   filename: string,
-  scratchDir: string | undefined,
+  scratchDir: string,
   callback: (tarPath: string, options: Record<string, unknown>) => Promise<T>,
 ): Promise<T> {
   const compression = getTarCompression(filename);
@@ -92,8 +92,12 @@ async function withTarInput<T>(
     return callback(archivePath, compression === "gzip" ? { gzip: true } : {});
   }
 
-  const ownsScratchDir = !scratchDir;
-  const workDir = scratchDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "willard-tar-"));
+  if (!scratchDir) {
+    throw new StoragePolicyError(
+      "NAS storage is required for compressed archive decompression.",
+    );
+  }
+  const workDir = scratchDir;
   const tarPath = path.join(workDir, ".willard-input.tar");
   const decompressor = compression === "bzip2" ? "bzip2" : "xz";
 
@@ -125,9 +129,6 @@ async function withTarInput<T>(
     return await callback(tarPath, {});
   } finally {
     try { fs.rmSync(tarPath, { force: true }); } catch { /* best effort */ }
-    if (ownsScratchDir) {
-      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* best effort */ }
-    }
   }
 }
 
@@ -214,7 +215,7 @@ function getDiskFreeBytes(dirPath: string): number | null {
 }
 
 
-async function peekArchiveEntries(archivePath: string, filename: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
+async function peekArchiveEntries(archivePath: string, filename: string, scratchDir: string): Promise<Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}>> {
   const ext    = getArchiveExt(filename);
   const entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
   const budget = createArchiveBudget();
@@ -229,7 +230,7 @@ async function peekArchiveEntries(archivePath: string, filename: string): Promis
       entries.push({ path: e.entryName, sizeBytes: checked.sizeBytes, isDirectory: checked.isDirectory, fileType: getFileTypeFromName(e.entryName) });
     }
   } else if (TAR_EXTS.has(ext)) {
-    await withTarInput(archivePath, filename, undefined, async (tarPath, tarOptions) => {
+    await withTarInput(archivePath, filename, scratchDir, async (tarPath, tarOptions) => {
       let validationError: Error | undefined;
       await tar.list({
         file: tarPath,
@@ -279,7 +280,7 @@ async function peekArchiveEntries(archivePath: string, filename: string): Promis
 }
 
 /** Open archive TOC and count entries — detects corruption early. */
-async function validateArchive(archivePath: string): Promise<{ ok: boolean; detail: string; entryCount: number }> {
+async function validateArchive(archivePath: string, scratchDir: string): Promise<{ ok: boolean; detail: string; entryCount: number }> {
   try {
     const ext    = getArchiveExt(path.basename(archivePath));
     let count = 0;
@@ -298,7 +299,7 @@ async function validateArchive(archivePath: string): Promise<{ ok: boolean; deta
         count++;
       }
     } else if (TAR_EXTS.has(ext)) {
-      await withTarInput(archivePath, path.basename(archivePath), undefined, async (tarPath, tarOptions) => {
+      await withTarInput(archivePath, path.basename(archivePath), scratchDir, async (tarPath, tarOptions) => {
         let validationError: Error | undefined;
         await tar.list({
           file: tarPath,
@@ -856,7 +857,14 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           }));
         }
       }
-      if (entries.length === 0) entries = await peekArchiveEntries(archivePath, path.basename(archivePath));
+      if (entries.length === 0) {
+        const peekScratch = getTempDir(nasPath, `org-peek-${id}`);
+        try {
+          entries = await peekArchiveEntries(archivePath, path.basename(archivePath), peekScratch);
+        } finally {
+          cleanTempDir(peekScratch);
+        }
+      }
     } else {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
@@ -1048,8 +1056,13 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
 
     // 2. Archive integrity — try to open and count entries
     if (job.sourceType === "archive" && sourceOk) {
-      const v = await validateArchive(job.sourcePath);
-      checks.push({ name: "Archive integrity", ok: v.ok, detail: v.detail });
+      const validationScratch = getTempDir(nasPath, `org-validate-${id}`);
+      try {
+        const v = await validateArchive(job.sourcePath, validationScratch);
+        checks.push({ name: "Archive integrity", ok: v.ok, detail: v.detail });
+      } finally {
+        cleanTempDir(validationScratch);
+      }
     }
 
     // 3. Destination writability — checked per destination (must be within NAS root)

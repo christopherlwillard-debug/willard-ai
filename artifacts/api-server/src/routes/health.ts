@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
-import { sql } from "drizzle-orm";
-import { db, appSettingsTable } from "@workspace/db";
+import { sql, and, eq } from "drizzle-orm";
+import { db, appSettingsTable, mediaFilesTable } from "@workspace/db";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkNasReachableAsync } from "../lib/nas-storage";
+import { getStoragePolicyStatus } from "../lib/storage-policy.ts";
 import { getMediaToolsHealth } from "../lib/media-tools.ts";
 import { getStartupHealth } from "../lib/startup-health.ts";
 import * as fs from "node:fs";
@@ -40,6 +41,21 @@ router.get("/health/status", async (_req, res) => {
     checkNasReachableAsync(nasPath),
     getMediaToolsHealth(),
   ]);
+
+  let originalBytes: number | null = null;
+  if (nasPath) {
+    try {
+      const [totals] = await db.select({
+        totalBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
+      }).from(mediaFilesTable).where(
+        and(activeMediaCondition, eq(mediaFilesTable.nasPath, nasPath)),
+      );
+      originalBytes = Number(totals?.totalBytes) || 0;
+    } catch {
+      // Capacity remains useful even when the catalog total is unavailable.
+    }
+  }
+  const storagePolicy = await getStoragePolicyStatus(nasPath, reach, originalBytes);
 
   // Integrity sweep: verify indexed (non-deleted) files still exist on disk.
   // Missing = row present but file gone; corrupt = file exists but is empty.
@@ -88,6 +104,7 @@ router.get("/health/status", async (_req, res) => {
     },
     missingFiles,
     corruptFiles,
+    storagePolicy,
   });
 });
 

@@ -336,6 +336,109 @@ export interface LibraryJobHistory {
   jobs: LibraryJobHistoryJobsItem[];
 }
 
+export type StoragePolicyStatusState = typeof StoragePolicyStatusState[keyof typeof StoragePolicyStatusState];
+
+
+export const StoragePolicyStatusState = {
+  READY: 'READY',
+  READ_ONLY: 'READ_ONLY',
+  PAUSED: 'PAUSED',
+  UNCONFIGURED: 'UNCONFIGURED',
+} as const;
+
+export type StorageUsageStorageClass = typeof StorageUsageStorageClass[keyof typeof StorageUsageStorageClass];
+
+
+export const StorageUsageStorageClass = {
+  NAS_REQUIRED: 'NAS_REQUIRED',
+  BOUNDED_LOCAL: 'BOUNDED_LOCAL',
+  BROWSER_DEVICE_LOCAL: 'BROWSER_DEVICE_LOCAL',
+  CONTROL_PLANE_LOCAL: 'CONTROL_PLANE_LOCAL',
+} as const;
+
+export type StorageUsageDestination = typeof StorageUsageDestination[keyof typeof StorageUsageDestination];
+
+
+export const StorageUsageDestination = {
+  NAS_LIBRARY: 'NAS_LIBRARY',
+  API_CONTROL_PLANE: 'API_CONTROL_PLANE',
+  DESKTOP_CONTROL_PLANE: 'DESKTOP_CONTROL_PLANE',
+  BROWSER_DEVICE: 'BROWSER_DEVICE',
+  MOBILE_DEVICE: 'MOBILE_DEVICE',
+} as const;
+
+export type StorageUsageDurability = typeof StorageUsageDurability[keyof typeof StorageUsageDurability];
+
+
+export const StorageUsageDurability = {
+  NAS_BACKED: 'NAS_BACKED',
+  RECOVERABLE_FROM_NAS_BACKUP: 'RECOVERABLE_FROM_NAS_BACKUP',
+  REBUILDABLE: 'REBUILDABLE',
+  EPHEMERAL: 'EPHEMERAL',
+} as const;
+
+export type StorageUsageAccounting = typeof StorageUsageAccounting[keyof typeof StorageUsageAccounting];
+
+
+export const StorageUsageAccounting = {
+  DATABASE: 'DATABASE',
+  NAS_FILESYSTEM: 'NAS_FILESYSTEM',
+  LOCAL_FILESYSTEM: 'LOCAL_FILESYSTEM',
+  BROWSER_DEVICE: 'BROWSER_DEVICE',
+  NOT_SERVER_VISIBLE: 'NOT_SERVER_VISIBLE',
+} as const;
+
+export type StorageUsageMeasurement = typeof StorageUsageMeasurement[keyof typeof StorageUsageMeasurement];
+
+
+export const StorageUsageMeasurement = {
+  exact: 'exact',
+  database: 'database',
+  unavailable: 'unavailable',
+  not_server_visible: 'not_server_visible',
+} as const;
+
+export interface StorageUsage {
+  id: string;
+  category: string;
+  storageClass: StorageUsageStorageClass;
+  destination: StorageUsageDestination;
+  durability: StorageUsageDurability;
+  protected: boolean;
+  reclaimable: boolean;
+  /** @nullable */
+  currentBytes: number | null;
+  /** @nullable */
+  projectedBytes: number | null;
+  /** @nullable */
+  maxBytes: number | null;
+  accounting: StorageUsageAccounting;
+  measurement: StorageUsageMeasurement;
+}
+
+export type StoragePolicyStatusCapacity = {
+  /** @nullable */
+  totalBytes: number | null;
+  /** @nullable */
+  freeBytes: number | null;
+  /** @nullable */
+  usedBytes: number | null;
+  known: boolean;
+};
+
+export interface StoragePolicyStatus {
+  policyVersion: string;
+  state: StoragePolicyStatusState;
+  stateMessage: string;
+  nasConfigured: boolean;
+  libraryReachable: boolean;
+  libraryWritable: boolean;
+  capacity: StoragePolicyStatusCapacity;
+  currentBytes: number;
+  projectedBytes: number;
+  usage: StorageUsage[];
+}
+
 export interface LibraryHealthStatus {
   database: boolean;
   libraryOnline: boolean;
@@ -346,6 +449,7 @@ export interface LibraryHealthStatus {
   missingFiles: number | null;
   /** @nullable */
   corruptFiles: number | null;
+  storagePolicy: StoragePolicyStatus;
 }
 
 export interface TypeBreakdown {

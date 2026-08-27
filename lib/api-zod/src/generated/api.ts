@@ -78,7 +78,72 @@ export const GetHealthStatusResponse = zod.object({
   "libraryMessage": zod.string(),
   "thumbnailsOk": zod.boolean(),
   "missingFiles": zod.number().nullable(),
-  "corruptFiles": zod.number().nullable()
+  "corruptFiles": zod.number().nullable(),
+  "storagePolicy": zod.object({
+  "policyVersion": zod.string(),
+  "state": zod.enum(['READY', 'READ_ONLY', 'PAUSED', 'UNCONFIGURED']),
+  "stateMessage": zod.string(),
+  "nasConfigured": zod.boolean(),
+  "libraryReachable": zod.boolean(),
+  "libraryWritable": zod.boolean(),
+  "capacity": zod.object({
+  "totalBytes": zod.number().nullable(),
+  "freeBytes": zod.number().nullable(),
+  "usedBytes": zod.number().nullable(),
+  "known": zod.boolean()
+}),
+  "currentBytes": zod.number(),
+  "projectedBytes": zod.number(),
+  "usage": zod.array(zod.object({
+  "id": zod.string(),
+  "category": zod.string(),
+  "storageClass": zod.enum(['NAS_REQUIRED', 'BOUNDED_LOCAL', 'BROWSER_DEVICE_LOCAL', 'CONTROL_PLANE_LOCAL']),
+  "destination": zod.enum(['NAS_LIBRARY', 'API_CONTROL_PLANE', 'DESKTOP_CONTROL_PLANE', 'BROWSER_DEVICE', 'MOBILE_DEVICE']),
+  "durability": zod.enum(['NAS_BACKED', 'RECOVERABLE_FROM_NAS_BACKUP', 'REBUILDABLE', 'EPHEMERAL']),
+  "protected": zod.boolean(),
+  "reclaimable": zod.boolean(),
+  "currentBytes": zod.number().nullable(),
+  "projectedBytes": zod.number().nullable(),
+  "maxBytes": zod.number().nullable(),
+  "accounting": zod.enum(['DATABASE', 'NAS_FILESYSTEM', 'LOCAL_FILESYSTEM', 'BROWSER_DEVICE', 'NOT_SERVER_VISIBLE']),
+  "measurement": zod.enum(['exact', 'database', 'unavailable', 'not_server_visible'])
+}))
+})
+})
+
+
+/**
+ * @summary Get storage policy classification and capacity
+ */
+export const GetStoragePolicyDiagnosticsResponse = zod.object({
+  "policyVersion": zod.string(),
+  "state": zod.enum(['READY', 'READ_ONLY', 'PAUSED', 'UNCONFIGURED']),
+  "stateMessage": zod.string(),
+  "nasConfigured": zod.boolean(),
+  "libraryReachable": zod.boolean(),
+  "libraryWritable": zod.boolean(),
+  "capacity": zod.object({
+  "totalBytes": zod.number().nullable(),
+  "freeBytes": zod.number().nullable(),
+  "usedBytes": zod.number().nullable(),
+  "known": zod.boolean()
+}),
+  "currentBytes": zod.number(),
+  "projectedBytes": zod.number(),
+  "usage": zod.array(zod.object({
+  "id": zod.string(),
+  "category": zod.string(),
+  "storageClass": zod.enum(['NAS_REQUIRED', 'BOUNDED_LOCAL', 'BROWSER_DEVICE_LOCAL', 'CONTROL_PLANE_LOCAL']),
+  "destination": zod.enum(['NAS_LIBRARY', 'API_CONTROL_PLANE', 'DESKTOP_CONTROL_PLANE', 'BROWSER_DEVICE', 'MOBILE_DEVICE']),
+  "durability": zod.enum(['NAS_BACKED', 'RECOVERABLE_FROM_NAS_BACKUP', 'REBUILDABLE', 'EPHEMERAL']),
+  "protected": zod.boolean(),
+  "reclaimable": zod.boolean(),
+  "currentBytes": zod.number().nullable(),
+  "projectedBytes": zod.number().nullable(),
+  "maxBytes": zod.number().nullable(),
+  "accounting": zod.enum(['DATABASE', 'NAS_FILESYSTEM', 'LOCAL_FILESYSTEM', 'BROWSER_DEVICE', 'NOT_SERVER_VISIBLE']),
+  "measurement": zod.enum(['exact', 'database', 'unavailable', 'not_server_visible'])
+}))
 })
 
 

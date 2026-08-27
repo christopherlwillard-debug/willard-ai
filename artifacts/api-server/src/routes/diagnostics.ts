@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { libraryJobsTable, appSettingsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { redactOperationalData } from "../lib/log-redaction.ts";
+import { getStoragePolicyStatus } from "../lib/storage-policy.ts";
+import { checkNasReachableAsync } from "../lib/nas-storage.ts";
 
 const router = Router();
 
@@ -41,6 +43,24 @@ router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
   // but never send stored paths, hashes, filenames, OCR, or free-form reports
   // back to a client by default.
   res.json({ scans: redactOperationalData(jobs) });
+});
+
+// Storage policy is deliberately a separate diagnostics surface as well as a
+// health field: operators can inspect capacity and classification without
+// receiving the configured library path or other sensitive filenames.
+router.get("/diagnostics/storage-policy", async (_req: Request, res: Response) => {
+  try {
+    const [settings] = await db
+      .select({ nasPath: appSettingsTable.nasPath })
+      .from(appSettingsTable)
+      .limit(1);
+    const nasPath = settings?.nasPath?.trim() || null;
+    const reach = await checkNasReachableAsync(nasPath);
+    const policy = await getStoragePolicyStatus(nasPath, reach);
+    res.json(policy);
+  } catch {
+    res.status(500).json({ error: "Storage policy diagnostics unavailable" });
+  }
 });
 
 export default router;

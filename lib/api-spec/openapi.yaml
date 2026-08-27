@@ -306,6 +306,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/LibraryHealthStatus"
 
+  /diagnostics/storage-policy:
+    get:
+      operationId: getStoragePolicyDiagnostics
+      tags: [diagnostics]
+      summary: Get storage policy classification and capacity
+      responses:
+        "200":
+          description: Storage policy diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoragePolicyStatus"
+
   # ── Auth ──────────────────────────────────────────────────────────────────
   /auth/status:
     get:
@@ -2412,6 +2425,8 @@ components:
           type: ["integer", "null"]
         corruptFiles:
           type: ["integer", "null"]
+        storagePolicy:
+          $ref: "#/components/schemas/StoragePolicyStatus"
       required:
         - database
         - libraryOnline
@@ -2420,6 +2435,79 @@ components:
         - thumbnailsOk
         - missingFiles
         - corruptFiles
+        - storagePolicy
+
+    StoragePolicyStatus:
+      type: object
+      properties:
+        policyVersion:
+          type: string
+        state:
+          type: string
+          enum: [READY, READ_ONLY, PAUSED, UNCONFIGURED]
+        stateMessage:
+          type: string
+        nasConfigured:
+          type: boolean
+        libraryReachable:
+          type: boolean
+        libraryWritable:
+          type: boolean
+        capacity:
+          type: object
+          properties:
+            totalBytes:
+              type: ["integer", "null"]
+            freeBytes:
+              type: ["integer", "null"]
+            usedBytes:
+              type: ["integer", "null"]
+            known:
+              type: boolean
+          required: [totalBytes, freeBytes, usedBytes, known]
+        currentBytes:
+          type: integer
+        projectedBytes:
+          type: integer
+        usage:
+          type: array
+          items:
+            $ref: "#/components/schemas/StorageUsage"
+      required: [policyVersion, state, stateMessage, nasConfigured, libraryReachable, libraryWritable, capacity, currentBytes, projectedBytes, usage]
+
+    StorageUsage:
+      type: object
+      properties:
+        id:
+          type: string
+        category:
+          type: string
+        storageClass:
+          type: string
+          enum: [NAS_REQUIRED, BOUNDED_LOCAL, BROWSER_DEVICE_LOCAL, CONTROL_PLANE_LOCAL]
+        destination:
+          type: string
+          enum: [NAS_LIBRARY, API_CONTROL_PLANE, DESKTOP_CONTROL_PLANE, BROWSER_DEVICE, MOBILE_DEVICE]
+        durability:
+          type: string
+          enum: [NAS_BACKED, RECOVERABLE_FROM_NAS_BACKUP, REBUILDABLE, EPHEMERAL]
+        protected:
+          type: boolean
+        reclaimable:
+          type: boolean
+        currentBytes:
+          type: ["integer", "null"]
+        projectedBytes:
+          type: ["integer", "null"]
+        maxBytes:
+          type: ["integer", "null"]
+        accounting:
+          type: string
+          enum: [DATABASE, NAS_FILESYSTEM, LOCAL_FILESYSTEM, BROWSER_DEVICE, NOT_SERVER_VISIBLE]
+        measurement:
+          type: string
+          enum: [exact, database, unavailable, not_server_visible]
+      required: [id, category, storageClass, destination, durability, protected, reclaimable, currentBytes, projectedBytes, maxBytes, accounting, measurement]
 
     DashboardSummary:
       type: object

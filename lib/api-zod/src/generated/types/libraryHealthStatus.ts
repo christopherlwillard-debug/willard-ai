@@ -5,6 +5,7 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+import type { StoragePolicyStatus } from './storagePolicyStatus';
 
 export interface LibraryHealthStatus {
   database: boolean;
@@ -16,4 +17,5 @@ export interface LibraryHealthStatus {
   missingFiles: number | null;
   /** @nullable */
   corruptFiles: number | null;
+  storagePolicy: StoragePolicyStatus;
 }
