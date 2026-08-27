@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   calculateLetterbox,
   detectFaces,
@@ -142,7 +143,10 @@ test("face library advisory lock excludes another client and releases after fail
 test("checked-in portrait fixtures detect faces and cluster duplicate portraits", {
   skip: !process.env.WILLARD_RUN_FACE_INTEGRATION,
 }, async () => {
-  const fixtureDir = path.resolve(import.meta.dirname, "../../../../test-media/Photos");
+  const fixtureDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../../test-media/Photos",
+  );
   const first = fs.readFileSync(path.join(fixtureDir, "portrait_a.jpg"));
   const duplicate = fs.readFileSync(path.join(fixtureDir, "portrait_a_copy.jpg"));
   const detected = await Promise.all([detectFaces(first), detectFaces(duplicate)]);

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(import.meta.dirname, "../../../../");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const setupSource = fs.readFileSync(path.join(repoRoot, "setup-db.cjs"), "utf8");
 const authSource = fs.readFileSync(
   path.join(repoRoot, "artifacts/api-server/src/routes/auth.ts"),

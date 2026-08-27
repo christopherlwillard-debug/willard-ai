@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 type Queryable = {
   query(sql: string): Promise<unknown>;
@@ -16,7 +17,7 @@ type BootstrapModule = {
   ): Promise<void>;
 };
 
-const repoRoot = path.resolve(import.meta.dirname, "../../../../");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const bootstrap = createRequire(import.meta.url)(
   path.join(repoRoot, "setup-db.cjs"),
 ) as BootstrapModule;
