@@ -156,25 +156,25 @@ jobs:
               $rawTail = Get-Content $auditLog -Tail 80 | Out-String
               $apiTail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 | Out-String } else { "(API stdout log was not created)" }
               $apiErrorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 | Out-String } else { "(API stderr log was not created)" }
-              @"
-            ## Windows backend audit failure
-
-            ````text
-            $rawTail
-            ````
-
-            ### API stdout
-
-            ````text
-            $apiTail
-            ````
-
-            ### API stderr
-
-            ````text
-            $apiErrorTail
-            ````
-            "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              @(
+                "## Windows backend audit failure"
+                ""
+                "````text"
+                $rawTail
+                "````"
+                ""
+                "### API stdout"
+                ""
+                "````text"
+                $apiTail
+                "````"
+                ""
+                "### API stderr"
+                ""
+                "````text"
+                $apiErrorTail
+                "````"
+              ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
               throw "API server backend audit failed with exit code $auditExitCode."
             }
 
