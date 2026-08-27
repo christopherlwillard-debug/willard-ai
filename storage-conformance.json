@@ -22,6 +22,98 @@
     "nas-loss-recovery",
     "operational-logs-and-reports"
   ],
+  "requiredScenarios": [
+    {
+      "id": "windows-clean-install",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/installer-lifecycle-smoke.ps1"
+    },
+    {
+      "id": "windows-update",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/update-smoke.ps1"
+    },
+    {
+      "id": "windows-rollback",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/installer-lifecycle-smoke.ps1"
+    },
+    {
+      "id": "windows-restart",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/startup-smoke.ps1"
+    },
+    {
+      "id": "windows-sleep-reconnect",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/check-nas-topology.ps1"
+    },
+    {
+      "id": "windows-mapped-drive",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/check-nas-topology.ps1"
+    },
+    {
+      "id": "windows-unc-share",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/check-nas-topology.ps1"
+    },
+    {
+      "id": "windows-locked-files",
+      "mode": "windows-packaged",
+      "evidence": "scripts/windows/installer-config.test.mjs"
+    },
+    {
+      "id": "windows-low-local-headroom",
+      "mode": "windows-packaged",
+      "evidence": "artifacts/api-server/src/__tests__/capacity-service.test.ts"
+    },
+    {
+      "id": "nas-permissions",
+      "mode": "windows-developer",
+      "evidence": "scripts/windows/check-nas-topology.ps1"
+    },
+    {
+      "id": "nas-slow-link",
+      "mode": "windows-developer",
+      "evidence": "scripts/windows/check-nas-topology.ps1"
+    },
+    {
+      "id": "nas-disconnect-during-write",
+      "mode": "windows-developer",
+      "evidence": "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+    },
+    {
+      "id": "nas-reconnect",
+      "mode": "windows-developer",
+      "evidence": "artifacts/api-server/src/__tests__/library-watcher-path-switch.test.ts"
+    },
+    {
+      "id": "nas-stale-references",
+      "mode": "linux-replit",
+      "evidence": "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+    },
+    {
+      "id": "nas-interrupted-cleanup",
+      "mode": "linux-replit",
+      "evidence": "artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts"
+    },
+    {
+      "id": "clean-machine-nas-recovery",
+      "mode": "windows-packaged",
+      "evidence": "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+    },
+    {
+      "id": "pwa-private-media-cache",
+      "mode": "web-pwa",
+      "evidence": "scripts/windows/storage-conformance.test.mjs"
+    },
+    {
+      "id": "mobile-device-cache",
+      "mode": "mobile",
+      "evidence": "scripts/windows/storage-conformance.test.mjs"
+    }
+  ],
   "entries": [
     {
       "pipeline": "scan-and-index",
@@ -188,7 +280,7 @@
     {
       "pipeline": "nas-loss-recovery",
       "modes": ["linux-replit", "windows-developer", "windows-packaged"],
-      "destination": "DATABASE control state + NAS-backed recovery artifacts",
+      "destination": "API_CONTROL_PLANE + NAS_LIBRARY recovery artifacts",
       "retention": "Job state, manifests, and verified backups survive restart; originals are never capacity fallbacks.",
       "capacityGuard": "Unknown capacity, missing paths, permissions, and disconnected NAS fail closed.",
       "nasOffline": "Persist PAUSED/READ_ONLY state and stop producers before shutdown or reconnect handling.",
@@ -198,7 +290,10 @@
       "automatedChecks": [
         "artifacts/api-server/src/__tests__/shutdown.test.ts",
         "artifacts/api-server/src/__tests__/library-watcher-path-switch.test.ts",
-        "artifacts/api-server/src/__tests__/storage-migration.test.ts"
+        "artifacts/api-server/src/__tests__/storage-migration.test.ts",
+        "scripts/windows/installer-lifecycle-smoke.ps1",
+        "scripts/windows/startup-smoke.ps1",
+        "scripts/windows/update-smoke.ps1"
       ]
     },
     {

@@ -14,6 +14,14 @@ const matrix = loadStorageConformance();
 test("storage conformance matrix is complete and every row has executable evidence", () => {
   assert.deepEqual(validateStorageConformance(matrix), []);
   assert.equal(matrix.entries.length, matrix.requiredPipelines.length);
+  assert.equal(matrix.requiredScenarios.length, 18);
+});
+
+test("Windows staging and validation both enforce the matrix", async () => {
+  const stager = await readFile(path.join(root, "scripts/windows/build-release.mjs"), "utf8");
+  const validator = await readFile(path.join(root, "scripts/windows/validate-release.mjs"), "utf8");
+  assert.match(stager, /assertStorageConformance/);
+  assert.match(validator, /assertStorageConformance/);
 });
 
 test("server media pipelines do not use OS temp as an unapproved media fallback", async () => {
@@ -58,4 +66,13 @@ test("Windows lifecycle coverage is represented separately from local developer 
   const recovery = matrix.entries.find((entry) => entry.pipeline === "nas-loss-recovery");
   assert.match(recovery.nasOffline, /persist|stop/i);
   assert.match(recovery.resume, /restart|reconnect/i);
+  const lifecycleEvidence = recovery.automatedChecks.filter((check) => check.endsWith(".ps1"));
+  assert.deepEqual(
+    lifecycleEvidence.sort(),
+    [
+      "scripts/windows/installer-lifecycle-smoke.ps1",
+      "scripts/windows/startup-smoke.ps1",
+      "scripts/windows/update-smoke.ps1",
+    ],
+  );
 });

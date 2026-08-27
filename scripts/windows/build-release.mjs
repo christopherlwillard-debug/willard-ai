@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
+import { assertStorageConformance } from "./storage-conformance.mjs";
 
 const run = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -136,6 +137,7 @@ async function pruneBuildOnlyFiles(apiOutput) {
 
 async function main() {
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("WILLARD_VERSION must be MAJOR.MINOR.PATCH.");
+  assertStorageConformance();
   if (!nodeRuntime) throw new Error("Set WILLARD_NODE_RUNTIME to a directory containing the Windows node.exe runtime.");
   assertCanonicalReleaseDirectory(output, root);
   await rm(output, { recursive: true, force: true });

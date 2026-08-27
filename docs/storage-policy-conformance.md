@@ -18,7 +18,7 @@ payload is staged.
 | Imports | NAS destinations and NAS scratch | Originals and operation history remain NAS-backed | Fail closed or pause; verified hashes prevent duplicate copies |
 | Exports | Explicit browser/mobile download target | Device-local and ephemeral; not NAS persistence | Existing download is client-local; new server export requires NAS |
 | Thumbnail reconciliation | NAS thumbnail cache | Bounded, rebuildable, atomic cache entries | Cancel/pause without local fallback; partial files excluded |
-| NAS-loss recovery | Database state plus NAS recovery artifacts | Jobs/manifests/backups survive restart; no permanent archive reclaim | Persist paused state and re-probe on reconnect |
+| NAS-loss recovery | API control state plus NAS recovery artifacts | Jobs/manifests/backups survive restart; no permanent archive reclaim | Persist paused state and re-probe on reconnect |
 | Operational logs and reports | NAS history plus bounded launcher logs | Redacted, bounded retention; never media fallback | Keep diagnostics private and report the failure |
 
 ## Environment coverage

@@ -121,6 +121,7 @@ test("Windows release publication is preceded by every required quality gate", (
     ["API server backend audit", "pnpm --filter @workspace/api-server run audit"],
     ["backend integration tests", "dashboard-after-scan.test.ts"],
     ["browser E2E suites", "pnpm exec playwright test"],
+    ["storage-policy conformance", "pnpm run test:storage-conformance"],
     ["payload validation and dependency audit gate", "make-release.ps1"],
     ["Compile the Windows installer", "compile-installer.ps1"],
   ]) {

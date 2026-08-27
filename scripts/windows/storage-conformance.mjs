@@ -26,6 +26,7 @@ export function validateStorageConformance(matrix, { rootDir = root } = {}) {
   const entries = Array.isArray(matrix?.entries) ? matrix.entries : [];
   const requiredPipelines = new Set(matrix?.requiredPipelines || []);
   const actualPipelines = new Set(entries.map((entry) => entry?.pipeline));
+  const scenarios = Array.isArray(matrix?.requiredScenarios) ? matrix.requiredScenarios : [];
 
   if (matrix?.format !== 1) errors.push("storage conformance matrix format must be 1");
   if (!matrix?.policyVersion) errors.push("storage conformance matrix is missing policyVersion");
@@ -36,6 +37,27 @@ export function validateStorageConformance(matrix, { rootDir = root } = {}) {
       [...requiredPipelines].some((pipeline) => !actualPipelines.has(pipeline))) {
     errors.push("requiredPipelines must match the matrix entries exactly");
   }
+  const scenarioIds = new Set();
+  for (const scenario of scenarios) {
+    if (!scenario?.id || !scenario?.mode || !scenario?.evidence) {
+      errors.push("every required scenario needs an id, mode, and evidence path");
+      continue;
+    }
+    if (scenarioIds.has(scenario.id)) errors.push(`duplicate required scenario: ${scenario.id}`);
+    scenarioIds.add(scenario.id);
+    if (!matrix.modes?.includes(scenario.mode)) {
+      errors.push(`${scenario.id} references an unsupported mode`);
+    }
+    try {
+      const absolute = path.resolve(rootDir, scenario.evidence);
+      if (!absolute.startsWith(`${rootDir}${path.sep}`) || !readFileSync(absolute)) {
+        errors.push(`${scenario.id} references an unreadable evidence file: ${scenario.evidence}`);
+      }
+    } catch {
+      errors.push(`${scenario.id} references a missing evidence file: ${scenario.evidence}`);
+    }
+  }
+  if (scenarioIds.size !== 18) errors.push("requiredScenarios must contain all 18 target-environment checks");
 
   const seen = new Set();
   for (const entry of entries) {
