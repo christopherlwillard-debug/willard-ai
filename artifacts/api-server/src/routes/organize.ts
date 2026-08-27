@@ -13,7 +13,7 @@ import * as tar from "tar";
 import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import {
   ARCHIVE_LIMITS,
@@ -29,6 +29,8 @@ import {
 import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
+import { logger } from "../lib/logger.ts";
+import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
 
 const router: IRouter = Router();
 
@@ -1345,7 +1347,19 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   const fileMoves: FileMoveRecord[] = [];
   let logStream: fs.WriteStream | null = null;
   let logPath = "";
-  const opLog = (line: string) => { try { logStream?.write(line + "\n"); } catch { /* best-effort */ } };
+  const correlationId = req.id;
+  const operationLogger = logger.child({ correlationId, operation: "organize", jobId: id });
+  let logWriteFailureReported = false;
+  const opLog = (line: string) => {
+    try {
+      logStream?.write(redactText(line) + "\n");
+    } catch (error) {
+      if (!logWriteFailureReported) {
+        logWriteFailureReported = true;
+        operationLogger.warn({ err: error }, "Organization operation log write failed");
+      }
+    }
+  };
 
   try {
     const nasPathForJob = await getNasPath();
@@ -1383,13 +1397,17 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const ts = isoTimestamp();
     try {
       const logsDir = path.join(getWillardAIDir(nasPath), "logs");
-      fs.mkdirSync(logsDir, { recursive: true });
+      ensurePrivateDir(logsDir);
+      pruneOperationalFiles(logsDir, "org-", 30);
       logPath = path.join(logsDir, `org-${ts}-${id}.log`);
-      logStream = fs.createWriteStream(logPath, { flags: "a" });
-      opLog(`=== Organization Job #${id} started ${new Date().toISOString()} ===`);
-      opLog(`Source: ${job.sourcePath} (${job.sourceType})`);
+      logStream = fs.createWriteStream(logPath, { flags: "a", mode: 0o600 });
+      try { fs.chmodSync(logPath, 0o600); } catch { /* best effort */ }
+      opLog(`=== Organization Job #${id} started ${new Date().toISOString()} correlation=${correlationId} ===`);
+      opLog(`Source type: ${job.sourceType}`);
       opLog(`Active routes: ${expectedTotal} / ${plan.routes?.length ?? 0} total`);
-    } catch { /* log is best-effort */ }
+    } catch (error) {
+      operationLogger.warn({ err: error }, "Organization operation log could not be opened");
+    }
 
     await db.update(organizationJobsTable).set({ status: "executing" }).where(eq(organizationJobsTable.id, id));
 
@@ -1428,7 +1446,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           throw new Error("Archive record is not available in the active library");
         }
       }
-      opLog(`EXTRACT: ${canonicalJobSourcePath} → ${tempDir}`);
+      opLog("EXTRACT: archive extraction started");
       const extractResult = await safeExtractArchive(canonicalJobSourcePath, tempDir);
       crcValidation = extractResult.crcValidation;
       archiveExtractionChecksums = extractResult.extractionChecksums ?? [];
@@ -1450,7 +1468,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         staged++;
         if (staged % 20 === 0) send("status", { stage: "staging", message: `Staged ${staged}/${walked.length}…`, progress: 5 + Math.round((staged / walked.length) * 17) });
       }
-      opLog(`STAGE: Copied ${staged} files to ${stagingBase}`);
+      opLog(`STAGE: Copied ${staged} files to staging`);
       sourceFiles = walkDir(stagingBase).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
       send("status", { stage: "scanning", message: `Staged ${sourceFiles.length} files`, progress: 24 });
     }
@@ -1497,7 +1515,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       // Respect plan exclusions
       if (excludedCategories.has(ft) || excludedPaths.has(sf.relativePath)) {
         excluded++;
-        opLog(`EXCLUDE: ${sf.relativePath}`);
+        opLog("EXCLUDE: file excluded by the approved plan");
         continue;
       }
 
@@ -1521,7 +1539,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         const filename = path.basename(sf.relativePath);
         if (conflictPolicy === "replace") {
           fs.unlinkSync(destFile);
-          opLog(`CONFLICT_REPLACE: ${destFile} overwritten`);
+          opLog("CONFLICT_REPLACE: existing destination overwritten");
           conflictResolutions.push({ filename, destDir, action: "replace" });
           // fall through to move normally
         } else if (conflictPolicy === "rename") {
@@ -1532,12 +1550,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
             destFile = path.join(destDir, `${base}_${suffix}${ext}`);
             suffix++;
           }
-          opLog(`CONFLICT_RENAME: ${filename} → ${path.basename(destFile)}`);
+          opLog("CONFLICT_RENAME: destination renamed to resolve a collision");
           conflictResolutions.push({ filename, destDir, action: "rename", resolvedTo: path.basename(destFile) });
           // fall through to move with renamed path
         } else {
           // keep_existing or skip: leave destination untouched, skip source
-          opLog(`CONFLICT_SKIP: ${filename} already exists at ${destDir} — skipped (policy: ${conflictPolicy})`);
+          opLog(`CONFLICT_SKIP: existing destination skipped (policy: ${conflictPolicy})`);
           conflictResolutions.push({ filename, destDir, action: conflictPolicy });
           conflictSkipped++;
           if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
@@ -1554,7 +1572,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       fileMoves.push(record);
       moved++;
 
-      opLog(`MOVE_OK [sha256]: ${sf.fullPath} → ${destFile} (hash=${record.sourceHash.slice(0, 16)}…)`);
+      opLog("MOVE_OK [sha256]: move verified");
 
       // Checkpoint after every move so rollback always has a complete record of moved files
       try {
@@ -1587,7 +1605,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     for (const mv of fileMoves) {
       if (!fs.existsSync(mv.to)) {
         unverified.push(mv.to);
-        opLog(`VERIFY_FAIL: ${mv.to} missing at destination`);
+        opLog("VERIFY_FAIL: destination file missing");
       }
     }
     if (unverified.length > 0) {
@@ -1607,7 +1625,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     for (const [dir, counts] of destCountMap) {
       const ok = counts.found === counts.expected;
       destVerification.push({ dir: path.basename(dir), expected: counts.expected, found: counts.found, ok });
-      opLog(`VERIFY_DEST: ${path.basename(dir)} expected=${counts.expected} found=${counts.found} ok=${ok}`);
+      opLog(`VERIFY_DEST: destination group expected=${counts.expected} found=${counts.found} ok=${ok}`);
     }
     const destVerifyFailed = destVerification.filter(d => !d.ok);
     if (destVerifyFailed.length > 0) {
@@ -1635,7 +1653,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           const dest = path.join(processedDir, path.basename(job.sourcePath));
           moveFile(job.sourcePath, dest);
           dispositionApplied = `moved_to:${dest}`;
-          opLog(`DISPOSE_MOVE: ${job.sourcePath} → ${dest}`);
+          opLog("DISPOSE_MOVE: archive moved to processed storage");
         } catch (e: any) {
           opLog(`DISPOSE_MOVE_FAIL: ${e.message}`);
         }
@@ -1685,27 +1703,35 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     let reportPath = "";
     try {
       const reportsDir = path.join(getWillardAIDir(nasPath), "reports");
-      fs.mkdirSync(reportsDir, { recursive: true });
+      ensurePrivateDir(reportsDir);
       reportPath = path.join(reportsDir, `org-${ts}-${id}.json`);
-      fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
-      opLog(`REPORT: ${reportPath}`);
-    } catch { /* non-fatal */ }
+      const safeReport = redactOperationalData(report);
+      fs.writeFileSync(reportPath, JSON.stringify(safeReport, null, 2), { encoding: "utf-8", mode: 0o600 });
+      try { fs.chmodSync(reportPath, 0o600); } catch { /* best effort */ }
+      pruneOperationalFiles(reportsDir, "org-", 30);
+      opLog("REPORT: report written with sensitive identifiers redacted");
+    } catch (reportError) {
+      operationLogger.error({ err: reportError }, "Organization report export failed");
+      opLog("WARN: report export failed; job completion remains recorded");
+    }
 
     opLog(`=== Job #${id} COMPLETED ${completedAt.toISOString()} — moved:${moved} excluded:${excluded} sha256-ok:${checksumVerifiedCount} failed-verify:${checksumUnverifiedCount} ===`);
     logStream?.end();
 
+    const safeReport = redactOperationalData(report) as Record<string, unknown>;
     await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: fileMoves as any,
-      reportJson: report as any,
+      reportJson: safeReport as any,
       reportPath: reportPath || null,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
 
-    send("complete", { ...report, progress: 100 });
+    send("complete", { ...safeReport, progress: 100 });
 
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : "Unknown error";
+    const errMsg = redactText(err instanceof Error ? err.message : "Unknown error");
+    operationLogger.error({ err, phase: "execute_failed", rolledBackMoves: fileMoves.length }, "Organization job failed; rollback started");
     opLog(`ERROR: ${errMsg}`);
     send("status", { stage: "rolling_back", message: "Error — rolling back all moves…", progress: -1 });
 

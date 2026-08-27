@@ -20,7 +20,7 @@ import {
   type DirCacheEntry, type FileEntry,
 } from "./indexer.ts";
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
-import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage.ts";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensurePrivateDir } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid } from "../thumbnail-engine.ts";
 import { logger } from "../logger.ts";
@@ -520,12 +520,12 @@ export async function loadDirMtimeCache(nasPath: string): Promise<Map<string, Di
     const parsed = JSON.parse(raw);
     if (parsed?.v === DIR_CACHE_VERSION && typeof parsed.dirs === "object") {
       if (parsed.root && parsed.root !== nasPath) {
-        console.warn(`[library] Dir cache root mismatch — expected "${nasPath}" got "${parsed.root}" — discarding stale cache`);
+        logger.warn({ operation: "dir_cache", reason: "root_mismatch" }, "Dir cache root mismatch; discarding stale cache");
         return new Map();
       }
       const updatedAt = typeof parsed.updatedAt === "string" ? Date.parse(parsed.updatedAt) : NaN;
       if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > DIR_CACHE_MAX_AGE_MS) {
-        console.info(`[library] Dir cache expired for "${nasPath}" — forcing reconciliation`);
+        logger.info({ operation: "dir_cache", reason: "expired" }, "Dir cache expired; forcing reconciliation");
         return new Map();
       }
       const cache = new Map(
@@ -812,7 +812,7 @@ export async function forceDiscardActiveJob(): Promise<{ discarded: boolean; job
     }).where(eq(libraryJobsTable.id, id));
   } catch { /* best effort — don't let a DB error block the in-memory clear */ }
 
-  console.warn(`[library-engine] Job #${id} force-discarded by user`);
+  logger.warn({ operation: "job_discard", jobId: id }, "Library job force-discarded by user");
   return { discarded: true, jobId: id };
 }
 
@@ -2960,7 +2960,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
       if (rows.length === 0) {
         // End of pass — reset cursor to start next pass from the beginning
         if (cursor > 0 && passResets > 0) {
-          console.info(`[thumbnail-reconcile] Pass complete — cleared ${passResets} orphaned thumbnailPath(s)`);
+          logger.info({ operation: "thumbnail_reconcile", resetCount: passResets }, "Thumbnail reconciliation pass complete");
         }
         // A completed scan has already marked files absent from the NAS as
         // DELETED. Remove those stale catalog rows automatically, but never
@@ -3012,12 +3012,16 @@ export function startThumbnailReconciliation(nasPath: string): void {
           .set({ thumbnailPath: null, thumbnailGeneratedAt: null })
           .where(inArray(mediaFilesTable.id, missing.map(r => r.id)));
         passResets += missing.length;
-        console.info(
-          `[thumbnail-reconcile] Reset ${missing.length} orphaned path(s) ` +
-          `— cursor=${cursor}, pass total=${passResets}`,
-        );
+        logger.info({
+          operation: "thumbnail_reconcile",
+          resetCount: missing.length,
+          cursor,
+          passTotal: passResets,
+        }, "Thumbnail reconciliation reset orphaned entries");
       }
-    } catch { /* non-fatal — runs again on next tick */ }
+    } catch (err) {
+      logger.warn({ err, operation: "thumbnail_reconcile" }, "Thumbnail reconciliation pass failed; will retry");
+    }
   };
 
   // First pass starts 10 s after boot, then continues every 30 s until the full
@@ -3086,15 +3090,16 @@ export async function recoverInterruptedJobs(): Promise<void> {
     }
     const computedIsScanning = (libMap["RUNNING"] ?? 0) > 0;
     const legacyRunning = scanMap["running"] ?? 0;
-    console.info(
-      `[library-engine] startup job state — library_jobs: ${JSON.stringify(libMap)}, ` +
-      `scan_jobs (legacy): ${JSON.stringify(scanMap)}, ` +
-      `computed isScanning: ${computedIsScanning}` +
-      (legacyRunning > 0
-        ? ` ⚠ legacy scan_jobs has ${legacyRunning} stuck 'running' row(s) — draining now`
-        : ""),
-    );
-  } catch { /* non-fatal — always proceed */ }
+    logger.info({
+      operation: "startup_job_state",
+      libraryJobs: libMap,
+      legacyScanJobs: scanMap,
+      computedIsScanning,
+      legacyRunning,
+    }, "Startup job state collected");
+  } catch (err) {
+    logger.warn({ err, operation: "startup_job_state" }, "Startup job state could not be collected");
+  }
 
   // ── Drain legacy scan_jobs stuck in 'running' ──────────────────────────────
   // The dashboard previously read isScanning from scan_jobs (old scan engine,
@@ -3107,9 +3112,8 @@ export async function recoverInterruptedJobs(): Promise<void> {
       .set({ status: "failed" })
       .where(eq(scanJobsTable.status, "running"));
     if (legacyDrained && legacyDrained > 0) {
-      console.warn(
-        `[library-engine] Drained ${legacyDrained} legacy scan_jobs row(s) stuck in 'running' state`
-      );
+      logger.warn({ operation: "legacy_scan_recovery", drainedCount: legacyDrained },
+        "Drained legacy scan jobs stuck in running state");
     }
   } catch { /* scan_jobs may not exist on a fresh install — non-fatal */ }
 
@@ -3122,7 +3126,8 @@ export async function recoverInterruptedJobs(): Promise<void> {
   }).where(eq(libraryJobsTable.status, "RUNNING"));
 
   if (failedCount && failedCount > 0) {
-    console.warn(`[library-engine] Marked ${failedCount} RUNNING job(s) as FAILED (interrupted by restart)`);
+    logger.warn({ operation: "restart_recovery", failedCount },
+      "Marked running library jobs as failed after restart");
   }
 
   // Jobs that were PAUSED when the server stopped → INTERRUPTED_BY_RESTART.
@@ -3134,7 +3139,8 @@ export async function recoverInterruptedJobs(): Promise<void> {
   }).where(eq(libraryJobsTable.status, "PAUSED"));
 
   if (interruptedCount && interruptedCount > 0) {
-    console.warn(`[library-engine] Marked ${interruptedCount} PAUSED job(s) as INTERRUPTED_BY_RESTART`);
+    logger.warn({ operation: "restart_recovery", interruptedCount },
+      "Marked paused library jobs as interrupted after restart");
   }
 }
 
@@ -3167,21 +3173,19 @@ export async function emitStartupHealth(nasPath: string): Promise<void> {
 
     const missingThumbs = Math.max(0, thumbPathsInDb - thumbsOnDisk);
 
-    const lines = [
-      `[startup] ══════════ Willard AI Health ══════════`,
-      `[startup] ✓ Database      connected`,
-      `[startup] ${cacheEntries > 10 ? "✓" : "⚠"} Dir cache     ${cacheEntries} entries loaded${cacheEntries <= 10 ? " — nearly empty (next scan will be slow)" : ""}`,
-      `[startup] ✓ Library       ${totalFiles.toLocaleString()} files indexed`,
-      `[startup]   Integrity     ${thumbPathsInDb.toLocaleString()} thumbnail paths in DB`,
-      `[startup] ${missingThumbs > 0 ? "⚠" : "✓"} Thumbnails    ${thumbsOnDisk.toLocaleString()} files on disk${missingThumbs > 0 ? ` / ${missingThumbs.toLocaleString()} missing — repair queued` : " — all present"}`,
-      `[startup] ════════════════════════════════════════`,
-    ];
-    console.info("\n" + lines.join("\n"));
+    logger.info({
+      operation: "startup_health",
+      cacheEntries,
+      totalFiles,
+      thumbPathsInDb,
+      thumbsOnDisk,
+      missingThumbs,
+    }, "Startup health collected");
 
     // Append to rolling startup-history.jsonl (keep last 20 entries)
     try {
       const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
-      fs.mkdirSync(cacheDir, { recursive: true });
+      ensurePrivateDir(cacheDir);
       const historyPath = path.join(cacheDir, "startup-history.jsonl");
       let entries: string[] = [];
       try { entries = fs.readFileSync(historyPath, "utf8").split("\n").filter(Boolean); } catch { /* first run */ }
@@ -3189,8 +3193,13 @@ export async function emitStartupHealth(nasPath: string): Promise<void> {
         ts: new Date().toISOString(),
         cacheEntries, totalFiles, thumbPathsInDb, thumbsOnDisk, missingThumbs,
       })];
-      fs.writeFileSync(historyPath, entries.join("\n") + "\n");
-    } catch { /* non-fatal */ }
+      fs.writeFileSync(historyPath, entries.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+      try { fs.chmodSync(historyPath, 0o600); } catch { /* best effort */ }
+    } catch (err) {
+      logger.warn({ err, operation: "startup_health_history" }, "Startup health history could not be persisted");
+    }
 
-  } catch { /* non-fatal — startup health is informational */ }
+  } catch (err) {
+    logger.warn({ err, operation: "startup_health" }, "Startup health collection failed");
+  }
 }

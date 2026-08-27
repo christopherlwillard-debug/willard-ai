@@ -4,6 +4,7 @@ import { db, pool, appSettingsTable } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
+import { redactText } from "./log-redaction.ts";
 import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
 import { isThumbnailFileValid } from "./thumbnail-engine.ts";
@@ -394,13 +395,21 @@ export async function enrichOne(file: PendingFile, privacy?: AiPrivacySettings):
     status.analyzed++;
   } catch (err) {
     status.failed++;
-    logger.warn({ err, fileId: file.id, name: file.name }, "AI enrichment failed for file");
+    logger.warn({
+      err,
+      fileId: file.id,
+      mediaType: file.mediaType,
+      operation: "ai_enrichment",
+    }, "AI enrichment failed for file");
     await pool.query(
       `INSERT INTO media_ai (media_file_id, ai_version, error)
        VALUES ($1, 0, $2)
        ON CONFLICT (media_file_id) DO UPDATE SET error = excluded.error`,
-      [file.id, String(err instanceof Error ? err.message : err).slice(0, 500)],
-    ).catch(() => {});
+      [file.id, redactText(String(err instanceof Error ? err.message : err)).slice(0, 500)],
+    ).catch((persistError) => {
+      logger.error({ err: persistError, fileId: file.id, operation: "ai_enrichment_error_persist" },
+        "AI enrichment failure could not be recorded");
+    });
   }
 }
 
@@ -424,7 +433,11 @@ export async function runEnrichmentTick(): Promise<void> {
       }).from(appSettingsTable).limit(1);
       nasPath = row?.nasPath ?? null;
       paused = row?.indexingPaused ?? false;
-    } catch { return; }
+    } catch (err) {
+      logger.warn({ err, operation: "ai_enrichment_settings" },
+        "AI enrichment settings could not be read");
+      return;
+    }
     if (!nasPath || paused) return;
     const privacy = await getAiPrivacySettings();
     if (!privacy.aiEnrichmentEnabled) return;
@@ -450,10 +463,16 @@ export function startAiEnrichment(): void {
   if (timer) return;
   startupTimer = setTimeout(() => {
     startupTimer = null;
-    runEnrichmentTick().catch(() => {});
+    runEnrichmentTick().catch((err) => {
+      logger.error({ err, operation: "ai_enrichment_tick" }, "AI enrichment tick failed");
+    });
   }, 8_000);
   startupTimer.unref?.();
-  timer = setInterval(() => { runEnrichmentTick().catch(() => {}); }, TICK_MS);
+  timer = setInterval(() => {
+    runEnrichmentTick().catch((err) => {
+      logger.error({ err, operation: "ai_enrichment_tick" }, "AI enrichment tick failed");
+    });
+  }, TICK_MS);
   timer.unref?.();
 }
 

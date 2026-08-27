@@ -10,6 +10,7 @@ import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
+import { logger } from "../lib/logger.ts";
 
 const router = Router();
 
@@ -104,9 +105,9 @@ export async function warmThumbnailCache(): Promise<void> {
         // A stale or poisoned thumbnail path is ignored and regenerated on demand.
       }
     }
-    console.log(`[thumbnail-cache] Warmed with ${_thumbCache.size} entries`);
+    logger.info({ entries: _thumbCache.size, operation: "thumbnail_cache_warm" }, "Thumbnail cache warmed");
   } catch (err) {
-    console.warn("[thumbnail-cache] Warm-up failed (non-fatal):", err);
+    logger.warn({ err, operation: "thumbnail_cache_warm" }, "Thumbnail cache warm-up failed; continuing without full cache");
   }
 }
 

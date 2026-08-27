@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { libraryJobsTable, appSettingsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
+import { redactOperationalData } from "../lib/log-redaction.ts";
 
 const router = Router();
 
@@ -36,7 +37,10 @@ router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
     .orderBy(desc(libraryJobsTable.createdAt))
     .limit(20);
 
-  res.json({ scans: jobs });
+  // Diagnostics is an export surface. Preserve metrics and lifecycle state,
+  // but never send stored paths, hashes, filenames, OCR, or free-form reports
+  // back to a client by default.
+  res.json({ scans: redactOperationalData(jobs) });
 });
 
 export default router;

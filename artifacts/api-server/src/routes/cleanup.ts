@@ -6,12 +6,13 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
-import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir } from "../lib/nas-storage";
+import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
 import { sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
+import { logger } from "../lib/logger.ts";
 
 const router: IRouter = Router();
 
@@ -199,7 +200,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
 
     res.json({ groups, totalGroups, totalWastedBytes });
   } catch (e: any) {
-    console.error("[cleanup/duplicates]", e);
+    logger.error({ err: e, operation: "cleanup_duplicates" }, "Duplicate cleanup failed");
     res.status(500).json({ error: "Failed to get duplicates" });
   }
 });
@@ -549,15 +550,14 @@ router.post("/cleanup/execute", async (req, res) => {
     // Append session entry to cleanup-history.jsonl
     if (recycled > 0 || errors.length > 0) {
       const logPath = cleanupLogPath(nasPath);
-      fs.mkdirSync(path.dirname(logPath), { recursive: true });
-      fs.appendFileSync(logPath, JSON.stringify({
+      appendPrivateJsonl(logPath, {
         ts:             new Date().toISOString(),
         recycled,
         recoveredBytes,
         platform:       process.platform === "win32" ? "Recycle Bin (Windows)" : "WillardAI/.Trash (Linux)",
         files:          deletedFiles,
         errors,
-      }) + "\n");
+      });
     }
 
     res.json({ recycled, recoveredBytes, errors });

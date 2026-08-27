@@ -27,7 +27,12 @@ those paths are unreachable and the library reports "Library Offline".
   both local services, waits for readiness, and retries one recoverable failure.
   `Stop`, `Repair`, and `Update` launchers remain available as advanced manual
   controls. All are Windows-only and exit immediately on Replit/non-Windows.
-  Launcher logs go to the git-ignored `logs/` folder.
+  Launcher logs go to the git-ignored `logs/` folder. Launcher diagnostics are
+  intended for the local user and should not be copied into shared support
+  bundles without review. API/library operational logs live under the active
+  library's `WillardAI/logs/`: the API stream rotates daily for 30 files, and
+  generated operation history/reports are bounded. Operational JSON exports
+  redact paths, filenames, hashes, queries, OCR, and reports by default.
 - The web artifact is installable as a PWA with a standalone window, shortcuts,
   and an offline static shell. A PWA cannot start PostgreSQL, the API server, or
   access a local/NAS filesystem; local users must start the native launcher first.

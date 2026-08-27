@@ -63,6 +63,32 @@ If anything goes wrong, the window stays open and explains what to do in plain
 language. The launcher retries safe failures automatically; use
 `Repair Willard AI.bat` only for advanced manual troubleshooting.
 
+### Log privacy, retention, and access
+
+Willard keeps two kinds of operational logs:
+
+- **Launcher logs** are in the project-root `logs\` folder (`api.log`,
+  `web.log`, setup/build logs, and readiness error logs). They are intended for
+  the Windows account that runs Willard. Keep this folder out of shared
+  folders, backups, and support bundles unless you have reviewed it; it can
+  contain service diagnostics. Each launcher `.log` rotates at 10 MiB and keeps
+  five numbered generations; readiness checks only display a short recent tail.
+- **API and library-operation logs** are under
+  `<library>\WillardAI\logs\`. The API log rotates daily and retains 30 files.
+  Organization logs, reports, scan-history records, conversion history, and
+  cleanup history are also bounded; startup history retains 20 records.
+  Reports and diagnostic responses redact paths, filenames, hashes, queries,
+  OCR, and other library identifiers by default.
+
+On Linux/macOS, Willard creates the `WillardAI` operational directories with
+owner-only permissions (`0700`) and files with owner-only permissions (`0600`).
+On Windows, grant the installed service/launcher account and the intended
+interactive user access to the `logs`, `reports`, `scan-history`, `config`,
+`database`, and `backups` folders, and remove inherited access for `Everyone`
+or broad shared groups. Do not place the library or project `logs\` folder in a
+public share. If a NAS does not preserve these permissions, use its equivalent
+private/share ACLs.
+
 ### Installed web app (PWA)
 
 The browser may offer **Install Willard Media Center**. The installed PWA gives

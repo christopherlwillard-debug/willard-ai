@@ -7,11 +7,12 @@ import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
 import { desc, eq } from "drizzle-orm";
-import { assertWithinRoot, getWillardAIDir } from "../lib/nas-storage";
+import { assertWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
+import { logger } from "../lib/logger.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -807,10 +808,10 @@ async function verifyConvertedFile(
 
 function appendConversionLog(nasPath: string, entry: Record<string, unknown>): void {
   try {
-    const logsDir = path.join(getWillardAIDir(nasPath), "logs");
-    fs.mkdirSync(logsDir, { recursive: true });
-    fs.appendFileSync(path.join(logsDir, "conversions.jsonl"), JSON.stringify(entry) + "\n", "utf-8");
-  } catch { /* non-fatal */ }
+    appendPrivateJsonl(path.join(getWillardAIDir(nasPath), "logs", "conversions.jsonl"), entry);
+  } catch (err) {
+    logger.warn({ err, operation: "conversion_log" }, "Conversion operation log could not be persisted");
+  }
 }
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────

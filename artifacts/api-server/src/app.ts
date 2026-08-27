@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -172,6 +172,10 @@ if (process.env["REPL_ID"] || process.env["NODE_ENV"] === "production") {
 app.use(
   pinoHttp({
     logger,
+    // Generate a server-owned correlation id for every request. Do not reuse
+    // a client-supplied value because it can be attacker-controlled and would
+    // make cross-request log searches ambiguous.
+    genReqId: () => randomUUID(),
     serializers: {
       req(req) {
         return {
@@ -188,6 +192,12 @@ app.use(
     },
   }),
 );
+app.use((req: Request, res: Response, next: NextFunction) => {
+  // The id is useful to support without exposing cookies, paths, or request
+  // bodies in logs. It also lets a user connect a UI failure to server logs.
+  res.setHeader("X-Request-Id", String(req.id));
+  next();
+});
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (isShuttingDown()) {
     res.status(503).json({ error: "Server is shutting down." });

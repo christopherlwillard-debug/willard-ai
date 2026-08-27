@@ -23,6 +23,7 @@ import {
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
+import { logger } from "../lib/logger.ts";
 
 const router: IRouter = Router();
 
@@ -414,7 +415,7 @@ router.post("/archives/:id/peek", async (req, res) => {
       res.status(422).json({ error: err.message });
       return;
     }
-    console.error("Peek error:", err);
+    logger.warn({ err, operation: "archive_peek" }, "Archive peek failed");
     res.status(500).json({ error: "Failed to peek archive" });
   }
 });

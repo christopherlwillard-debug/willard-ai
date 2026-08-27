@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { ensurePrivateDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFile, sha256File } from "./organize-helpers.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
 
@@ -75,14 +75,15 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
   const filePath = manifestPath(nasPath);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const fd = fs.openSync(filePath, "a");
+  ensurePrivateDir(path.dirname(filePath));
+  const fd = fs.openSync(filePath, "a", 0o600);
   try {
     fs.writeSync(fd, JSON.stringify(entry) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
+  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
 }
 
 /**
@@ -115,7 +116,7 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
 
   const tempPath = `${filePath}.${operationId}.tmp`;
   const content = kept.length ? `${kept.join("\n")}\n` : "";
-  const fd = fs.openSync(tempPath, "w");
+  const fd = fs.openSync(tempPath, "w", 0o600);
   try {
     fs.writeSync(fd, content);
     fs.fsyncSync(fd);
@@ -135,6 +136,7 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
   } finally {
     fs.rmSync(tempPath, { force: true });
   }
+  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
   return true;
 }
 

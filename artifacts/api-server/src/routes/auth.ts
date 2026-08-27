@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
+import { logger } from "../lib/logger.ts";
 
 const router: IRouter = Router();
 
@@ -161,7 +162,7 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
 
     res.json({ ok: true, recoveryKey });
   } catch (err) {
-    console.error("Setup error:", err);
+    logger.error({ err, operation: "auth_setup" }, "Authentication setup failed");
     res.status(500).json({ error: "Setup failed" });
   }
 });

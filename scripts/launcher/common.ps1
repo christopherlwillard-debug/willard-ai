@@ -19,6 +19,8 @@ $script:WebLog  = Join-Path $LogDir "web.log"
 $script:ApiUrl  = "http://127.0.0.1:8080/api/healthz"
 $script:WebUrl  = "http://127.0.0.1:5000"
 $script:AppUrl  = "http://localhost:5000"
+$script:MaxLauncherLogBytes = 10MB
+$script:MaxLauncherLogGenerations = 5
 
 function Assert-LocalWindows {
     # Replit / cloud / non-Windows safety: these scripts are for a personal
@@ -250,6 +252,24 @@ function Get-WillardPnpmCommand {
 
 function Ensure-LogDir {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+    Get-ChildItem -Path $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Rotate-LauncherLog $_.FullName }
+}
+
+function Rotate-LauncherLog($path) {
+    if (-not (Test-Path $path)) { return }
+    try {
+        if ((Get-Item $path).Length -lt $MaxLauncherLogBytes) { return }
+        for ($index = $MaxLauncherLogGenerations - 1; $index -ge 1; $index--) {
+            $older = $path + "." + $index
+            $newer = $path + "." + ($index + 1)
+            if (Test-Path $older) { Move-Item $older $newer -Force -ErrorAction SilentlyContinue }
+        }
+        Move-Item $path ($path + ".1") -Force -ErrorAction SilentlyContinue
+    } catch {
+        # A full or unavailable log disk must not prevent the launcher from
+        # explaining the primary startup failure.
+    }
 }
 
 function Get-DeveloperUpdateJournalPath {

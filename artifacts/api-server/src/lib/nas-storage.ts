@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { Writable } from "stream";
 import { Worker } from "worker_threads";
+import { redactOperationalData } from "./log-redaction.ts";
 
 export const WILLARD_SUBDIRS = [
   "config",
@@ -20,6 +21,60 @@ export type WillardSubdir = (typeof WILLARD_SUBDIRS)[number];
 
 export function getWillardAIDir(nasPath: string): string {
   return path.join(nasPath, "WillardAI");
+}
+
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+
+/**
+ * Operational files contain library metadata and must be readable only by the
+ * account running Willard. POSIX mode bits are best-effort on Windows; the
+ * Windows release documentation requires the equivalent user-only ACL.
+ */
+export function ensurePrivateDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  try { fs.chmodSync(dir, PRIVATE_DIR_MODE); } catch { /* ACLs may be managed by the host */ }
+}
+
+function writePrivateJson(filePath: string, value: unknown): void {
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), {
+    encoding: "utf-8",
+    mode: PRIVATE_FILE_MODE,
+  });
+  try { fs.chmodSync(filePath, PRIVATE_FILE_MODE); } catch { /* best effort */ }
+}
+
+/** Keep generated operational artifacts bounded without touching user media. */
+export function pruneOperationalFiles(dir: string, prefix: string, maxFiles = 30): void {
+  try {
+    const candidates = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith(prefix))
+      .map((entry) => {
+        const filePath = path.join(dir, entry.name);
+        return { filePath, mtime: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const candidate of candidates.slice(maxFiles)) {
+      try { fs.unlinkSync(candidate.filePath); } catch { /* best effort */ }
+    }
+  } catch {
+    // Retention is protective housekeeping; a transient NAS error must not
+    // prevent the primary operation from completing.
+  }
+}
+
+/** Append a bounded, redacted JSONL operational log with private permissions. */
+export function appendPrivateJsonl(
+  filePath: string,
+  value: unknown,
+  maxEntries = 500,
+): void {
+  ensurePrivateDir(path.dirname(filePath));
+  let entries: string[] = [];
+  try { entries = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean); } catch { /* first write */ }
+  entries = [...entries.slice(-(maxEntries - 1)), JSON.stringify(redactOperationalData(value))];
+  fs.writeFileSync(filePath, entries.join("\n") + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+  try { fs.chmodSync(filePath, PRIVATE_FILE_MODE); } catch { /* best effort */ }
 }
 
 /**
@@ -369,12 +424,12 @@ export function bootstrapWillardAIDir(nasPath: string): NasDirStatusResult {
   }
   const willardAiPath = getWillardAIDir(nasPath);
   // Root dir creation is critical — let errors propagate so callers can surface them
-  fs.mkdirSync(willardAiPath, { recursive: true });
+  ensurePrivateDir(willardAiPath);
   // All 9 subdirs are required — collect failures and throw a structured error
   const failures: string[] = [];
   for (const subdir of WILLARD_SUBDIRS) {
     try {
-      fs.mkdirSync(path.join(willardAiPath, subdir), { recursive: true });
+      ensurePrivateDir(path.join(willardAiPath, subdir));
     } catch (err) {
       failures.push(`${subdir} (${err instanceof Error ? err.message : "unknown"})`);
     }
@@ -421,13 +476,12 @@ export function writeScanHistory(
     const ts = new Date().toISOString().replace(/:/g, "-").replace(/\./g, "-");
     const jobId = summary["jobId"] ?? "unknown";
     const filename = `${ts}-${jobId}.json`;
-    fs.writeFileSync(
-      path.join(histDir, filename),
-      JSON.stringify(summary, null, 2),
-      "utf-8",
-    );
+    writePrivateJson(path.join(histDir, filename), redactOperationalData(summary));
+    pruneOperationalFiles(histDir, "", 30);
   } catch {
-    // Non-fatal — scan history write is best-effort
+    // Non-fatal, but observable. A missing history file should not look like a
+    // successful export when an operator is diagnosing a failed background job.
+    process.emitWarning("Scan history export unavailable", { code: "WILLARD_SCAN_HISTORY_WRITE_FAILED" });
   }
 }
 
@@ -442,11 +496,13 @@ export class LazyNasLogStream extends Writable {
     try {
       const logDir = path.join(getWillardAIDir(nasPath), "logs");
       if (!fs.existsSync(logDir)) return;
+      ensurePrivateDir(logDir);
       const { createStream } = await import("rotating-file-stream");
       const newStream = createStream("willard-ai.log", {
         interval: "1d",
         path: logDir,
         maxFiles: 30,
+        mode: PRIVATE_FILE_MODE,
       });
       const old = this.rfsStream;
       this.rfsStream = newStream as unknown as NodeJS.WritableStream;
@@ -454,7 +510,11 @@ export class LazyNasLogStream extends Writable {
         (old as any).destroy();
       }
     } catch {
-      // NAS not accessible — silently continue with stdout only
+      // NAS not accessible — continue with stdout, but make the degraded
+      // logging state visible to the operator.
+      process.emitWarning("NAS operational log stream unavailable; using process logs only", {
+        code: "WILLARD_NAS_LOG_STREAM_UNAVAILABLE",
+      });
     }
   }
 
