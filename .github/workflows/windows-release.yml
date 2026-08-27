@@ -173,6 +173,14 @@ jobs:
           }
           exit 0
 
+      - name: Upload backend audit log on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-backend-audit-log
+          path: ${{ runner.temp }}/willard-backend-audit.log
+          if-no-files-found: error
+
       - name: Install Chromium for browser release tests
         run: pnpm exec playwright install chromium
 
