@@ -24,6 +24,13 @@ remains intentional until then.
 
 ## Windows payload contract
 
+`pnpm run check:artifacts` is the source-of-truth guard for the workspace. It
+discovers artifact manifests while skipping generated directories, requires the
+single API artifact at `artifacts/api-server/.replit-artifact/artifact.toml` to
+own port 8080, and rejects tracked build directories or ZIP files. This keeps
+the registered API workflow and release inputs tied to source rather than to a
+copied or stale generated tree.
+
 Windows releases are staged only in the ignored `build/windows` directory.
 The release builder deletes that directory before every build, builds the web
 and API outputs from source, dereferences production dependencies, and removes

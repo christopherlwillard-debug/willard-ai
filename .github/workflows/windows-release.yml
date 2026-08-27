@@ -61,6 +61,8 @@ jobs:
 
       - name: Gate release on type checks and generated API contracts
         run: |
+          pnpm run check:artifacts
+          if ($LASTEXITCODE -ne 0) { throw "Artifact source checks failed." }
           pnpm run typecheck
           if ($LASTEXITCODE -ne 0) { throw "Type checks failed." }
           pnpm run check:router

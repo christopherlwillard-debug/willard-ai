@@ -70,3 +70,4 @@ logs/
 # Windows release staging and installer output
 /build/
 build/installer/
+*.zip
