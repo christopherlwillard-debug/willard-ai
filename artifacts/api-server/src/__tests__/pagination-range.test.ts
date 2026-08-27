@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import express from "express";
 import {
@@ -61,7 +63,7 @@ test("invalid and unsatisfiable byte ranges return null", () => {
 test("file stream errors become a response instead of an unhandled stream error", async () => {
   const app = express();
   app.get("/", (_request, response) => {
-    streamFileWithErrorHandling(response, "/tmp/willard-file-that-does-not-exist.bin");
+    streamFileWithErrorHandling(response, path.join(os.tmpdir(), "willard-file-that-does-not-exist.bin"));
   });
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));

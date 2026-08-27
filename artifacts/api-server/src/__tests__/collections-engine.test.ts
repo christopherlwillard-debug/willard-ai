@@ -7,6 +7,8 @@
 
 import { after, before, beforeEach, describe, test } from "node:test";
 import * as assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import {
   db,
   pool,
@@ -23,7 +25,7 @@ import {
 } from "../lib/collections-engine.ts";
 import { placeGridCoordinate } from "../lib/geocode.ts";
 
-const nasPath = `/tmp/willard-collections-engine-${process.pid}-${Date.now()}`;
+const nasPath = path.join(os.tmpdir(), `willard-collections-engine-${process.pid}-${Date.now()}`);
 const placeCells = [
   { lat10: 891, lon10: 1791, name: "Test City, North Pole" },
   { lat10: 881, lon10: 1781, name: "Other City, North Pole" },

@@ -141,8 +141,14 @@ jobs:
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
           PGPASSWORD: "postgres"
         run: |
-          pnpm --filter @workspace/api-server run audit
-          if ($LASTEXITCODE -ne 0) { throw "API server backend audit failed." }
+          $auditLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit.log"
+          pnpm --filter @workspace/api-server run audit 2>&1 | Tee-Object -FilePath $auditLog
+          $auditExitCode = $LASTEXITCODE
+          if ($auditExitCode -ne 0) {
+            $tail = (Get-Content $auditLog -Tail 80 -Raw).Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=API server backend audit failed::$tail"
+            exit $auditExitCode
+          }
 
       - name: Run backend integration tests
         shell: pwsh

@@ -108,7 +108,7 @@ test("face library advisory lock excludes another client and releases after fail
     return;
   }
 
-  const nasPath = `/tmp/willard-face-lock-${Date.now()}-${Math.random()}`;
+  const nasPath = path.join(os.tmpdir(), `willard-face-lock-${Date.now()}-${Math.random()}`);
   let entered!: () => void;
   const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
   let release!: () => void;

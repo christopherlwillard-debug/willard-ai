@@ -33,6 +33,24 @@ function assertSafetyFailure(action: () => unknown, expected: RegExp): void {
   });
 }
 
+function createSymlinkOrSkip(
+  context: { skip(message: string): void },
+  target: string,
+  linkPath: string,
+): boolean {
+  try {
+    fs.symlinkSync(target, linkPath);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      context.skip("symlink creation is not permitted on this runner");
+      return false;
+    }
+    throw error;
+  }
+}
+
 test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archive paths", () => {
   for (const entryPath of [
     "../outside.txt",
@@ -100,13 +118,13 @@ test("bounds entry count, per-file expansion, total expansion, and duplicate pat
   );
 });
 
-test("atomically refuses a symlink output and never changes the outside target", () => {
+test("atomically refuses a symlink output and never changes the outside target", (t) => {
   const outside = path.join(root, "outside.txt");
   const outputRoot = path.join(root, "staging");
   const output = path.join(outputRoot, "nested", "file.txt");
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(outside, "outside");
-  fs.symlinkSync(outside, output);
+  if (!createSymlinkOrSkip(t, outside, output)) return;
 
   assertSafetyFailure(
     () => writeArchiveFileAtomically(outputRoot, output, Buffer.from("archive data")),
@@ -116,13 +134,13 @@ test("atomically refuses a symlink output and never changes the outside target",
   assert.equal(fs.readlinkSync(output), outside);
 });
 
-test("inspectExtractedTree rejects symlinks and reports bounded regular files", () => {
+test("inspectExtractedTree rejects symlinks and reports bounded regular files", (t) => {
   const staging = path.join(root, "staging");
   const outside = path.join(root, "outside.txt");
   fs.mkdirSync(path.join(staging, "nested"), { recursive: true });
   fs.writeFileSync(path.join(staging, "nested", "photo.jpg"), "photo");
   fs.writeFileSync(outside, "outside");
-  fs.symlinkSync(outside, path.join(staging, "escape.txt"));
+  if (!createSymlinkOrSkip(t, outside, path.join(staging, "escape.txt"))) return;
 
   assertSafetyFailure(
     () => inspectExtractedTree(staging),

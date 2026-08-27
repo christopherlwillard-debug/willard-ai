@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 const { pool } = await import("@workspace/db");
@@ -21,8 +23,8 @@ test("concurrent runnable claims allow one job per library and do not block othe
     return;
   }
 
-  const sameLibrary = `/tmp/willard-job-claim-${crypto.randomUUID()}`;
-  const otherLibrary = `/tmp/willard-job-claim-${crypto.randomUUID()}`;
+  const sameLibrary = path.join(os.tmpdir(), `willard-job-claim-${crypto.randomUUID()}`);
+  const otherLibrary = path.join(os.tmpdir(), `willard-job-claim-${crypto.randomUUID()}`);
   const paths = [sameLibrary, otherLibrary];
   try {
     const sameResults = await Promise.allSettled([

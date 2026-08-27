@@ -13,6 +13,24 @@ function makeRoot(): string {
   return root;
 }
 
+function createDirectorySymlinkOrSkip(
+  context: { skip(message: string): void },
+  target: string,
+  linkPath: string,
+): boolean {
+  try {
+    fs.symlinkSync(target, linkPath, "dir");
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      context.skip("directory symlink creation is not permitted on this runner");
+      return false;
+    }
+    throw error;
+  }
+}
+
 afterEach(() => {
   while (temporaryRoots.length) {
     const root = temporaryRoots.pop()!;
@@ -42,11 +60,11 @@ test("rejects traversal and absolute database paths", () => {
   }
 });
 
-test("rejects a symlinked directory that escapes the library", () => {
+test("rejects a symlinked directory that escapes the library", (t) => {
   const root = makeRoot();
   const outside = makeRoot();
   fs.writeFileSync(path.join(outside, "secret.jpg"), "secret");
-  fs.symlinkSync(outside, path.join(root, "linked"), "dir");
+  if (!createDirectorySymlinkOrSkip(t, outside, path.join(root, "linked"))) return;
 
   assert.throws(
     () => resolveLibraryPath(root, "linked/secret.jpg"),
@@ -54,10 +72,10 @@ test("rejects a symlinked directory that escapes the library", () => {
   );
 });
 
-test("rejects a symlink escape even when the requested child does not exist", () => {
+test("rejects a symlink escape even when the requested child does not exist", (t) => {
   const root = makeRoot();
   const outside = makeRoot();
-  fs.symlinkSync(outside, path.join(root, "linked"), "dir");
+  if (!createDirectorySymlinkOrSkip(t, outside, path.join(root, "linked"))) return;
 
   assert.throws(
     () => resolveLibraryPath(root, "linked/new-folder/new-file.jpg"),
