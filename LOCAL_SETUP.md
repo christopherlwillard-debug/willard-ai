@@ -179,6 +179,44 @@ utility verifies schema and data before it reports success. After restoring,
 point Willard at the restored database and run a full scan so the catalog is
 reconciled with the NAS. The database backup never includes media files.
 
+### Catalog growth and large-result policy
+
+Willard keeps the catalog bounded at the API and metadata boundaries:
+
+- Archive collection requests return at most 100 summary rows and never load
+  `peek_entries`. Archive peek metadata stores at most 5,000 entries, and
+  detail/peek responses return at most 200 entries per page. Use
+  `entryOffset` and `entryLimit` on `GET /api/archives/:id`; a response with
+  `entriesTruncated: true` means the archive has more entries than the
+  retained metadata window.
+- Media and document list endpoints cap a page at 200 rows. AI search returns
+  at most 60 ranked results and similar-media search at most 24 results.
+- Search history retains the newest 50 executions. Search queries are capped
+  at 500 characters. Saved searches are capped at 100 and can be deleted from
+  the Search screen; the API list is also capped so saved-search metadata is
+  never rendered as an unbounded collection.
+- AI and face rows are derived from canonical media rows and are removed by
+  the derived-data cleanup boundary when canonical media is permanently
+  deleted. Library activity is retained to a bounded per-library window.
+
+The archive, media, and activity indexes are created during schema bootstrap.
+PostgreSQL autovacuum should remain enabled for the database. For a large
+library after a bulk scan, inspect table growth and dead tuples with:
+
+```sql
+SELECT relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze
+FROM pg_stat_user_tables
+WHERE relname IN (
+  'archives', 'media_files', 'media_ai', 'faces', 'search_history',
+  'library_activity'
+)
+ORDER BY relname;
+```
+
+If `n_dead_tup` remains high after the bulk operation, run `VACUUM (ANALYZE)`
+during a maintenance window. Do not use `VACUUM FULL` while Willard is
+running; it takes a table lock and can block scans and searches.
+
 ### Existing ZIP-based folders
 
 If this folder came from an older ZIP download, run **Setup Willard AI.bat** again.

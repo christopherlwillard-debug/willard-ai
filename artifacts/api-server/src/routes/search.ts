@@ -8,6 +8,11 @@ import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
+import {
+  SAVED_SEARCH_LIMIT,
+  SEARCH_HISTORY_RETENTION,
+  SEARCH_QUERY_MAX_LENGTH,
+} from "../lib/catalog-limits.ts";
 
 const router: IRouter = Router();
 
@@ -69,6 +74,9 @@ router.post("/search/ai", async (req, res) => {
   try {
     const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
     if (!query) return res.status(400).json({ error: "query is required" });
+    if (query.length > SEARCH_QUERY_MAX_LENGTH) {
+      return res.status(400).json({ error: `query must be ${SEARCH_QUERY_MAX_LENGTH} characters or fewer` });
+    }
     const previousIntent = sanitizeIntent(req.body?.previousIntent);
     const refine = req.body?.refine === true && previousIntent !== null;
 
@@ -98,12 +106,15 @@ router.post("/search/ai", async (req, res) => {
 
     const results = await executeSearch(nasPath, intent);
 
-    // Record history (best-effort, pruned to 50).
+    // Record history (best-effort, pruned to a bounded retention window).
     pool.query(
       `INSERT INTO search_history (query, intent_json, result_count) VALUES ($1, $2, $3)`,
       [query, JSON.stringify(intent), results.length],
     ).then(() => pool.query(
-      `DELETE FROM search_history WHERE id NOT IN (SELECT id FROM search_history ORDER BY created_at DESC LIMIT 50)`,
+      `DELETE FROM search_history WHERE id NOT IN (
+         SELECT id FROM search_history ORDER BY created_at DESC, id DESC LIMIT $1
+       )`,
+      [SEARCH_HISTORY_RETENTION],
     )).catch(() => {});
 
     const enrichment = getEnrichmentStatus();
@@ -191,6 +202,12 @@ router.post("/search/saved", async (req, res) => {
   const query = typeof req.body?.query === "string" ? req.body.query.trim() : "";
   if (!name || !query) return res.status(400).json({ error: "name and query are required" });
   const intent = sanitizeIntent(req.body?.intent);
+  const { rows: countRows } = await pool.query(`SELECT COUNT(*)::int AS count FROM saved_searches`);
+  if (Number(countRows[0]?.count ?? 0) >= SAVED_SEARCH_LIMIT) {
+    return res.status(409).json({
+      error: `Saved search limit reached (${SAVED_SEARCH_LIMIT}); delete one before saving another`,
+    });
+  }
   const { rows } = await pool.query(
     `INSERT INTO saved_searches (name, query, intent_json) VALUES ($1,$2,$3) RETURNING id`,
     [name.slice(0, 100), query.slice(0, 500), intent ? JSON.stringify(intent) : null],

@@ -24,6 +24,14 @@ import {
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
 import { logger } from "../lib/logger.ts";
+import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import {
+  ARCHIVE_ENTRY_PAGE_LIMIT,
+  ARCHIVE_LIST_LIMIT,
+  pageEntries,
+  responsePeekEntries,
+  storedPeekEntries,
+} from "../lib/catalog-limits.ts";
 
 const router: IRouter = Router();
 
@@ -185,7 +193,13 @@ router.get("/archives", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const { category, minSize, maxSize, status, dateFrom, dateTo, limit = "50", offset = "0" } = req.query as Record<string, string>;
+    const { category, minSize, maxSize, status, dateFrom, dateTo } = req.query as Record<string, string>;
+    const limit = parseBoundedInteger(req.query.limit, {
+      name: "limit", defaultValue: 50, min: 1, max: ARCHIVE_LIST_LIMIT,
+    });
+    const offset = parseBoundedInteger(req.query.offset, {
+      name: "offset", defaultValue: 0, min: 0, max: 10_000_000,
+    });
     const conditions: SQL[] = [archiveScope(nasPath)];
     if (category) conditions.push(eq(archivesTable.category, category));
     if (minSize) conditions.push(gte(archivesTable.sizeBytes, parseInt(minSize)));
@@ -195,13 +209,37 @@ router.get("/archives", async (req, res) => {
     if (dateTo) conditions.push(lte(archivesTable.modifiedAt, new Date(dateTo)));
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [{ total }] = await db.select({ total: count() }).from(archivesTable).where(where);
-    const archives = await db.select().from(archivesTable)
+    // Do not pull peek_entries into the collection response. A single archive
+    // can contain thousands of entries, and list views only need its summary.
+    const archives = await db.select({
+      id: archivesTable.id,
+      nasPath: archivesTable.nasPath,
+      path: archivesTable.path,
+      filename: archivesTable.filename,
+      sizeBytes: archivesTable.sizeBytes,
+      modifiedAt: archivesTable.modifiedAt,
+      folder: archivesTable.folder,
+      containedFileCount: archivesTable.containedFileCount,
+      photoCount: archivesTable.photoCount,
+      videoCount: archivesTable.videoCount,
+      documentCount: archivesTable.documentCount,
+      category: archivesTable.category,
+      peekStatus: archivesTable.peekStatus,
+      isPasswordProtected: archivesTable.isPasswordProtected,
+      hasNestedArchives: archivesTable.hasNestedArchives,
+      estimatedExtractionSize: archivesTable.estimatedExtractionSize,
+      indexedAt: archivesTable.indexedAt,
+    }).from(archivesTable)
       .where(where)
       .orderBy(desc(archivesTable.sizeBytes))
-      .limit(parseInt(limit))
-      .offset(parseInt(offset));
-    res.json({ archives, total, offset: parseInt(offset), limit: parseInt(limit) });
-  } catch {
+      .limit(limit)
+      .offset(offset);
+    res.json({ archives, total, offset, limit });
+  } catch (error) {
+    if (error instanceof RequestValidationError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: "Failed to list archives" });
   }
 });
@@ -213,9 +251,30 @@ router.get("/archives/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
-    const entries = (archive.peekEntries as any[]) ?? [];
-    res.json({ ...archive, peekEntries: entries });
-  } catch {
+    const entryLimit = parseBoundedInteger(req.query.entryLimit, {
+      name: "entryLimit", defaultValue: ARCHIVE_ENTRY_PAGE_LIMIT, min: 1, max: ARCHIVE_ENTRY_PAGE_LIMIT,
+    });
+    const entryOffset = parseBoundedInteger(req.query.entryOffset, {
+      name: "entryOffset", defaultValue: 0, min: 0, max: 10_000_000,
+    });
+    const storedEntries = Array.isArray(archive.peekEntries) ? archive.peekEntries : [];
+    const totalEntries = typeof archive.containedFileCount === "number" && Number.isSafeInteger(archive.containedFileCount)
+      ? archive.containedFileCount
+      : storedEntries.length;
+    const page = pageEntries(storedEntries, totalEntries, entryOffset, entryLimit);
+    res.json({
+      ...archive,
+      peekEntries: page.entries,
+      totalEntries: page.totalEntries,
+      entryOffset,
+      entryLimit,
+      entriesTruncated: page.entriesTruncated,
+    });
+  } catch (error) {
+    if (error instanceof RequestValidationError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: "Failed to get archive" });
   }
 });
@@ -303,12 +362,13 @@ router.post("/archives/:id/peek", async (req, res) => {
         isPasswordProtected,
         hasNestedArchives,
         estimatedExtractionSize,
-        peekEntries: entries,
+        peekEntries: storedPeekEntries(entries),
         category,
       }).where(archiveByIdScope(id, nasPath));
 
+      const page = responsePeekEntries(entries);
       res.json({
-        archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
+        archiveId: id, filename: archive.filename, ...page,
         isPasswordProtected, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
         category, photoCount, videoCount, documentCount, format: "zip",
       });
@@ -360,12 +420,13 @@ router.post("/archives/:id/peek", async (req, res) => {
         isPasswordProtected: false,
         hasNestedArchives,
         estimatedExtractionSize,
-        peekEntries: entries,
+        peekEntries: storedPeekEntries(entries),
         category,
       }).where(archiveByIdScope(id, nasPath));
 
+      const page = responsePeekEntries(entries);
       res.json({
-        archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
+        archiveId: id, filename: archive.filename, ...page,
         isPasswordProtected: false, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
         category, photoCount: tarPhotoCount, videoCount: tarVideoCount, documentCount: tarDocCount,
         format: `tar/${rawExt}`,
@@ -396,12 +457,13 @@ router.post("/archives/:id/peek", async (req, res) => {
         isPasswordProtected,
         hasNestedArchives,
         estimatedExtractionSize,
-        peekEntries: entries,
+        peekEntries: storedPeekEntries(entries),
         category,
       }).where(archiveByIdScope(id, nasPath));
 
+      const page = responsePeekEntries(entries);
       res.json({
-        archiveId: id, filename: archive.filename, entries, totalEntries: entries.length,
+        archiveId: id, filename: archive.filename, ...page,
         isPasswordProtected, hasNestedArchives, estimatedExtractionSizeBytes: estimatedExtractionSize,
         category, photoCount: szPhotoCount, videoCount: szVideoCount, documentCount: szDocCount, format,
         ...(error && entries.length === 0 ? { notes: `Could not list entries: ${error}` } : {}),

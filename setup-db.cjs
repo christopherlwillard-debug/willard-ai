@@ -139,7 +139,7 @@ const OPTIONAL_SQL = [
 // Increment this when a new ordered schema step is added. The history table
 // makes the bootstrap contract inspectable without relying on a local marker
 // file, while every step remains idempotent for existing installations.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS willard_schema_versions (
@@ -241,6 +241,9 @@ const SETUP_SQL = [
     peek_entries             jsonb,
     indexed_at               timestamp NOT NULL DEFAULT now()
   )`,
+  `CREATE INDEX IF NOT EXISTS archives_nas_size_idx ON archives (nas_path, size_bytes DESC)`,
+  `CREATE INDEX IF NOT EXISTS archives_nas_modified_idx ON archives (nas_path, modified_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS archives_nas_status_idx ON archives (nas_path, peek_status)`,
 
   // organization_jobs
   `CREATE TABLE IF NOT EXISTS organization_jobs (
@@ -488,6 +491,7 @@ const SETUP_SQL = [
     created_at  timestamp NOT NULL DEFAULT now(),
     last_used_at timestamp
   )`,
+  `CREATE INDEX IF NOT EXISTS saved_searches_created_idx ON saved_searches (created_at DESC)`,
 
   // people (face recognition)
   `CREATE TABLE IF NOT EXISTS people (

@@ -1,4 +1,4 @@
-import { pgTable, serial, text, bigint, timestamp, boolean, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, bigint, timestamp, boolean, integer, jsonb, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -21,7 +21,11 @@ export const archivesTable = pgTable("archives", {
   estimatedExtractionSize: bigint("estimated_extraction_size", { mode: "number" }),
   peekEntries: jsonb("peek_entries"),
   indexedAt: timestamp("indexed_at").notNull().defaultNow(),
-});
+}, (t) => [
+  index("archives_nas_size_idx").on(t.nasPath, t.sizeBytes),
+  index("archives_nas_modified_idx").on(t.nasPath, t.modifiedAt),
+  index("archives_nas_status_idx").on(t.nasPath, t.peekStatus),
+]);
 
 export const insertArchiveSchema = createInsertSchema(archivesTable).omit({ id: true, indexedAt: true });
 export type InsertArchive = z.infer<typeof insertArchiveSchema>;

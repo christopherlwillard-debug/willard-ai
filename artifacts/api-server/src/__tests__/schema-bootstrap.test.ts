@@ -58,6 +58,16 @@ test("required schema bootstrap is versioned and runs atomically", async () => {
     statements.some((sql) => /organization_jobs[\s\S]*nas_path/.test(sql)),
     "fresh bootstrap must create organization job library scope",
   );
+  assert.ok(
+    statements.some((sql) => /archives_nas_size_idx/.test(sql)) &&
+      statements.some((sql) => /archives_nas_modified_idx/.test(sql)) &&
+      statements.some((sql) => /archives_nas_status_idx/.test(sql)),
+    "fresh bootstrap must create archive list indexes",
+  );
+  assert.ok(
+    statements.some((sql) => /saved_searches_created_idx/.test(sql)),
+    "fresh bootstrap must index saved-search ordering",
+  );
 });
 
 test("required schema bootstrap rolls back and rethrows the original failure", async () => {
