@@ -48,7 +48,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath}
          AND content_hash IS NOT NULL
-         AND ${sql.raw(activeMediaSql("m"))}
+         AND ${activeMediaCondition}
       GROUP BY content_hash
       HAVING COUNT(*) > 1
     `);
