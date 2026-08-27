@@ -130,6 +130,7 @@ jobs:
             $apiProcess = Start-Process $nodePath `
               -ArgumentList @("--enable-source-maps", $apiEntry) `
               -Environment @{
+                WILLARD_LOCAL_DATA_ROOT = $env:RUNNER_TEMP
                 WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"
                 WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"
               } `
