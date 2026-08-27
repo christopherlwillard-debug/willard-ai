@@ -14,12 +14,17 @@ const SCRIPT = path.join(ROOT, "desktop", "database-backup.mjs");
 const postgresBin = process.env.POSTGRES_BIN || "postgres";
 const initdbBin = process.env.INITDB_BIN || "initdb";
 const createdbBin = process.env.CREATEDB_BIN || "createdb";
+const dropdbBin = process.env.DROPDB_BIN || "dropdb";
 const psqlBin = process.env.PSQL_BIN || "psql";
 
 async function run(command, args, env = {}) {
   return execFileAsync(command, args, {
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: {
+      ...process.env,
+      ...(process.platform === "win32" ? { PGPASSWORD: process.env.PGPASSWORD || "postgres" } : {}),
+      ...env,
+    },
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -38,7 +43,7 @@ async function freePort() {
 
 async function waitForPostgres(url, process) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (process.exitCode !== null) {
+    if (process && process.exitCode !== null) {
       throw new Error(
         `Disposable PostgreSQL exited before becoming ready.\n${process.stderrText || "(no server error output)"}`,
       );
@@ -82,25 +87,42 @@ test(
     const backupRoot = path.join(root, "backups");
     const tamperedBackup = path.join(root, "tampered-backup");
     const tamperedManifestBackup = path.join(root, "tampered-manifest-backup");
+    const useInstalledService = process.platform === "win32";
+    const databaseSuffix = path
+      .basename(root)
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(-20)
+      .toLowerCase();
+    const sourceDatabase = `willard_source_${databaseSuffix}`;
+    const targetDatabase = `willard_target_${databaseSuffix}`;
     const port = await freePort();
+    const databasePort = useInstalledService ? 5432 : port;
+    const databasePrefix = useInstalledService
+      ? `postgresql://postgres:postgres@127.0.0.1:${databasePort}`
+      : `postgresql://postgres@127.0.0.1:${databasePort}`;
     let server;
     try {
-      await run(initdbBin, ["--no-locale", "--auth=trust", "--username=postgres", "--pgdata", dataDir]);
-      await mkdir(socketDir, { recursive: true });
-      server = spawn(
-        postgresBin,
-        ["-D", dataDir, "-p", String(port), "-h", "127.0.0.1", "-k", socketDir],
-        { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] },
-      );
-      server.stderrText = "";
-      server.stderr.on("data", (chunk) => {
-        server.stderrText += chunk.toString();
-      });
-      await waitForPostgres(`postgresql://postgres@127.0.0.1:${port}/postgres`, server);
-      await run(createdbBin, ["-h", "127.0.0.1", "-p", String(port), "-U", "postgres", "willard_source"]);
-      await run(createdbBin, ["-h", "127.0.0.1", "-p", String(port), "-U", "postgres", "willard_target"]);
-      const sourceUrl = `postgresql://postgres@127.0.0.1:${port}/willard_source`;
-      const targetUrl = `postgresql://postgres@127.0.0.1:${port}/willard_target`;
+      if (useInstalledService) {
+        await waitForPostgres(`${databasePrefix}/postgres`, null);
+      } else {
+        await run(initdbBin, ["--no-locale", "--auth=trust", "--username=postgres", "--pgdata", dataDir]);
+        await mkdir(socketDir, { recursive: true });
+        server = spawn(
+          postgresBin,
+          ["-D", dataDir, "-p", String(port), "-h", "127.0.0.1", "-k", socketDir],
+          { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        server.stderrText = "";
+        server.stderr.on("data", (chunk) => {
+          server.stderrText += chunk.toString();
+        });
+        await waitForPostgres(`${databasePrefix}/postgres`, server);
+      }
+      const databaseArgs = ["-h", "127.0.0.1", "-p", String(databasePort), "-U", "postgres"];
+      await run(createdbBin, [...databaseArgs, sourceDatabase]);
+      await run(createdbBin, [...databaseArgs, targetDatabase]);
+      const sourceUrl = `${databasePrefix}/${sourceDatabase}`;
+      const targetUrl = `${databasePrefix}/${targetDatabase}`;
       await run(psqlBin, [
         "-X",
         "--no-password",
@@ -193,6 +215,14 @@ test(
       assert.equal(retained.length, 1);
     } finally {
       await stopPostgres(server);
+      if (useInstalledService) {
+        const databaseArgs = ["-h", "127.0.0.1", "-p", String(databasePort), "-U", "postgres"];
+        await Promise.all(
+          [targetDatabase, sourceDatabase].map((database) =>
+            run(dropdbBin, [...databaseArgs, "--if-exists", database]).catch(() => undefined),
+          ),
+        );
+      }
       await rm(root, { recursive: true, force: true });
     }
   },
