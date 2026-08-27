@@ -43,13 +43,18 @@ jobs:
       - name: Gate release on type checks and generated API contracts
         run: |
           pnpm run typecheck
+          if ($LASTEXITCODE -ne 0) { throw "Type checks failed." }
           pnpm run check:router
+          if ($LASTEXITCODE -ne 0) { throw "Router checks failed." }
           pnpm run check:api-contracts
+          if ($LASTEXITCODE -ne 0) { throw "Generated API contract checks failed." }
 
       - name: Gate release on unit and packaging contracts
         run: |
           pnpm run test:database-backup
+          if ($LASTEXITCODE -ne 0) { throw "Database backup tests failed." }
           pnpm run test:release-contracts
+          if ($LASTEXITCODE -ne 0) { throw "Release contract tests failed." }
 
       - name: Install PostgreSQL for the source launcher smoke test
         shell: pwsh

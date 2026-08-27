@@ -156,9 +156,11 @@ test("inspectExtractedTree rejects symlinks and reports bounded regular files", 
 
 test("source replacement between archive phases is detected", () => {
   const archive = path.join(root, "source.zip");
+  const replacement = path.join(root, "source-replacement.zip");
   fs.writeFileSync(archive, "original");
   const snapshot = snapshotArchiveFile(archive);
-  fs.writeFileSync(archive, "replaced");
+  fs.writeFileSync(replacement, "replaced");
+  fs.renameSync(replacement, archive);
 
   assertSafetyFailure(
     () => assertArchiveFileUnchanged(archive, snapshot),
