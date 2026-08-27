@@ -10,6 +10,7 @@ import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReac
 import { logger } from "../lib/logger";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
+import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
 
 const router: IRouter = Router();
 
@@ -164,6 +165,16 @@ router.put("/settings", async (req, res) => {
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
 
+    if (body.nasPath && body.nasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
+      const cancelledJobs = cancelJobsForLibrary(existing.nasPath);
+      if (cancelledJobs > 0) {
+        logger.info(
+          { oldNasPath: existing.nasPath, newNasPath: updated.nasPath, cancelledJobs },
+          "Cancelled jobs targeting the replaced library root",
+        );
+      }
+    }
+
     const aiChanged = body.aiEnrichmentEnabled !== undefined ||
       body.aiLocalOnly !== undefined || aiExcludedFolders !== undefined ||
       aiExcludedExtensions !== undefined;
@@ -229,9 +240,19 @@ router.post("/settings/test-nas", async (req, res) => {
       path: r.path,
       isDirectory: r.isDirectory,
       readable: r.readable,
+      enumerable: r.enumerable,
+      writable: r.writable,
     });
   } catch (err) {
-    res.json({ accessible: false, message: `Error: ${err instanceof Error ? err.message : "Unknown"}`, path: "", isDirectory: false, readable: false });
+    res.json({
+      accessible: false,
+      message: `Error: ${err instanceof Error ? err.message : "Unknown"}`,
+      path: "",
+      isDirectory: false,
+      readable: false,
+      enumerable: false,
+      writable: false,
+    });
   }
 });
 

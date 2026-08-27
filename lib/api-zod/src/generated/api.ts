@@ -282,7 +282,9 @@ export const TestNasPathResponse = zod.object({
   "message": zod.string(),
   "path": zod.string(),
   "isDirectory": zod.boolean(),
-  "readable": zod.boolean()
+  "readable": zod.boolean(),
+  "enumerable": zod.boolean(),
+  "writable": zod.boolean()
 })
 
 

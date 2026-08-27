@@ -123,6 +123,10 @@ export function getWatcherSnapshot(): WatcherSnapshot {
 // ── Event handling ────────────────────────────────────────────────────────────
 
 function onFsEvent(nasPath: string, filename: string | Buffer | null): void {
+  // fs.watch callbacks can be queued after close() when a path is changed or
+  // an SMB mount disappears. Never let an event from the old root schedule
+  // work against the current library.
+  if (!state.online || state.watchedPath !== nasPath) return;
   // Ignore Willard AI's own working directory (logs, thumbnails, temp…) —
   // otherwise our own writes would trigger endless rescans.
   if (filename) {
@@ -174,7 +178,10 @@ function scheduleDebouncedScan(nasPath: string): void {
 }
 
 async function triggerScan(nasPath: string, source: "events" | "sweep" | "recovery"): Promise<void> {
-  if (state.paused || !state.online) return; // will retry when unpaused/online (heartbeat)
+  if (state.paused || !state.online || state.watchedPath !== nasPath) return;
+  // The path can change while startJob is awaiting the database claim. The
+  // engine performs its own live probe, but this guard prevents a stale
+  // watcher timer from even attempting the old root.
 
   const activeProfile = getActiveJobProfile(nasPath);
   if (activeProfile !== null) {

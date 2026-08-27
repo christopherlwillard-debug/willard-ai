@@ -25,6 +25,7 @@ import {
   Loader2,
   ChevronRight,
   Monitor,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -201,19 +202,23 @@ export function LibrarySetup({
         {testResult && (
           <div className={cn(
             "flex items-start gap-2 rounded-md border px-3 py-2 text-sm",
-            testResult.accessible
+            testResult.accessible && testResult.writable
               ? "border-green-500/40 bg-green-500/10 text-green-400"
-              : "border-destructive/40 bg-destructive/10 text-destructive"
+              : testResult.accessible
+                ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-300"
+                : "border-destructive/40 bg-destructive/10 text-destructive"
           )}>
-            {testResult.accessible
+            {testResult.accessible && testResult.writable
               ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
-              : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+              : testResult.accessible
+                ? <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
             <span className="text-xs">{testResult.message}</span>
           </div>
         )}
         <Button
           className="w-full"
-          disabled={!manualPath || busy || (testResult != null && !testResult.accessible)}
+          disabled={!manualPath || busy || (testResult != null && (!testResult.accessible || !testResult.writable))}
           onClick={() => chooseLocation(manualPath)}
         >
           {busy && savingPath === manualPath

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkNasReachable, checkNasReachableAsync } from "../lib/nas-storage.ts";
+import { bootstrapWillardAIDir, checkNasReachable, checkNasReachableAsync } from "../lib/nas-storage.ts";
 
 const onPosix = process.platform !== "win32";
 
@@ -85,6 +85,15 @@ test("a readable absolute directory is online", () => {
   assert.equal(r.online, true);
   assert.equal(r.isDirectory, true);
   assert.equal(r.readable, true);
+  assert.equal(r.enumerable, true);
+  assert.equal(r.writable, true);
+});
+
+test("bootstrap refuses an unreachable Windows path before creating a local folder", { skip: !onPosix }, () => {
+  assert.throws(
+    () => bootstrapWillardAIDir("Z:"),
+    /not reachable from this server/i,
+  );
 });
 
 // ── checkNasReachableAsync — Worker IIFE regression tests ─────────────────────
@@ -102,6 +111,8 @@ test("async: accessible directory → online=true, message='Online — path is a
     assert.equal(r.online, true, `Expected online=true, got: ${r.message}`);
     assert.equal(r.isDirectory, true);
     assert.equal(r.readable, true);
+    assert.equal(r.enumerable, true);
+    assert.equal(r.writable, true);
     assert.equal(r.message, "Online \u2014 path is accessible");
   } finally {
     try { fs.rmSync(dir, { recursive: true }); } catch { /* ignore */ }

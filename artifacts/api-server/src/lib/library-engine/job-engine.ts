@@ -20,7 +20,7 @@ import {
   type DirCacheEntry, type FileEntry,
 } from "./indexer.ts";
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage.ts";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import { getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid } from "../thumbnail-engine.ts";
 import { logger } from "../logger.ts";
@@ -749,6 +749,20 @@ export function requestCancel(jobId: number, reason: CancellationReason = "USER_
   return true;
 }
 
+/**
+ * Cancel every in-process job that still targets a library root being
+ * replaced in Settings. A path switch must not leave a worker mutating or
+ * reading the old root while the watcher moves to the new one.
+ */
+export function cancelJobsForLibrary(nasPath: string): number {
+  let cancelled = 0;
+  for (const [jobId, state] of activeJobs) {
+    if (!sameLibraryPath(state.nasPath, nasPath)) continue;
+    if (requestCancel(jobId, "ERROR")) cancelled++;
+  }
+  return cancelled;
+}
+
 function startJobRun(jobId: number, run: Promise<void>): void {
   activeJobRuns.set(jobId, run);
   void run.then(
@@ -831,13 +845,23 @@ export interface StartJobOptions {
   rootPath?: string;
 }
 
-export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; alreadyRunning: boolean; errorCode?: "NAS_OFFLINE" }> {
+export async function startJob(opts: StartJobOptions): Promise<{
+  jobId: number;
+  alreadyRunning: boolean;
+  errorCode?: "NAS_OFFLINE";
+  errorMessage?: string;
+}> {
   if (isShuttingDown()) {
     throw new Error("Server is shutting down");
   }
   // Fail before preempting another job or starting any worker.  Persist the
   // failed attempt so the history endpoint still explains why it did not run.
-  if (!await isNasAvailable(opts.nasPath)) {
+  const configuredPath = await getConfiguredNasPath();
+  if (!configuredPath || !sameLibraryPath(configuredPath, opts.nasPath)) {
+    throw new Error("Library path changed; refusing to start a job against a stale NAS root");
+  }
+  const reach = await checkNasReachableAsync(opts.rootPath ?? opts.nasPath);
+  if (!reach.online) {
     const [failedJob] = await db.insert(libraryJobsTable).values({
       jobType: opts.jobType,
       profile: opts.profile,
@@ -846,10 +870,15 @@ export async function startJob(opts: StartJobOptions): Promise<{ jobId: number; 
       cancellationReason: "NAS_OFFLINE",
       nasPath: opts.nasPath,
       rootPath: opts.rootPath ?? null,
-      error: "NAS path is not accessible",
+      error: `NAS path is not accessible: ${reach.message}`,
       finishedAt: new Date(),
     }).returning({ id: libraryJobsTable.id });
-    return { jobId: failedJob.id, alreadyRunning: false, errorCode: "NAS_OFFLINE" };
+    return {
+      jobId: failedJob.id,
+      alreadyRunning: false,
+      errorCode: "NAS_OFFLINE",
+      errorMessage: reach.message,
+    };
   }
 
   const priority: JobPriority = opts.profile === "QUICK" ? "HIGH"
@@ -1031,13 +1060,21 @@ async function getPreviousElapsedMs(nasPath: string, profile: string): Promise<n
 
 // ── NAS availability check ───────────────────────────────────────────────────
 
-async function isNasAvailable(nasPath: string): Promise<boolean> {
-  try {
-    await fs.promises.stat(nasPath);
-    return true;
-  } catch {
-    return false;
-  }
+async function getConfiguredNasPath(): Promise<string | null> {
+  const [settings] = await db
+    .select({ nasPath: appSettingsTable.nasPath })
+    .from(appSettingsTable)
+    .limit(1);
+  const configured = settings?.nasPath?.trim();
+  return configured || null;
+}
+
+function sameLibraryPath(left: string, right: string): boolean {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32"
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
 }
 
 async function findDurableActiveJob(nasPath: string): Promise<{
@@ -1190,7 +1227,7 @@ async function runScanJob(
     // ── NAS availability check (after scan_started so all terminal exits emit
     //    the full scan_started → terminal → scan_summary → scan_finished triplet)
     sdbg('nas_check_start', { scanRoot });
-    if (!await isNasAvailable(scanRoot)) {
+    if (!(await checkNasReachableAsync(scanRoot)).online) {
       slog('terminal', { completionReason: 'failed', ...getResources(), nasOffline: true });
       slog('scan_summary', { completionReason: 'failed', stages: stageTiming, totalMs: 0 });
       slog('scan_finished', { completionReason: 'failed' });
@@ -1894,7 +1931,7 @@ async function runScanJob(
     if (state.profile === "FULL") {
       _walkTimeoutTimer = setTimeout(async () => {
         _walkTimeoutTimer = null;
-        if (state.filesTotal === 0 && await isNasAvailable(scanRoot)) {
+        if (state.filesTotal === 0 && (await checkNasReachableAsync(scanRoot)).online) {
           const msg = `Walk timed out — no files found after 90 s; NAS may be unreachable or empty (${scanRoot})`;
           sdbg('walk_timeout', { scanRoot, msg });
           walkTimedOut = true;
@@ -2468,7 +2505,7 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
   state.phase = "metadata";
 
   try {
-    if (!await isNasAvailable(state.nasPath)) {
+    if (!(await checkNasReachableAsync(state.nasPath)).online) {
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
@@ -2619,7 +2656,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
   try {
     // Check NAS
-    if (!await isNasAvailable(nasPath)) {
+    if (!(await checkNasReachableAsync(nasPath)).online) {
       await failJob(jobId, "NAS_OFFLINE", "NAS path is not accessible");
       return;
     }
@@ -2906,7 +2943,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
 
   const runPass = async (): Promise<void> => {
     try {
-      if (!await isNasAvailable(nasPath)) return;
+      if (!(await checkNasReachableAsync(nasPath)).online) return;
 
       const rows = await db.select({
         id: mediaFilesTable.id,

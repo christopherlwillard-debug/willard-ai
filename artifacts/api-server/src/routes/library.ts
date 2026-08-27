@@ -252,7 +252,7 @@ router.post("/library/scan", async (req: Request, res: Response) => {
     res.status(503).json({
       code: "NAS_OFFLINE",
       error: "NAS Not Available",
-      message: `Cannot reach ${nasPath}. Check that your NAS is online and the drive is mounted.`,
+      message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
       jobId: result.jobId,
     });
     return;

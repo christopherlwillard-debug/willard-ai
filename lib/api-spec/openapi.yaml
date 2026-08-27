@@ -2261,12 +2261,18 @@ components:
           type: boolean
         readable:
           type: boolean
+        enumerable:
+          type: boolean
+        writable:
+          type: boolean
       required:
         - accessible
         - message
         - path
         - isDirectory
         - readable
+        - enumerable
+        - writable
 
     ScanJob:
       type: object

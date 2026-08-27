@@ -12,4 +12,6 @@ export interface NasTestResult {
   path: string;
   isDirectory: boolean;
   readable: boolean;
+  enumerable: boolean;
+  writable: boolean;
 }

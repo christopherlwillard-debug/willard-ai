@@ -112,6 +112,8 @@ export interface NasReachability {
   exists: boolean;
   isDirectory: boolean;
   readable: boolean;
+  enumerable: boolean;
+  writable: boolean;
   message: string;
 }
 
@@ -123,10 +125,16 @@ export interface NasReachability {
  */
 export function checkNasReachable(nasPath: string | null | undefined): NasReachability {
   if (!nasPath || typeof nasPath !== "string" || nasPath.trim() === "") {
-    return { online: false, path: nasPath ?? "", exists: false, isDirectory: false, readable: false, message: "No library location configured" };
+    return {
+      online: false, path: nasPath ?? "", exists: false, isDirectory: false,
+      readable: false, enumerable: false, writable: false, message: "No library location configured",
+    };
   }
   if (nasPath.includes("\0") || nasPath.length > 4096) {
-    return { online: false, path: nasPath, exists: false, isDirectory: false, readable: false, message: "Invalid library location" };
+    return {
+      online: false, path: nasPath, exists: false, isDirectory: false,
+      readable: false, enumerable: false, writable: false, message: "Invalid library location",
+    };
   }
   const trimmed = nasPath.trim();
   // On a non-Windows host (this server runs on Linux), Windows-style locations
@@ -135,40 +143,87 @@ export function checkNasReachable(nasPath: string | null | undefined): NasReacha
   // and falsely report online.
   if (process.platform !== "win32") {
     if (/^[A-Za-z]:/.test(trimmed)) {
-      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows drive letters (e.g. Z:) are not reachable from this server" };
+      return {
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Windows drive letters (e.g. Z:) are not reachable from this server",
+      };
     }
     if (trimmed.startsWith("\\\\")) {
-      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows network shares (\\\\server\\share) are not reachable from this server" };
+      return {
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Windows network shares (\\\\server\\share) are not reachable from this server",
+      };
     }
     if (!trimmed.startsWith("/")) {
-      return { online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Library location must be an absolute path" };
+      return {
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Library location must be an absolute path",
+      };
     }
   }
   const resolved = path.resolve(trimmed);
   try {
     if (!fs.existsSync(resolved)) {
-      return { online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: `Library not found: ${resolved}` };
+      return {
+        online: false, path: resolved, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: `Library not found: ${resolved}`,
+      };
     }
     const stat = fs.statSync(resolved);
     if (!stat.isDirectory()) {
-      return { online: false, path: resolved, exists: true, isDirectory: false, readable: false, message: "Library location is not a directory" };
+      return {
+        online: false, path: resolved, exists: true, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Library location is not a directory",
+      };
     }
     try {
       fs.accessSync(resolved, fs.constants.R_OK);
     } catch {
-      return { online: false, path: resolved, exists: true, isDirectory: true, readable: false, message: "Library exists but is not readable (permission denied)" };
+      return {
+        online: false, path: resolved, exists: true, isDirectory: true,
+        readable: false, enumerable: false, writable: false,
+        message: "Library exists but is not readable (permission denied)",
+      };
     }
-    const entries = fs.readdirSync(resolved);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(resolved);
+    } catch {
+      return {
+        online: false, path: resolved, exists: true, isDirectory: true,
+        readable: true, enumerable: false, writable: false,
+        message: "Library exists but its contents cannot be listed (permission denied)",
+      };
+    }
+    let writable = true;
+    try {
+      fs.accessSync(resolved, fs.constants.W_OK);
+    } catch {
+      writable = false;
+    }
     return {
       online: true,
       path: resolved,
       exists: true,
       isDirectory: true,
       readable: true,
-      message: `Online — ${entries.length} item${entries.length !== 1 ? "s" : ""} at root`,
+      enumerable: true,
+      writable,
+      message: writable
+        ? `Online — ${entries.length} item${entries.length !== 1 ? "s" : ""} at root`
+        : `Online — read-only (${entries.length} item${entries.length !== 1 ? "s" : ""} at root)`,
     };
   } catch (err) {
-    return { online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: `Library unreachable: ${err instanceof Error ? err.message : "unknown error"}` };
+    return {
+      online: false, path: resolved, exists: false, isDirectory: false,
+      readable: false, enumerable: false, writable: false,
+      message: `Library unreachable: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
   }
 }
 
@@ -183,21 +238,35 @@ const NAS_CHECK_WORKER = `
   const p = workerData.resolved;
   try {
     if (!fs.existsSync(p)) {
-      parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library not found: ' + p });
+      parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, enumerable: false, writable: false, message: 'Library not found: ' + p });
       return;
     }
     const stat = fs.statSync(p);
     if (!stat.isDirectory()) {
-      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: false, readable: false, message: 'Library location is not a directory' });
+      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: false, readable: false, enumerable: false, writable: false, message: 'Library location is not a directory' });
       return;
     }
     try { fs.accessSync(p, 4); } catch {
-      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: true, readable: false, message: 'Library exists but is not readable (permission denied)' });
+      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: true, readable: false, enumerable: false, writable: false, message: 'Library exists but is not readable (permission denied)' });
       return;
     }
-    parentPort.postMessage({ online: true, path: p, exists: true, isDirectory: true, readable: true, message: 'Online \u2014 path is accessible' });
+    try {
+      const dir = fs.opendirSync(p);
+      dir.readSync();
+      dir.closeSync();
+    } catch {
+      parentPort.postMessage({ online: false, path: p, exists: true, isDirectory: true, readable: true, enumerable: false, writable: false, message: 'Library exists but its contents cannot be listed (permission denied)' });
+      return;
+    }
+    let writable = true;
+    try { fs.accessSync(p, 2); } catch { writable = false; }
+    parentPort.postMessage({
+      online: true, path: p, exists: true, isDirectory: true, readable: true,
+      enumerable: true, writable,
+      message: writable ? 'Online \u2014 path is accessible' : 'Online \u2014 read-only',
+    });
   } catch (err) {
-    parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, message: 'Library unreachable: ' + (err instanceof Error ? err.message : String(err)) });
+    parentPort.postMessage({ online: false, path: p, exists: false, isDirectory: false, readable: false, enumerable: false, writable: false, message: 'Library unreachable: ' + (err instanceof Error ? err.message : String(err)) });
   }
 })();
 `;
@@ -213,21 +282,39 @@ export function checkNasReachableAsync(
   timeoutMs = 8000,
 ): Promise<NasReachability> {
   if (!nasPath || typeof nasPath !== "string" || nasPath.trim() === "") {
-    return Promise.resolve({ online: false, path: nasPath ?? "", exists: false, isDirectory: false, readable: false, message: "No library location configured" });
+    return Promise.resolve({
+      online: false, path: nasPath ?? "", exists: false, isDirectory: false,
+      readable: false, enumerable: false, writable: false, message: "No library location configured",
+    });
   }
   if (nasPath.includes("\0") || nasPath.length > 4096) {
-    return Promise.resolve({ online: false, path: nasPath, exists: false, isDirectory: false, readable: false, message: "Invalid library location" });
+    return Promise.resolve({
+      online: false, path: nasPath, exists: false, isDirectory: false,
+      readable: false, enumerable: false, writable: false, message: "Invalid library location",
+    });
   }
   const trimmed = nasPath.trim();
   if (process.platform !== "win32") {
     if (/^[A-Za-z]:/.test(trimmed)) {
-      return Promise.resolve({ online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows drive letters (e.g. Z:) are not reachable from this server" });
+      return Promise.resolve({
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Windows drive letters (e.g. Z:) are not reachable from this server",
+      });
     }
     if (trimmed.startsWith("\\\\")) {
-      return Promise.resolve({ online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Windows network shares (\\\\server\\share) are not reachable from this server" });
+      return Promise.resolve({
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Windows network shares (\\\\server\\share) are not reachable from this server",
+      });
     }
     if (!trimmed.startsWith("/")) {
-      return Promise.resolve({ online: false, path: trimmed, exists: false, isDirectory: false, readable: false, message: "Library location must be an absolute path" });
+      return Promise.resolve({
+        online: false, path: trimmed, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Library location must be an absolute path",
+      });
     }
   }
   const resolved = path.resolve(trimmed);
@@ -235,7 +322,11 @@ export function checkNasReachableAsync(
     const worker = new Worker(NAS_CHECK_WORKER, { eval: true, workerData: { resolved } });
     const timer = setTimeout(() => {
       worker.terminate();
-      resolve({ online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: "Drive is not responding — check that the drive is connected and accessible." });
+      resolve({
+        online: false, path: resolved, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Drive is not responding — check that the drive is connected and accessible.",
+      });
     }, timeoutMs);
     worker.on("message", (result: NasReachability) => {
       clearTimeout(timer);
@@ -245,7 +336,11 @@ export function checkNasReachableAsync(
     worker.on("error", (err) => {
       clearTimeout(timer);
       worker.terminate();
-      resolve({ online: false, path: resolved, exists: false, isDirectory: false, readable: false, message: "Check failed: " + (err instanceof Error ? err.message : String(err)) });
+      resolve({
+        online: false, path: resolved, exists: false, isDirectory: false,
+        readable: false, enumerable: false, writable: false,
+        message: "Check failed: " + (err instanceof Error ? err.message : String(err)),
+      });
     });
   });
 }
@@ -265,6 +360,13 @@ export function getNasDirStatus(nasPath: string): NasDirStatusResult {
 }
 
 export function bootstrapWillardAIDir(nasPath: string): NasDirStatusResult {
+  const reach = checkNasReachable(nasPath);
+  if (!reach.online) {
+    throw new Error(`Library is not reachable: ${reach.message}`);
+  }
+  if (!reach.writable) {
+    throw new Error("Library is read-only; WillardAI directories cannot be created or repaired");
+  }
   const willardAiPath = getWillardAIDir(nasPath);
   // Root dir creation is critical — let errors propagate so callers can surface them
   fs.mkdirSync(willardAiPath, { recursive: true });

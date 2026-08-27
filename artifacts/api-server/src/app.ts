@@ -296,11 +296,18 @@ db.select().from(appSettingsTable).limit(1).then(async (rows) => {
     // Uses async check so Windows network-drive probing never blocks startup.
     const reach = await checkNasReachableAsync(nasPath);
     if (reach.online) {
+      let bootstrapped = false;
       try {
         bootstrapWillardAIDir(nasPath);
-      } catch { /* NAS may not be mounted yet — non-fatal */ }
+        bootstrapped = true;
+      } catch (err) {
+        logger.warn({ err, nasPath, reason: reach.message },
+          "NAS is readable but WillardAI storage could not be initialized");
+      }
       nasLogStream.setNasPath(nasPath).catch(() => {});
-      logger.info({ nasPath }, "NAS storage initialized from persisted settings");
+      if (bootstrapped) {
+        logger.info({ nasPath }, "NAS storage initialized from persisted settings");
+      }
       // Emit startup health after a brief delay so DB queries complete cleanly
       setTimeout(() => emitStartupHealth(nasPath).catch(() => {}), 2_000);
       // Background reconciliation: verifies thumbnailPath rows against disk,

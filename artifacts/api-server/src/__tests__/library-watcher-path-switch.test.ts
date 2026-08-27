@@ -102,6 +102,12 @@ test("switching library path cancels queued old-path scans and watches only the 
   assert.equal(snapshot.watchedPath, newPath);
   assert.equal(snapshot.nextSweepAt, null, "events mode must not expose a sweep countdown");
 
+  // A close()d watcher may still deliver a queued callback. It must not be
+  // allowed to schedule work against the old library after the switch.
+  emitWatcherEvent(watchers[0]);
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  assert.deepEqual(startedScans, [], "queued events from the old path must be ignored");
+
   // Confirm the replacement watcher is live and uses the new path.
   assert.equal(watchers.length, 2);
   emitWatcherEvent(watchers[1]);

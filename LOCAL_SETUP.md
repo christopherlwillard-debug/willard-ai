@@ -204,6 +204,49 @@ You can change the library location any time in **Settings → Libraries**.
 
 ---
 
+## Validate NAS access from the launcher account
+
+Willard checks the library with the same Windows identity that runs the API.
+Mapped drives are per-user, so a drive visible in an administrator window or
+your desktop may still be invisible to a scheduled task or another service
+account. Prefer a UNC path when the launcher account is not the interactive
+desktop account.
+
+Run the topology probe from the extracted Willard folder, using the same
+account that starts Willard:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\check-nas-topology.ps1 `
+  -Path "Z:\Media" -ProbeWrite
+```
+
+The probe reports the Windows identity, read access, directory enumeration,
+and an optional create/delete write check. The write check creates and removes
+one temporary file in the selected root. A UNC path can be checked the same
+way:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\check-nas-topology.ps1 `
+  -Path "\\nas\share\Media" -ProbeWrite
+```
+
+For reconnect validation, keep the probe running while disconnecting and
+reconnecting the share:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\check-nas-topology.ps1 `
+  -Path "\\nas\share\Media" -ProbeWrite -Watch
+```
+
+Use the same matrix for a mapped drive and a UNC path: readable, listable,
+writable, disconnected, reconnected, and briefly unavailable during a scan.
+While the share is offline, Willard must report **Library Offline**, stop
+watching, and pause or cancel unsafe work; after reconnecting, it must announce
+the recovery and run a catch-up scan against the current path. Do not treat a
+desktop-only mapped drive result as proof that the launcher account can see it.
+
+---
+
 ## Troubleshooting
 
 - **Something's broken and you're not sure what** — run
