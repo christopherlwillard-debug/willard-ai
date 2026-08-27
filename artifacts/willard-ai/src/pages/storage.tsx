@@ -3,6 +3,7 @@ import {
   useGetTopFolders, getGetTopFoldersQueryKey,
   useGetTopFiles, getGetTopFilesQueryKey,
   useGetStoragePolicyDiagnostics, getGetStoragePolicyDiagnosticsQueryKey,
+  useGetCapacityDiagnostics, getGetCapacityDiagnosticsQueryKey,
 } from "@workspace/api-client-react";
 import { formatBytes } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +28,13 @@ export default function Storage() {
   const { data: policy, isLoading: policyLoading } = useGetStoragePolicyDiagnostics({
     query: {
       queryKey: getGetStoragePolicyDiagnosticsQueryKey(),
+      refetchInterval: 30_000,
+    },
+  });
+
+  const { data: capacity } = useGetCapacityDiagnostics({
+    query: {
+      queryKey: getGetCapacityDiagnosticsQueryKey(),
       refetchInterval: 30_000,
     },
   });
@@ -104,6 +112,53 @@ export default function Storage() {
           {policy && policy.state !== "READY" && (
             <div className="flex items-center gap-2 text-sm"><AlertTriangle className="h-4 w-4 shrink-0" /> NAS-required jobs are refused or paused until the library is safely available.</div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" /> Capacity admission</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Media-producing work reserves headroom before it starts. The laptop keeps a 4 GiB control-plane floor; NAS work never falls back to local storage.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md border border-border/60 bg-background/30 p-3">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Laptop free</p>
+              <p className="mt-1 text-xl font-semibold">
+                {capacity?.local.known && capacity.local.freeBytes !== null ? formatBytes(capacity.local.freeBytes) : "Unknown"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Floor {capacity ? formatBytes(capacity.floors.localBytes) : "4 GiB"}</p>
+            </div>
+            <div className="rounded-md border border-border/60 bg-background/30 p-3">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">NAS free</p>
+              <p className="mt-1 text-xl font-semibold">
+                {capacity?.nas?.known && capacity.nas.freeBytes !== null ? formatBytes(capacity.nas.freeBytes) : "Unknown"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Safety margin {capacity ? formatBytes(capacity.floors.nasBytes) : "4 GiB"}</p>
+            </div>
+            <div className="rounded-md border border-border/60 bg-background/30 p-3">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Reserved now</p>
+              <p className="mt-1 text-xl font-semibold">
+                {capacity ? formatBytes(capacity.reservations.reduce((sum, reservation) => sum + reservation.nasBytes, 0)) : "—"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{capacity?.reservations.length ?? 0} active operation(s)</p>
+            </div>
+          </div>
+          {capacity?.reservations.length ? (
+            <div className="rounded-md border border-border/60 p-3 text-xs">
+              <p className="mb-2 font-medium">Active reservations</p>
+              <ul className="space-y-1 text-muted-foreground">
+                {capacity.reservations.map((reservation, index) => (
+                  <li key={`${reservation.operation}-${index}`} className="flex justify-between gap-3">
+                    <span className="truncate">{reservation.operation}</span>
+                    <span className="whitespace-nowrap">{formatBytes(reservation.nasBytes)} reserved</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

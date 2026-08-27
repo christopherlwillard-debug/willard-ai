@@ -30,6 +30,12 @@ import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
 import { purgeDerivedDataForMedia } from "../derived-cleanup.ts";
 import { getStoragePolicyState } from "../storage-policy.ts";
+import {
+  evaluateCapacity,
+  reserveCapacity,
+  releaseCapacity,
+  type CapacityReservation,
+} from "../capacity-service.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
@@ -767,11 +773,17 @@ export function cancelJobsForLibrary(nasPath: string): number {
   return cancelled;
 }
 
-function startJobRun(jobId: number, run: Promise<void>): void {
+function startJobRun(jobId: number, run: Promise<void>, reservation?: CapacityReservation): void {
   activeJobRuns.set(jobId, run);
   void run.then(
-    () => { if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId); },
-    () => { if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId); },
+    () => {
+      if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId);
+      if (reservation) releaseCapacity(reservation.id);
+    },
+    () => {
+      if (activeJobRuns.get(jobId) === run) activeJobRuns.delete(jobId);
+      if (reservation) releaseCapacity(reservation.id);
+    },
   );
 }
 
@@ -852,7 +864,7 @@ export interface StartJobOptions {
 export async function startJob(opts: StartJobOptions): Promise<{
   jobId: number;
   alreadyRunning: boolean;
-  errorCode?: "NAS_OFFLINE" | "NAS_READ_ONLY";
+  errorCode?: "NAS_OFFLINE" | "NAS_READ_ONLY" | "CAPACITY_UNSAFE";
   errorMessage?: string;
 }> {
   if (isShuttingDown()) {
@@ -899,6 +911,51 @@ export async function startJob(opts: StartJobOptions): Promise<{
     };
   }
 
+  const capacity = await evaluateCapacity({
+    nasPath: opts.nasPath,
+    operation: `${opts.jobType} job`,
+    nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+  });
+  if (!capacity.allowed) {
+    const [failedJob] = await db.insert(libraryJobsTable).values({
+      jobType: opts.jobType,
+      profile: opts.profile,
+      priority: opts.profile === "QUICK" ? "HIGH" : opts.profile === "FULL" ? "NORMAL" : "LOW",
+      status: "FAILED",
+      cancellationReason: "ERROR",
+      nasPath: opts.nasPath,
+      rootPath: opts.rootPath ?? null,
+      error: capacity.message,
+      diagnostics: {
+        storagePolicy: {
+          state: "PAUSED",
+          message: capacity.message,
+          requiresNas: true,
+        },
+        capacity,
+      },
+      finishedAt: new Date(),
+    }).returning({ id: libraryJobsTable.id });
+    return {
+      jobId: failedJob.id,
+      alreadyRunning: false,
+      errorCode: "CAPACITY_UNSAFE",
+      errorMessage: capacity.message,
+    };
+  }
+
+  let reservation: CapacityReservation;
+  try {
+    reservation = await reserveCapacity({
+      nasPath: opts.nasPath,
+      operation: `${opts.jobType} job`,
+      nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+    });
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error("Unable to reserve capacity for the library job");
+  }
+
   const priority: JobPriority = opts.profile === "QUICK" ? "HIGH"
     : opts.profile === "FULL" ? "NORMAL" : "LOW";
 
@@ -907,6 +964,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
   // and also prevented independent libraries from running concurrently.
   const existingId = getActiveJobId(opts.nasPath);
   if (existingId !== null) {
+    releaseCapacity(reservation.id);
     const existing = activeJobs.get(existingId)!;
     // Preempt if new job has higher priority
     if (PRIORITY_RANK[priority] > PRIORITY_RANK[existing.priority]) {
@@ -921,6 +979,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
     // authority whenever no local worker is present.
     const durableExisting = await findDurableActiveJob(opts.nasPath);
     if (durableExisting) {
+      releaseCapacity(reservation.id);
       return { jobId: durableExisting.id, alreadyRunning: true };
     }
   }
@@ -949,14 +1008,23 @@ export async function startJob(opts: StartJobOptions): Promise<{
       }).returning();
       job = inserted;
     } catch (error) {
-      if (!isActiveJobClaimConflict(error)) throw error;
+      if (!isActiveJobClaimConflict(error)) {
+        releaseCapacity(reservation.id);
+        throw error;
+      }
       const winner = await findDurableActiveJob(opts.nasPath);
-      if (winner) return { jobId: winner.id, alreadyRunning: true };
+      if (winner) {
+        releaseCapacity(reservation.id);
+        return { jobId: winner.id, alreadyRunning: true };
+      }
       // The winner may have completed between the conflicting insert and the
       // lookup.  Retry once so a legitimate new request is not lost.
     }
   }
-  if (!job) throw new Error("Unable to claim library job");
+  if (!job) {
+    releaseCapacity(reservation.id);
+    throw new Error("Unable to claim library job");
+  }
 
   // A new job supersedes the previous completion summary only after its
   // durable claim has succeeded.
@@ -986,11 +1054,11 @@ export async function startJob(opts: StartJobOptions): Promise<{
 
   // Run async without blocking the response
   if (opts.jobType === "THUMBNAILS") {
-    startJobRun(job.id, runThumbnailJob(state));
+    startJobRun(job.id, runThumbnailJob(state), reservation);
   } else if (opts.jobType === "METADATA") {
-    startJobRun(job.id, runMetadataRefreshJob(state));
+    startJobRun(job.id, runMetadataRefreshJob(state), reservation);
   } else {
-    startJobRun(job.id, runScanJob(state, opts.rootPath));
+    startJobRun(job.id, runScanJob(state, opts.rootPath), reservation);
   }
 
   return { jobId: job.id, alreadyRunning: false };
@@ -1006,6 +1074,19 @@ export async function resumeJob(jobId: number): Promise<boolean> {
 
   const priority = (job.priority as JobPriority) ?? "NORMAL";
   const profile  = (job.profile  as JobProfile)  ?? "QUICK";
+  const resumeReach = await checkNasReachableAsync(job.nasPath);
+  if (!resumeReach.online || !resumeReach.writable) return false;
+  const capacity = await evaluateCapacity({
+    nasPath: job.nasPath,
+    operation: `${job.jobType} resume`,
+    nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+  });
+  if (!capacity.allowed) return false;
+  const reservation = await reserveCapacity({
+    nasPath: job.nasPath,
+    operation: `${job.jobType} resume`,
+    nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+  });
 
   // Claim the library atomically.  Two resume requests must not both turn the
   // same checkpoint into workers, and a resume must not race a fresh start.
@@ -1018,10 +1099,17 @@ export async function resumeJob(jobId: number): Promise<boolean> {
         inArray(libraryJobsTable.status, ["PAUSED", "INTERRUPTED_BY_RESTART"]),
       )).returning();
   } catch (error) {
-    if (isActiveJobClaimConflict(error)) return false;
+    if (isActiveJobClaimConflict(error)) {
+      releaseCapacity(reservation.id);
+      return false;
+    }
+    releaseCapacity(reservation.id);
     throw error;
   }
-  if (!claimed) return false;
+  if (!claimed) {
+    releaseCapacity(reservation.id);
+    return false;
+  }
 
   // Re-create in-memory state and restart
 
@@ -1056,11 +1144,11 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   activeJobs.set(job.id, state);
 
   if (job.jobType === "THUMBNAILS") {
-    startJobRun(job.id, runThumbnailJob(state));
+    startJobRun(job.id, runThumbnailJob(state), reservation);
   } else if (job.jobType === "METADATA") {
-    startJobRun(job.id, runMetadataRefreshJob(state));
+    startJobRun(job.id, runMetadataRefreshJob(state), reservation);
   } else {
-    startJobRun(job.id, runScanJob(state, job.rootPath ?? undefined, cursorIndex, scanStartedAt));
+    startJobRun(job.id, runScanJob(state, job.rootPath ?? undefined, cursorIndex, scanStartedAt), reservation);
   }
   return true;
 }

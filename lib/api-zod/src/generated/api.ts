@@ -148,6 +148,41 @@ export const GetStoragePolicyDiagnosticsResponse = zod.object({
 
 
 /**
+ * @summary Get local and NAS capacity admission state
+ */
+export const GetCapacityDiagnosticsResponse = zod.object({
+  "local": zod.object({
+  "target": zod.enum(['local', 'nas']),
+  "totalBytes": zod.number().nullable(),
+  "freeBytes": zod.number().nullable(),
+  "known": zod.boolean(),
+  "checkedAt": zod.string(),
+  "error": zod.string().optional()
+}),
+  "nas": zod.union([zod.object({
+  "target": zod.enum(['local', 'nas']),
+  "totalBytes": zod.number().nullable(),
+  "freeBytes": zod.number().nullable(),
+  "known": zod.boolean(),
+  "checkedAt": zod.string(),
+  "error": zod.string().optional()
+}),zod.null()]),
+  "floors": zod.object({
+  "localBytes": zod.number(),
+  "nasBytes": zod.number()
+}),
+  "reservations": zod.array(zod.object({
+  "id": zod.string(),
+  "operation": zod.string(),
+  "createdAt": zod.string(),
+  "expiresAt": zod.string(),
+  "localBytes": zod.number(),
+  "nasBytes": zod.number()
+}))
+})
+
+
+/**
  * @summary Get authentication status and setup state
  */
 export const GetAuthStatusResponse = zod.object({

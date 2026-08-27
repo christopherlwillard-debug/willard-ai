@@ -319,6 +319,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/StoragePolicyStatus"
 
+  /diagnostics/capacity:
+    get:
+      operationId: getCapacityDiagnostics
+      tags: [diagnostics]
+      summary: Get local and NAS capacity admission state
+      responses:
+        "200":
+          description: Capacity floors, measurements, and active reservations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapacityDiagnostics"
+
   # ── Auth ──────────────────────────────────────────────────────────────────
   /auth/status:
     get:
@@ -2474,6 +2487,64 @@ components:
           items:
             $ref: "#/components/schemas/StorageUsage"
       required: [policyVersion, state, stateMessage, nasConfigured, libraryReachable, libraryWritable, capacity, currentBytes, projectedBytes, usage]
+
+    CapacityDiagnostics:
+      type: object
+      properties:
+        local:
+          $ref: "#/components/schemas/CapacitySnapshot"
+        nas:
+          anyOf:
+            - $ref: "#/components/schemas/CapacitySnapshot"
+            - type: "null"
+        floors:
+          type: object
+          properties:
+            localBytes:
+              type: integer
+            nasBytes:
+              type: integer
+          required: [localBytes, nasBytes]
+        reservations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapacityReservation"
+      required: [local, nas, floors, reservations]
+
+    CapacitySnapshot:
+      type: object
+      properties:
+        target:
+          type: string
+          enum: [local, nas]
+        totalBytes:
+          type: ["integer", "null"]
+        freeBytes:
+          type: ["integer", "null"]
+        known:
+          type: boolean
+        checkedAt:
+          type: string
+        error:
+          type: string
+      required: [target, totalBytes, freeBytes, known, checkedAt]
+
+    CapacityReservation:
+      type: object
+      properties:
+        id:
+          type: string
+        operation:
+          type: string
+        createdAt:
+          type: string
+        expiresAt:
+          type: string
+        localBytes:
+          type: integer
+        nasBytes:
+          type: integer
+      required: [id, operation, createdAt, expiresAt, localBytes, nasBytes]
 
     StorageUsage:
       type: object

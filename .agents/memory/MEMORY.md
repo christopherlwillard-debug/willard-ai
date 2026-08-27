@@ -48,3 +48,4 @@
 - [Derived-data cleanup boundary](derived-data-cleanup-boundary.md) — purge rebuildable AI/face rows transactionally before permanent catalog deletion, with NAS-scoped crop-path validation
 - [Least-privilege DB bootstrap](least-privilege-db-bootstrap.md) — probe the target first; use /postgres only on 3D000 so existing restricted roles need no maintenance access
 - [NAS derivative bounds](nas-derivative-bounds.md) — keep derivative generation lazy or explicitly bounded, publish atomically on NAS, and exclude partial files from cache accounting
+- [Capacity admission](capacity-admission.md) — every media writer needs known headroom, a local floor, NAS margin, and a re-probed reservation; never fall back locally

@@ -7,6 +7,7 @@ import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./na
 import { logger } from "./logger.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
 import { isThumbnailFileValid } from "./thumbnail-engine.ts";
+import { reserveCapacity, releaseCapacity, CapacityAdmissionError } from "./capacity-service.ts";
 
 /**
  * Face Recognition Engine — privacy-first, fully local.
@@ -594,7 +595,20 @@ export async function runFaceTick(): Promise<void> {
     const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
-    await withFaceLibraryLock(nasPath, async () => {
+    let reservation;
+    try {
+      reservation = await reserveCapacity({
+        nasPath: reach.path,
+        operation: "Face processing batch",
+        nasBytes: 64 * 1024 ** 2,
+      });
+    } catch (error) {
+      const message = error instanceof CapacityAdmissionError ? error.message : "Face processing capacity admission failed";
+      logger.warn({ operation: "face_capacity", message }, "Face processing paused");
+      return;
+    }
+    try {
+      await withFaceLibraryLock(nasPath, async () => {
       const { rows } = await pool.query(
         `SELECT f.id, f.thumbnail_path, count(*) OVER () AS total
            FROM media_files f
@@ -622,7 +636,10 @@ export async function runFaceTick(): Promise<void> {
         await scanFile(reach.path, { id: r.id, thumbnailPath: r.thumbnail_path });
       }
       status.pending = Math.max(0, status.pending - rows.length);
-    });
+      });
+    } finally {
+      releaseCapacity(reservation.id);
+    }
   } finally {
     ticking = false;
     status.running = false;

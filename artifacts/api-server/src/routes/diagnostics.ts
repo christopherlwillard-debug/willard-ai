@@ -5,6 +5,7 @@ import { eq, desc, and } from "drizzle-orm";
 import { redactOperationalData } from "../lib/log-redaction.ts";
 import { getStoragePolicyStatus } from "../lib/storage-policy.ts";
 import { checkNasReachableAsync } from "../lib/nas-storage.ts";
+import { getCapacityStatus } from "../lib/capacity-service.ts";
 
 const router = Router();
 
@@ -60,6 +61,22 @@ router.get("/diagnostics/storage-policy", async (_req: Request, res: Response) =
     res.json(policy);
   } catch {
     res.status(500).json({ error: "Storage policy diagnostics unavailable" });
+  }
+});
+
+router.get("/diagnostics/capacity", async (_req: Request, res: Response) => {
+  try {
+    const nasPath = await getNasPath();
+    const status = await getCapacityStatus(nasPath);
+    // The diagnostics payload intentionally reports measurements and reasons,
+    // but not the configured library path.
+    res.json({
+      ...status,
+      local: { ...status.local, path: undefined },
+      nas: status.nas ? { ...status.nas, path: undefined } : null,
+    });
+  } catch {
+    res.status(500).json({ error: "Capacity diagnostics unavailable" });
   }
 });
 

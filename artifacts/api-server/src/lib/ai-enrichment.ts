@@ -8,6 +8,7 @@ import { redactText } from "./log-redaction.ts";
 import { extractDocumentText as extractOfficeDocumentText } from "./document-text.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
 import { isThumbnailFileValid } from "./thumbnail-engine.ts";
+import { reserveCapacity, releaseCapacity, CapacityAdmissionError } from "./capacity-service.ts";
 import {
   getAiPrivacySettings,
   isMediaExcluded,
@@ -444,15 +445,31 @@ export async function runEnrichmentTick(): Promise<void> {
     const reach = await checkNasReachableAsync(nasPath);
     if (!reach.online) return;
 
-    const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK, privacy);
-    status.pending = total;
-    status.lastRunAt = new Date().toISOString();
-    for (const file of rows) {
-      const currentPrivacy = await getAiPrivacySettings();
-      if (!currentPrivacy.aiEnrichmentEnabled) break;
-      await enrichOne(file, currentPrivacy);
+    let reservation;
+    try {
+      reservation = await reserveCapacity({
+        nasPath: reach.path,
+        operation: "AI enrichment batch",
+        nasBytes: 32 * 1024 ** 2,
+      });
+    } catch (error) {
+      const message = error instanceof CapacityAdmissionError ? error.message : "AI enrichment capacity admission failed";
+      logger.warn({ operation: "ai_enrichment_capacity", message }, "AI enrichment paused");
+      return;
     }
-    if (rows.length) status.pending = Math.max(0, total - rows.length);
+    try {
+      const { rows, total } = await fetchPending(reach.path, BATCH_PER_TICK, privacy);
+      status.pending = total;
+      status.lastRunAt = new Date().toISOString();
+      for (const file of rows) {
+        const currentPrivacy = await getAiPrivacySettings();
+        if (!currentPrivacy.aiEnrichmentEnabled) break;
+        await enrichOne(file, currentPrivacy);
+      }
+      if (rows.length) status.pending = Math.max(0, total - rows.length);
+    } finally {
+      releaseCapacity(reservation.id);
+    }
   } finally {
     ticking = false;
     status.running = false;

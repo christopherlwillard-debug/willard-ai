@@ -452,6 +452,46 @@ export interface LibraryHealthStatus {
   storagePolicy: StoragePolicyStatus;
 }
 
+export type CapacityDiagnosticsFloors = {
+  localBytes: number;
+  nasBytes: number;
+};
+
+export type CapacitySnapshotTarget = typeof CapacitySnapshotTarget[keyof typeof CapacitySnapshotTarget];
+
+
+export const CapacitySnapshotTarget = {
+  local: 'local',
+  nas: 'nas',
+} as const;
+
+export interface CapacitySnapshot {
+  target: CapacitySnapshotTarget;
+  /** @nullable */
+  totalBytes: number | null;
+  /** @nullable */
+  freeBytes: number | null;
+  known: boolean;
+  checkedAt: string;
+  error?: string;
+}
+
+export interface CapacityReservation {
+  id: string;
+  operation: string;
+  createdAt: string;
+  expiresAt: string;
+  localBytes: number;
+  nasBytes: number;
+}
+
+export interface CapacityDiagnostics {
+  local: CapacitySnapshot;
+  nas: CapacitySnapshot | null;
+  floors: CapacityDiagnosticsFloors;
+  reservations: CapacityReservation[];
+}
+
 export interface TypeBreakdown {
   fileType: string;
   count: number;

@@ -13,6 +13,13 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
+import {
+  evaluateCapacity,
+  reserveCapacity,
+  releaseCapacity,
+  CapacityAdmissionError,
+  type CapacityReservation,
+} from "../lib/capacity-service.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -1203,6 +1210,20 @@ router.post("/optimize/run", async (req, res) => {
     try { assertWithinRoot(path.resolve(resolvedBackupDir), path.resolve(nasPath)); }
     catch { res.status(400).json({ error: "Backup directory must be within the NAS root" }); return; }
 
+    const capacity = await evaluateCapacity({
+      nasPath,
+      operation: "Conversion setup",
+    });
+    if (!capacity.allowed) {
+      res.status(507).json({
+        code: "CAPACITY_UNSAFE",
+        error: "Insufficient safe storage capacity",
+        message: capacity.message,
+        capacity,
+      });
+      return;
+    }
+
     const [job] = await db.insert(conversionJobsTable).values({
       status: "pending",
       approvedExts: approvedExts.map(ext => ext.toLowerCase()),
@@ -1330,6 +1351,19 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     if (!resultData) { res.status(500).json({ error: "Job result data is missing" }); return; }
 
     const nasPath = job.nasPath;
+    const capacity = await evaluateCapacity({
+      nasPath,
+      operation: `Finalize conversion #${id}`,
+    });
+    if (!capacity.allowed) {
+      res.status(507).json({
+        code: "CAPACITY_UNSAFE",
+        error: "Insufficient safe storage capacity",
+        message: capacity.message,
+        capacity,
+      });
+      return;
+    }
     const ts      = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
     const trashBase   = path.join(getWillardAIDir(nasPath), ".Trash", ts);
     const archiveBase = path.join(getWillardAIDir(nasPath), "archive");
@@ -1490,6 +1524,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
+  let capacityReservation: CapacityReservation | null = null;
   try {
     const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
@@ -1534,6 +1569,24 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         completedAt: new Date(), resultJson: { files: [] },
       }).where(eq(conversionJobsTable.id, id));
       send("summary", { totalFiles: 0, succeeded: 0, failed: 0, skipped: 0, results: [] });
+      res.end();
+      return;
+    }
+
+    const estimatedStagingBytes = filesToConvert.reduce((sum, file) => {
+      try { return sum + fs.statSync(file.fullPath).size; } catch { return sum; }
+    }, 0);
+    try {
+      capacityReservation = await reserveCapacity({
+        nasPath,
+        operation: `Conversion job #${id}`,
+        nasBytes: estimatedStagingBytes,
+      });
+    } catch (error) {
+      const admission = error instanceof CapacityAdmissionError ? error.admission : null;
+      const message = error instanceof Error ? error.message : "Conversion capacity admission failed";
+      await db.update(conversionJobsTable).set({ status: "failed", error: message }).where(eq(conversionJobsTable.id, id));
+      send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
       res.end();
       return;
     }
@@ -1761,6 +1814,8 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     } catch { /* best effort */ }
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
+  } finally {
+    if (capacityReservation) releaseCapacity(capacityReservation.id);
   }
 });
 

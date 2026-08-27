@@ -132,6 +132,10 @@ router.post("/scan", async (req: Request, res: Response) => {
       res.status(503).json(toLegacyJob(job));
       return;
     }
+    if (result.errorCode === "CAPACITY_UNSAFE") {
+      res.status(507).json(toLegacyJob(job));
+      return;
+    }
 
     const progress = result.alreadyRunning ? getJobProgress(result.jobId) : null;
     res.status(202).json(toLegacyJob(job, progress));

@@ -31,6 +31,13 @@ import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../l
 import { logger } from "../lib/logger.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
+import {
+  reserveCapacity,
+  releaseCapacity,
+  evaluateCapacity,
+  CapacityAdmissionError,
+  type CapacityReservation,
+} from "../lib/capacity-service.ts";
 
 const router: IRouter = Router();
 
@@ -859,9 +866,24 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       }
       if (entries.length === 0) {
         const peekScratch = getTempDir(nasPath, `org-peek-${id}`);
+        let peekReservation: CapacityReservation | null = null;
         try {
+          const archiveBytes = fs.statSync(archivePath).size;
+          peekReservation = await reserveCapacity({
+            nasPath,
+            operation: `Archive inspection #${id}`,
+            nasBytes: archiveBytes,
+          });
           entries = await peekArchiveEntries(archivePath, path.basename(archivePath), peekScratch);
+        } catch (error) {
+          if (error instanceof CapacityAdmissionError) {
+            await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(eq(organizationJobsTable.id, id));
+            res.status(507).json({ code: "CAPACITY_UNSAFE", error: "Insufficient safe storage capacity", message: error.message });
+            return;
+          }
+          throw error;
         } finally {
+          if (peekReservation) releaseCapacity(peekReservation.id);
           cleanTempDir(peekScratch);
         }
       }
@@ -1085,6 +1107,11 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
 
     // 4. Disk space — checked per unique filesystem
     const totalBytes = plan.totalSizeBytes ?? 0;
+    const capacity = await evaluateCapacity({
+      nasPath,
+      operation: `Organization pre-flight #${id}`,
+      nasBytes: totalBytes,
+    });
     const seenFs = new Set<string>();
     for (const dest of uniqueDests) {
       const checkDir = fs.existsSync(dest) ? dest : path.dirname(dest);
@@ -1163,13 +1190,20 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
 
     // allOk: all critical checks pass; warnings (collisions with policy) are non-blocking
     const allOk = checks.every(c => c.ok || c.warning === true);
+    checks.push({
+      name: "Capacity admission",
+      ok: capacity.allowed,
+      detail: capacity.message,
+      capacity,
+    });
+    const capacityAllOk = allOk && capacity.allowed;
     const preflightJson = {
-      ok: allOk, checks, diskSpaceRequiredBytes: totalBytes,
+      ok: capacityAllOk, checks, diskSpaceRequiredBytes: totalBytes, capacity,
       collisionCount, diskCollisionCount, intraJobCollisionCount,
       conflictPolicy, conflictList,
     };
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: allOk ? "verified" : "planned", preflightJson })
+      .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message })
       .where(eq(organizationJobsTable.id, id))
       .returning();
     res.json(updated);
@@ -1362,6 +1396,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   let logPath = "";
   const correlationId = req.id;
   const operationLogger = logger.child({ correlationId, operation: "organize", jobId: id });
+  let capacityReservation: CapacityReservation | null = null;
   let logWriteFailureReported = false;
   const opLog = (line: string) => {
     try {
@@ -1400,6 +1435,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       !excludedCategories.has(r.fileType) && !excludedPaths.has(r.relativePath)
     );
     const expectedTotal = activeRoutes.length;
+    const requiredNasBytes = activeRoutes.reduce((sum, route) => sum + Math.max(0, Number(route.sizeBytes) || 0), 0);
+    try {
+      capacityReservation = await reserveCapacity({
+        nasPath,
+        operation: `Organization job #${id}`,
+        nasBytes: requiredNasBytes,
+      });
+    } catch (error) {
+      const admission = error instanceof CapacityAdmissionError ? error.admission : null;
+      const message = error instanceof Error ? error.message : "Organization capacity admission failed";
+      await db.update(organizationJobsTable).set({ error: message }).where(eq(organizationJobsTable.id, id));
+      send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
+      return;
+    }
 
     // Archive name (stem without extensions) used for "other" destination scoping
     const archiveName = job.sourceType === "archive"
@@ -1759,6 +1808,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     send("error", { message: errMsg, rolledBack });
   } finally {
+    if (capacityReservation) releaseCapacity(capacityReservation.id);
     for (const td of tempDirs) cleanTempDir(td);
     res.end();
   }
@@ -1959,6 +2009,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   const newMoves: FileMoveRecord[] = [];
   // Declared outside try so catch can restore DB fileMoves to pre-resume baseline on failure
   let existingMoves: FileMoveRecord[] = [];
+  let capacityReservation: CapacityReservation | null = null;
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
@@ -1975,6 +2026,26 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     }
     try { resolveWithinRoot(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
+
+    const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
+    const excludedPaths = new Set<string>(plan.excludePaths ?? []);
+    const activeRoutes: any[] = (plan.routes ?? []).filter((r: any) =>
+      !excludedCategories.has(r.fileType) && !excludedPaths.has(r.relativePath)
+    );
+    const requiredNasBytes = activeRoutes.reduce((sum, route) => sum + Math.max(0, Number(route.sizeBytes) || 0), 0);
+    try {
+      capacityReservation = await reserveCapacity({
+        nasPath,
+        operation: `Resume organization job #${id}`,
+        nasBytes: requiredNasBytes,
+      });
+    } catch (error) {
+      const admission = error instanceof CapacityAdmissionError ? error.admission : null;
+      const message = error instanceof Error ? error.message : "Organization resume capacity admission failed";
+      await db.update(organizationJobsTable).set({ error: message }).where(eq(organizationJobsTable.id, id));
+      send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
+      return;
+    }
 
     // Mark as executing so a re-interruption is still detectable as a crashed job
     await db.update(organizationJobsTable)
@@ -2003,9 +2074,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
     await setStage("staging");
     send("status", { stage: "staging", message: `Resuming — ${existingMoves.length} file(s) already at destination, re-staging source…`, progress: 2 });
-
-    const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
-    const excludedPaths      = new Set<string>(plan.excludePaths ?? []);
 
     const planDestMap = new Map<string, string>();
     for (const r of (plan.routes ?? [])) {
@@ -2041,9 +2109,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       sourceFiles = walkDir(stagingBase).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
     }
 
-    const activeRoutes: any[] = (plan.routes ?? []).filter((r: any) =>
-      !excludedCategories.has(r.fileType) && !excludedPaths.has(r.relativePath)
-    );
     const total = activeRoutes.length;
     const conflictPolicy: string = (job as any).conflictPolicy ?? "keep_existing";
 
@@ -2182,6 +2247,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
     send("error", { message: errMsg, rolledBack });
   } finally {
+    if (capacityReservation) releaseCapacity(capacityReservation.id);
     for (const td of tempDirs) cleanTempDir(td);
     res.end();
   }

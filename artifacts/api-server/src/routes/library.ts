@@ -18,6 +18,7 @@ import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/lib
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { CapacityAdmissionError } from "../lib/capacity-service.ts";
 
 const router = Router();
 const jobStreamId = randomUUID();
@@ -131,8 +132,15 @@ router.post("/library/indexing/resume", async (_req: Request, res: Response) => 
     .limit(1);
   let resumedJobId: number | null = null;
   if (paused) {
-    const ok = await resumeJob(paused.id);
-    if (ok) resumedJobId = paused.id;
+    try {
+      const ok = await resumeJob(paused.id);
+      if (ok) resumedJobId = paused.id;
+    } catch (error) {
+      // Capacity is revalidated before a paused worker is restarted. Keep the
+      // durable pause and let the next explicit resume retry after headroom is
+      // restored instead of turning indexing-resume into a 500.
+      if (!(error instanceof CapacityAdmissionError)) throw error;
+    }
   }
   if (nasPath) void recordActivity(nasPath, "resumed", "Indexing resumed — watching for library changes again.");
   res.json({ ok: true, indexingPaused: false, resumedJobId });
@@ -257,6 +265,15 @@ router.post("/library/scan", async (req: Request, res: Response) => {
       code: "NAS_OFFLINE",
       error: "NAS Not Available",
       message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
+      jobId: result.jobId,
+    });
+    return;
+  }
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
       jobId: result.jobId,
     });
     return;
@@ -442,7 +459,20 @@ router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const nasPath = await getNasPath();
   if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
-  const ok = await resumeJob(id);
+  let ok: boolean;
+  try {
+    ok = await resumeJob(id);
+  } catch (error) {
+    if (error instanceof CapacityAdmissionError) {
+      res.status(507).json({
+        code: "CAPACITY_UNSAFE",
+        error: "Insufficient safe storage capacity",
+        message: error.message,
+      });
+      return;
+    }
+    throw error;
+  }
   if (!ok) { res.status(400).json({ error: "Job not found or not paused" }); return; }
   res.json({ ok, jobId: id });
 });
@@ -488,6 +518,15 @@ router.post("/library/thumbnails", async (req: Request, res: Response) => {
     nasPath,
   });
 
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
+      jobId: result.jobId,
+    });
+    return;
+  }
   res.json(result);
 });
 
@@ -646,6 +685,15 @@ router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) 
     nasPath,
   });
 
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
+      jobId: result.jobId,
+    });
+    return;
+  }
   res.json(result);
 });
 
@@ -972,6 +1020,15 @@ router.post("/library/reprocess", async (_req: Request, res: Response) => {
     nasPath,
   });
 
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
+      jobId: result.jobId,
+    });
+    return;
+  }
   res.json(result);
 });
 

@@ -31,6 +31,7 @@ import type {
   AuthSetupInput,
   AuthSetupResult,
   AuthStatus,
+  CapacityDiagnostics,
   CleanupExecuteRequest,
   CleanupExecuteResult,
   CleanupHistoryResult,
@@ -566,6 +567,83 @@ export function useGetStoragePolicyDiagnostics<TData = Awaited<ReturnType<typeof
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetStoragePolicyDiagnosticsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetCapacityDiagnosticsUrl = () => {
+
+
+
+
+  return `/api/diagnostics/capacity`
+}
+
+/**
+ * @summary Get local and NAS capacity admission state
+ */
+export const getCapacityDiagnostics = async ( options?: RequestInit): Promise<CapacityDiagnostics> => {
+
+  return customFetch<CapacityDiagnostics>(getGetCapacityDiagnosticsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCapacityDiagnosticsQueryKey = () => {
+    return [
+    `/api/diagnostics/capacity`
+    ] as const;
+    }
+
+
+export const getGetCapacityDiagnosticsQueryOptions = <TData = Awaited<ReturnType<typeof getCapacityDiagnostics>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCapacityDiagnostics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCapacityDiagnosticsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCapacityDiagnostics>>> = ({ signal }) => getCapacityDiagnostics({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCapacityDiagnostics>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCapacityDiagnosticsQueryResult = NonNullable<Awaited<ReturnType<typeof getCapacityDiagnostics>>>
+export type GetCapacityDiagnosticsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get local and NAS capacity admission state
+ */
+
+export function useGetCapacityDiagnostics<TData = Awaited<ReturnType<typeof getCapacityDiagnostics>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCapacityDiagnostics>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCapacityDiagnosticsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
