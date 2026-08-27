@@ -725,6 +725,9 @@ importers:
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.101.0(react@19.1.0)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.4
       '@types/react':
         specifier: ~19.1.10
         version: 19.1.17

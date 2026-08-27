@@ -6,6 +6,7 @@
     "baseUrl": ".",
     "strict": true,
     "allowImportingTsExtensions": true,
+    "types": ["node"],
     "paths": {
       "@/*": [
         "./*"
