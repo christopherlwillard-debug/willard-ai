@@ -48,7 +48,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath}
          AND content_hash IS NOT NULL
-         AND ${activeMediaSql("m")}
+         AND ${sql.raw(activeMediaSql("m"))}
       GROUP BY content_hash
       HAVING COUNT(*) > 1
     `);
@@ -147,7 +147,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
           FROM media_files m
           WHERE m.nas_path = ${nasPath}
             AND m.content_hash = ${raw.groupKey}
-             AND ${activeMediaSql("m")}
+             AND ${sql.raw(activeMediaSql("m"))}
           LIMIT 10
         `);
       } else {
@@ -175,7 +175,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
           FROM media_files m
           WHERE m.nas_path = ${nasPath}
             AND m.quick_fingerprint = ${raw.groupKey}
-             AND ${activeMediaSql("m")}
+             AND ${sql.raw(activeMediaSql("m"))}
           LIMIT 10
         `);
       }
@@ -346,7 +346,7 @@ router.get("/cleanup/summary", async (_req, res) => {
         FROM ${mediaFilesTable} m
         WHERE m.nas_path = ${nasPath}
           AND m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
-           AND ${activeMediaSql("m")}
+           AND ${sql.raw(activeMediaSql("m"))}
         GROUP BY m.quick_fingerprint
         HAVING COUNT(DISTINCT m.id) > 1
           AND NOT (
