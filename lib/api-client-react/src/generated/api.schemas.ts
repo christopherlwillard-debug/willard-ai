@@ -492,6 +492,103 @@ export interface CapacityDiagnostics {
   reservations: CapacityReservation[];
 }
 
+export interface StorageMigrationPreviewRequest {
+  sourceRoot: string;
+  destinationRoot: string;
+  sourceLabel?: string;
+  destinationLabel?: string;
+}
+
+export type StorageMigrationReferenceTable = typeof StorageMigrationReferenceTable[keyof typeof StorageMigrationReferenceTable];
+
+
+export const StorageMigrationReferenceTable = {
+  media_files: 'media_files',
+  faces: 'faces',
+  conversion_jobs: 'conversion_jobs',
+  organization_jobs: 'organization_jobs',
+} as const;
+
+export interface StorageMigrationReference {
+  table: StorageMigrationReferenceTable;
+  column: string;
+  rowId: number;
+  value: string;
+}
+
+export type StorageMigrationEntryState = typeof StorageMigrationEntryState[keyof typeof StorageMigrationEntryState];
+
+
+export const StorageMigrationEntryState = {
+  pending: 'pending',
+  verified: 'verified',
+  conflict: 'conflict',
+  missing: 'missing',
+  unsafe: 'unsafe',
+  error: 'error',
+} as const;
+
+export interface StorageMigrationEntry {
+  id: string;
+  namespace: string;
+  sourcePath: string;
+  destinationPath: string;
+  relativePath: string;
+  sizeBytes: number;
+  /** @nullable */
+  sourceHash: string | null;
+  /** @nullable */
+  destinationHash: string | null;
+  referenceCount: number;
+  references: StorageMigrationReference[];
+  protected: boolean;
+  state: StorageMigrationEntryState;
+  error?: string;
+}
+
+export type StorageMigrationManifestState = typeof StorageMigrationManifestState[keyof typeof StorageMigrationManifestState];
+
+
+export const StorageMigrationManifestState = {
+  PREVIEW: 'PREVIEW',
+  READY: 'READY',
+  COPYING: 'COPYING',
+  PAUSED: 'PAUSED',
+  VERIFIED: 'VERIFIED',
+  FAILED: 'FAILED',
+  CLEANUP_PENDING: 'CLEANUP_PENDING',
+  CLEANED: 'CLEANED',
+} as const;
+
+export interface StorageMigrationManifest {
+  version: number;
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  state: StorageMigrationManifestState;
+  sourceRoot: string;
+  destinationRoot: string;
+  sourceLabel: string;
+  destinationLabel: string;
+  requiredBytes: number;
+  copiedBytes: number;
+  verifiedBytes: number;
+  /** @nullable */
+  freeBytes: number | null;
+  /** @nullable */
+  capacitySafe: boolean | null;
+  referenceCount: number;
+  conflicts: number;
+  unsafeFiles: number;
+  missingFiles: number;
+  eligibleFileCount: number;
+  orphanedFiles: string[];
+  entries: StorageMigrationEntry[];
+  cleanupConfirmed: boolean;
+  cleanupCompletedAt?: string;
+  error?: string;
+}
+
 export interface TypeBreakdown {
   fileType: string;
   count: number;

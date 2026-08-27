@@ -90,6 +90,8 @@ import type {
   SearchFilesParams,
   SessionsResult,
   SettingsInput,
+  StorageMigrationManifest,
+  StorageMigrationPreviewRequest,
   StoragePolicyStatus,
   StorageStats,
   SystemEnvironment,
@@ -2678,6 +2680,440 @@ export function useGetTopFiles<TData = Awaited<ReturnType<typeof getTopFiles>>, 
 
 
 
+
+export const getPreviewStorageMigrationUrl = () => {
+
+
+
+
+  return `/api/storage/migrations/preview`
+}
+
+/**
+ * @summary Preview a safe storage-location migration
+ */
+export const previewStorageMigration = async (storageMigrationPreviewRequest: StorageMigrationPreviewRequest, options?: RequestInit): Promise<StorageMigrationManifest> => {
+
+  return customFetch<StorageMigrationManifest>(getPreviewStorageMigrationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(storageMigrationPreviewRequest)
+  }
+);}
+
+
+
+
+export const getPreviewStorageMigrationMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewStorageMigration>>, TError,{data: BodyType<StorageMigrationPreviewRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof previewStorageMigration>>, TError,{data: BodyType<StorageMigrationPreviewRequest>}, TContext> => {
+
+const mutationKey = ['previewStorageMigration'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof previewStorageMigration>>, {data: BodyType<StorageMigrationPreviewRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  previewStorageMigration(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PreviewStorageMigrationMutationResult = NonNullable<Awaited<ReturnType<typeof previewStorageMigration>>>
+    export type PreviewStorageMigrationMutationBody = BodyType<StorageMigrationPreviewRequest>
+    export type PreviewStorageMigrationMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Preview a safe storage-location migration
+ */
+export const usePreviewStorageMigration = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewStorageMigration>>, TError,{data: BodyType<StorageMigrationPreviewRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof previewStorageMigration>>,
+        TError,
+        {data: BodyType<StorageMigrationPreviewRequest>},
+        TContext
+      > => {
+      return useMutation(getPreviewStorageMigrationMutationOptions(options));
+    }
+
+export const getListStorageMigrationsUrl = () => {
+
+
+
+
+  return `/api/storage/migrations`
+}
+
+/**
+ * @summary List persisted storage migration manifests
+ */
+export const listStorageMigrations = async ( options?: RequestInit): Promise<StorageMigrationManifest[]> => {
+
+  return customFetch<StorageMigrationManifest[]>(getListStorageMigrationsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListStorageMigrationsQueryKey = () => {
+    return [
+    `/api/storage/migrations`
+    ] as const;
+    }
+
+
+export const getListStorageMigrationsQueryOptions = <TData = Awaited<ReturnType<typeof listStorageMigrations>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStorageMigrations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListStorageMigrationsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listStorageMigrations>>> = ({ signal }) => listStorageMigrations({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listStorageMigrations>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListStorageMigrationsQueryResult = NonNullable<Awaited<ReturnType<typeof listStorageMigrations>>>
+export type ListStorageMigrationsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List persisted storage migration manifests
+ */
+
+export function useListStorageMigrations<TData = Awaited<ReturnType<typeof listStorageMigrations>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listStorageMigrations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListStorageMigrationsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetStorageMigrationUrl = (id: string,) => {
+
+
+
+
+  return `/api/storage/migrations/${id}`
+}
+
+/**
+ * @summary Get a persisted storage migration manifest
+ */
+export const getStorageMigration = async (id: string, options?: RequestInit): Promise<StorageMigrationManifest> => {
+
+  return customFetch<StorageMigrationManifest>(getGetStorageMigrationUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetStorageMigrationQueryKey = (id: string,) => {
+    return [
+    `/api/storage/migrations/${id}`
+    ] as const;
+    }
+
+
+export const getGetStorageMigrationQueryOptions = <TData = Awaited<ReturnType<typeof getStorageMigration>>, TError = ErrorType<unknown>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStorageMigration>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetStorageMigrationQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStorageMigration>>> = ({ signal }) => getStorageMigration(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getStorageMigration>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetStorageMigrationQueryResult = NonNullable<Awaited<ReturnType<typeof getStorageMigration>>>
+export type GetStorageMigrationQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get a persisted storage migration manifest
+ */
+
+export function useGetStorageMigration<TData = Awaited<ReturnType<typeof getStorageMigration>>, TError = ErrorType<unknown>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getStorageMigration>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetStorageMigrationQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCopyStorageMigrationUrl = (id: string,) => {
+
+
+
+
+  return `/api/storage/migrations/${id}/copy`
+}
+
+/**
+ * @summary Copy and verify a storage migration
+ */
+export const copyStorageMigration = async (id: string, options?: RequestInit): Promise<StorageMigrationManifest> => {
+
+  return customFetch<StorageMigrationManifest>(getCopyStorageMigrationUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getCopyStorageMigrationMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof copyStorageMigration>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof copyStorageMigration>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['copyStorageMigration'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof copyStorageMigration>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  copyStorageMigration(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CopyStorageMigrationMutationResult = NonNullable<Awaited<ReturnType<typeof copyStorageMigration>>>
+
+    export type CopyStorageMigrationMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Copy and verify a storage migration
+ */
+export const useCopyStorageMigration = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof copyStorageMigration>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof copyStorageMigration>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getCopyStorageMigrationMutationOptions(options));
+    }
+
+export const getConfirmStorageMigrationCleanupUrl = (id: string,) => {
+
+
+
+
+  return `/api/storage/migrations/${id}/cleanup/confirm`
+}
+
+/**
+ * @summary Confirm cleanup of verified disposable source artifacts
+ */
+export const confirmStorageMigrationCleanup = async (id: string, options?: RequestInit): Promise<StorageMigrationManifest> => {
+
+  return customFetch<StorageMigrationManifest>(getConfirmStorageMigrationCleanupUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getConfirmStorageMigrationCleanupMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['confirmStorageMigrationCleanup'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  confirmStorageMigrationCleanup(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConfirmStorageMigrationCleanupMutationResult = NonNullable<Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>>
+
+    export type ConfirmStorageMigrationCleanupMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Confirm cleanup of verified disposable source artifacts
+ */
+export const useConfirmStorageMigrationCleanup = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof confirmStorageMigrationCleanup>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getConfirmStorageMigrationCleanupMutationOptions(options));
+    }
+
+export const getCleanupStorageMigrationUrl = (id: string,) => {
+
+
+
+
+  return `/api/storage/migrations/${id}/cleanup`
+}
+
+/**
+ * @summary Execute previously confirmed migration cleanup
+ */
+export const cleanupStorageMigration = async (id: string, options?: RequestInit): Promise<StorageMigrationManifest> => {
+
+  return customFetch<StorageMigrationManifest>(getCleanupStorageMigrationUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getCleanupStorageMigrationMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStorageMigration>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cleanupStorageMigration>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['cleanupStorageMigration'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cleanupStorageMigration>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  cleanupStorageMigration(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CleanupStorageMigrationMutationResult = NonNullable<Awaited<ReturnType<typeof cleanupStorageMigration>>>
+
+    export type CleanupStorageMigrationMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Execute previously confirmed migration cleanup
+ */
+export const useCleanupStorageMigration = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStorageMigration>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cleanupStorageMigration>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getCleanupStorageMigrationMutationOptions(options));
+    }
 
 export const getGetDuplicateFilesUrl = (params?: GetDuplicateFilesParams,) => {
   const normalizedParams = new URLSearchParams();

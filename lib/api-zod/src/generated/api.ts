@@ -743,6 +743,330 @@ export const GetTopFilesResponse = zod.array(GetTopFilesResponseItem)
 
 
 /**
+ * @summary Preview a safe storage-location migration
+ */
+export const PreviewStorageMigrationBody = zod.object({
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string().optional(),
+  "destinationLabel": zod.string().optional()
+})
+
+export const PreviewStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary List persisted storage migration manifests
+ */
+export const ListStorageMigrationsResponseItem = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+export const ListStorageMigrationsResponse = zod.array(ListStorageMigrationsResponseItem)
+
+
+/**
+ * @summary Get a persisted storage migration manifest
+ */
+export const GetStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Copy and verify a storage migration
+ */
+export const CopyStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CopyStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Confirm cleanup of verified disposable source artifacts
+ */
+export const ConfirmStorageMigrationCleanupParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ConfirmStorageMigrationCleanupResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Execute previously confirmed migration cleanup
+ */
+export const CleanupStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CleanupStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
  * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
  */
 export const GetDuplicateFilesQueryParams = zod.object({

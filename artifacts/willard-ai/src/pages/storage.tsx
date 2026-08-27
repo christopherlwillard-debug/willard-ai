@@ -5,14 +5,87 @@ import {
   useGetStoragePolicyDiagnostics, getGetStoragePolicyDiagnosticsQueryKey,
   useGetCapacityDiagnostics, getGetCapacityDiagnosticsQueryKey,
 } from "@workspace/api-client-react";
+import { useEffect, useState } from "react";
 import { formatBytes } from "@/lib/format";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { AlertTriangle, CheckCircle2, File, Folder, HardDrive, PauseCircle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, File, Folder, HardDrive, PauseCircle, ShieldCheck, ArrowRight, RefreshCw, Trash2 } from "lucide-react";
+
+type MigrationEntry = {
+  id: string;
+  namespace: string;
+  relativePath: string;
+  sizeBytes: number;
+  referenceCount: number;
+  protected: boolean;
+  state: string;
+  error?: string;
+};
+
+type MigrationManifest = {
+  id: string;
+  state: string;
+  sourceLabel: string;
+  destinationLabel: string;
+  requiredBytes: number;
+  verifiedBytes: number;
+  freeBytes: number | null;
+  capacitySafe: boolean | null;
+  referenceCount: number;
+  conflicts: number;
+  unsafeFiles: number;
+  missingFiles: number;
+  eligibleFileCount: number;
+  orphanedFiles: string[];
+  entries: MigrationEntry[];
+};
 
 export default function Storage() {
+  const [sourceRoot, setSourceRoot] = useState("");
+  const [destinationRoot, setDestinationRoot] = useState("");
+  const [migration, setMigration] = useState<MigrationManifest | null>(null);
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    void apiFetch<MigrationManifest[]>("/storage/migrations")
+      .then((manifests) => setMigration(manifests[0] ?? null))
+      .catch(() => setMigrationMessage("Saved migration manifests are unavailable."));
+  }, []);
+
+  const runMigrationAction = async (action: "preview" | "copy" | "confirm" | "cleanup") => {
+    setMigrationBusy(true);
+    setMigrationMessage(null);
+    try {
+      if (action === "preview") {
+        const result = await apiFetch<MigrationManifest>("/storage/migrations/preview", {
+          method: "POST",
+          body: JSON.stringify({ sourceRoot, destinationRoot }),
+        });
+        setMigration(result);
+        setMigrationMessage("Dry run saved. No files or database references were changed.");
+      } else if (migration) {
+        const endpoint = action === "copy"
+          ? `/storage/migrations/${migration.id}/copy`
+          : action === "confirm"
+            ? `/storage/migrations/${migration.id}/cleanup/confirm`
+            : `/storage/migrations/${migration.id}/cleanup`;
+        const result = await apiFetch<MigrationManifest>(endpoint, { method: "POST", body: JSON.stringify({}) });
+        setMigration(result);
+        setMigrationMessage(action === "cleanup" ? "Cleanup completed for verified, non-protected artifacts." : `Migration ${action} completed.`);
+      }
+    } catch (error) {
+      setMigrationMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMigrationBusy(false);
+    }
+  };
+
   const { data: stats, isLoading: statsLoading } = useGetStorageStats({
     query: { queryKey: getGetStorageStatsQueryKey() }
   });
@@ -159,6 +232,88 @@ export default function Storage() {
               </ul>
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><ArrowRight className="h-5 w-5" /> Storage location migration</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Start with a dry run. Copies are resumable and hash-verified; originals, conversion backups, and archive knowledge are never removed automatically.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Source library or storage root</span>
+              <Input value={sourceRoot} onChange={(event) => setSourceRoot(event.target.value)} placeholder="D:\Old Library or /mnt/old-library" />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Destination library or storage root</span>
+              <Input value={destinationRoot} onChange={(event) => setDestinationRoot(event.target.value)} placeholder="\\NAS\Photos or /mnt/new-library" />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void runMigrationAction("preview")} disabled={migrationBusy || !sourceRoot || !destinationRoot} className="font-mono">
+              <RefreshCw className="h-4 w-4" /> {migrationBusy ? "Working…" : "Preview migration"}
+            </Button>
+            {migration && (
+              <Button variant="outline" onClick={() => void runMigrationAction("copy")} disabled={migrationBusy || !["READY", "PAUSED"].includes(migration.state)} className="font-mono">
+                <ArrowRight className="h-4 w-4" /> Copy verified plan
+              </Button>
+            )}
+          </div>
+          {migrationMessage && <p className="rounded-md border border-border/60 bg-background/30 p-3 text-sm">{migrationMessage}</p>}
+          {migration && (
+            <div className="space-y-4 rounded-md border border-border/60 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-semibold">{migration.sourceLabel} <span className="text-muted-foreground">→</span> {migration.destinationLabel}</p>
+                  <p className="mt-1 text-xs font-mono text-muted-foreground">MIGRATION {migration.id} · {migration.state}</p>
+                </div>
+                <span className={`rounded-full border px-2 py-1 text-xs font-mono ${migration.conflicts || migration.unsafeFiles || migration.missingFiles ? "border-amber-500/40 text-amber-300" : "border-emerald-500/40 text-emerald-300"}`}>
+                  {migration.conflicts + migration.unsafeFiles + migration.missingFiles > 0 ? "ACTION REQUIRED" : "SAFE TO COPY"}
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div><p className="text-xs text-muted-foreground">Required</p><p className="font-semibold">{formatBytes(migration.requiredBytes)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Verified</p><p className="font-semibold">{formatBytes(migration.verifiedBytes)}</p></div>
+                <div><p className="text-xs text-muted-foreground">DB references</p><p className="font-semibold">{migration.referenceCount}</p></div>
+                <div><p className="text-xs text-muted-foreground">Destination free</p><p className="font-semibold">{migration.freeBytes === null ? "Unknown" : formatBytes(migration.freeBytes)}</p></div>
+              </div>
+              <p className="text-xs text-muted-foreground">{migration.eligibleFileCount === 0 ? "No eligible local or NAS derivatives were found." : `${migration.eligibleFileCount} eligible derivative artifact(s) found.`} · {migration.orphanedFiles.length} destination orphan(s) reported</p>
+              {migration.capacitySafe === false && (
+                <p className="flex items-center gap-2 text-sm text-amber-300"><AlertTriangle className="h-4 w-4" /> The destination does not currently have enough free space for this plan.</p>
+              )}
+              {(migration.conflicts || migration.unsafeFiles || migration.missingFiles) > 0 && (
+                <p className="flex items-center gap-2 text-sm text-amber-300"><AlertTriangle className="h-4 w-4" /> Resolve {migration.conflicts} conflict(s), {migration.unsafeFiles} unsafe item(s), and {migration.missingFiles} missing source(s) before copying.</p>
+              )}
+              <div className="max-h-64 overflow-auto rounded-md border border-border/60">
+                <Table>
+                  <TableHeader><TableRow><TableHead>Artifact</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Size</TableHead><TableHead className="text-right">References</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {migration.entries.map((entry) => (
+                      <TableRow key={entry.id}>
+                        <TableCell className="max-w-[280px] truncate font-mono text-xs" title={entry.relativePath}>{entry.relativePath}</TableCell>
+                        <TableCell className={entry.state === "verified" ? "text-emerald-300" : entry.state === "pending" ? "text-muted-foreground" : "text-amber-300"}>{entry.state}{entry.protected ? " · protected" : ""}</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{formatBytes(entry.sizeBytes)}</TableCell>
+                        <TableCell className="text-right">{entry.referenceCount}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {migration.state === "VERIFIED" && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+                  <p className="mr-auto text-xs text-muted-foreground">Cleanup is separate and only removes verified, non-protected source artifacts.</p>
+                  <Button variant="outline" onClick={() => void runMigrationAction("confirm")} disabled={migrationBusy} className="font-mono"><Trash2 className="h-4 w-4" /> Confirm cleanup</Button>
+                </div>
+              )}
+              {migration.state === "CLEANUP_PENDING" && (
+                <Button variant="destructive" onClick={() => void runMigrationAction("cleanup")} disabled={migrationBusy} className="font-mono"><Trash2 className="h-4 w-4" /> Execute confirmed cleanup</Button>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

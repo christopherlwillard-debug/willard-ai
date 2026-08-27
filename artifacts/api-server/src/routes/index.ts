@@ -22,6 +22,7 @@ import searchRouter from "./search";
 import facesRouter from "./faces";
 import diagnosticsRouter from "./diagnostics";
 import mediaHealthRouter from "./media-health";
+import storageMigrationRouter from "./storage-migration";
 
 const router: IRouter = Router();
 
@@ -48,5 +49,6 @@ router.use(searchRouter);
 router.use(facesRouter);
 router.use(diagnosticsRouter);
 router.use(mediaHealthRouter);
+router.use(storageMigrationRouter);
 
 export default router;

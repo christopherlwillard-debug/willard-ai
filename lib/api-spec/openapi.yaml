@@ -912,6 +912,116 @@ paths:
                 items:
                   $ref: "#/components/schemas/IndexedFile"
 
+  /storage/migrations/preview:
+    post:
+      operationId: previewStorageMigration
+      tags: [storage]
+      summary: Preview a safe storage-location migration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StorageMigrationPreviewRequest"
+      responses:
+        "200":
+          description: Dry-run migration manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageMigrationManifest"
+
+  /storage/migrations:
+    get:
+      operationId: listStorageMigrations
+      tags: [storage]
+      summary: List persisted storage migration manifests
+      responses:
+        "200":
+          description: Persisted migration manifests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StorageMigrationManifest"
+
+  /storage/migrations/{id}:
+    get:
+      operationId: getStorageMigration
+      tags: [storage]
+      summary: Get a persisted storage migration manifest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Migration manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageMigrationManifest"
+
+  /storage/migrations/{id}/copy:
+    post:
+      operationId: copyStorageMigration
+      tags: [storage]
+      summary: Copy and verify a storage migration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verified migration manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageMigrationManifest"
+
+  /storage/migrations/{id}/cleanup/confirm:
+    post:
+      operationId: confirmStorageMigrationCleanup
+      tags: [storage]
+      summary: Confirm cleanup of verified disposable source artifacts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleanup-pending migration manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageMigrationManifest"
+
+  /storage/migrations/{id}/cleanup:
+    post:
+      operationId: cleanupStorageMigration
+      tags: [storage]
+      summary: Execute previously confirmed migration cleanup
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleaned migration manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageMigrationManifest"
+
   # ── Cleanup ───────────────────────────────────────────────────────────────
   /cleanup/duplicates:
     get:
@@ -2579,6 +2689,125 @@ components:
           type: string
           enum: [exact, database, unavailable, not_server_visible]
       required: [id, category, storageClass, destination, durability, protected, reclaimable, currentBytes, projectedBytes, maxBytes, accounting, measurement]
+
+    StorageMigrationPreviewRequest:
+      type: object
+      properties:
+        sourceRoot:
+          type: string
+        destinationRoot:
+          type: string
+        sourceLabel:
+          type: string
+        destinationLabel:
+          type: string
+      required: [sourceRoot, destinationRoot]
+
+    StorageMigrationReference:
+      type: object
+      properties:
+        table:
+          type: string
+          enum: [media_files, faces, conversion_jobs, organization_jobs]
+        column:
+          type: string
+        rowId:
+          type: integer
+        value:
+          type: string
+      required: [table, column, rowId, value]
+
+    StorageMigrationEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        namespace:
+          type: string
+        sourcePath:
+          type: string
+        destinationPath:
+          type: string
+        relativePath:
+          type: string
+        sizeBytes:
+          type: integer
+        sourceHash:
+          type: ["string", "null"]
+        destinationHash:
+          type: ["string", "null"]
+        referenceCount:
+          type: integer
+        references:
+          type: array
+          items:
+            $ref: "#/components/schemas/StorageMigrationReference"
+        protected:
+          type: boolean
+        state:
+          type: string
+          enum: [pending, verified, conflict, missing, unsafe, error]
+        error:
+          type: string
+      required: [id, namespace, sourcePath, destinationPath, relativePath, sizeBytes, sourceHash, destinationHash, referenceCount, references, protected, state]
+
+    StorageMigrationManifest:
+      type: object
+      properties:
+        version:
+          type: integer
+        id:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        state:
+          type: string
+          enum: [PREVIEW, READY, COPYING, PAUSED, VERIFIED, FAILED, CLEANUP_PENDING, CLEANED]
+        sourceRoot:
+          type: string
+        destinationRoot:
+          type: string
+        sourceLabel:
+          type: string
+        destinationLabel:
+          type: string
+        requiredBytes:
+          type: integer
+        copiedBytes:
+          type: integer
+        verifiedBytes:
+          type: integer
+        freeBytes:
+          type: ["integer", "null"]
+        capacitySafe:
+          type: ["boolean", "null"]
+        referenceCount:
+          type: integer
+        conflicts:
+          type: integer
+        unsafeFiles:
+          type: integer
+        missingFiles:
+          type: integer
+        eligibleFileCount:
+          type: integer
+        orphanedFiles:
+          type: array
+          items:
+            type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/StorageMigrationEntry"
+        cleanupConfirmed:
+          type: boolean
+        cleanupCompletedAt:
+          type: string
+        error:
+          type: string
+      required: [version, id, createdAt, updatedAt, state, sourceRoot, destinationRoot, sourceLabel, destinationLabel, requiredBytes, copiedBytes, verifiedBytes, freeBytes, capacitySafe, referenceCount, conflicts, unsafeFiles, missingFiles, eligibleFileCount, orphanedFiles, entries, cleanupConfirmed]
 
     DashboardSummary:
       type: object
