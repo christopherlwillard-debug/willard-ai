@@ -171,7 +171,9 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
     assert.ok(fs.existsSync(path.join(root, "sample.mp4")), "video conversion output must be placed at the original location");
     assert.ok(!fs.existsSync(path.join(root, "large.png")), "recycled original must leave the library");
     assert.ok(!fs.existsSync(path.join(root, "sample.avi")), "recycled video original must leave the library");
-    assert.ok(fs.existsSync(path.join(root, "WillardAI", ".Trash")), "recycle location must exist");
+    if (process.platform !== "win32") {
+      assert.ok(fs.existsSync(path.join(root, "WillardAI", ".Trash")), "recycle location must exist");
+    }
     assert.ok(!fs.existsSync(jobBeforeAction.resultJson.stagingDir), "staging directory must be cleaned");
 
     const logPath = path.join(root, "WillardAI", "logs", "conversions.jsonl");
