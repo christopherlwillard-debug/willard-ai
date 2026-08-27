@@ -1,8 +1,8 @@
-export class RequestValidationError extends Error {
-  readonly statusCode = 400;
+import { ApiRequestError } from "./api-errors.ts";
 
+export class RequestValidationError extends ApiRequestError {
   constructor(message: string) {
-    super(message);
+    super(400, message);
     this.name = "RequestValidationError";
   }
 }

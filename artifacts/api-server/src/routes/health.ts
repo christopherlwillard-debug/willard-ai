@@ -5,6 +5,7 @@ import { activeMediaCondition } from "../lib/media-scope.ts";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkNasReachableAsync } from "../lib/nas-storage";
 import { getMediaToolsHealth } from "../lib/media-tools.ts";
+import { getStartupHealth } from "../lib/startup-health.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -15,7 +16,7 @@ const INTEGRITY_SWEEP_LIMIT = 20000;
 const router: IRouter = Router();
 
 router.get("/healthz", (_req, res) => {
-  const data = HealthCheckResponse.parse({ status: "ok" });
+  const data = HealthCheckResponse.parse({ status: getStartupHealth().status });
   res.json(data);
 });
 

@@ -26,6 +26,8 @@ import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "
 import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
 import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-lock";
 import { isShuttingDown } from "./lib/shutdown-state.ts";
+import { apiErrorHandler, apiNotFoundHandler } from "./lib/api-errors.ts";
+import { markStartupDegraded } from "./lib/startup-health.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost",
@@ -295,6 +297,8 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use("/api", router);
+app.use(apiNotFoundHandler);
+app.use(apiErrorHandler);
 
 // Initialize NAS log stream from persisted settings on startup
 db.select().from(appSettingsTable).limit(1).then(async (rows) => {
@@ -314,12 +318,18 @@ db.select().from(appSettingsTable).limit(1).then(async (rows) => {
         logger.warn({ err, nasPath, reason: reach.message },
           "NAS is readable but WillardAI storage could not be initialized");
       }
-      nasLogStream.setNasPath(nasPath).catch(() => {});
+      nasLogStream.setNasPath(nasPath).catch((err) => {
+        markStartupDegraded("nas_log_stream", "NAS log storage could not be attached.");
+        logger.error({ err, operation: "nas_log_stream" }, "NAS log storage could not be attached");
+      });
       if (bootstrapped) {
         logger.info({ nasPath }, "NAS storage initialized from persisted settings");
       }
       // Emit startup health after a brief delay so DB queries complete cleanly
-      setTimeout(() => emitStartupHealth(nasPath).catch(() => {}), 2_000);
+      setTimeout(() => emitStartupHealth(nasPath).catch((err) => {
+        markStartupDegraded("startup_health", "Startup health collection did not complete.");
+        logger.error({ err, operation: "startup_health" }, "Startup health collection did not complete");
+      }), 2_000);
       // Background reconciliation: verifies thumbnailPath rows against disk,
       // resets NULL for any whose .webp is missing so the thumb job picks them up.
       startThumbnailReconciliation(nasPath);
@@ -327,13 +337,19 @@ db.select().from(appSettingsTable).limit(1).then(async (rows) => {
       logger.warn({ nasPath, reason: reach.message }, "Library Offline — NAS storage not initialized (location unreachable)");
     }
   }
-}).catch(() => { /* DB not ready yet — logger will use stdout only */ });
+}).catch((err) => {
+  markStartupDegraded("nas_startup", "NAS startup initialization did not complete.");
+  logger.error({ err, operation: "nas_startup" }, "NAS startup initialization did not complete");
+});
 
 // Warn (don't crash) if ffmpeg/ffprobe are missing — important for local installs
 checkMediaToolsOnStartup();
 
 // Pre-populate thumbnail cache so the first page-load hits zero NAS stat calls
-warmThumbnailCache().catch(() => {});
+warmThumbnailCache().catch((err) => {
+  markStartupDegraded("thumbnail_cache", "Thumbnail cache initialization did not complete.");
+  logger.error({ err, operation: "thumbnail_cache" }, "Thumbnail cache initialization did not complete");
+});
 
 // Smart Library Health: watch reachability, auto-pause on offline,
 // auto-rescan (incremental) on reconnect
@@ -356,7 +372,10 @@ recoverInterruptedConversionJobs()
       );
     }
   })
-  .catch(() => {});
+  .catch((err) => {
+    markStartupDegraded("conversion_recovery", "Conversion recovery did not complete.");
+    logger.error({ err, operation: "conversion_recovery" }, "Conversion recovery did not complete");
+  });
 
 // Detect organize jobs interrupted mid-execution: "executing" status (server died) or
 // "failed" jobs that have a lastStage set (meaning they failed during execute, not during analyze).
@@ -380,6 +399,9 @@ db.select({ id: organizationJobsTable.id, sourcePath: organizationJobsTable.sour
       );
     }
   })
-  .catch(() => {});
+  .catch((err) => {
+    markStartupDegraded("organize_recovery", "Organization recovery inspection did not complete.");
+    logger.error({ err, operation: "organize_recovery" }, "Organization recovery inspection did not complete");
+  });
 
 export default app;

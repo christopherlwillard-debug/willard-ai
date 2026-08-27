@@ -4,6 +4,7 @@ import { purgeExpiredTrashEntries, reconcileCleanupOperations } from "./lib/clea
 import { purgeOrphanedDerivedData } from "./lib/derived-cleanup.ts";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 import { installShutdownHandlers } from "./lib/shutdown.ts";
+import { markStartupDegraded } from "./lib/startup-health.ts";
 import type { Server } from "node:http";
 
 let server: Server | null = null;
@@ -48,13 +49,20 @@ startupMigrations
         const nasPath = settings[0]?.nasPath?.trim();
         if (nasPath) {
           purgeExpiredTrashEntries(nasPath).catch((error) =>
-            logger.error({ err: error }, "Expired trash cleanup failed"),
+            (() => {
+              markStartupDegraded("expired_trash_cleanup", "Expired trash cleanup did not complete.");
+              logger.error({ err: error, operation: "expired_trash_cleanup" }, "Expired trash cleanup failed");
+            })(),
           );
           purgeOrphanedDerivedData(nasPath).catch((error) =>
-            logger.error({ err: error }, "Orphaned derived-data cleanup failed"),
+            (() => {
+              markStartupDegraded("derived_data_cleanup", "Orphaned derived-data cleanup did not complete.");
+              logger.error({ err: error, operation: "derived_data_cleanup" }, "Orphaned derived-data cleanup failed");
+            })(),
           );
         }
       })().catch((recoveryError) => {
+        markStartupDegraded("post_start_recovery", "Post-start recovery did not complete.");
         logger.error({ err: recoveryError }, "Post-start recovery failed");
       });
     });
