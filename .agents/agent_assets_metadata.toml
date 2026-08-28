@@ -38,5 +38,5 @@ description = "Updated ZIP containing the Windows path-quoting fix and graceful 
 id = "O8ZOuN2NSLOW6P1EdG8ix"
 uri = "file://build/Willard-AI-fixed.zip"
 type = "unspecified"
-title = "Willard AI — startup and updater fixed"
-description = "Verified replacement folder. Clears stale local browser workers that caused the loading-screen hang and prepares updates without copying the entire live dependency folder."
+title = "Willard AI — updated favicon"
+description = "Verified replacement folder with the supplied Willard Media Center icon installed as the web app favicon, plus the previous startup and updater fixes."
