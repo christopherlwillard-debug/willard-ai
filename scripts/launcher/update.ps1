@@ -30,6 +30,28 @@ function Invoke-LoggedCommand($label, $logPath, [scriptblock]$command) {
     return $exitCode
 }
 
+function Test-FileLockFailure($logPath) {
+    if (-not (Test-Path $logPath)) { return $false }
+    try {
+        $content = Get-Content $logPath -Raw -ErrorAction Stop
+        return ($content -match "(?i)being used by another process|sharing violation|EBUSY|EPERM|resource busy|file.+locked|cannot access.+file|access is denied")
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-PreparationCommand($label, $logPath, [scriptblock]$command) {
+    $exitCode = Invoke-LoggedCommand $label $logPath $command
+    if ($exitCode -eq 0 -and -not (Test-FileLockFailure $logPath)) { return $exitCode }
+    if (-not (Test-FileLockFailure $logPath)) { return $exitCode }
+
+    Write-Warn "Windows reported a file lock while preparing the update. Stopping Willard-owned services and retrying..."
+    Stop-TrackedProcesses | Out-Null
+    # taskkill returns before every descendant has released its file handles.
+    Start-Sleep -Seconds 2
+    return (Invoke-LoggedCommand ($label + " (retry)") $logPath $command)
+}
+
 function Test-InjectedUpdateFailure($point) {
     if ($env:WILLARD_UPDATE_FAIL_AT -eq $point) {
         throw ("Injected update failure at " + $point + ".")
@@ -103,13 +125,13 @@ function Prepare-DeveloperCandidate($candidate) {
 
     Push-Location $candidate
     try {
-        $installCode = Invoke-LoggedCommand "Preparing the complete updated application..." $installLog {
+        $installCode = Invoke-PreparationCommand "Preparing the complete updated application..." $installLog {
             & $pnpmCommand install --ignore-scripts
         }
         if ($installCode -ne 0) { throw "Package refresh failed. See $installLog." }
         Test-InjectedUpdateFailure "install"
 
-        $buildCode = Invoke-LoggedCommand "Building the updated library service..." $buildLog {
+        $buildCode = Invoke-PreparationCommand "Building the updated library service..." $buildLog {
             & $pnpmCommand --filter @workspace/api-server run build
         }
         if ($buildCode -ne 0 -or -not (Test-Path (Join-Path $candidate "artifacts\api-server\dist\index.mjs"))) {

@@ -774,6 +774,9 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);
   assert.match(updater, /--ignore-scripts/);
   assert.match(updater, /api-server run build/);
+  assert.match(updater, /Test-FileLockFailure/);
+  assert.match(updater, /Stopping Willard-owned services and retrying/);
+  assert.match(updater, /Start-Sleep -Seconds 2/);
   assert.match(launcherCommon, /Restore-PendingDeveloperUpdate/);
   assert.match(launcherCommon, /Recover-InterruptedDeveloperUpdate/);
   assert.match(launcherCommon, /Confirm-DeveloperUpdateHealth/);
