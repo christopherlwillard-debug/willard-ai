@@ -42,11 +42,20 @@ function Invoke-Robocopy($source, $destination) {
     if ($LASTEXITCODE -gt 7) { throw "File copy failed with robocopy exit code $LASTEXITCODE." }
 }
 
-function New-CandidateDirectory {
+function New-CandidateDirectory($gitCommand) {
     $parent = Split-Path -Parent $Root
     $leaf = Split-Path -Leaf $Root
     $candidate = Join-Path $parent ("." + $leaf + ".candidate-" + [guid]::NewGuid().ToString())
-    Invoke-Robocopy $Root $candidate
+    Write-Info "Preparing a clean update workspace..."
+    & $gitCommand clone --quiet --no-hardlinks $Root $candidate 2>> $updateLog
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $candidate ".git"))) {
+        throw "Git could not prepare a clean update workspace. See $updateLog."
+    }
+    & $gitCommand -C $candidate remote set-url origin $GithubRepo 2>> $updateLog
+    if ($LASTEXITCODE -ne 0) {
+        throw "This folder's GitHub update source could not be configured."
+    }
+    Copy-PreservedDeveloperState $candidate
     Test-InjectedUpdateFailure "candidate-copy"
     return $candidate
 }
@@ -177,14 +186,8 @@ try {
             throw ("Local code changes are present. Save or revert them before running Update Willard AI." + $suffix)
         }
 
-        $candidate = New-CandidateDirectory
+        $candidate = New-CandidateDirectory $gitCommand
         try {
-            $remote = Get-GitRemoteUrl $gitCommand
-            if ($remote -ne $GithubRepo) {
-                & $gitCommand -C $candidate remote set-url origin $GithubRepo 2>$null
-                if ($LASTEXITCODE -ne 0) { throw "This folder's GitHub update source could not be configured." }
-            }
-
             $pullLog = Join-Path $candidate "logs\update-git.log"
             $pullCode = Invoke-LoggedCommand "Checking GitHub for the latest Willard AI..." $pullLog {
                 & $gitCommand -C $candidate pull --ff-only origin $GithubBranch

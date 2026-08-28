@@ -22,6 +22,10 @@ const developerLauncher = await readFile(
   new URL("../launcher/start.ps1", import.meta.url),
   "utf8",
 );
+const webIndex = await readFile(
+  new URL("../../artifacts/willard-ai/index.html", import.meta.url),
+  "utf8",
+);
 const launcherCommon = await readFile(
   new URL("../launcher/common.ps1", import.meta.url),
   "utf8",
@@ -740,6 +744,8 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(updater, /status --porcelain/);
   assert.match(updater, /Detected:/);
   assert.match(updater, /New-CandidateDirectory/);
+  assert.match(updater, /clone --quiet --no-hardlinks/);
+  assert.match(updater, /Copy-PreservedDeveloperState \$candidate/);
   assert.match(updater, /Invoke-DeveloperVersionSwap/);
   assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);
   assert.match(updater, /--ignore-scripts/);
@@ -755,6 +761,14 @@ test("developer updater preserves full runnable versions and rolls back failed c
     developerLauncher,
     /previous runnable version was restored after the update did not become healthy/,
   );
+});
+
+test("local developer launch clears stale Willard service workers before loading Vite", () => {
+  assert.match(webIndex, /navigator\.serviceWorker\.controller/);
+  assert.match(webIndex, /fetch\("\/@vite\/client"/);
+  assert.match(webIndex, /willard-shell-/);
+  assert.match(webIndex, /registration\.unregister\(\)/);
+  assert.match(webIndex, /location\.reload\(\)/);
 });
 
 test("Windows update swaps are journaled and recoverable across copied, locked, or interrupted versions", () => {

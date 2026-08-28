@@ -24,6 +24,41 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // A production Willard service worker can outlive an older local folder
+      // because every developer copy uses localhost:5000. Vite development
+      // must start without that worker or it can serve a stale application
+      // shell while the current API is healthy.
+      (() => {
+        const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+        if (!localHost || !("serviceWorker" in navigator) || !navigator.serviceWorker.controller) return;
+
+        fetch("/@vite/client", { cache: "no-store" })
+          .then((response) => {
+            const contentType = response.headers.get("content-type") || "";
+            if (!response.ok || !contentType.includes("javascript")) return;
+            return Promise.all([
+              navigator.serviceWorker.getRegistrations()
+                .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister()))),
+              "caches" in window
+                ? caches.keys().then((keys) => Promise.all(
+                    keys.filter((key) => key.startsWith("willard-shell-")).map((key) => caches.delete(key)),
+                  ))
+                : Promise.resolve(),
+            ]).then(() => {
+              if (sessionStorage.getItem("willard-dev-worker-reset") === "done") {
+                sessionStorage.removeItem("willard-dev-worker-reset");
+                return;
+              }
+              sessionStorage.setItem("willard-dev-worker-reset", "done");
+              location.reload();
+            });
+          })
+          .catch(() => {
+            // Startup continues normally if browser storage is unavailable.
+          });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
