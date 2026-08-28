@@ -7,4 +7,4 @@ For pushes that add or update GitHub Actions workflow files, use a valid classic
 
 **Why:** GitHub explicitly rejects OAuth App credentials without `workflow`, while a classic PAT can have that scope.
 
-**How to apply:** Validate the PAT privately with `/user`, then push using `GIT_ASKPASS`; remove the temporary helper immediately afterward.
+**How to apply:** Validate the PAT privately with `/user`, then push using `GIT_ASKPASS`; remove the temporary helper immediately afterward. If the PAT can push but returns 403 for Actions dispatch or cancellation, use the connected GitHub integration proxy for those Actions API calls.
