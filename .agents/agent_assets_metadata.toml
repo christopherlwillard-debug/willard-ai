@@ -38,5 +38,5 @@ description = "Updated ZIP containing the Windows path-quoting fix and graceful 
 id = "O8ZOuN2NSLOW6P1EdG8ix"
 uri = "file://build/Willard-AI-fixed.zip"
 type = "unspecified"
-title = "Willard AI — Windows updater lock fixed"
-description = "Verified replacement folder. The updater now prepares from GitHub outside the live installation and waits for Willard services to stop before preserving mutable state, avoiding Windows file-lock collisions."
+title = "Willard AI — final updater fix"
+description = "Verified replacement folder. Includes the live-lock fix and creates the candidate logs directory before writing update-git.log."
