@@ -56,24 +56,56 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Restore portable PostgreSQL
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}\postgresql
+          key: postgresql-${{ runner.os }}-16.15-25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e
+
       - name: Install PostgreSQL for the source launcher smoke test
         shell: pwsh
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = "Stop"
-          choco install postgresql16 --params="/Password:postgres" --no-progress --yes
-          $service = Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object -First 1
-          if (-not $service) { throw "PostgreSQL service was not installed." }
-          Start-Service $service.Name
-          $postgresBin = Join-Path $env:ProgramFiles "PostgreSQL\16\bin"
+          $postgresRoot = Join-Path $env:RUNNER_TEMP "postgresql\pgsql"
+          $postgresBin = Join-Path $postgresRoot "bin"
           if (-not (Test-Path (Join-Path $postgresBin "initdb.exe"))) {
-            throw "PostgreSQL command-line tools were not installed at $postgresBin."
+            $archive = Join-Path $env:RUNNER_TEMP "postgresql-16.15.zip"
+            $downloadUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.15-1-windows-x64-binaries.zip"
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
+            $expectedSha256 = "25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e"
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha256) {
+              throw "The portable PostgreSQL archive did not match the pinned SHA-256."
+            }
+            Expand-Archive -Path $archive -DestinationPath (Join-Path $env:RUNNER_TEMP "postgresql") -Force
+          }
+          if (-not (Test-Path (Join-Path $postgresBin "initdb.exe"))) {
+            throw "Portable PostgreSQL command-line tools were not found at $postgresBin."
           }
           $postgresBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           "PGPASSWORD=postgres" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $env:PGPASSWORD = "postgres"
-          & "$env:ProgramFiles\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "ALTER USER postgres PASSWORD 'postgres';"
-          & "$env:ProgramFiles\PostgreSQL\16\bin\createdb.exe" -h localhost -U postgres willard
+          $dataRoot = Join-Path $env:RUNNER_TEMP "postgresql-data"
+          $passwordFile = Join-Path $env:RUNNER_TEMP "postgresql-password.txt"
+          Set-Content -Path $passwordFile -Value "postgres" -Encoding ASCII
+          & (Join-Path $postgresBin "initdb.exe") --username=postgres --pwfile=$passwordFile --encoding=UTF8 --pgdata=$dataRoot
+          if ($LASTEXITCODE -ne 0) { throw "Portable PostgreSQL initdb failed." }
+          Remove-Item $passwordFile -Force
+          $serverLog = Join-Path $env:RUNNER_TEMP "postgresql-server.log"
+          & (Join-Path $postgresBin "pg_ctl.exe") -D $dataRoot -l $serverLog -o "-h 127.0.0.1 -p 5432" start
+          if ($LASTEXITCODE -ne 0) { throw "Portable PostgreSQL failed to start. See $serverLog." }
+          $ready = $false
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            & (Join-Path $postgresBin "pg_isready.exe") -h 127.0.0.1 -p 5432 -U postgres
+            if ($LASTEXITCODE -eq 0) {
+              $ready = $true
+              break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw "Portable PostgreSQL did not become ready. See $serverLog." }
+          & (Join-Path $postgresBin "createdb.exe") -h 127.0.0.1 -U postgres willard
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the release-test database." }
 
       - name: Gate release on type checks and generated API contracts
         run: |

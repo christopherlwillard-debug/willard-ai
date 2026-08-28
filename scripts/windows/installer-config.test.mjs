@@ -484,6 +484,11 @@ test("launcher database helper also uses target-first least-privilege setup", ()
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
   assert.match(workflow, /startup-smoke\.ps1/);
   assert.match(workflow, /Install PostgreSQL for the source launcher smoke test/);
+  assert.match(workflow, /postgresql-16\.15-1-windows-x64-binaries\.zip/);
+  assert.match(workflow, /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/);
+  assert.match(workflow, /pg_ctl\.exe/);
+  assert.match(workflow, /pg_isready\.exe/);
+  assert.doesNotMatch(workflow, /choco install postgresql/);
   assert.match(startupSmoke, /Start Willard AI\.bat/);
   assert.match(startupSmoke, /127\.0\.0\.1:8080\/api\/healthz/);
   assert.match(startupSmoke, /127\.0\.0\.1:5000/);
