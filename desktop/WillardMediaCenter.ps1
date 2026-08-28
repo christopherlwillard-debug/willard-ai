@@ -492,7 +492,6 @@ try {
     exit 0
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
-  Start-LoadingScreen
   Recover-InterruptedUpdateSwap
   Try-Update
   if (-not (Ensure-Env)) {
@@ -505,6 +504,7 @@ try {
   Initialize-BackupProtection
   $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
+  Start-LoadingScreen
   $apiProc = $null
   try {
     $apiProc = Start-Process $Node -ArgumentList @("--env-file=`"$EnvFile`"", "`"$Api`"") -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
