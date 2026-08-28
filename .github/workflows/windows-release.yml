@@ -134,6 +134,12 @@ jobs:
           if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
             throw "ffmpeg is required by the Windows optimize-cycle audit fixture."
           }
+          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
+            choco install zip --no-progress --yes
+          }
+          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
+            throw "zip is required by the Windows archive safety audit fixtures."
+          }
 
       - name: Bootstrap disposable backend-audit database schema
         shell: pwsh

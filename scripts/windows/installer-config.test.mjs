@@ -184,6 +184,7 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /Install media fixture tools for backend audit/);
   assert.match(workflow, /choco install ffmpeg/);
+  assert.match(workflow, /choco install zip/);
   const auditStep = workflow.slice(
     workflow.indexOf(
       "Run API server backend audit and backend integration tests",
