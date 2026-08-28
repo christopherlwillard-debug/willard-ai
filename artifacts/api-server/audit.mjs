@@ -29,6 +29,9 @@ if (!Number.isFinite(heartbeatMs) || heartbeatMs <= 0) {
 function runTestFile(testFile) {
   const name = path.basename(testFile);
   const startedAt = Date.now();
+  const testWorkingDirectory = integrationTestFiles.includes(testFile)
+    ? workspaceDirectory
+    : apiServerDirectory;
   console.log(`[backend-audit] START ${name}`);
 
   return new Promise((resolve, reject) => {
@@ -41,7 +44,12 @@ function runTestFile(testFile) {
         "--test-concurrency=1",
         testFile,
       ],
-      { env: process.env, stdio: "inherit", windowsHide: false },
+      {
+        cwd: testWorkingDirectory,
+        env: process.env,
+        stdio: "inherit",
+        windowsHide: false,
+      },
     );
     let settled = false;
     const heartbeat = setInterval(() => {
