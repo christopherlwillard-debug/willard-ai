@@ -745,6 +745,9 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(updater, /Detected:/);
   assert.match(updater, /New-CandidateDirectory/);
   assert.match(updater, /clone --quiet --no-hardlinks/);
+  assert.match(updater, /--branch \$GithubBranch --single-branch \$GithubRepo/);
+  assert.match(updater, /Copy-PreservedDeveloperState \$candidate -IncludeLogs/);
+  assert.match(updater, /Exclude @\("update\.log"\)/);
   assert.match(updater, /Copy-PreservedDeveloperState \$candidate/);
   assert.match(updater, /Invoke-DeveloperVersionSwap/);
   assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);

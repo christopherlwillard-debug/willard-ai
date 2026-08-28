@@ -36,9 +36,15 @@ function Test-InjectedUpdateFailure($point) {
     }
 }
 
-function Invoke-Robocopy($source, $destination) {
+function Invoke-Robocopy($source, $destination, [switch]$Merge, [string[]]$Exclude) {
     New-Item -ItemType Directory -Force $destination | Out-Null
-    & robocopy $source $destination /MIR /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:1 | Out-Null
+    $arguments = @($source, $destination)
+    $arguments += if ($Merge) { "/E" } else { "/MIR" }
+    $arguments += @("/COPY:DAT", "/DCOPY:DAT", "/XJ", "/R:2", "/W:1")
+    if ($Exclude -and $Exclude.Count -gt 0) {
+        $arguments += @("/XF") + $Exclude
+    }
+    & robocopy @arguments | Out-Null
     if ($LASTEXITCODE -gt 7) { throw "File copy failed with robocopy exit code $LASTEXITCODE." }
 }
 
@@ -47,7 +53,9 @@ function New-CandidateDirectory($gitCommand) {
     $leaf = Split-Path -Leaf $Root
     $candidate = Join-Path $parent ("." + $leaf + ".candidate-" + [guid]::NewGuid().ToString())
     Write-Info "Preparing a clean update workspace..."
-    & $gitCommand clone --quiet --no-hardlinks $Root $candidate 2>> $updateLog
+    # Never clone from the live runnable folder. Windows services, log writers,
+    # or virus scanning can hold handles there while an update is prepared.
+    & $gitCommand clone --quiet --no-hardlinks --branch $GithubBranch --single-branch $GithubRepo $candidate 2>> $updateLog
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $candidate ".git"))) {
         throw "Git could not prepare a clean update workspace. See $updateLog."
     }
@@ -55,21 +63,27 @@ function New-CandidateDirectory($gitCommand) {
     if ($LASTEXITCODE -ne 0) {
         throw "This folder's GitHub update source could not be configured."
     }
-    Copy-PreservedDeveloperState $candidate
-    Test-InjectedUpdateFailure "candidate-copy"
     return $candidate
 }
 
-function Copy-PreservedDeveloperState($destination) {
+function Copy-PreservedDeveloperState($destination, [switch]$IncludeLogs) {
     # Archive fallbacks do not contain the local settings, library data, or
     # diagnostics. Carry them forward deliberately; the full old version stays
     # intact as the rollback directory until the next healthy start.
-    foreach ($entry in @(".env", "logs", "library-data", "media-path.txt")) {
+    $entries = @(".env", "library-data", "media-path.txt")
+    if ($IncludeLogs) { $entries = @(".env", "logs", "library-data", "media-path.txt") }
+    foreach ($entry in $entries) {
         $source = Join-Path $Root $entry
         if (-not (Test-Path $source)) { continue }
         $target = Join-Path $destination $entry
         if ((Get-Item $source).PSIsContainer) {
-            Invoke-Robocopy $source $target
+            if ($entry -eq "logs") {
+                # This updater writes update.log itself. Preserve the remaining
+                # diagnostics without depending on copying an active log handle.
+                Invoke-Robocopy $source $target -Merge -Exclude @("update.log")
+            } else {
+                Invoke-Robocopy $source $target
+            }
         } else {
             New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
             Copy-Item $source $target -Force
@@ -115,6 +129,11 @@ function Prepare-DeveloperCandidate($candidate) {
 function Complete-DeveloperUpdate($candidate, $label) {
     $backup = $Root + ".previous-" + (Get-Date -Format "yyyyMMddHHmmss")
     Stop-TrackedProcesses | Out-Null
+    Start-Sleep -Milliseconds 750
+    # Mutable state is copied only after the app processes have released their
+    # Windows file handles. The prepared source and dependencies remain isolated.
+    Copy-PreservedDeveloperState $candidate -IncludeLogs
+    Test-InjectedUpdateFailure "candidate-copy"
     Invoke-DeveloperVersionSwap $candidate $backup
     Write-Ok ($label + " A verified rollback version is retained until the next healthy start.")
 }
@@ -156,7 +175,6 @@ function Invoke-ArchiveFallback {
 
         $candidate = Join-Path (Split-Path -Parent $Root) ("." + (Split-Path -Leaf $Root) + ".candidate-" + [guid]::NewGuid().ToString())
         Invoke-Robocopy $sourceRoot.FullName $candidate
-        Copy-PreservedDeveloperState $candidate
         Prepare-DeveloperCandidate $candidate
         Complete-DeveloperUpdate $candidate "Developer archive update installed."
         $candidate = $null
