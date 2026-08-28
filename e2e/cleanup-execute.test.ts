@@ -152,12 +152,16 @@ async function pollUntil<T>(
 /** Query the PostgreSQL DB via psql and return trimmed stdout. */
 function queryDb(sql: string): string {
   const dbUrl = process.env["DATABASE_URL"] ?? "";
-  return execFileSync("psql", [dbUrl, "--no-psqlrc", "-t", "-c", sql], {
-    encoding: "utf8",
-    stdio: ["inherit", "pipe", "pipe"],
-    timeout: 30_000,
-    env: { ...process.env, PGCONNECT_TIMEOUT: "10" },
-  }).trim();
+  return execFileSync(
+    "psql",
+    ["--no-psqlrc", "--tuples-only", "--command", sql, "--dbname", dbUrl],
+    {
+      encoding: "utf8",
+      stdio: ["inherit", "pipe", "pipe"],
+      timeout: 30_000,
+      env: { ...process.env, PGCONNECT_TIMEOUT: "10" },
+    },
+  ).trim();
 }
 
 // ─── State shared across tests ──────────────────────────────────────────────
