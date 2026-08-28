@@ -56,3 +56,7 @@ test("concurrent runnable claims allow one job per library and do not block othe
     ]);
   }
 });
+
+test.after(async () => {
+  await pool.end();
+});

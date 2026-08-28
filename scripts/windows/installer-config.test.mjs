@@ -91,6 +91,8 @@ test("release helper produces a checksum-bearing update artifact", () => {
 
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /runs-on: windows-latest/);
+  assert.match(workflow, /group:\s*windows-release-\$\{\{\s*github\.ref\s*\}\}/);
+  assert.match(workflow, /cancel-in-progress:\s*true/);
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
@@ -106,6 +108,9 @@ test("Windows release workflow builds and publishes the versioned package", () =
     workflow.indexOf("Run API server backend audit and backend integration tests"),
     workflow.indexOf("Upload backend audit log on failure"),
   );
+  assert.match(auditStep, /timeout-minutes:\s*30/);
+  assert.match(auditStep, /WILLARD_AUDIT_TEST_TIMEOUT_MS:\s*"300000"/);
+  assert.match(auditStep, /WILLARD_AUDIT_HEARTBEAT_MS:\s*"30000"/);
   assert.match(auditStep, /-Environment\s+@\{[\s\S]*WILLARD_LOCAL_DATA_ROOT = \$env:RUNNER_TEMP[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"[\s\S]*WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"/);
   assert.doesNotMatch(auditStep, /env:\s*[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES:\s*"0"/);
   assert.match(workflow, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);

@@ -13,6 +13,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: "24.13.1"
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
@@ -109,6 +113,7 @@ jobs:
 
       - name: Run API server backend audit and backend integration tests
         shell: pwsh
+        timeout-minutes: 30
         env:
           PORT: "8080"
           NODE_ENV: development
@@ -116,6 +121,8 @@ jobs:
           WILLARD_NAS_PATH: "${{ github.workspace }}\\test-media"
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/willard"
           PGPASSWORD: "postgres"
+          WILLARD_AUDIT_TEST_TIMEOUT_MS: "300000"
+          WILLARD_AUDIT_HEARTBEAT_MS: "30000"
         run: |
           $ErrorActionPreference = "Stop"
           $apiLog = Join-Path $env:RUNNER_TEMP "willard-backend-audit-api.log"
