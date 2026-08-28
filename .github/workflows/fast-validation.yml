@@ -1,0 +1,70 @@
+name: Fast validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.13.1"
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.12.4 --activate
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm package cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and validate generated contracts
+        run: |
+          pnpm run check:artifacts
+          pnpm run typecheck
+          pnpm run check:router
+          pnpm run check:api-contracts
+
+      - name: Validate release and storage contracts
+        run: |
+          pnpm run test:database-backup
+          pnpm run test:release-contracts
+          pnpm run test:storage-conformance
+
+      - name: Run targeted backend regressions
+        run: |
+          node --experimental-strip-types --test \
+            artifacts/api-server/src/__tests__/capacity-service.test.ts \
+            artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
+            artifacts/api-server/src/__tests__/library-job-claims.test.ts \
+            artifacts/api-server/src/__tests__/organize-helpers.test.ts \
+            artifacts/api-server/src/__tests__/storage-policy.test.ts \
+            artifacts/api-server/src/__tests__/thumbnail-engine.test.ts

@@ -1,8 +1,6 @@
 name: Windows release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -40,6 +38,20 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.12.4 --activate
           pnpm --version
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        shell: pwsh
+        run: |
+          "path=$(pnpm store path --silent)" >> $env:GITHUB_OUTPUT
+
+      - name: Restore pnpm package cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -212,6 +224,12 @@ jobs:
           if-no-files-found: ignore
 
       - name: Install Chromium for browser release tests
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Ensure Chromium is installed
         run: pnpm exec playwright install chromium
 
       - name: Gate release on browser E2E suites
@@ -230,21 +248,30 @@ jobs:
         shell: pwsh
         run: .\scripts\windows\update-smoke.ps1
 
-      - name: Download the bundled Windows Node runtime
+      - name: Restore the bundled Windows Node runtime
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build\node-runtime
+          key: node-runtime-${{ runner.os }}-${{ env.NODE_VERSION }}-fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279
+
+      - name: Download or verify the bundled Windows Node runtime
         shell: pwsh
         run: |
           $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE "build\node-runtime"
           $zip = Join-Path $env:RUNNER_TEMP "node-runtime.zip"
-          $url = "https://nodejs.org/dist/v$env:NODE_VERSION/node-v$env:NODE_VERSION-win-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip
           $expectedSha256 = "fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279"
           $expectedNodeExeSha256 = "e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50"
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha256) {
-            throw "The downloaded Node.js runtime did not match the pinned SHA-256."
+          $nodeExe = Join-Path $runtimeRoot "node.exe"
+          if (-not (Test-Path $nodeExe)) {
+            $url = "https://nodejs.org/dist/v$env:NODE_VERSION/node-v$env:NODE_VERSION-win-x64.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha256) {
+              throw "The downloaded Node.js runtime did not match the pinned SHA-256."
+            }
+            Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP\node-runtime -Force
+            New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+            Copy-Item "$env:RUNNER_TEMP\node-runtime\node-v$env:NODE_VERSION-win-x64\*" $runtimeRoot -Recurse -Force
           }
-          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP\node-runtime -Force
-          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
-          Copy-Item "$env:RUNNER_TEMP\node-runtime\node-v$env:NODE_VERSION-win-x64\*" $runtimeRoot -Recurse -Force
           if ((Get-FileHash (Join-Path $runtimeRoot "node.exe") -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedNodeExeSha256) {
             throw "The extracted Node.js runtime executable did not match the pinned SHA-256."
           }
