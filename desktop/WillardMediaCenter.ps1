@@ -40,18 +40,39 @@ function ConvertFrom-WillardSecureString($secureValue) {
   try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
   finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 }
+function Protect-WillardBackupCredential($plainText) {
+  $plainBytes = [Text.Encoding]::UTF8.GetBytes($plainText)
+  $protectedBytes = [Security.Cryptography.ProtectedData]::Protect(
+    $plainBytes,
+    $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser
+  )
+  return "dpapi-v2:" + [Convert]::ToBase64String($protectedBytes)
+}
+function Read-WillardBackupCredential {
+  $stored = (Get-Content $BackupCredentialFile -Raw -ErrorAction Stop).Trim()
+  if ($stored.StartsWith("dpapi-v2:")) {
+    $protectedBytes = [Convert]::FromBase64String($stored.Substring(8))
+    $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+      $protectedBytes,
+      $null,
+      [Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    return [Text.Encoding]::UTF8.GetString($plainBytes)
+  }
+  return ConvertFrom-WillardSecureString (ConvertTo-SecureString $stored)
+}
 function Initialize-BackupProtection {
   New-Item -ItemType Directory -Force -Path $BackupProtectionRoot | Out-Null
   if (-not (Test-Path $BackupCredentialFile)) {
     $bytes = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $generated = [Convert]::ToBase64String($bytes)
-    $protected = ConvertTo-SecureString $generated -AsPlainText -Force | ConvertFrom-SecureString
+    $protected = Protect-WillardBackupCredential $generated
     $protected | Set-Content $BackupCredentialFile -Encoding ASCII
   }
   try {
-    $secure = Get-Content $BackupCredentialFile -Raw | ConvertTo-SecureString
-    $env:WILLARD_BACKUP_PASSPHRASE = ConvertFrom-WillardSecureString $secure
+    $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
   } catch {
     throw "Windows could not unlock the locally protected backup credential for this account."
   }

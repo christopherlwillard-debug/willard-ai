@@ -59,11 +59,37 @@ function ConvertFrom-WillardSecureString($secureValue) {
     }
 }
 
+function Protect-WillardBackupCredential($plainText) {
+    $plainBytes = [Text.Encoding]::UTF8.GetBytes($plainText)
+    $protectedBytes = [Security.Cryptography.ProtectedData]::Protect(
+        $plainBytes,
+        $null,
+        [Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    return "dpapi-v2:" + [Convert]::ToBase64String($protectedBytes)
+}
+
+function Read-WillardBackupCredential {
+    $stored = (Get-Content $BackupCredentialFile -Raw -ErrorAction Stop).Trim()
+    if ($stored.StartsWith("dpapi-v2:")) {
+        $protectedBytes = [Convert]::FromBase64String($stored.Substring(8))
+        $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+            $protectedBytes,
+            $null,
+            [Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+        return [Text.Encoding]::UTF8.GetString($plainBytes)
+    }
+
+    # Read the original PowerShell SecureString format for existing installs.
+    return ConvertFrom-WillardSecureString (ConvertTo-SecureString $stored)
+}
+
 function New-WillardBackupCredential {
     $bytes = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $generated = [Convert]::ToBase64String($bytes)
-    $protected = ConvertTo-SecureString $generated -AsPlainText -Force | ConvertFrom-SecureString
+    $protected = Protect-WillardBackupCredential $generated
     $protected | Set-Content $BackupCredentialFile -Encoding ASCII
 }
 
@@ -74,8 +100,7 @@ function Initialize-WillardBackupProtection([bool]$RequireRecoveryExport = $fals
     }
 
     try {
-        $secure = Get-Content $BackupCredentialFile -Raw | ConvertTo-SecureString
-        $env:WILLARD_BACKUP_PASSPHRASE = ConvertFrom-WillardSecureString $secure
+        $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
     } catch {
         if (-not $OfferCredentialReset) {
             throw "Windows could not unlock the locally protected backup credential for this account."
@@ -94,8 +119,7 @@ function Initialize-WillardBackupProtection([bool]$RequireRecoveryExport = $fals
         Move-Item -LiteralPath $BackupCredentialFile -Destination $preservedCredential -Force -ErrorAction Stop
         New-WillardBackupCredential
         try {
-            $secure = Get-Content $BackupCredentialFile -Raw | ConvertTo-SecureString
-            $env:WILLARD_BACKUP_PASSPHRASE = ConvertFrom-WillardSecureString $secure
+            $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
         } catch {
             throw "Windows could not create a locally protected backup credential for this account."
         }

@@ -34,6 +34,10 @@ const setupLauncher = await readFile(
   new URL("../launcher/setup.ps1", import.meta.url),
   "utf8",
 );
+const repairLauncher = await readFile(
+  new URL("../launcher/repair.ps1", import.meta.url),
+  "utf8",
+);
 const updater = await readFile(
   new URL("../launcher/update.ps1", import.meta.url),
   "utf8",
@@ -116,7 +120,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /setup-db\.cjs/);
   assert.match(launcher, /database\.log/);
   assert.match(launcher, /automation-credential\.dpapi/);
-  assert.match(launcher, /ConvertFrom-SecureString/);
+  assert.match(launcher, /ProtectedData\]::Protect/);
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
   assert.match(launcher, /portable recovery export/i);
   assert.match(launcher, /credentialFingerprint/);
@@ -570,6 +574,19 @@ test("developer setup enables one-click GitHub updates without affecting package
   assert.match(launcherCommon, /Restore-SetupQuarantineNonConflicting/);
   assert.doesNotMatch(launcherCommon, /gitCommand -C \$Root add -A/);
   assert.match(updater, /signed release archive remains a fallback/);
+});
+
+test("Windows backup credentials use native user-scoped DPAPI with legacy compatibility", () => {
+  for (const credentialLauncher of [launcherCommon, launcher]) {
+    assert.match(credentialLauncher, /ProtectedData\]::Protect/);
+    assert.match(credentialLauncher, /ProtectedData\]::Unprotect/);
+    assert.match(credentialLauncher, /DataProtectionScope\]::CurrentUser/);
+    assert.match(credentialLauncher, /dpapi-v2:/);
+    assert.match(credentialLauncher, /ConvertTo-SecureString \$stored/);
+  }
+  assert.match(setupLauncher, /-OfferCredentialReset/);
+  assert.match(developerLauncher, /-OfferCredentialReset/);
+  assert.match(repairLauncher, /Library backup protection is ready/);
 });
 
 test("database setup quotes special names and parameterizes catalog lookup", async () => {
