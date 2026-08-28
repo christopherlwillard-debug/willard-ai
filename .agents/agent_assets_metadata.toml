@@ -33,3 +33,10 @@ uri = "file://willard-ai-laptop-source.zip"
 type = "unspecified"
 title = "Willard AI laptop project folder"
 description = "Updated ZIP containing the Windows path-quoting fix and graceful handling when GitHub has no published verified release yet."
+
+[[outputs]]
+id = "O8ZOuN2NSLOW6P1EdG8ix"
+uri = "file://build/Willard-AI-fixed.zip"
+type = "unspecified"
+title = "Willard AI — fixed download folder"
+description = "Clean source folder containing the updater fix. Extract it, then run Setup Willard AI.bat. Existing NAS files and app data are not included or modified."
