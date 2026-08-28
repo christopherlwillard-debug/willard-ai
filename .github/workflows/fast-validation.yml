@@ -46,6 +46,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Expose PostgreSQL test tools
+        run: |
+          if ! command -v pg_config >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql
+          fi
+          postgres_bin="$(pg_config --bindir)"
+          test -x "$postgres_bin/initdb"
+          echo "$postgres_bin" >> "$GITHUB_PATH"
+
       - name: Typecheck and validate generated contracts
         run: |
           pnpm run check:artifacts
