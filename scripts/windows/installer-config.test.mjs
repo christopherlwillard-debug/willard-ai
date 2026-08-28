@@ -291,9 +291,10 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   assert.match(launcher, /CloseMainWindow\(\)/);
   assert.match(launcher, /startup-failure\.log/);
   assert.match(launcher, /System\.Windows\.MessageBox/);
+  assert.match(launcher, /Recover-InterruptedUpdateSwap/);
   assert.match(
     launcher,
-    /Start-LoadingScreen\s*\n\s*Recover-InterruptedUpdateSwap/,
+    /\$env:PORT = "8080"\s*\n\s*Start-LoadingScreen\s*\n\s*\$apiProc/,
   );
   assert.doesNotMatch(launcher, /if \(-not \(Ensure-Env\)\) \{ exit 1 \}/);
   assert.doesNotMatch(
@@ -308,6 +309,8 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
       failureCatch.indexOf("Report-StartupFailure"),
   );
   assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 150000/);
+  assert.match(loaderPage, /const elapsed = document\.getElementById\("elapsed"\)/);
+  assert.match(loaderPage, /STARTING LOCAL SERVICES/);
   assert.match(loaderPage, /STARTUP NEEDS ATTENTION/);
   assert.match(loaderPage, /detail\.hidden = false/);
   assert.match(

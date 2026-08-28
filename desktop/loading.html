@@ -24,6 +24,7 @@
   <main>
     <h1>WILLARD_AI</h1>
     <p id="status" role="status" aria-live="polite">PREPARING YOUR LIBRARY</p>
+    <p id="elapsed" aria-live="polite">STARTING LOCAL SERVICES</p>
     <p id="detail" hidden>Willard is taking longer than expected. Close this window, then check the launcher message and the logs in your local Willard Media Center folder before trying again.</p>
   </main>
   <script>
@@ -32,6 +33,14 @@
     const web = "http://127.0.0.1:5000";
     const deadline = Date.now() + 150000;
     const detail = document.getElementById("detail");
+    const elapsed = document.getElementById("elapsed");
+    const startedAt = Date.now();
+    window.setInterval(() => {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      elapsed.textContent = seconds < 10
+        ? "STARTING LOCAL SERVICES"
+        : `STARTING LOCAL SERVICES · ${seconds}s`;
+    }, 1000);
     async function ready(url, check) {
       try {
         const response = await fetch(url, { cache: "no-store" });
