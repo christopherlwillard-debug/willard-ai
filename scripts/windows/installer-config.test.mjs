@@ -738,6 +738,7 @@ test("developer fallback stages a complete source archive", async () => {
 
 test("developer updater preserves full runnable versions and rolls back failed candidate updates", () => {
   assert.match(updater, /status --porcelain/);
+  assert.match(updater, /Detected:/);
   assert.match(updater, /New-CandidateDirectory/);
   assert.match(updater, /Invoke-DeveloperVersionSwap/);
   assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);

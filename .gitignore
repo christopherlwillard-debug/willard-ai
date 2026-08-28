@@ -64,6 +64,8 @@ test-results/
 .env.local
 .env.*.local
 logs/
+/library-data/
+/media-path.txt
 
 # Encrypted database backups are operator-managed and must not enter source control.
 /backups/

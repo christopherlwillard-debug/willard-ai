@@ -165,9 +165,16 @@ try {
     if ($gitCommand -and (Test-Path (Join-Path $Root ".git"))) {
         $before = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
         if ($LASTEXITCODE -ne 0) { throw "This developer folder has an invalid Git checkout. Run setup again to repair it." }
-        $dirty = & $gitCommand -C $Root status --porcelain
-        if ($dirty) {
-            throw "Local code changes are present. Save or revert them before running Update Willard AI."
+        $dirty = @(& $gitCommand -C $Root status --porcelain)
+        if ($dirty.Count -gt 0) {
+            $dirtyPaths = @(
+                $dirty | ForEach-Object {
+                    $line = ([string]$_)
+                    if ($line.Length -gt 3) { $line.Substring(3).Trim() } else { $line.Trim() }
+                } | Select-Object -First 8
+            )
+            $suffix = if ($dirtyPaths.Count -gt 0) { " Detected: " + ($dirtyPaths -join ", ") + "." } else { "" }
+            throw ("Local code changes are present. Save or revert them before running Update Willard AI." + $suffix)
         }
 
         $candidate = New-CandidateDirectory
