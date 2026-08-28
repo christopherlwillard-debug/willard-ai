@@ -63,6 +63,7 @@ function New-CandidateDirectory($gitCommand) {
     if ($LASTEXITCODE -ne 0) {
         throw "This folder's GitHub update source could not be configured."
     }
+    New-Item -ItemType Directory -Force (Join-Path $candidate "logs") | Out-Null
     return $candidate
 }
 
