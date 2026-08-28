@@ -14,7 +14,7 @@
     "test:storage-conformance": "node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-policy.test.ts && node --test scripts/windows/storage-conformance.test.mjs",
     "test:release-contracts": "node --test desktop/release-contract.test.mjs scripts/artifact-sources.test.mjs scripts/windows/release-payload.test.mjs scripts/windows/installer-config.test.mjs scripts/windows/storage-conformance.test.mjs",
     "test:routed": "node scripts/run-routed-workflows.mjs",
-    "audit:backend": "pnpm --filter @workspace/api-server run audit && node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts e2e/cleanup-execute.test.ts"
+    "audit:backend": "pnpm --filter @workspace/api-server run audit"
   },
   "private": true,
   "devDependencies": {

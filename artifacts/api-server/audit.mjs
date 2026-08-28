@@ -3,11 +3,18 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const testDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "src", "__tests__");
-const testFiles = readdirSync(testDirectory)
+const apiServerDirectory = path.dirname(fileURLToPath(import.meta.url));
+const workspaceDirectory = path.resolve(apiServerDirectory, "../..");
+const testDirectory = path.join(apiServerDirectory, "src", "__tests__");
+const apiTestFiles = readdirSync(testDirectory)
   .filter((name) => name.endsWith(".test.ts"))
   .sort()
   .map((name) => path.join(testDirectory, name));
+const integrationTestFiles = [
+  path.join(workspaceDirectory, "e2e", "cleanup-execute.test.ts"),
+  path.join(workspaceDirectory, "e2e", "dashboard-after-scan.test.ts"),
+];
+const testFiles = [...apiTestFiles, ...integrationTestFiles];
 
 const timeoutMs = Number(process.env.WILLARD_AUDIT_TEST_TIMEOUT_MS ?? 300_000);
 const heartbeatMs = Number(process.env.WILLARD_AUDIT_HEARTBEAT_MS ?? 30_000);
@@ -38,7 +45,9 @@ function runTestFile(testFile) {
     );
     let settled = false;
     const heartbeat = setInterval(() => {
-      console.log(`[backend-audit] HEARTBEAT ${name} elapsedMs=${Date.now() - startedAt}`);
+      console.log(
+        `[backend-audit] HEARTBEAT ${name} elapsedMs=${Date.now() - startedAt}`,
+      );
     }, heartbeatMs);
     const finish = (result) => {
       if (settled) return;
@@ -47,9 +56,14 @@ function runTestFile(testFile) {
       resolve(result);
     };
     const timeout = setTimeout(() => {
-      console.error(`[backend-audit] TIMEOUT ${name} afterMs=${Date.now() - startedAt}`);
+      console.error(
+        `[backend-audit] TIMEOUT ${name} afterMs=${Date.now() - startedAt}`,
+      );
       if (process.platform === "win32" && child.pid) {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "inherit", windowsHide: true });
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          stdio: "inherit",
+          windowsHide: true,
+        });
       } else {
         child.kill("SIGTERM");
       }
@@ -73,11 +87,15 @@ function runTestFile(testFile) {
 for (const testFile of testFiles) {
   const result = await runTestFile(testFile);
   if (result.timedOut) {
-    console.error(`[backend-audit] FAILED ${path.basename(testFile)} reason=timeout`);
+    console.error(
+      `[backend-audit] FAILED ${path.basename(testFile)} reason=timeout`,
+    );
     process.exit(124);
   }
   if (result.code !== 0) {
-    console.error(`[backend-audit] FAILED ${path.basename(testFile)} exitCode=${result.code} signal=${result.signal ?? "none"}`);
+    console.error(
+      `[backend-audit] FAILED ${path.basename(testFile)} exitCode=${result.code} signal=${result.signal ?? "none"}`,
+    );
     process.exit(result.code);
   }
   console.log(`[backend-audit] PASS ${path.basename(testFile)}`);

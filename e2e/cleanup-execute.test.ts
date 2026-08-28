@@ -29,7 +29,7 @@ import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -72,11 +72,25 @@ async function apiGet(p: string): Promise<Response> {
 }
 
 async function apiOrganizeExecute(jobId: number): Promise<Response> {
-  const tokenResponse = await apiPost(`/organize/jobs/${jobId}/execute-token`, {});
-  const tokenResult = await readJson<{ token?: string; error?: string }>(tokenResponse);
-  assert.strictEqual(tokenResult.status, 200, `Could not authorize organize execution: ${tokenResult.text}`);
-  assert.ok(tokenResult.body.token, "Organize execution token should be returned");
-  return apiGet(`/organize/jobs/${jobId}/execute?token=${encodeURIComponent(tokenResult.body.token)}`);
+  const tokenResponse = await apiPost(
+    `/organize/jobs/${jobId}/execute-token`,
+    {},
+  );
+  const tokenResult = await readJson<{ token?: string; error?: string }>(
+    tokenResponse,
+  );
+  assert.strictEqual(
+    tokenResult.status,
+    200,
+    `Could not authorize organize execution: ${tokenResult.text}`,
+  );
+  assert.ok(
+    tokenResult.body.token,
+    "Organize execution token should be returned",
+  );
+  return apiGet(
+    `/organize/jobs/${jobId}/execute?token=${encodeURIComponent(tokenResult.body.token)}`,
+  );
 }
 
 async function apiPost(
@@ -138,9 +152,11 @@ async function pollUntil<T>(
 /** Query the PostgreSQL DB via psql and return trimmed stdout. */
 function queryDb(sql: string): string {
   const dbUrl = process.env["DATABASE_URL"] ?? "";
-  return execSync(`psql "${dbUrl}" --no-psqlrc -t -c ${JSON.stringify(sql)}`, {
+  return execFileSync("psql", [dbUrl, "--no-psqlrc", "-t", "-c", sql], {
     encoding: "utf8",
     stdio: ["inherit", "pipe", "pipe"],
+    timeout: 30_000,
+    env: { ...process.env, PGCONNECT_TIMEOUT: "10" },
   }).trim();
 }
 
@@ -498,8 +514,14 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const archivePath = path.join(tempNasDir, "approved-archive.zip");
     const waitingDir = path.join(tempNasDir, "Waiting to be Organized");
     const files = [
-      { entry: "photos/approved.jpg", content: Buffer.from("approved-photo-content") },
-      { entry: "notes/readme.txt", content: Buffer.from("approved-note-content") },
+      {
+        entry: "photos/approved.jpg",
+        content: Buffer.from("approved-photo-content"),
+      },
+      {
+        entry: "notes/readme.txt",
+        content: Buffer.from("approved-note-content"),
+      },
     ];
     const archiveInputDir = path.join(tempNasDir, "approved-archive-input");
     for (const file of files) {
@@ -507,7 +529,9 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       fs.mkdirSync(path.dirname(inputPath), { recursive: true });
       fs.writeFileSync(inputPath, file.content);
     }
-    execFileSync("zip", ["-q", "-r", archivePath, "photos", "notes"], { cwd: archiveInputDir });
+    execFileSync("zip", ["-q", "-r", archivePath, "photos", "notes"], {
+      cwd: archiveInputDir,
+    });
     fs.rmSync(archiveInputDir, { recursive: true, force: true });
 
     const createRes = await apiPost("/organize/jobs", {
@@ -516,17 +540,33 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       archiveDisposition: "waiting",
     });
     const created = await readJson<{ id: number }>(createRes);
-    assert.strictEqual(created.status, 201, `Archive job creation failed: ${created.text}`);
+    assert.strictEqual(
+      created.status,
+      201,
+      `Archive job creation failed: ${created.text}`,
+    );
 
-    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+    const analyzeRes = await apiPost(
+      `/organize/jobs/${created.body.id}/analyze`,
+      {},
+    );
     const analyzed = await readJson<{
       status: string;
       planJson?: {
         routes: Array<{ destination: string; filename: string }>;
-        destinations: { images: string; videos: string; documents: string; other: string };
+        destinations: {
+          images: string;
+          videos: string;
+          documents: string;
+          other: string;
+        };
       };
     }>(analyzeRes);
-    assert.strictEqual(analyzed.status, 200, `Archive analysis failed: ${analyzed.text}`);
+    assert.strictEqual(
+      analyzed.status,
+      200,
+      `Archive analysis failed: ${analyzed.text}`,
+    );
     assert.ok(analyzed.body.planJson, "Analysis should return the saved plan");
 
     const plan = analyzed.body.planJson!;
@@ -537,36 +577,71 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       "every approved archive route must use Waiting to be Organized",
     );
     assert.deepEqual(
-      Object.values(plan.destinations).map((destination) => path.resolve(destination)),
+      Object.values(plan.destinations).map((destination) =>
+        path.resolve(destination),
+      ),
       [expectedWaiting, expectedWaiting, expectedWaiting, expectedWaiting],
       "all planned destination summaries must use Waiting to be Organized",
     );
     assert.ok(
-      plan.routes.every((route) => !route.destination.includes(path.join("Media", "Photos"))),
+      plan.routes.every(
+        (route) => !route.destination.includes(path.join("Media", "Photos")),
+      ),
       "approved archive contents must not route directly into media folders",
     );
 
-    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
+    const preflightRes = await apiPost(
+      `/organize/jobs/${created.body.id}/preflight`,
+      {},
+    );
     const preflight = await readJson<{ status: string }>(preflightRes);
-    assert.strictEqual(preflight.status, 200, `Archive preflight failed: ${preflight.text}`);
+    assert.strictEqual(
+      preflight.status,
+      200,
+      `Archive preflight failed: ${preflight.text}`,
+    );
 
     const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
-    assert.strictEqual(executeRes.status, 200, "Archive execution should return an SSE stream");
-    assert.match(executeText, /event: complete/, `Archive execution did not complete: ${executeText}`);
-    assert.doesNotMatch(executeText, /event: error/, "Archive execution must not report an error");
+    assert.strictEqual(
+      executeRes.status,
+      200,
+      "Archive execution should return an SSE stream",
+    );
+    assert.match(
+      executeText,
+      /event: complete/,
+      `Archive execution did not complete: ${executeText}`,
+    );
+    assert.doesNotMatch(
+      executeText,
+      /event: error/,
+      "Archive execution must not report an error",
+    );
 
     for (const file of files) {
       const destination = path.join(waitingDir, path.basename(file.entry));
-      assert.ok(fs.existsSync(destination), `Extracted file should arrive at ${destination}`);
-      assert.deepEqual(fs.readFileSync(destination), file.content, "Extracted bytes must be intact");
+      assert.ok(
+        fs.existsSync(destination),
+        `Extracted file should arrive at ${destination}`,
+      );
+      assert.deepEqual(
+        fs.readFileSync(destination),
+        file.content,
+        "Extracted bytes must be intact",
+      );
     }
-    assert.ok(fs.existsSync(archivePath), "The approved source archive must remain present");
-    assert.ok(!fs.existsSync(path.join(tempNasDir, "Media", "Photos", "approved.jpg")),
-      "Approved archive content must not be placed in Media/Photos");
+    assert.ok(
+      fs.existsSync(archivePath),
+      "The approved source archive must remain present",
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tempNasDir, "Media", "Photos", "approved.jpg")),
+      "Approved archive content must not be placed in Media/Photos",
+    );
 
     const jobRes = await apiGet(`/organize/jobs/${created.body.id}`);
-    const job = await jobRes.json() as {
+    const job = (await jobRes.json()) as {
       status: string;
       reportJson?: {
         filesVerified: number;
@@ -578,7 +653,9 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.equal(job.reportJson?.filesVerified, files.length);
     assert.equal(job.reportJson?.checksumVerifiedCount, files.length);
     assert.equal(
-      job.reportJson?.archiveExtractionChecksums?.filter((checksum) => checksum.verified).length,
+      job.reportJson?.archiveExtractionChecksums?.filter(
+        (checksum) => checksum.verified,
+      ).length,
       files.length,
       "each extracted archive entry must pass integrity verification",
     );
@@ -594,11 +671,23 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     ];
 
     for (const variant of variants) {
-      const archivePath = path.join(tempNasDir, `approved-${variant.suffix}.${variant.extension}`);
-      const archiveInputDir = path.join(tempNasDir, `approved-${variant.suffix}-input`);
+      const archivePath = path.join(
+        tempNasDir,
+        `approved-${variant.suffix}.${variant.extension}`,
+      );
+      const archiveInputDir = path.join(
+        tempNasDir,
+        `approved-${variant.suffix}-input`,
+      );
       const files = [
-        { entry: `photos/approved-${variant.suffix}.jpg`, content: Buffer.from(`${variant.suffix}-photo-content`) },
-        { entry: `notes/readme-${variant.suffix}.txt`, content: Buffer.from(`${variant.suffix}-note-content`) },
+        {
+          entry: `photos/approved-${variant.suffix}.jpg`,
+          content: Buffer.from(`${variant.suffix}-photo-content`),
+        },
+        {
+          entry: `notes/readme-${variant.suffix}.txt`,
+          content: Buffer.from(`${variant.suffix}-note-content`),
+        },
       ];
 
       for (const file of files) {
@@ -608,7 +697,14 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       }
       execFileSync(
         "tar",
-        [variant.createFlag, archivePath, "-C", archiveInputDir, "photos", "notes"],
+        [
+          variant.createFlag,
+          archivePath,
+          "-C",
+          archiveInputDir,
+          "photos",
+          "notes",
+        ],
         { cwd: archiveInputDir },
       );
       fs.rmSync(archiveInputDir, { recursive: true, force: true });
@@ -619,18 +715,37 @@ describe("Cleanup execute API", { concurrency: false }, () => {
         archiveDisposition: "waiting",
       });
       const created = await readJson<{ id: number }>(createRes);
-      assert.strictEqual(created.status, 201, `TAR job creation failed: ${created.text}`);
+      assert.strictEqual(
+        created.status,
+        201,
+        `TAR job creation failed: ${created.text}`,
+      );
 
-      const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
+      const analyzeRes = await apiPost(
+        `/organize/jobs/${created.body.id}/analyze`,
+        {},
+      );
       const analyzed = await readJson<{
         status: string;
         planJson?: {
           routes: Array<{ destination: string }>;
-          destinations: { images: string; videos: string; documents: string; other: string };
+          destinations: {
+            images: string;
+            videos: string;
+            documents: string;
+            other: string;
+          };
         };
       }>(analyzeRes);
-      assert.strictEqual(analyzed.status, 200, `TAR analysis failed: ${analyzed.text}`);
-      assert.ok(analyzed.body.planJson, "TAR analysis should return the saved plan");
+      assert.strictEqual(
+        analyzed.status,
+        200,
+        `TAR analysis failed: ${analyzed.text}`,
+      );
+      assert.ok(
+        analyzed.body.planJson,
+        "TAR analysis should return the saved plan",
+      );
 
       const plan = analyzed.body.planJson!;
       const expectedWaiting = path.resolve(waitingDir);
@@ -640,34 +755,64 @@ describe("Cleanup execute API", { concurrency: false }, () => {
         `${variant.extension} routes must use Waiting to be Organized`,
       );
       assert.deepEqual(
-        Object.values(plan.destinations).map((destination) => path.resolve(destination)),
+        Object.values(plan.destinations).map((destination) =>
+          path.resolve(destination),
+        ),
         [expectedWaiting, expectedWaiting, expectedWaiting, expectedWaiting],
         `${variant.extension} destination summaries must use Waiting to be Organized`,
       );
 
-      const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
-      assert.strictEqual(preflightRes.status, 200, `TAR preflight failed: ${await preflightRes.text()}`);
+      const preflightRes = await apiPost(
+        `/organize/jobs/${created.body.id}/preflight`,
+        {},
+      );
+      assert.strictEqual(
+        preflightRes.status,
+        200,
+        `TAR preflight failed: ${await preflightRes.text()}`,
+      );
 
       const executeRes = await apiOrganizeExecute(created.body.id);
       const executeText = await executeRes.text();
       assert.strictEqual(executeRes.status, 200);
-      assert.match(executeText, /event: complete/, `${variant.extension} execution did not complete`);
-      assert.doesNotMatch(executeText, /event: error/, `${variant.extension} execution must not report an error`);
+      assert.match(
+        executeText,
+        /event: complete/,
+        `${variant.extension} execution did not complete`,
+      );
+      assert.doesNotMatch(
+        executeText,
+        /event: error/,
+        `${variant.extension} execution must not report an error`,
+      );
 
       for (const file of files) {
         const destination = path.join(waitingDir, path.basename(file.entry));
-        assert.ok(fs.existsSync(destination), `Extracted ${variant.extension} file should arrive at ${destination}`);
-        assert.deepEqual(fs.readFileSync(destination), file.content, "TAR extracted bytes must be intact");
+        assert.ok(
+          fs.existsSync(destination),
+          `Extracted ${variant.extension} file should arrive at ${destination}`,
+        );
+        assert.deepEqual(
+          fs.readFileSync(destination),
+          file.content,
+          "TAR extracted bytes must be intact",
+        );
       }
-      assert.ok(fs.existsSync(archivePath), `${variant.extension} source archive must remain present`);
+      assert.ok(
+        fs.existsSync(archivePath),
+        `${variant.extension} source archive must remain present`,
+      );
 
       const jobRes = await apiGet(`/organize/jobs/${created.body.id}`);
-      const job = await jobRes.json() as {
+      const job = (await jobRes.json()) as {
         status: string;
         reportJson?: {
           filesVerified: number;
           checksumVerifiedCount: number;
-          archiveExtractionChecksums?: Array<{ verified: boolean; verificationMethod: string }>;
+          archiveExtractionChecksums?: Array<{
+            verified: boolean;
+            verificationMethod: string;
+          }>;
           archiveCrcValidation?: { format: string };
         };
       };
@@ -675,15 +820,22 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       assert.equal(job.reportJson?.filesVerified, files.length);
       assert.equal(job.reportJson?.checksumVerifiedCount, files.length);
       assert.equal(
-        job.reportJson?.archiveExtractionChecksums?.filter((checksum) => checksum.verified).length,
+        job.reportJson?.archiveExtractionChecksums?.filter(
+          (checksum) => checksum.verified,
+        ).length,
         files.length,
         "each TAR entry must have a post-extraction checksum",
       );
       assert.ok(
-        job.reportJson?.archiveExtractionChecksums?.every((checksum) => checksum.verificationMethod === "post-extract-only"),
+        job.reportJson?.archiveExtractionChecksums?.every(
+          (checksum) => checksum.verificationMethod === "post-extract-only",
+        ),
         "TAR checksums must identify their post-extraction verification method",
       );
-      assert.match(job.reportJson?.archiveCrcValidation?.format ?? "", /tar-sha256-post-extract/);
+      assert.match(
+        job.reportJson?.archiveCrcValidation?.format ?? "",
+        /tar-sha256-post-extract/,
+      );
     }
   });
 
@@ -694,10 +846,20 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const archiveInputDir = path.join(tempNasDir, "malicious-archive-input");
     const outsidePath = path.join(tempNasDir, "tar-escape.txt");
     fs.mkdirSync(archiveInputDir, { recursive: true });
-    fs.writeFileSync(path.join(archiveInputDir, "escape.txt"), "must not escape staging");
+    fs.writeFileSync(
+      path.join(archiveInputDir, "escape.txt"),
+      "must not escape staging",
+    );
     execFileSync(
       "tar",
-      ["-cf", archivePath, "-C", archiveInputDir, "--transform=s|^|../|", "escape.txt"],
+      [
+        "-cf",
+        archivePath,
+        "-C",
+        archiveInputDir,
+        "--transform=s|^|../|",
+        "escape.txt",
+      ],
       { cwd: archiveInputDir },
     );
     fs.rmSync(archiveInputDir, { recursive: true, force: true });
@@ -709,22 +871,52 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       archiveDisposition: "waiting",
     });
     const created = await readJson<{ id: number }>(createRes);
-    assert.strictEqual(created.status, 201, `TAR traversal job creation failed: ${created.text}`);
+    assert.strictEqual(
+      created.status,
+      201,
+      `TAR traversal job creation failed: ${created.text}`,
+    );
 
-    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
-    assert.strictEqual(analyzeRes.status, 200, `TAR traversal analysis failed: ${await analyzeRes.text()}`);
-    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
-    assert.strictEqual(preflightRes.status, 200, `TAR traversal preflight failed: ${await preflightRes.text()}`);
+    const analyzeRes = await apiPost(
+      `/organize/jobs/${created.body.id}/analyze`,
+      {},
+    );
+    assert.strictEqual(
+      analyzeRes.status,
+      200,
+      `TAR traversal analysis failed: ${await analyzeRes.text()}`,
+    );
+    const preflightRes = await apiPost(
+      `/organize/jobs/${created.body.id}/preflight`,
+      {},
+    );
+    assert.strictEqual(
+      preflightRes.status,
+      200,
+      `TAR traversal preflight failed: ${await preflightRes.text()}`,
+    );
 
     const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
-    assert.match(executeText, /event: error/, "TAR traversal must fail during safe extraction");
+    assert.match(
+      executeText,
+      /event: error/,
+      "TAR traversal must fail during safe extraction",
+    );
     assert.match(executeText, /traversal rejected/i);
-    assert.ok(fs.existsSync(archivePath), "A rejected TAR archive must remain present");
-    assert.ok(!fs.existsSync(outsidePath), "TAR traversal must not write outside the staging area");
+    assert.ok(
+      fs.existsSync(archivePath),
+      "A rejected TAR archive must remain present",
+    );
+    assert.ok(
+      !fs.existsSync(outsidePath),
+      "TAR traversal must not write outside the staging area",
+    );
     assert.equal(
-      fs.readdirSync(path.join(tempNasDir, "Waiting to be Organized"), { withFileTypes: true }).length,
+      fs.readdirSync(path.join(tempNasDir, "Waiting to be Organized"), {
+        withFileTypes: true,
+      }).length,
       0,
       "TAR traversal must not partially move files",
     );
@@ -735,9 +927,16 @@ describe("Cleanup execute API", { concurrency: false }, () => {
   test("TAR extraction failure after approval leaves no partial moves and preserves source", async () => {
     const archivePath = path.join(tempNasDir, "truncated-archive.tgz");
     const archiveInputDir = path.join(tempNasDir, "truncated-archive-input");
-    const destination = path.join(tempNasDir, "Waiting to be Organized", "truncated.jpg");
+    const destination = path.join(
+      tempNasDir,
+      "Waiting to be Organized",
+      "truncated.jpg",
+    );
     fs.mkdirSync(path.join(archiveInputDir, "photos"), { recursive: true });
-    fs.writeFileSync(path.join(archiveInputDir, "photos", "truncated.jpg"), "must not be partially moved");
+    fs.writeFileSync(
+      path.join(archiveInputDir, "photos", "truncated.jpg"),
+      "must not be partially moved",
+    );
     execFileSync("tar", ["-czf", archivePath, "-C", archiveInputDir, "photos"]);
     fs.rmSync(archiveInputDir, { recursive: true, force: true });
 
@@ -747,19 +946,43 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       archiveDisposition: "waiting",
     });
     const created = await readJson<{ id: number }>(createRes);
-    assert.strictEqual(created.status, 201, `Truncated TAR job creation failed: ${created.text}`);
-    assert.strictEqual((await apiPost(`/organize/jobs/${created.body.id}/analyze`, {})).status, 200);
-    assert.strictEqual((await apiPost(`/organize/jobs/${created.body.id}/preflight`, {})).status, 200);
+    assert.strictEqual(
+      created.status,
+      201,
+      `Truncated TAR job creation failed: ${created.text}`,
+    );
+    assert.strictEqual(
+      (await apiPost(`/organize/jobs/${created.body.id}/analyze`, {})).status,
+      200,
+    );
+    assert.strictEqual(
+      (await apiPost(`/organize/jobs/${created.body.id}/preflight`, {})).status,
+      200,
+    );
 
     const originalSize = fs.statSync(archivePath).size;
     fs.truncateSync(archivePath, Math.max(1, Math.floor(originalSize / 2)));
     const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
-    assert.match(executeText, /event: error/, "A truncated TAR must fail extraction");
-    assert.doesNotMatch(executeText, /event: complete/, "A failed TAR extraction must not complete");
-    assert.ok(fs.existsSync(archivePath), "A failed TAR extraction must preserve the source archive");
-    assert.ok(!fs.existsSync(destination), "A failed TAR extraction must not move partial files");
+    assert.match(
+      executeText,
+      /event: error/,
+      "A truncated TAR must fail extraction",
+    );
+    assert.doesNotMatch(
+      executeText,
+      /event: complete/,
+      "A failed TAR extraction must not complete",
+    );
+    assert.ok(
+      fs.existsSync(archivePath),
+      "A failed TAR extraction must preserve the source archive",
+    );
+    assert.ok(
+      !fs.existsSync(destination),
+      "A failed TAR extraction must not move partial files",
+    );
   });
 
   // ── Test 9: traversal protection still applies ───────────────────────────
@@ -769,8 +992,13 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const escapedPath = path.join(tempNasDir, "escape.txt");
     const archiveInputDir = path.join(tempNasDir, "malicious-archive-input");
     fs.mkdirSync(archiveInputDir, { recursive: true });
-    fs.writeFileSync(path.join(tempNasDir, "escape-source.txt"), "must not escape staging");
-    execFileSync("zip", ["-q", archivePath, "../escape-source.txt"], { cwd: archiveInputDir });
+    fs.writeFileSync(
+      path.join(tempNasDir, "escape-source.txt"),
+      "must not escape staging",
+    );
+    execFileSync("zip", ["-q", archivePath, "../escape-source.txt"], {
+      cwd: archiveInputDir,
+    });
     fs.rmSync(archiveInputDir, { recursive: true, force: true });
     fs.rmSync(path.join(tempNasDir, "escape-source.txt"), { force: true });
     assert.ok(!fs.existsSync(escapedPath));
@@ -781,20 +1009,48 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       archiveDisposition: "waiting",
     });
     const created = await readJson<{ id: number }>(createRes);
-    assert.strictEqual(created.status, 201, `Traversal job creation failed: ${created.text}`);
+    assert.strictEqual(
+      created.status,
+      201,
+      `Traversal job creation failed: ${created.text}`,
+    );
 
-    const analyzeRes = await apiPost(`/organize/jobs/${created.body.id}/analyze`, {});
-    assert.strictEqual(analyzeRes.status, 200, `Traversal analysis failed: ${await analyzeRes.text()}`);
-    const preflightRes = await apiPost(`/organize/jobs/${created.body.id}/preflight`, {});
-    assert.strictEqual(preflightRes.status, 200, `Traversal preflight failed: ${await preflightRes.text()}`);
+    const analyzeRes = await apiPost(
+      `/organize/jobs/${created.body.id}/analyze`,
+      {},
+    );
+    assert.strictEqual(
+      analyzeRes.status,
+      200,
+      `Traversal analysis failed: ${await analyzeRes.text()}`,
+    );
+    const preflightRes = await apiPost(
+      `/organize/jobs/${created.body.id}/preflight`,
+      {},
+    );
+    assert.strictEqual(
+      preflightRes.status,
+      200,
+      `Traversal preflight failed: ${await preflightRes.text()}`,
+    );
 
     const executeRes = await apiOrganizeExecute(created.body.id);
     const executeText = await executeRes.text();
     assert.strictEqual(executeRes.status, 200);
-    assert.match(executeText, /event: error/, "Traversal must fail during safe extraction");
+    assert.match(
+      executeText,
+      /event: error/,
+      "Traversal must fail during safe extraction",
+    );
     assert.match(executeText, /traversal rejected/i);
-    assert.ok(fs.existsSync(archivePath), "A rejected archive must remain present");
-    assert.ok(!fs.existsSync(escapedPath), "Traversal must not write outside the staging area");
+    assert.ok(
+      fs.existsSync(archivePath),
+      "A rejected archive must remain present",
+    );
+    assert.ok(
+      !fs.existsSync(escapedPath),
+      "Traversal must not write outside the staging area",
+    );
   });
 
   // ── Test 10: missing NAS returns a retryable conflict ─────────────────────

@@ -5,33 +5,99 @@ import { createRequire } from "node:module";
 import { findHighSeverityImageAdvisories } from "./validate-release.mjs";
 
 const require = createRequire(import.meta.url);
-const { ensureDatabase, getDatabaseName, quoteIdentifier } = require("../../setup-db.cjs");
-const config = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
-const launcher = await readFile(new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url), "utf8");
-const developerLauncher = await readFile(new URL("../launcher/start.ps1", import.meta.url), "utf8");
-const launcherCommon = await readFile(new URL("../launcher/common.ps1", import.meta.url), "utf8");
-const setupLauncher = await readFile(new URL("../launcher/setup.ps1", import.meta.url), "utf8");
-const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
-const releaseBuilder = await readFile(new URL("./make-release.ps1", import.meta.url), "utf8");
-const releaseSigner = await readFile(new URL("./sign-release.mjs", import.meta.url), "utf8");
-const localBuildInstaller = await readFile(new URL("./build-installer.ps1", import.meta.url), "utf8");
-const releaseStager = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
-const workflow = await readFile(new URL("../../.github/workflows/windows-release.yml", import.meta.url), "utf8");
-const releaseValidator = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
-const startupSmoke = await readFile(new URL("./startup-smoke.ps1", import.meta.url), "utf8");
-const updateSmoke = await readFile(new URL("./update-smoke.ps1", import.meta.url), "utf8");
-const loaderPage = await readFile(new URL("../../desktop/loading.html", import.meta.url), "utf8");
-const installerCompiler = await readFile(new URL("./compile-installer.ps1", import.meta.url), "utf8");
-const installedLifecycleSmoke = await readFile(new URL("./installer-lifecycle-smoke.ps1", import.meta.url), "utf8");
+const {
+  ensureDatabase,
+  getDatabaseName,
+  quoteIdentifier,
+} = require("../../setup-db.cjs");
+const config = await readFile(
+  new URL("../../installer/WillardMediaCenter.iss", import.meta.url),
+  "utf8",
+);
+const launcher = await readFile(
+  new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url),
+  "utf8",
+);
+const developerLauncher = await readFile(
+  new URL("../launcher/start.ps1", import.meta.url),
+  "utf8",
+);
+const launcherCommon = await readFile(
+  new URL("../launcher/common.ps1", import.meta.url),
+  "utf8",
+);
+const setupLauncher = await readFile(
+  new URL("../launcher/setup.ps1", import.meta.url),
+  "utf8",
+);
+const updater = await readFile(
+  new URL("../launcher/update.ps1", import.meta.url),
+  "utf8",
+);
+const releaseBuilder = await readFile(
+  new URL("./make-release.ps1", import.meta.url),
+  "utf8",
+);
+const releaseSigner = await readFile(
+  new URL("./sign-release.mjs", import.meta.url),
+  "utf8",
+);
+const localBuildInstaller = await readFile(
+  new URL("./build-installer.ps1", import.meta.url),
+  "utf8",
+);
+const releaseStager = await readFile(
+  new URL("./build-release.mjs", import.meta.url),
+  "utf8",
+);
+const workflow = await readFile(
+  new URL("../../.github/workflows/windows-release.yml", import.meta.url),
+  "utf8",
+);
+const backendAudit = await readFile(
+  new URL("../../artifacts/api-server/audit.mjs", import.meta.url),
+  "utf8",
+);
+const rootPackage = JSON.parse(
+  await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+);
+const releaseValidator = await readFile(
+  new URL("./validate-release.mjs", import.meta.url),
+  "utf8",
+);
+const startupSmoke = await readFile(
+  new URL("./startup-smoke.ps1", import.meta.url),
+  "utf8",
+);
+const updateSmoke = await readFile(
+  new URL("./update-smoke.ps1", import.meta.url),
+  "utf8",
+);
+const loaderPage = await readFile(
+  new URL("../../desktop/loading.html", import.meta.url),
+  "utf8",
+);
+const installerCompiler = await readFile(
+  new URL("./compile-installer.ps1", import.meta.url),
+  "utf8",
+);
+const installedLifecycleSmoke = await readFile(
+  new URL("./installer-lifecycle-smoke.ps1", import.meta.url),
+  "utf8",
+);
 
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
   assert.match(config, /Name: "\{autodesktop\}\\\{#MyAppName\}"/);
   assert.match(config, /willard\.ico/);
-  const explicitIconCopies = config.split(/\r?\n/).filter((line) =>
-    /^\s*Source:\s*"willard\.ico"/i.test(line),
+  const explicitIconCopies = config
+    .split(/\r?\n/)
+    .filter((line) => /^\s*Source:\s*"willard\.ico"/i.test(line));
+  assert.equal(
+    explicitIconCopies.length,
+    0,
+    "the staged icon must be included by the payload wildcard only",
   );
-  assert.equal(explicitIconCopies.length, 0, "the staged icon must be included by the payload wildcard only");
 });
 
 test("installer shortcuts invoke the native launcher, not a developer script", () => {
@@ -67,13 +133,24 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /swap-journal\.json/);
   assert.match(launcher, /Invoke-PackagedVersionSwap/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);
-  assert.match(launcher, /Move-Item -LiteralPath \$InstallRoot -Destination \$backup/);
-  assert.match(launcher, /prior runnable version is retained until health checks pass/);
-  assert.doesNotMatch(launcher, /Copy-Item \(Join-Path \$stage "\*"\) \$InstallRoot -Recurse -Force/);
+  assert.match(
+    launcher,
+    /Move-Item -LiteralPath \$InstallRoot -Destination \$backup/,
+  );
+  assert.match(
+    launcher,
+    /prior runnable version is retained until health checks pass/,
+  );
+  assert.doesNotMatch(
+    launcher,
+    /Copy-Item \(Join-Path \$stage "\*"\) \$InstallRoot -Recurse -Force/,
+  );
 });
 
 test("installer deliberately leaves external services outside its payload", () => {
-  const installSources = config.split(/\r?\n/).filter((line) => /^\s*Source:/i.test(line));
+  const installSources = config
+    .split(/\r?\n/)
+    .filter((line) => /^\s*Source:/i.test(line));
   assert.doesNotMatch(installSources.join("\n"), /postgres|PostgreSQL|ffmpeg/i);
 });
 
@@ -91,7 +168,10 @@ test("release helper produces a checksum-bearing update artifact", () => {
 
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /runs-on: windows-latest/);
-  assert.match(workflow, /group:\s*windows-release-\$\{\{\s*github\.ref\s*\}\}/);
+  assert.match(
+    workflow,
+    /group:\s*windows-release-\$\{\{\s*github\.ref\s*\}\}/,
+  );
   assert.match(workflow, /cancel-in-progress:\s*true/);
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
@@ -105,22 +185,45 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /Install media fixture tools for backend audit/);
   assert.match(workflow, /choco install ffmpeg/);
   const auditStep = workflow.slice(
-    workflow.indexOf("Run API server backend audit and backend integration tests"),
+    workflow.indexOf(
+      "Run API server backend audit and backend integration tests",
+    ),
     workflow.indexOf("Upload backend audit log on failure"),
   );
   assert.match(auditStep, /timeout-minutes:\s*30/);
   assert.match(auditStep, /WILLARD_AUDIT_TEST_TIMEOUT_MS:\s*"300000"/);
   assert.match(auditStep, /WILLARD_AUDIT_HEARTBEAT_MS:\s*"30000"/);
-  assert.match(auditStep, /-Environment\s+@\{[\s\S]*WILLARD_LOCAL_DATA_ROOT = \$env:RUNNER_TEMP[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"[\s\S]*WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"/);
-  assert.doesNotMatch(auditStep, /env:\s*[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES:\s*"0"/);
-  assert.match(workflow, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
-  assert.match(workflow, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
-  assert.match(localBuildInstaller, /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/);
-  assert.match(localBuildInstaller, /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/);
+  assert.match(auditStep, /pnpm run audit:backend/);
+  assert.match(
+    auditStep,
+    /-Environment\s+@\{[\s\S]*WILLARD_LOCAL_DATA_ROOT = \$env:RUNNER_TEMP[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"[\s\S]*WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"/,
+  );
+  assert.doesNotMatch(
+    auditStep,
+    /env:\s*[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES:\s*"0"/,
+  );
+  assert.match(
+    workflow,
+    /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/,
+  );
+  assert.match(
+    workflow,
+    /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/,
+  );
+  assert.match(
+    localBuildInstaller,
+    /fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279/,
+  );
+  assert.match(
+    localBuildInstaller,
+    /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/,
+  );
 });
 
 test("Windows release publication is preceded by every required quality gate", () => {
-  const publishIndex = workflow.indexOf("Publish installer, update ZIP, and manifest");
+  const publishIndex = workflow.indexOf(
+    "Publish installer, update ZIP, and manifest",
+  );
   assert.ok(publishIndex > 0, "release workflow must contain a publish step");
 
   for (const [stage, command] of [
@@ -129,8 +232,7 @@ test("Windows release publication is preceded by every required quality gate", (
     ["type checks and generated API contracts", "pnpm run check:api-contracts"],
     ["unit and packaging contracts", "pnpm run test:database-backup"],
     ["unit and packaging contracts", "pnpm run test:release-contracts"],
-    ["API server backend audit", "pnpm --filter @workspace/api-server run audit"],
-    ["backend integration tests", "dashboard-after-scan.test.ts"],
+    ["API server backend audit", "pnpm run audit:backend"],
     ["browser E2E suites", "pnpm exec playwright test"],
     ["storage-policy conformance", "pnpm run test:storage-conformance"],
     ["payload validation and dependency audit gate", "make-release.ps1"],
@@ -140,9 +242,18 @@ test("Windows release publication is preceded by every required quality gate", (
     const commandIndex = workflow.indexOf(command);
     assert.ok(stageIndex >= 0, `missing release gate stage: ${stage}`);
     assert.ok(commandIndex >= 0, `missing release gate command: ${command}`);
-    assert.ok(stageIndex < publishIndex && commandIndex < publishIndex, `${stage} must run before publication`);
+    assert.ok(
+      stageIndex < publishIndex && commandIndex < publishIndex,
+      `${stage} must run before publication`,
+    );
   }
 
+  assert.equal(
+    rootPackage.scripts["audit:backend"],
+    "pnpm --filter @workspace/api-server run audit",
+  );
+  assert.match(backendAudit, /cleanup-execute\.test\.ts/);
+  assert.match(backendAudit, /dashboard-after-scan\.test\.ts/);
   assert.match(workflow, /pnpm exec playwright install chromium/);
   assert.match(workflow, /WILLARD_START_LOCAL_SERVERS: "true"/);
   assert.match(installerCompiler, /Get-FileHash \$setup -Algorithm SHA256/);
@@ -155,23 +266,37 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   assert.match(launcher, /CloseMainWindow\(\)/);
   assert.match(launcher, /startup-failure\.log/);
   assert.match(launcher, /System\.Windows\.MessageBox/);
-  assert.match(launcher, /Start-LoadingScreen\s*\n\s*Recover-InterruptedUpdateSwap/);
+  assert.match(
+    launcher,
+    /Start-LoadingScreen\s*\n\s*Recover-InterruptedUpdateSwap/,
+  );
   assert.doesNotMatch(launcher, /if \(-not \(Ensure-Env\)\) \{ exit 1 \}/);
-  assert.doesNotMatch(launcher, /if \(-not \(Test-Dependencies\)\) \{ exit 1 \}/);
+  assert.doesNotMatch(
+    launcher,
+    /if \(-not \(Test-Dependencies\)\) \{ exit 1 \}/,
+  );
   assert.match(launcher, /throw "Willard needs database connection details/);
 
   const failureCatch = launcher.slice(launcher.lastIndexOf("} catch {"));
-  assert.ok(failureCatch.indexOf("Close-LoadingScreen") < failureCatch.indexOf("Report-StartupFailure"));
+  assert.ok(
+    failureCatch.indexOf("Close-LoadingScreen") <
+      failureCatch.indexOf("Report-StartupFailure"),
+  );
   assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 150000/);
   assert.match(loaderPage, /STARTUP NEEDS ATTENTION/);
   assert.match(loaderPage, /detail\.hidden = false/);
-  assert.match(loaderPage, /return;\s*\n\s*}\s*\n\s*window\.setTimeout\(waitForWillard, 800\)/);
+  assert.match(
+    loaderPage,
+    /return;\s*\n\s*}\s*\n\s*window\.setTimeout\(waitForWillard, 800\)/,
+  );
 });
 
 test("installer compilation stops on warnings", () => {
   assert.match(installerCompiler, /ISCC\.exe/);
   assert.match(installerCompiler, /--messages-jsonl/);
-  assert.ok(installerCompiler.includes('"(?:type|kind|severity)"\\s*:\\s*"warning"'));
+  assert.ok(
+    installerCompiler.includes('"(?:type|kind|severity)"\\s*:\\s*"warning"'),
+  );
   assert.match(installerCompiler, /Inno Setup emitted warnings/);
   assert.match(localBuildInstaller, /compile-installer\.ps1/);
   assert.match(workflow, /compile-installer\.ps1/);
@@ -179,9 +304,17 @@ test("installer compilation stops on warnings", () => {
 
 test("Windows release gate proves the installed lifecycle with external data", () => {
   const compileIndex = workflow.indexOf("Compile the Windows installer");
-  const lifecycleIndex = workflow.indexOf("Verify installed Windows lifecycle with external PostgreSQL");
-  const publishIndex = workflow.indexOf("Publish installer, update ZIP, and manifest");
-  assert.ok(compileIndex >= 0 && lifecycleIndex > compileIndex && lifecycleIndex < publishIndex);
+  const lifecycleIndex = workflow.indexOf(
+    "Verify installed Windows lifecycle with external PostgreSQL",
+  );
+  const publishIndex = workflow.indexOf(
+    "Publish installer, update ZIP, and manifest",
+  );
+  assert.ok(
+    compileIndex >= 0 &&
+      lifecycleIndex > compileIndex &&
+      lifecycleIndex < publishIndex,
+  );
   assert.match(workflow, /installer-lifecycle-smoke\.ps1/);
   assert.match(workflow, /Bootstrap disposable backend-audit database schema/);
   assert.match(workflow, /Seed disposable backend-audit settings/);
@@ -191,10 +324,19 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(workflow, /bcryptjs/);
   assert.doesNotMatch(workflow, /api\/auth\/setup/);
   assert.match(installedLifecycleSmoke, /New-LocalUser/);
-  assert.match(installedLifecycleSmoke, /Get-LocalGroupMember -Group "Administrators"/);
-  assert.match(installedLifecycleSmoke, /-Credential \$Credential -LoadUserProfile/);
+  assert.match(
+    installedLifecycleSmoke,
+    /Get-LocalGroupMember -Group "Administrators"/,
+  );
+  assert.match(
+    installedLifecycleSmoke,
+    /-Credential \$Credential -LoadUserProfile/,
+  );
   assert.match(installedLifecycleSmoke, /VERYSILENT.*SUPPRESSMSGBOXES.*\/DIR/);
-  assert.match(installedLifecycleSmoke, /Wait-Http "http:\/\/127\.0\.0\.1:8080\/api\/healthz"/);
+  assert.match(
+    installedLifecycleSmoke,
+    /Wait-Http "http:\/\/127\.0\.0\.1:8080\/api\/healthz"/,
+  );
   assert.match(installedLifecycleSmoke, /compile-installer\.ps1/);
   assert.match(installedLifecycleSmoke, /phase = "swapped"/);
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
@@ -224,49 +366,60 @@ test("release payload validation requires the bundled runtime and app entrypoint
 });
 
 test("release validation gates high and critical image parser advisories in both runtime graphs", () => {
-  const findings = findHighSeverityImageAdvisories({
-    advisories: {
-      "api-image": {
-        module_name: "image-size",
-        severity: "high",
-        title: "Image parser denial of service",
-        findings: [{
-          version: "1.2.1",
-          paths: ["artifacts__willard-mobile>@expo/cli>image-size"],
-        }],
-      },
-      "api-sharp": {
-        module_name: "sharp",
-        severity: "critical",
-        title: "Sharp parser issue",
-        findings: [{
-          version: "0.35.1",
-          paths: ["artifacts__api-server>sharp"],
-        }],
-      },
-      "unrelated": {
-        module_name: "tar",
-        severity: "critical",
-        title: "Archive issue",
-        findings: [{
-          version: "7.5.20",
-          paths: ["artifacts__willard-mobile>@expo/cli>tar"],
-        }],
-      },
-      "below-threshold": {
-        module_name: "image-size",
-        severity: "moderate",
-        title: "Not a release-blocking severity",
-        findings: [{
-          version: "1.2.0",
-          paths: ["artifacts__api-server>image-size"],
-        }],
+  const findings = findHighSeverityImageAdvisories(
+    {
+      advisories: {
+        "api-image": {
+          module_name: "image-size",
+          severity: "high",
+          title: "Image parser denial of service",
+          findings: [
+            {
+              version: "1.2.1",
+              paths: ["artifacts__willard-mobile>@expo/cli>image-size"],
+            },
+          ],
+        },
+        "api-sharp": {
+          module_name: "sharp",
+          severity: "critical",
+          title: "Sharp parser issue",
+          findings: [
+            {
+              version: "0.35.1",
+              paths: ["artifacts__api-server>sharp"],
+            },
+          ],
+        },
+        unrelated: {
+          module_name: "tar",
+          severity: "critical",
+          title: "Archive issue",
+          findings: [
+            {
+              version: "7.5.20",
+              paths: ["artifacts__willard-mobile>@expo/cli>tar"],
+            },
+          ],
+        },
+        "below-threshold": {
+          module_name: "image-size",
+          severity: "moderate",
+          title: "Not a release-blocking severity",
+          findings: [
+            {
+              version: "1.2.0",
+              paths: ["artifacts__api-server>image-size"],
+            },
+          ],
+        },
       },
     },
-  }, {
-    "API runtime": "artifacts__api-server>",
-    "Mobile toolchain": "artifacts__willard-mobile>",
-  });
+    {
+      "API runtime": "artifacts__api-server>",
+      "Mobile toolchain": "artifacts__willard-mobile>",
+    },
+  );
 
   assert.deepEqual(findings, [
     {
@@ -287,7 +440,10 @@ test("release validation gates high and critical image parser advisories in both
     },
   ]);
   assert.match(releaseValidator, /pnpm.*audit.*--json/);
-  assert.match(releaseValidator, /High or critical image-processing advisories/);
+  assert.match(
+    releaseValidator,
+    /High or critical image-processing advisories/,
+  );
 });
 
 test("clean Windows payload includes a one-click launcher", () => {
@@ -347,14 +503,26 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /dependencies-ready\.json/);
   assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
-  assert.doesNotMatch(developerLauncher, /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/);
+  assert.doesNotMatch(
+    developerLauncher,
+    /Get-Command pnpm -ErrorAction SilentlyContinue\)\.Source/,
+  );
   assert.doesNotMatch(developerLauncher, /pull --ff-only origin/);
   assert.doesNotMatch(developerLauncher, /Checking for safe updates/);
-  assert.doesNotMatch(developerLauncher, /Start-Process -FilePath \$powershellCommand/);
-  assert.match(developerLauncher, /Wait-ForUrl \$ApiUrl "your library service" \$apiReadyTimeout \$services\.api\.Id/);
+  assert.doesNotMatch(
+    developerLauncher,
+    /Start-Process -FilePath \$powershellCommand/,
+  );
+  assert.match(
+    developerLauncher,
+    /Wait-ForUrl \$ApiUrl "your library service" \$apiReadyTimeout \$services\.api\.Id/,
+  );
   assert.match(developerLauncher, /\$apiReadyTimeout = 180/);
   assert.doesNotMatch(developerLauncher, /automatic restart/);
-  assert.doesNotMatch(developerLauncher, /Read-Host "  Press Enter to close this launcher window"/);
+  assert.doesNotMatch(
+    developerLauncher,
+    /Read-Host "  Press Enter to close this launcher window"/,
+  );
   assert.match(launcherCommon, /process exited before it became ready/);
   assert.match(launcherCommon, /Get-LogTail/);
   assert.match(launcherCommon, /function Wait-ForDatabase/);
@@ -383,7 +551,9 @@ test("database setup quotes special names and parameterizes catalog lookup", asy
   const calls = [];
   let instance = 0;
   class Client {
-    constructor() { this.instance = instance++; }
+    constructor() {
+      this.instance = instance++;
+    }
     async connect() {
       if (this.instance === 0) {
         const error = new Error("database does not exist");
@@ -400,9 +570,17 @@ test("database setup quotes special names and parameterizes catalog lookup", asy
   }
 
   const name = 'family archive"2026';
-  assert.equal(getDatabaseName("postgresql://user:pass@localhost:5432/family%20archive%222026"), name);
+  assert.equal(
+    getDatabaseName(
+      "postgresql://user:pass@localhost:5432/family%20archive%222026",
+    ),
+    name,
+  );
   assert.equal(quoteIdentifier(name), '"family archive""2026"');
-  await ensureDatabase("postgresql://user:pass@localhost:5432/family%20archive%222026", Client);
+  await ensureDatabase(
+    "postgresql://user:pass@localhost:5432/family%20archive%222026",
+    Client,
+  );
   assert.deepEqual(calls[0], {
     sql: "SELECT 1 FROM pg_database WHERE datname = $1",
     params: [name],
@@ -416,14 +594,19 @@ test("database setup rejects invalid names and explains restricted roles safely"
     /not a valid PostgreSQL connection string/,
   );
   assert.throws(
-    () => getDatabaseName("postgresql://user:pass@localhost:5432/" + "a".repeat(64)),
+    () =>
+      getDatabaseName(
+        "postgresql://user:pass@localhost:5432/" + "a".repeat(64),
+      ),
     /no longer than 63 bytes/,
   );
 
   let ended = false;
   let restrictedInstance = 0;
   class RestrictedClient {
-    constructor() { this.instance = restrictedInstance++; }
+    constructor() {
+      this.instance = restrictedInstance++;
+    }
     async connect() {
       if (this.instance === 0) {
         const error = new Error("database does not exist");
@@ -437,30 +620,46 @@ test("database setup rejects invalid names and explains restricted roles safely"
       error.code = "42501";
       throw error;
     }
-    async end() { ended = true; }
+    async end() {
+      ended = true;
+    }
   }
   await assert.rejects(
-    ensureDatabase("postgresql://reader:pass@localhost:5432/family", RestrictedClient),
+    ensureDatabase(
+      "postgresql://reader:pass@localhost:5432/family",
+      RestrictedClient,
+    ),
     /cannot create databases.*grant CREATEDB/i,
   );
   assert.equal(ended, true);
 
   let clientCount = 0;
   class ExistingDatabaseClient {
-    constructor() { clientCount += 1; }
+    constructor() {
+      clientCount += 1;
+    }
     async connect() {}
-    async query() { throw new Error("existing target should not query maintenance database"); }
+    async query() {
+      throw new Error("existing target should not query maintenance database");
+    }
     async end() {}
   }
-  await ensureDatabase("postgresql://reader:pass@localhost:5432/existing", ExistingDatabaseClient);
+  await ensureDatabase(
+    "postgresql://reader:pass@localhost:5432/existing",
+    ExistingDatabaseClient,
+  );
   assert.equal(clientCount, 1);
 
   let maintenanceDeniedInstance = 0;
   class MaintenanceDeniedClient {
-    constructor() { this.instance = maintenanceDeniedInstance++; }
+    constructor() {
+      this.instance = maintenanceDeniedInstance++;
+    }
     async connect() {
       const error = new Error(
-        this.instance === 0 ? "database does not exist" : "permission denied for database postgres",
+        this.instance === 0
+          ? "database does not exist"
+          : "permission denied for database postgres",
       );
       error.code = this.instance === 0 ? "3D000" : "42501";
       throw error;
@@ -468,7 +667,10 @@ test("database setup rejects invalid names and explains restricted roles safely"
     async end() {}
   }
   await assert.rejects(
-    ensureDatabase("postgresql://reader:pass@localhost:5432/missing", MaintenanceDeniedClient),
+    ensureDatabase(
+      "postgresql://reader:pass@localhost:5432/missing",
+      MaintenanceDeniedClient,
+    ),
     /cannot access the maintenance database.*administrator/i,
   );
 });
@@ -483,9 +685,15 @@ test("launcher database helper also uses target-first least-privilege setup", ()
 
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
   assert.match(workflow, /startup-smoke\.ps1/);
-  assert.match(workflow, /Install PostgreSQL for the source launcher smoke test/);
+  assert.match(
+    workflow,
+    /Install PostgreSQL for the source launcher smoke test/,
+  );
   assert.match(workflow, /postgresql-16\.15-1-windows-x64-binaries\.zip/);
-  assert.match(workflow, /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/);
+  assert.match(
+    workflow,
+    /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,
+  );
   assert.match(workflow, /pg_ctl\.exe/);
   assert.match(workflow, /pg_isready\.exe/);
   assert.doesNotMatch(workflow, /choco install postgresql/);
@@ -501,14 +709,20 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
 });
 
 test("installer coordinates upgrades and repair reports failures", async () => {
-  const repair = await readFile(new URL("../launcher/repair.ps1", import.meta.url), "utf8");
+  const repair = await readFile(
+    new URL("../launcher/repair.ps1", import.meta.url),
+    "utf8",
+  );
   assert.match(config, /PrepareToInstall/);
   assert.match(config, /WillardMediaCenter\.ps1[\s\S]*-Stop/);
   assert.match(repair, /\$problems\.Count -gt 0\) \{ exit 1 \}/);
 });
 
 test("developer fallback stages a complete source archive", async () => {
-  const updater = await readFile(new URL("../launcher/update.ps1", import.meta.url), "utf8");
+  const updater = await readFile(
+    new URL("../launcher/update.ps1", import.meta.url),
+    "utf8",
+  );
   assert.match(updater, /sourceArtifactUrl/);
   assert.match(updater, /sourceSha256/);
   assert.match(updater, /Expand-Archive/);
@@ -531,8 +745,14 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(launcherCommon, /Restore-PendingDeveloperUpdate/);
   assert.match(launcherCommon, /Recover-InterruptedDeveloperUpdate/);
   assert.match(launcherCommon, /Confirm-DeveloperUpdateHealth/);
-  assert.match(developerLauncher, /Verifying the updated version before removing its rollback copy/);
-  assert.match(developerLauncher, /previous runnable version was restored after the update did not become healthy/);
+  assert.match(
+    developerLauncher,
+    /Verifying the updated version before removing its rollback copy/,
+  );
+  assert.match(
+    developerLauncher,
+    /previous runnable version was restored after the update did not become healthy/,
+  );
 });
 
 test("Windows update swaps are journaled and recoverable across copied, locked, or interrupted versions", () => {
