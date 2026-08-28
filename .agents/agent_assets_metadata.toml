@@ -40,3 +40,10 @@ uri = "file://build/Willard-AI-fixed.zip"
 type = "unspecified"
 title = "Willard AI — final updater fix"
 description = "Verified replacement folder. Includes the live-lock fix and creates the candidate logs directory before writing update-git.log."
+
+[[outputs]]
+id = "pr6rNhaViJk558lImxDG8"
+uri = "file://build/Willard-AI-Windows-fixed.zip"
+type = "unspecified"
+title = "Willard AI Windows — Detached Update Fix"
+description = "Clean Windows copy whose updater prepares everything first, waits for the updater window to close, and then swaps folders from a separate helper so Windows cannot lock the live installation."
