@@ -30,13 +30,36 @@ function Invoke-LoggedCommand($label, $logPath, [scriptblock]$command) {
     return $exitCode
 }
 
+function Test-FileLockMessage($message) {
+    return ([string]$message -match "(?i)being used by another process|sharing violation|EBUSY|EPERM|resource busy|file.+locked|cannot access.+file|process cannot access|access is denied")
+}
+
 function Test-FileLockFailure($logPath) {
     if (-not (Test-Path $logPath)) { return $false }
     try {
         $content = Get-Content $logPath -Raw -ErrorAction Stop
-        return ($content -match "(?i)being used by another process|sharing violation|EBUSY|EPERM|resource busy|file.+locked|cannot access.+file|access is denied")
+        return (Test-FileLockMessage $content)
     } catch {
         return $false
+    }
+}
+
+function Invoke-WithFileLockRetry([string]$label, [scriptblock]$command) {
+    $savedPref = $ErrorActionPreference
+    $ErrorActionPreference = "Stop"
+    try {
+        try {
+            & $command
+            return
+        } catch {
+            if (-not (Test-FileLockMessage $_.Exception.Message)) { throw }
+            Write-Warn "Windows reported a file lock while $label. Stopping Willard-owned services and retrying..."
+            Stop-TrackedProcesses | Out-Null
+            Start-Sleep -Seconds 2
+            & $command
+        }
+    } finally {
+        $ErrorActionPreference = $savedPref
     }
 }
 
@@ -155,9 +178,13 @@ function Complete-DeveloperUpdate($candidate, $label) {
     Start-Sleep -Milliseconds 750
     # Mutable state is copied only after the app processes have released their
     # Windows file handles. The prepared source and dependencies remain isolated.
-    Copy-PreservedDeveloperState $candidate -IncludeLogs
+    Invoke-WithFileLockRetry "preserving local settings and diagnostics" {
+        Copy-PreservedDeveloperState $candidate -IncludeLogs
+    }
     Test-InjectedUpdateFailure "candidate-copy"
-    Invoke-DeveloperVersionSwap $candidate $backup
+    Invoke-WithFileLockRetry "swapping the verified update into place" {
+        Invoke-DeveloperVersionSwap $candidate $backup
+    }
     Write-Ok ($label + " A verified rollback version is retained until the next healthy start.")
 }
 
