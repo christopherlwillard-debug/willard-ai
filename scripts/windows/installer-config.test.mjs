@@ -790,7 +790,9 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(updater, /Copy-PreservedDeveloperState \$candidate -IncludeLogs/);
   assert.match(updater, /Exclude @\("update\.log"\)/);
   assert.match(updater, /Copy-PreservedDeveloperState \$candidate/);
-  assert.match(updater, /Invoke-DeveloperVersionSwap/);
+  assert.match(updater, /Start-ExternalDeveloperVersionSwap/);
+  assert.match(updater, /Get-Process -Id \$UpdaterPid/);
+  assert.match(updater, /Start-Process -FilePath "powershell\.exe"/);
   assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);
   assert.match(updater, /--ignore-scripts/);
   assert.match(updater, /api-server run build/);

@@ -63,6 +63,89 @@ function Invoke-WithFileLockRetry([string]$label, [scriptblock]$command) {
     }
 }
 
+function Start-ExternalDeveloperVersionSwap($candidate, $backup) {
+    $parent = Split-Path -Parent $Root
+    $leaf = Split-Path -Leaf $Root
+    $journal = Join-Path $parent ("." + $leaf + ".willard-update.json")
+    $result = Join-Path $parent ("." + $leaf + ".willard-update-result.json")
+    $helper = Join-Path $env:TEMP ("willard-update-swap-" + [guid]::NewGuid().ToString() + ".ps1")
+    $helperSource = @'
+param(
+    [string]$Root,
+    [string]$Candidate,
+    [string]$Backup,
+    [string]$Journal,
+    [string]$Result,
+    [string]$UpdateLabel,
+    [int]$UpdaterPid
+)
+$ErrorActionPreference = "Stop"
+$parent = Split-Path -Parent $Root
+function Write-Journal($phase) {
+    @{
+        version = 1
+        phase = $phase
+        live = $Root
+        candidate = $Candidate
+        backup = $Backup
+        updatedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content $Journal -Encoding UTF8
+}
+function Write-Result($status, $message) {
+    @{
+        status = $status
+        message = $message
+        completedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json | Set-Content $Result -Encoding UTF8
+}
+Set-Location $parent
+try {
+    for ($attempt = 0; $attempt -lt 1200; $attempt++) {
+        if (-not (Get-Process -Id $UpdaterPid -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    if (Get-Process -Id $UpdaterPid -ErrorAction SilentlyContinue) {
+        throw "The updater window did not close in time for the safe folder swap."
+    }
+    if (-not (Test-Path $Candidate)) { throw "The prepared update version is missing." }
+    if (Test-Path $Backup) { throw "A previous update backup is still present: $Backup" }
+    Write-Journal "prepared"
+    Move-Item -LiteralPath $Root -Destination $Backup -ErrorAction Stop
+    Write-Journal "backup-created"
+    Move-Item -LiteralPath $Candidate -Destination $Root -ErrorAction Stop
+    Write-Journal "swapped"
+    Write-Result "ok" $UpdateLabel
+} catch {
+    try {
+        if (-not (Test-Path $Root) -and (Test-Path $Backup)) {
+            Move-Item -LiteralPath $Backup -Destination $Root -ErrorAction Stop
+        }
+    } catch {
+        $message = $_.Exception.Message
+    }
+    Write-Result "failed" $_.Exception.Message
+} finally {
+    Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
+'@
+    $helperSource | Set-Content $helper -Encoding UTF8
+    $quote = { param($value) '"' + ([string]$value).Replace('"', '\"') + '"' }
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", (& $quote $helper),
+        "-Root", (& $quote $Root),
+        "-Candidate", (& $quote $candidate),
+        "-Backup", (& $quote $backup),
+        "-Journal", (& $quote $journal),
+        "-Result", (& $quote $result),
+        "-UpdateLabel", (& $quote "Update completed"),
+        "-UpdaterPid", $PID
+    )
+    Set-Location $env:TEMP
+    Start-Process -FilePath "powershell.exe" -ArgumentList ($arguments -join " ") -WorkingDirectory $parent -WindowStyle Hidden | Out-Null
+}
+
 function Invoke-PreparationCommand($label, $logPath, [scriptblock]$command) {
     $exitCode = Invoke-LoggedCommand $label $logPath $command
     if ($exitCode -eq 0 -and -not (Test-FileLockFailure $logPath)) { return $exitCode }
@@ -182,10 +265,8 @@ function Complete-DeveloperUpdate($candidate, $label) {
         Copy-PreservedDeveloperState $candidate -IncludeLogs
     }
     Test-InjectedUpdateFailure "candidate-copy"
-    Invoke-WithFileLockRetry "swapping the verified update into place" {
-        Invoke-DeveloperVersionSwap $candidate $backup
-    }
-    Write-Ok ($label + " A verified rollback version is retained until the next healthy start.")
+    Start-ExternalDeveloperVersionSwap $candidate $backup
+    Write-Ok ($label + " Windows is finishing the safe folder swap. Start Willard AI after this window closes.")
 }
 
 function Invoke-ArchiveFallback {
