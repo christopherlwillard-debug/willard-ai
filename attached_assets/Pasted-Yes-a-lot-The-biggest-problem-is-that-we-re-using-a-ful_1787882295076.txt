@@ -1,0 +1,50 @@
+Yes — a lot. The biggest problem is that we're using a full Windows release build to validate things that don't need a full Windows machine.
+
+For the current run, though, PostgreSQL is already installing. We shouldn't change it mid-run.
+
+For the next version of the workflow, I'd have Replit optimize it like this:
+
+Make Windows setup much faster
+Cache PostgreSQL
+Don't download/install PostgreSQL from Chocolatey every run.
+Cache the installer/package or use a known runner installation when available.
+Start the service and test the connection instead.
+Cache pnpm dependencies
+Avoid reinstalling the same packages every Windows run.
+Cache Chromium
+Browser tooling shouldn't be downloaded repeatedly.
+Cache the pinned Node runtime
+Especially the bundled Node 24 runtime we're shipping.
+Don't run unrelated tests on Windows
+Linux handles the cheap application validation.
+Windows handles Windows-specific behavior.
+Run Windows tests in parallel where safe
+Don't make browser, launcher, packaging, and other independent checks wait unnecessarily on one another.
+Fail quickly
+If one gate fails, stop before spending another 20–30 minutes on downstream gates that can't produce a release anyway.
+Use the NAS/local-drive tests intelligently
+We need to test actual storage behavior, but we don't need to copy a giant family library onto the CI machine just to prove the application can access a directory.
+The ideal workflow
+
+Instead of:
+
+Windows setup → PostgreSQL → dependencies → backend → browser → storage → launcher → updater → packaging → installer → everything
+
+we want:
+
+Fast Linux validation
+→ catches normal bugs in minutes
+
+then, only for a release:
+
+Cached Windows environment
+→ Windows-specific tests
+→ installer
+→ fresh-install test
+→ final artifact
+
+That could make a huge difference in both time and cost.
+
+And I would tell Replit to make this optimization a priority after the current run, rather than continually spending money testing the same setup.
+
+For this current run, though, I'd let the PostgreSQL step hit its 10-minute hard limit. If it can't get through in that time, stop it.
