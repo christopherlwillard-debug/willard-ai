@@ -310,7 +310,14 @@ export const GetSettingsResponse = zod.object({
   "aiExcludedExtensions": zod.array(zod.string()).optional(),
   "aiConsentAt": zod.string().nullish(),
   "aiConsentProvider": zod.string().nullish(),
-  "aiConsentVersion": zod.string().nullish()
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
 })
 
 
@@ -366,7 +373,14 @@ export const UpdateSettingsResponse = zod.object({
   "aiExcludedExtensions": zod.array(zod.string()).optional(),
   "aiConsentAt": zod.string().nullish(),
   "aiConsentProvider": zod.string().nullish(),
-  "aiConsentVersion": zod.string().nullish()
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
 })
 
 
@@ -417,6 +431,69 @@ export const ReinitNasDirsResponse = zod.object({
   "path": zod.string(),
   "exists": zod.boolean()
 }))
+})
+
+
+/**
+ * @summary Get encrypted NAS database backup health
+ */
+export const GetLibraryBackupStatusResponse = zod.object({
+  "status": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']),
+  "enabled": zod.boolean(),
+  "scheduleHours": zod.number(),
+  "lastAttemptAt": zod.string().nullable(),
+  "lastSuccessAt": zod.string().nullable(),
+  "lastVerifiedAt": zod.string().nullable(),
+  "lastError": zod.string().nullable(),
+  "destinationClass": zod.enum(['NAS_LIBRARY']),
+  "destinationLabel": zod.string(),
+  "recoveryExportReady": zod.boolean(),
+  "pendingReason": zod.string().nullable()
+})
+
+
+/**
+ * @summary Update backup schedule and enablement
+ */
+export const updateLibraryBackupSettingsBodyScheduleHoursMax = 168;
+
+
+
+export const UpdateLibraryBackupSettingsBody = zod.object({
+  "enabled": zod.boolean().optional(),
+  "scheduleHours": zod.number().min(1).max(updateLibraryBackupSettingsBodyScheduleHoursMax).optional()
+})
+
+export const UpdateLibraryBackupSettingsResponse = zod.object({
+  "status": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']),
+  "enabled": zod.boolean(),
+  "scheduleHours": zod.number(),
+  "lastAttemptAt": zod.string().nullable(),
+  "lastSuccessAt": zod.string().nullable(),
+  "lastVerifiedAt": zod.string().nullable(),
+  "lastError": zod.string().nullable(),
+  "destinationClass": zod.enum(['NAS_LIBRARY']),
+  "destinationLabel": zod.string(),
+  "recoveryExportReady": zod.boolean(),
+  "pendingReason": zod.string().nullable()
+})
+
+
+/**
+ * @summary Create and verify a database backup now
+ */
+export const CreateLibraryBackupResponse = zod.object({
+  "status": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']),
+  "enabled": zod.boolean(),
+  "scheduleHours": zod.number(),
+  "lastAttemptAt": zod.string().nullable(),
+  "lastSuccessAt": zod.string().nullable(),
+  "lastVerifiedAt": zod.string().nullable(),
+  "lastError": zod.string().nullable(),
+  "destinationClass": zod.enum(['NAS_LIBRARY']),
+  "destinationLabel": zod.string(),
+  "recoveryExportReady": zod.boolean(),
+  "pendingReason": zod.string().nullable()
 })
 
 
@@ -1596,7 +1673,14 @@ export const UploadSettingsLogoResponse = zod.object({
   "aiExcludedExtensions": zod.array(zod.string()).optional(),
   "aiConsentAt": zod.string().nullish(),
   "aiConsentProvider": zod.string().nullish(),
-  "aiConsentVersion": zod.string().nullish()
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
 })
 
 
@@ -1624,7 +1708,14 @@ export const DeleteSettingsLogoResponse = zod.object({
   "aiExcludedExtensions": zod.array(zod.string()).optional(),
   "aiConsentAt": zod.string().nullish(),
   "aiConsentProvider": zod.string().nullish(),
-  "aiConsentVersion": zod.string().nullish()
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
 })
 
 

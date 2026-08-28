@@ -17,6 +17,11 @@ import {
   loadLibraryDurabilityManifest,
   validateLibraryDurabilityManifest,
 } from "../scripts/windows/library-durability.mjs";
+import {
+  createRecoveryExport,
+  decryptRecoveryExport,
+  validateRecoveryExport,
+} from "./backup-credentials.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -119,6 +124,21 @@ test("library path reconciliation is transactional and boundary-aware", () => {
   );
   assert.ok(unc.includes("\\\\nas-a\\photos\\Willard"));
   assert.ok(unc.includes("\\\\nas-b\\recovered\\Willard"));
+});
+
+test("portable recovery exports are encrypted, authenticated, and fail closed", () => {
+  const secret = "automatic-backup-secret-that-never-goes-on-the-nas";
+  const passphrase = "portable-export-passphrase";
+  const serialized = createRecoveryExport(secret, passphrase);
+  const exported = validateRecoveryExport(JSON.parse(serialized));
+  assert.equal(exported.format, "willard-backup-recovery-export");
+  assert.doesNotMatch(serialized, new RegExp(secret));
+  assert.equal(decryptRecoveryExport(serialized, passphrase), secret);
+  assert.throws(() => decryptRecoveryExport(serialized, "incorrect-passphrase"), /incorrect/);
+
+  const tampered = JSON.parse(serialized);
+  tampered.createdAt = new Date(Date.parse(tampered.createdAt) + 1000).toISOString();
+  assert.throws(() => decryptRecoveryExport(tampered, passphrase), /incorrect/);
 });
 
 test(
@@ -299,6 +319,26 @@ test(
       await runCli(["verify", "--backup-dir", backupDir], {
         WILLARD_BACKUP_PASSPHRASE: passphrase,
       });
+      const recoveryExport = path.join(root, "portable-recovery.willard-recovery.json");
+      const exportPassphrase = "separate-portable-export-passphrase";
+      await runCli(["export-recovery", "--output", recoveryExport], {
+        WILLARD_BACKUP_PASSPHRASE: passphrase,
+        WILLARD_RECOVERY_EXPORT_PASSPHRASE: exportPassphrase,
+      });
+      const serializedExport = await readFile(recoveryExport, "utf8");
+      assert.doesNotMatch(serializedExport, new RegExp(passphrase));
+      await runCli(["verify", "--backup-dir", backupDir, "--recovery-export", recoveryExport], {
+        WILLARD_BACKUP_PASSPHRASE: "",
+        WILLARD_RECOVERY_EXPORT_PASSPHRASE: exportPassphrase,
+      });
+      const discovered = await runCli(["discover", "--output-dir", backupRoot, "--recovery-export", recoveryExport], {
+        WILLARD_BACKUP_PASSPHRASE: "",
+        WILLARD_RECOVERY_EXPORT_PASSPHRASE: exportPassphrase,
+      });
+      const discoveredBackups = JSON.parse(discovered.stdout);
+      assert.equal(discoveredBackups.length, 1);
+      assert.equal(discoveredBackups[0].backupDir, backupDir);
+      assert.equal(discoveredBackups[0].verified, true);
       const sourceIdentityPath = path.join(nasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);
       const reattachedIdentityPath = path.join(reattachedNasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);
       const reattachedOriginalPath = path.join(reattachedNasRoot, "photos", "family.jpg");
@@ -351,10 +391,12 @@ test(
       await runCli([
         "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
         "--confirm-library-id", manifest.library.libraryId,
+        "--recovery-export", recoveryExport,
       ], {
         DATABASE_URL: sourceUrl,
         WILLARD_RESTORE_DATABASE_URL: targetUrl,
-        WILLARD_BACKUP_PASSPHRASE: passphrase,
+        WILLARD_BACKUP_PASSPHRASE: "",
+        WILLARD_RECOVERY_EXPORT_PASSPHRASE: exportPassphrase,
       });
       const restored = await run(psqlBin, [
         "-X",

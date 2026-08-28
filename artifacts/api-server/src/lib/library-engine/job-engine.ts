@@ -30,6 +30,7 @@ import { logger } from "../logger.ts";
 import { isShuttingDown } from "../shutdown-state.ts";
 import { purgeDerivedDataForMedia } from "../derived-cleanup.ts";
 import { getStoragePolicyState } from "../storage-policy.ts";
+import { requestLibraryBackup } from "../backup-coordinator.ts";
 import {
   evaluateCapacity,
   reserveCapacity,
@@ -2492,6 +2493,7 @@ async function runScanJob(
         elapsedMs,
       });
     }
+    void requestLibraryBackup("completed library scan");
 
   } catch (err: any) {
     stopIncrementalDirCacheSave();

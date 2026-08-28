@@ -90,6 +90,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "Database ready"
 
+# -- Backup protection ---------------------------------------------------------
+try {
+    Initialize-WillardBackupProtection $true | Out-Null
+} catch {
+    Show-Failure "Library backup protection is not ready." $_.Exception.Message
+    Write-Host "  Setup cannot finish until a separate portable recovery export is created." -ForegroundColor White
+    Pause-BeforeClose; exit 1
+}
+
 # -- Build API server ---------------------------------------------------------
 Write-Info "Building API server..."
 $buildLog = Join-Path $LogDir "setup-build.log"

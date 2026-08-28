@@ -202,6 +202,11 @@ if ($schemaReady) {
 }
 Write-Ok "Database ready"
 $env:WILLARD_SCHEMA_READY = "1"
+try {
+    Initialize-WillardBackupProtection $true | Out-Null
+} catch {
+    Stop-And-Exit "Library backup protection is not ready." $_.Exception.Message
+}
 
 # -- Ports ----------------------------------------------------------------------
 foreach ($port in 8080, 5000) {

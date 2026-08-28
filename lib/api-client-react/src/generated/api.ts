@@ -52,6 +52,8 @@ import type {
   IndexedFile,
   IndexingToggleResult,
   LargeFileResult,
+  LibraryBackupSettingsInput,
+  LibraryBackupStatus,
   LibraryHealth,
   LibraryHealthStatus,
   LibraryJobHistory,
@@ -1664,6 +1666,223 @@ export const useReinitNasDirs = <TError = ErrorType<ApiError>,
         TContext
       > => {
       return useMutation(getReinitNasDirsMutationOptions(options));
+    }
+
+export const getGetLibraryBackupStatusUrl = () => {
+
+
+
+
+  return `/api/settings/backup`
+}
+
+/**
+ * @summary Get encrypted NAS database backup health
+ */
+export const getLibraryBackupStatus = async ( options?: RequestInit): Promise<LibraryBackupStatus> => {
+
+  return customFetch<LibraryBackupStatus>(getGetLibraryBackupStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetLibraryBackupStatusQueryKey = () => {
+    return [
+    `/api/settings/backup`
+    ] as const;
+    }
+
+
+export const getGetLibraryBackupStatusQueryOptions = <TData = Awaited<ReturnType<typeof getLibraryBackupStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryBackupStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetLibraryBackupStatusQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLibraryBackupStatus>>> = ({ signal }) => getLibraryBackupStatus({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getLibraryBackupStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetLibraryBackupStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getLibraryBackupStatus>>>
+export type GetLibraryBackupStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get encrypted NAS database backup health
+ */
+
+export function useGetLibraryBackupStatus<TData = Awaited<ReturnType<typeof getLibraryBackupStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLibraryBackupStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetLibraryBackupStatusQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateLibraryBackupSettingsUrl = () => {
+
+
+
+
+  return `/api/settings/backup`
+}
+
+/**
+ * @summary Update backup schedule and enablement
+ */
+export const updateLibraryBackupSettings = async (libraryBackupSettingsInput: LibraryBackupSettingsInput, options?: RequestInit): Promise<LibraryBackupStatus> => {
+
+  return customFetch<LibraryBackupStatus>(getUpdateLibraryBackupSettingsUrl(),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(libraryBackupSettingsInput)
+  }
+);}
+
+
+
+
+export const getUpdateLibraryBackupSettingsMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateLibraryBackupSettings>>, TError,{data: BodyType<LibraryBackupSettingsInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateLibraryBackupSettings>>, TError,{data: BodyType<LibraryBackupSettingsInput>}, TContext> => {
+
+const mutationKey = ['updateLibraryBackupSettings'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateLibraryBackupSettings>>, {data: BodyType<LibraryBackupSettingsInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  updateLibraryBackupSettings(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateLibraryBackupSettingsMutationResult = NonNullable<Awaited<ReturnType<typeof updateLibraryBackupSettings>>>
+    export type UpdateLibraryBackupSettingsMutationBody = BodyType<LibraryBackupSettingsInput>
+    export type UpdateLibraryBackupSettingsMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update backup schedule and enablement
+ */
+export const useUpdateLibraryBackupSettings = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateLibraryBackupSettings>>, TError,{data: BodyType<LibraryBackupSettingsInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateLibraryBackupSettings>>,
+        TError,
+        {data: BodyType<LibraryBackupSettingsInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateLibraryBackupSettingsMutationOptions(options));
+    }
+
+export const getCreateLibraryBackupUrl = () => {
+
+
+
+
+  return `/api/settings/backup`
+}
+
+/**
+ * @summary Create and verify a database backup now
+ */
+export const createLibraryBackup = async ( options?: RequestInit): Promise<LibraryBackupStatus> => {
+
+  return customFetch<LibraryBackupStatus>(getCreateLibraryBackupUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getCreateLibraryBackupMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLibraryBackup>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createLibraryBackup>>, TError,void, TContext> => {
+
+const mutationKey = ['createLibraryBackup'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createLibraryBackup>>, void> = () => {
+
+
+          return  createLibraryBackup(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateLibraryBackupMutationResult = NonNullable<Awaited<ReturnType<typeof createLibraryBackup>>>
+
+    export type CreateLibraryBackupMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Create and verify a database backup now
+ */
+export const useCreateLibraryBackup = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createLibraryBackup>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createLibraryBackup>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getCreateLibraryBackupMutationOptions(options));
     }
 
 export const getStartScanUrl = () => {

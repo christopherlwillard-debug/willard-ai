@@ -136,6 +136,16 @@ export const AppSettingsOptimizeProfile = {
   MAXIMUM: 'MAXIMUM',
 } as const;
 
+export type AppSettingsBackupStatus = typeof AppSettingsBackupStatus[keyof typeof AppSettingsBackupStatus];
+
+
+export const AppSettingsBackupStatus = {
+  NEVER_CONFIGURED: 'NEVER_CONFIGURED',
+  PENDING: 'PENDING',
+  PROTECTED: 'PROTECTED',
+  FAILED: 'FAILED',
+} as const;
+
 export interface AppSettings {
   nasPath: string;
   /** @nullable */
@@ -165,6 +175,17 @@ export interface AppSettings {
   aiConsentProvider?: string | null;
   /** @nullable */
   aiConsentVersion?: string | null;
+  backupEnabled?: boolean;
+  backupScheduleHours?: number;
+  backupStatus?: AppSettingsBackupStatus;
+  /** @nullable */
+  backupLastAttemptAt?: string | null;
+  /** @nullable */
+  backupLastSuccessAt?: string | null;
+  /** @nullable */
+  backupLastVerifiedAt?: string | null;
+  /** @nullable */
+  backupLastError?: string | null;
 }
 
 export type SettingsInputScanPerformance = typeof SettingsInputScanPerformance[keyof typeof SettingsInputScanPerformance];
@@ -209,6 +230,51 @@ export interface SettingsInput {
      */
   aiExcludedExtensions?: string[];
   aiConsentAcknowledged?: boolean;
+}
+
+export type LibraryBackupStatusStatus = typeof LibraryBackupStatusStatus[keyof typeof LibraryBackupStatusStatus];
+
+
+export const LibraryBackupStatusStatus = {
+  NEVER_CONFIGURED: 'NEVER_CONFIGURED',
+  PENDING: 'PENDING',
+  PROTECTED: 'PROTECTED',
+  FAILED: 'FAILED',
+} as const;
+
+export type LibraryBackupStatusDestinationClass = typeof LibraryBackupStatusDestinationClass[keyof typeof LibraryBackupStatusDestinationClass];
+
+
+export const LibraryBackupStatusDestinationClass = {
+  NAS_LIBRARY: 'NAS_LIBRARY',
+} as const;
+
+export interface LibraryBackupStatus {
+  status: LibraryBackupStatusStatus;
+  enabled: boolean;
+  scheduleHours: number;
+  /** @nullable */
+  lastAttemptAt: string | null;
+  /** @nullable */
+  lastSuccessAt: string | null;
+  /** @nullable */
+  lastVerifiedAt: string | null;
+  /** @nullable */
+  lastError: string | null;
+  destinationClass: LibraryBackupStatusDestinationClass;
+  destinationLabel: string;
+  recoveryExportReady: boolean;
+  /** @nullable */
+  pendingReason: string | null;
+}
+
+export interface LibraryBackupSettingsInput {
+  enabled?: boolean;
+  /**
+     * @minimum 1
+     * @maximum 168
+     */
+  scheduleHours?: number;
 }
 
 export interface NasTestInput {

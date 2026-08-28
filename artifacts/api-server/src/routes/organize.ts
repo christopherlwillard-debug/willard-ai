@@ -38,6 +38,7 @@ import {
   CapacityAdmissionError,
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
+import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
 
 const router: IRouter = Router();
 
@@ -1788,6 +1789,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       reportPath: reportPath || null,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
+    void requestLibraryBackup("completed organization job");
 
     send("complete", { ...safeReport, progress: 100 });
 
@@ -2227,6 +2229,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       reportJson: report as any,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
+    void requestLibraryBackup("completed organization recovery");
 
     send("complete", { ...report, progress: 100 });
 

@@ -40,6 +40,7 @@ import {
   readLibraryIdentity,
   validateRecoveryAttachment,
 } from "./library-recovery.mjs";
+import { createRecoveryExport, decryptRecoveryExport } from "./backup-credentials.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
@@ -407,11 +408,24 @@ function promptSecret(label) {
   });
 }
 
-async function passphrase(confirm = false) {
+async function passphrase(confirm = false, options = {}) {
   const value = process.env.WILLARD_BACKUP_PASSPHRASE;
   if (value) {
     if (value.length < 12) fail("WILLARD_BACKUP_PASSPHRASE must contain at least 12 characters.");
     return value;
+  }
+  const recoveryExport = options["recovery-export"] || process.env.WILLARD_RECOVERY_EXPORT;
+  if (recoveryExport) {
+    let serialized;
+    try {
+      serialized = await readFile(path.resolve(String(recoveryExport)), "utf8");
+    } catch {
+      fail(`The recovery export could not be read: ${recoveryExport}`);
+    }
+    const exportPassphrase =
+      process.env.WILLARD_RECOVERY_EXPORT_PASSPHRASE ||
+      await promptSecret("Recovery export passphrase: ");
+    return decryptRecoveryExport(serialized, exportPassphrase);
   }
   const entered = await promptSecret("Backup encryption passphrase: ");
   if (entered.length < 12) fail("The backup passphrase must contain at least 12 characters.");
@@ -744,6 +758,16 @@ async function createBackup(options) {
     const suffix = randomBytes(4).toString("hex");
     finalDir = path.join(outputRoot, `backup-${createdAt.replace(/[-:.]/g, "")}-${suffix}`);
     await rename(staging, finalDir);
+    // Do not report success until the completed generation can be read and
+    // decrypted from its final NAS location.
+    const completed = await readBackup(finalDir);
+    const verifiedDump = decryptDump(completed.encrypted, completed.manifest, secret);
+    if (
+      verifiedDump.length !== completed.manifest.dump.plaintextBytes ||
+      sha256Bytes(verifiedDump) !== completed.manifest.dump.plaintextSha256
+    ) {
+      fail("Completed backup failed post-write verification.");
+    }
     const removed = await pruneBackups(outputRoot, retentionDays, keep);
     console.log(`Encrypted database backup created: ${finalDir}`);
     if (removed.length) console.log(`Retention removed ${removed.length} older backup(s).`);
@@ -1075,7 +1099,7 @@ function compareFacts(expected, actual) {
 async function restoreBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
-  const secret = await passphrase();
+  const secret = await passphrase(false, options);
   const dump = decryptDump(encrypted, manifest, secret);
   if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
     fail("Decrypted database dump failed its SHA-256 integrity check.");
@@ -1177,11 +1201,64 @@ async function restoreBackup(options) {
 async function verifyBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
-  const dump = decryptDump(encrypted, manifest, await passphrase());
+  const dump = decryptDump(encrypted, manifest, await passphrase(false, options));
   if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
     fail("Decrypted database dump failed its SHA-256 integrity check.");
   }
   console.log(`Backup integrity verified: ${backupDir}`);
+}
+
+async function exportRecovery(options) {
+  const output = path.resolve(requireOption(options, "output"));
+  if (path.basename(output).toLowerCase() === "manifest.json" || output.endsWith(`${path.sep}${DUMP_FILE}`)) {
+    fail("A recovery export cannot replace a backup manifest or dump.");
+  }
+  const secret = await passphrase(false, options);
+  const exportPassphrase =
+    process.env.WILLARD_RECOVERY_EXPORT_PASSPHRASE ||
+    await promptSecret("New recovery export passphrase: ");
+  if (exportPassphrase.length < 12) fail("The recovery export passphrase must contain at least 12 characters.");
+  if (!process.env.WILLARD_RECOVERY_EXPORT_PASSPHRASE) {
+    const repeated = await promptSecret("Repeat recovery export passphrase: ");
+    if (exportPassphrase !== repeated) fail("The recovery export passphrases did not match.");
+  }
+  const temporary = `${output}.${process.pid}.${randomBytes(6).toString("hex")}.partial`;
+  await mkdir(path.dirname(output), { recursive: true });
+  try {
+    await writeFile(temporary, createRecoveryExport(secret, exportPassphrase), { mode: 0o600 });
+    await rename(temporary, output);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+  console.log(`Portable recovery export created: ${output}`);
+}
+
+async function discoverBackups(options) {
+  const root = resolveBackupRoot(options);
+  const secret = await passphrase(false, options);
+  const entries = [];
+  for (const backup of await listBackupDirectories(root)) {
+    try {
+      const { encrypted } = await readBackup(backup.path);
+      const dump = decryptDump(encrypted, backup.manifest, secret);
+      if (dump.length !== backup.manifest.dump.plaintextBytes || sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256) {
+        continue;
+      }
+      entries.push({
+        backupDir: backup.path,
+        createdAt: backup.manifest.createdAt,
+        libraryId: backup.manifest.library?.libraryId ?? null,
+        applicationSchemaVersion: backup.manifest.compatibility.applicationSchemaVersion,
+        postgresMajor: backup.manifest.compatibility.postgresMajor,
+        catalogMediaCount: backup.manifest.library?.catalogMediaCount ?? null,
+        verified: true,
+      });
+    } catch {
+      // Discovery is fail-closed: corrupt/incomplete generations are omitted.
+    }
+  }
+  console.log(JSON.stringify(entries, null, 2));
+  return entries;
 }
 
 function printHelp() {
@@ -1190,13 +1267,17 @@ function printHelp() {
 Commands:
   backup [--output-dir DIR] [--retention-days N] [--keep N]
   restore --backup-dir DIR [--library-root NAS_LIBRARY] [--confirm-library-id ID]
-          [--resume-recovery]
+          [--resume-recovery] [--recovery-export FILE]
   verify --backup-dir DIR
+  discover [--output-dir DIR] [--recovery-export FILE]
+  export-recovery --output FILE
 
 Connection:
   DATABASE_URL identifies the source database for backup.
   WILLARD_RESTORE_DATABASE_URL identifies the clean restore target.
   WILLARD_BACKUP_PASSPHRASE supplies the encryption passphrase for automation.
+  --recovery-export FILE unlocks a portable recovery export without exposing the
+  backup secret in command-line arguments.
   PGDUMP_BIN, PGRESTORE_BIN, and PSQL_BIN override PostgreSQL tool paths.
 
 Backups contain database metadata only; media files remain on the NAS and must
@@ -1222,6 +1303,14 @@ async function main() {
   }
   if (command === "verify") {
     await verifyBackup(options);
+    return;
+  }
+  if (command === "discover") {
+    await discoverBackups(options);
+    return;
+  }
+  if (command === "export-recovery") {
+    await exportRecovery(options);
     return;
   }
   fail(`Unknown command: ${command}`);

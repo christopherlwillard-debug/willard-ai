@@ -16,6 +16,10 @@ $Web = Join-Path $InstallRoot "web"
 $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
 $LoadingScreen = Join-Path $InstallRoot "desktop\loading.html"
 $ReleaseContract = Join-Path $InstallRoot "desktop\release-contract.mjs"
+$BackupScript = Join-Path $InstallRoot "desktop\database-backup.mjs"
+$BackupProtectionRoot = Join-Path $DataRoot "backup-protection"
+$BackupCredentialFile = Join-Path $BackupProtectionRoot "automation-credential.dpapi"
+$BackupRecoveryMarker = Join-Path $BackupProtectionRoot "recovery-export-ready.json"
 $ApiUrl = "http://127.0.0.1:8080/api/healthz"
 $WebUrl = "http://127.0.0.1:5000"
 $UpdateManifest = "https://github.com/christopherlwillard-debug/willard-ai/releases/latest/download/release-manifest.json"
@@ -31,6 +35,72 @@ function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
 function Warn($message) { Write-Host "  [!]  $message" -ForegroundColor Yellow }
 function Fail($message) { Write-Host "  [X]  $message" -ForegroundColor Red }
 function Ensure-Folders { New-Item -ItemType Directory -Force -Path $DataRoot, $LogRoot | Out-Null }
+function ConvertFrom-WillardSecureString($secureValue) {
+  $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureValue)
+  try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+}
+function Initialize-BackupProtection {
+  New-Item -ItemType Directory -Force -Path $BackupProtectionRoot | Out-Null
+  if (-not (Test-Path $BackupCredentialFile)) {
+    $bytes = New-Object byte[] 32
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $generated = [Convert]::ToBase64String($bytes)
+    $protected = ConvertTo-SecureString $generated -AsPlainText -Force | ConvertFrom-SecureString
+    $protected | Set-Content $BackupCredentialFile -Encoding ASCII
+  }
+  try {
+    $secure = Get-Content $BackupCredentialFile -Raw | ConvertTo-SecureString
+    $env:WILLARD_BACKUP_PASSPHRASE = ConvertFrom-WillardSecureString $secure
+  } catch {
+    throw "Windows could not unlock the locally protected backup credential for this account."
+  }
+  $env:WILLARD_BACKUP_SCRIPT = $BackupScript
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($env:WILLARD_BACKUP_PASSPHRASE))
+    $credentialFingerprint = ([BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $hasher.Dispose()
+  }
+  if (Test-Path $BackupRecoveryMarker) {
+    try {
+      $marker = Get-Content $BackupRecoveryMarker -Raw | ConvertFrom-Json
+      if ($marker.version -eq 1 -and $marker.credentialFingerprint -eq $credentialFingerprint) {
+        $env:WILLARD_BACKUP_RECOVERY_EXPORT_READY = "1"
+        return
+      }
+    } catch { }
+  }
+  Warn "A separate portable recovery export is required before Willard can start."
+  Say "Store it on a USB drive or another location outside WillardAI\backups."
+  $defaultExport = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Willard-Library-Recovery.willard-recovery.json"
+  $exportPath = if ($env:WILLARD_RECOVERY_EXPORT_PATH) { $env:WILLARD_RECOVERY_EXPORT_PATH } else { Read-Host "  Recovery export path [$defaultExport]" }
+  if (-not $exportPath) { $exportPath = $defaultExport }
+  if ($exportPath -match "(?i)[\\/]WillardAI[\\/]backups(?:[\\/]|$)") {
+    throw "The portable recovery export must not be stored beside the NAS backups."
+  }
+  $exportPassphrase = $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE
+  if (-not $exportPassphrase) {
+    $exportPassphrase = ConvertFrom-WillardSecureString (Read-Host "  Recovery export passphrase (12+ characters)" -AsSecureString)
+  }
+  if (-not $exportPassphrase -or $exportPassphrase.Length -lt 12) {
+    throw "The recovery export passphrase must contain at least 12 characters."
+  }
+  $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = $exportPassphrase
+  try {
+    & $Node $BackupScript export-recovery --output $exportPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exportPath)) { throw "The portable recovery export could not be created." }
+    @{ version = 1; createdAt = (Get-Date).ToString("o"); credentialFingerprint = $credentialFingerprint } |
+      ConvertTo-Json | Set-Content $BackupRecoveryMarker -Encoding UTF8
+    $env:WILLARD_BACKUP_RECOVERY_EXPORT_READY = "1"
+    Good "Portable recovery export created."
+    Warn "Keep the export and passphrase away from the NAS."
+  } finally {
+    Remove-Item Env:\WILLARD_RECOVERY_EXPORT_PASSPHRASE -ErrorAction SilentlyContinue
+    $exportPassphrase = $null
+  }
+}
 function Start-LoadingScreen {
   if (-not (Test-Path $LoadingScreen)) { return }
   try {
@@ -344,7 +414,8 @@ function Try-Update {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
     $required = @("version.json", "payload-manifest.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
-      "desktop\desktop-web-server.mjs", "desktop\database-backup.mjs", "desktop\loading.html",
+      "desktop\desktop-web-server.mjs", "desktop\database-backup.mjs", "desktop\backup-credentials.mjs",
+      "desktop\library-recovery.mjs", "desktop\loading.html",
       "api-runtime\dist\index.mjs", "api-runtime\setup-db.cjs",
       "web\index.html", "web\willard-loading.mp4")
     foreach ($entry in $required) {
@@ -410,6 +481,7 @@ try {
     throw "Willard cannot use its database settings yet. Check '$EnvFile' and launch again."
   }
   Ensure-Schema
+  Initialize-BackupProtection
   $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
   $apiProc = $null

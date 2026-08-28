@@ -21,6 +21,9 @@ $script:WebUrl  = "http://127.0.0.1:5000"
 $script:AppUrl  = "http://localhost:5000"
 $script:MaxLauncherLogBytes = 10MB
 $script:MaxLauncherLogGenerations = 5
+$script:BackupProtectionRoot = Join-Path $env:LOCALAPPDATA "Willard Media Center\backup-protection"
+$script:BackupCredentialFile = Join-Path $BackupProtectionRoot "automation-credential.dpapi"
+$script:BackupRecoveryMarker = Join-Path $BackupProtectionRoot "recovery-export-ready.json"
 
 function Assert-LocalWindows {
     # Replit / cloud / non-Windows safety: these scripts are for a personal
@@ -45,6 +48,94 @@ function Pause-BeforeClose {
     if ($env:WILLARD_NO_PAUSE -eq "1") { return }
     Write-Host ""
     Read-Host "  Press Enter to close this window" | Out-Null
+}
+
+function ConvertFrom-WillardSecureString($secureValue) {
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureValue)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
+    }
+}
+
+function Initialize-WillardBackupProtection([bool]$RequireRecoveryExport = $false) {
+    New-Item -ItemType Directory -Force -Path $BackupProtectionRoot | Out-Null
+    if (-not (Test-Path $BackupCredentialFile)) {
+        $bytes = New-Object byte[] 32
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $generated = [Convert]::ToBase64String($bytes)
+        $protected = ConvertTo-SecureString $generated -AsPlainText -Force | ConvertFrom-SecureString
+        $protected | Set-Content $BackupCredentialFile -Encoding ASCII
+    }
+
+    try {
+        $secure = Get-Content $BackupCredentialFile -Raw | ConvertTo-SecureString
+        $env:WILLARD_BACKUP_PASSPHRASE = ConvertFrom-WillardSecureString $secure
+    } catch {
+        throw "Windows could not unlock the locally protected backup credential for this account."
+    }
+    $env:WILLARD_BACKUP_SCRIPT = Join-Path $Root "desktop\database-backup.mjs"
+
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($env:WILLARD_BACKUP_PASSPHRASE))
+        $credentialFingerprint = ([BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $hasher.Dispose()
+    }
+    if (Test-Path $BackupRecoveryMarker) {
+        try {
+            $marker = Get-Content $BackupRecoveryMarker -Raw | ConvertFrom-Json
+            if ($marker.version -eq 1 -and $marker.credentialFingerprint -eq $credentialFingerprint) {
+                $env:WILLARD_BACKUP_RECOVERY_EXPORT_READY = "1"
+                return $true
+            }
+        } catch { }
+    }
+    if (-not $RequireRecoveryExport) { return $false }
+
+    Write-Host ""
+    Write-Host "  Protect your library recovery key." -ForegroundColor Yellow
+    Write-Host "  Save the portable recovery export on a USB drive or another location" -ForegroundColor White
+    Write-Host "  that is NOT inside the library's WillardAI\backups folder." -ForegroundColor White
+    $defaultFolder = [Environment]::GetFolderPath("MyDocuments")
+    $defaultExport = Join-Path $defaultFolder "Willard-Library-Recovery.willard-recovery.json"
+    $exportPath = if ($env:WILLARD_RECOVERY_EXPORT_PATH) {
+        $env:WILLARD_RECOVERY_EXPORT_PATH
+    } else {
+        Read-Host ("  Recovery export path [" + $defaultExport + "]")
+    }
+    if (-not $exportPath) { $exportPath = $defaultExport }
+    if ($exportPath -match "(?i)[\\/]WillardAI[\\/]backups(?:[\\/]|$)") {
+        throw "The portable recovery export must not be stored beside the NAS backups."
+    }
+    $exportPassphrase = $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE
+    if (-not $exportPassphrase) {
+        $exportPassphrase = ConvertFrom-WillardSecureString (Read-Host "  Recovery export passphrase (12+ characters)" -AsSecureString)
+    }
+    if (-not $exportPassphrase -or $exportPassphrase.Length -lt 12) {
+        throw "The recovery export passphrase must contain at least 12 characters."
+    }
+    $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = $exportPassphrase
+    try {
+        & node $env:WILLARD_BACKUP_SCRIPT export-recovery --output $exportPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exportPath)) {
+            throw "The portable recovery export could not be created."
+        }
+        @{
+            version = 1
+            createdAt = (Get-Date).ToString("o")
+            credentialFingerprint = $credentialFingerprint
+        } | ConvertTo-Json | Set-Content $BackupRecoveryMarker -Encoding UTF8
+        $env:WILLARD_BACKUP_RECOVERY_EXPORT_READY = "1"
+        Write-Ok "Portable recovery export created"
+        Write-Warn "Keep the export and its passphrase away from the NAS. Both are needed after laptop loss."
+        return $true
+    } finally {
+        Remove-Item Env:\WILLARD_RECOVERY_EXPORT_PASSPHRASE -ErrorAction SilentlyContinue
+        $exportPassphrase = $null
+    }
 }
 
 function Show-Failure($friendly, $technical) {

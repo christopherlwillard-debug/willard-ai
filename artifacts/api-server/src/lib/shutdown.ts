@@ -5,6 +5,7 @@ import { stopAiEnrichment } from "./ai-enrichment.ts";
 import { stopFaceRecognition } from "./face-recognition.ts";
 import { stopLibraryJobs } from "./library-engine/index.ts";
 import { stopLibraryMonitor } from "./library-monitor.ts";
+import { stopLibraryBackupCoordinator } from "./backup-coordinator.ts";
 import { stopLibraryWatcher } from "./library-watcher.ts";
 import { stopThumbnailReconciliation } from "./library-engine/index.ts";
 import { logger } from "./logger.ts";
@@ -73,6 +74,7 @@ async function checkpointExternalJobs(): Promise<void> {
 
 export interface ShutdownDependencies {
   stopLibraryMonitor: () => Promise<void>;
+  stopLibraryBackupCoordinator: () => Promise<void>;
   stopLibraryWatcher: () => Promise<void>;
   stopAiEnrichment: () => Promise<void>;
   stopFaceRecognition: () => Promise<void>;
@@ -85,6 +87,7 @@ export interface ShutdownDependencies {
 
 const defaultShutdownDependencies: ShutdownDependencies = {
   stopLibraryMonitor,
+  stopLibraryBackupCoordinator,
   stopLibraryWatcher,
   stopAiEnrichment,
   stopFaceRecognition,
@@ -111,6 +114,7 @@ export function createShutdownCoordinator(
       // Stop producers first so no new work is created while existing work drains.
       await Promise.all([
         bounded("library monitor", dependencies.stopLibraryMonitor(), timeoutMs),
+        bounded("backup coordinator", dependencies.stopLibraryBackupCoordinator(), timeoutMs),
         bounded("library watcher", dependencies.stopLibraryWatcher(), timeoutMs),
         bounded("AI enrichment", dependencies.stopAiEnrichment(), timeoutMs),
         bounded("face recognition", dependencies.stopFaceRecognition(), timeoutMs),

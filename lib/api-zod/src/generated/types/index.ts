@@ -8,6 +8,7 @@
 
 export * from './apiError';
 export * from './appSettings';
+export * from './appSettingsBackupStatus';
 export * from './appSettingsOptimizeProfile';
 export * from './appSettingsScanPerformance';
 export * from './archiveDetail';
@@ -57,6 +58,10 @@ export * from './healthStatus';
 export * from './indexedFile';
 export * from './indexingToggleResult';
 export * from './largeFileResult';
+export * from './libraryBackupSettingsInput';
+export * from './libraryBackupStatus';
+export * from './libraryBackupStatusDestinationClass';
+export * from './libraryBackupStatusStatus';
 export * from './libraryHealth';
 export * from './libraryHealthActiveJob';
 export * from './libraryHealthLastCompleted';

@@ -105,6 +105,8 @@ export async function validateRelease() {
     "Start Willard Media Center.bat",
     "desktop/desktop-web-server.mjs",
     "desktop/database-backup.mjs",
+    "desktop/backup-credentials.mjs",
+    "desktop/library-recovery.mjs",
     "desktop/loading.html",
     "desktop/release-contract.mjs",
     "api-runtime/dist/index.mjs",

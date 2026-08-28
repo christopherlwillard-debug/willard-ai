@@ -24,6 +24,60 @@ The dump, schema/row facts, active library root, and canonical hash inventory
 are all read through one exported PostgreSQL snapshot. A library-path switch or
 catalog write cannot bind the encrypted dump to later database state.
 
+## Automatic library protection on Windows
+
+Willard automatically creates encrypted database generations in the active
+library's `WillardAI/backups` folder after important library work and on the
+configured schedule. A generation is not reported as protected until its final
+NAS files have been read back, decrypted, and checked against the authenticated
+dump hash. At least 12 recent generations and 30 days of history are retained.
+General storage cleanup treats this folder as protected and never reclaims it.
+
+Windows setup creates two deliberately separate recovery factors:
+
+1. An unattended automation secret protected for the current Windows account
+   with DPAPI under `%LOCALAPPDATA%\Willard Media Center\backup-protection`.
+2. A passphrase-encrypted portable recovery export selected by the user.
+
+Setup does not finish until the portable export exists. Keep the export and its
+passphrase on a USB drive or another trusted location away from the NAS. Never
+place it in `WillardAI/backups`. The Windows-only credential is intentionally
+insufficient after laptop loss, while the portable export is unusable without
+its passphrase.
+
+The Settings **Library Protection** panel reports:
+
+- **Library Protected** after a verified generation succeeds.
+- **Backup Pending** while the NAS is offline or read-only; Willard retries on
+  reconnection and on its schedule.
+- **Backup Failed** with a bounded, non-secret explanation.
+- **Backup Not Configured** until Windows protection and the NAS library are
+  ready.
+
+The panel also shows last backup and verification times, destination class,
+recovery-export readiness, manual backup control, and a schedule from 1 to 168
+hours. Duplicate triggers share one running backup.
+
+## Replacement computer recovery
+
+Connect the existing NAS library to the replacement computer and keep the
+portable recovery export available somewhere other than the NAS backup folder.
+Discover only generations that decrypt and verify:
+
+```powershell
+node .\desktop\database-backup.mjs discover `
+  --output-dir "Z:\MediaLibrary\WillardAI\backups" `
+  --recovery-export "E:\Willard-Library-Recovery.willard-recovery.json"
+```
+
+The command prompts for the export passphrase without echoing it. Select the
+newest compatible result, create a new empty PostgreSQL database, and run the
+restore command below with the same `--recovery-export` option. The restore
+rejects non-empty targets, foreign library identities, incompatible PostgreSQL
+or application schema versions, corrupt or incomplete generations, and media
+hash mismatches. Path-bearing rows are remapped only after the restored catalog
+and representative originals pass verification.
+
 ## Backup policy
 
 1. Store backups on a different physical device from the database, preferably
@@ -133,7 +187,8 @@ database; the utility refuses to overwrite an existing user table.
    node .\desktop\database-backup.mjs restore `
       --backup-dir "Z:\WillardBackups\Database\backup-<timestamp>-<id>" `
       --library-root "Z:\MediaLibrary" `
-      --confirm-library-id "<libraryId from authenticated manifest.json>"
+      --confirm-library-id "<libraryId from authenticated manifest.json>" `
+      --recovery-export "E:\Willard-Library-Recovery.willard-recovery.json"
    Remove-Item Env:\WILLARD_RESTORE_DATABASE_URL
    ```
 

@@ -62,6 +62,10 @@ const backendAudit = await readFile(
   new URL("../../artifacts/api-server/audit.mjs", import.meta.url),
   "utf8",
 );
+const backupCoordinator = await readFile(
+  new URL("../../artifacts/api-server/src/lib/backup-coordinator.ts", import.meta.url),
+  "utf8",
+);
 const rootPackage = JSON.parse(
   await readFile(new URL("../../package.json", import.meta.url), "utf8"),
 );
@@ -111,6 +115,11 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Expand-Archive/);
   assert.match(launcher, /setup-db\.cjs/);
   assert.match(launcher, /database\.log/);
+  assert.match(launcher, /automation-credential\.dpapi/);
+  assert.match(launcher, /ConvertFrom-SecureString/);
+  assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
+  assert.match(launcher, /portable recovery export/i);
+  assert.match(launcher, /credentialFingerprint/);
   assert.match(launcher, /schema-ready\.json/);
   assert.match(launcher, /Get-SchemaFingerprint/);
   assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
@@ -156,6 +165,13 @@ test("installer deliberately leaves external services outside its payload", () =
     .split(/\r?\n/)
     .filter((line) => /^\s*Source:/i.test(line));
   assert.doesNotMatch(installSources.join("\n"), /postgres|PostgreSQL|ffmpeg/i);
+});
+
+test("backup shutdown terminates the full Windows process tree", () => {
+  assert.match(backupCoordinator, /taskkill\.exe/);
+  assert.match(backupCoordinator, /\["\/PID", String\(child\.pid\), "\/T", "\/F"\]/);
+  assert.match(backupCoordinator, /SIGKILL/);
+  assert.match(backupCoordinator, /Promise\.race/);
 });
 
 test("release helper produces a checksum-bearing update artifact", () => {
@@ -363,6 +379,10 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /desktop\/database-backup\.mjs/);
   assert.match(releaseStager, /desktop\/database-backup\.mjs/);
+  assert.match(releaseValidator, /desktop\/backup-credentials\.mjs/);
+  assert.match(releaseValidator, /desktop\/library-recovery\.mjs/);
+  assert.match(releaseStager, /desktop\/backup-credentials\.mjs/);
+  assert.match(releaseStager, /desktop\/library-recovery\.mjs/);
   assert.match(releaseValidator, /WILLARD_RELEASE_ZIP/);
   assert.match(releaseValidator, /validateReleaseManifest/);
   assert.match(releaseValidator, /sha256.*match/i);

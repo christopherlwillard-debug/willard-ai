@@ -597,6 +597,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /settings/backup:
+    get:
+      operationId: getLibraryBackupStatus
+      tags: [settings]
+      summary: Get encrypted NAS database backup health
+      responses:
+        "200":
+          description: Backup health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryBackupStatus"
+    put:
+      operationId: updateLibraryBackupSettings
+      tags: [settings]
+      summary: Update backup schedule and enablement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LibraryBackupSettingsInput"
+      responses:
+        "200":
+          description: Updated backup health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryBackupStatus"
+    post:
+      operationId: createLibraryBackup
+      tags: [settings]
+      summary: Create and verify a database backup now
+      responses:
+        "202":
+          description: Backup attempt completed or is pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryBackupStatus"
+
   # ── Scan ──────────────────────────────────────────────────────────────────
   /scan:
     post:
@@ -2287,6 +2328,21 @@ components:
           type: ["string", "null"]
         aiConsentVersion:
           type: ["string", "null"]
+        backupEnabled:
+          type: boolean
+        backupScheduleHours:
+          type: integer
+        backupStatus:
+          type: string
+          enum: [NEVER_CONFIGURED, PENDING, PROTECTED, FAILED]
+        backupLastAttemptAt:
+          type: ["string", "null"]
+        backupLastSuccessAt:
+          type: ["string", "null"]
+        backupLastVerifiedAt:
+          type: ["string", "null"]
+        backupLastError:
+          type: ["string", "null"]
       required:
         - nasPath
         - lastScanAt
@@ -2339,6 +2395,56 @@ components:
             maxLength: 16
         aiConsentAcknowledged:
           type: boolean
+
+    LibraryBackupStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [NEVER_CONFIGURED, PENDING, PROTECTED, FAILED]
+        enabled:
+          type: boolean
+        scheduleHours:
+          type: integer
+        lastAttemptAt:
+          type: ["string", "null"]
+        lastSuccessAt:
+          type: ["string", "null"]
+        lastVerifiedAt:
+          type: ["string", "null"]
+        lastError:
+          type: ["string", "null"]
+        destinationClass:
+          type: string
+          enum: [NAS_LIBRARY]
+        destinationLabel:
+          type: string
+        recoveryExportReady:
+          type: boolean
+        pendingReason:
+          type: ["string", "null"]
+      required:
+        - status
+        - enabled
+        - scheduleHours
+        - lastAttemptAt
+        - lastSuccessAt
+        - lastVerifiedAt
+        - lastError
+        - destinationClass
+        - destinationLabel
+        - recoveryExportReady
+        - pendingReason
+
+    LibraryBackupSettingsInput:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        scheduleHours:
+          type: integer
+          minimum: 1
+          maximum: 168
 
     NasTestInput:
       type: object

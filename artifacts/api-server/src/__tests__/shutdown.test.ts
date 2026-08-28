@@ -13,6 +13,7 @@ function dependencies(events: string[], options: { hangingStep?: string } = {}) 
   };
   return {
     stopLibraryMonitor: step("monitor"),
+    stopLibraryBackupCoordinator: step("backup"),
     stopLibraryWatcher: step("watcher"),
     stopAiEnrichment: step("ai"),
     stopFaceRecognition: step("face"),

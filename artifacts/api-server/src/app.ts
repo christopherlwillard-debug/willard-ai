@@ -138,6 +138,15 @@ export async function bootstrapSessionTable(): Promise<void> {
   await withSchemaBootstrapLock(dbPool, async (client) => {
     const { runRequiredSchema } = loadRequiredSchemaBootstrap();
     await runRequiredSchema(client, { log: false });
+    await client.query(`
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_enabled boolean NOT NULL DEFAULT true;
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_schedule_hours integer NOT NULL DEFAULT 24;
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_status text NOT NULL DEFAULT 'NEVER_CONFIGURED';
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_attempt_at timestamp;
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_success_at timestamp;
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_verified_at timestamp;
+      ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_error text;
+    `);
     // pgvector is optional; probe it only after all required tables exist.
     await initializeVectorCapability(client);
   });

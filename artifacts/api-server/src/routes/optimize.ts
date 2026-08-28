@@ -20,6 +20,7 @@ import {
   CapacityAdmissionError,
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
+import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -1807,6 +1808,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       total: totalFiles,
     });
     send("summary", { totalFiles, succeeded, failed, skipped, totalSavedBytes: totalSaved, stagingDir, cancelled: wasCancelled, results: results.slice(0, 200) });
+    if (!wasCancelled && succeeded > 0) void requestLibraryBackup("completed optimization processing");
     res.end();
   } catch (e: any) {
     try {

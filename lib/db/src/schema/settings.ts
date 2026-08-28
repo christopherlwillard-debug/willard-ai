@@ -38,6 +38,13 @@ export const appSettingsTable = pgTable("app_settings", {
   aiConsentAt: timestamp("ai_consent_at"),
   aiConsentProvider: text("ai_consent_provider"),
   aiConsentVersion: text("ai_consent_version"),
+  backupEnabled: boolean("backup_enabled").notNull().default(true),
+  backupScheduleHours: integer("backup_schedule_hours").notNull().default(24),
+  backupStatus: text("backup_status").notNull().default("NEVER_CONFIGURED"),
+  backupLastAttemptAt: timestamp("backup_last_attempt_at"),
+  backupLastSuccessAt: timestamp("backup_last_success_at"),
+  backupLastVerifiedAt: timestamp("backup_last_verified_at"),
+  backupLastError: text("backup_last_error"),
 });
 
 export const insertAppSettingsSchema = createInsertSchema(appSettingsTable).omit({ id: true });

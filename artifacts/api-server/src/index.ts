@@ -4,6 +4,7 @@ import { purgeExpiredTrashEntries, reconcileCleanupOperations } from "./lib/clea
 import { purgeOrphanedDerivedData } from "./lib/derived-cleanup.ts";
 import { recoverInterruptedJobs } from "./lib/library-engine";
 import { installShutdownHandlers } from "./lib/shutdown.ts";
+import { startLibraryBackupCoordinator } from "./lib/backup-coordinator.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
 import type { Server } from "node:http";
 
@@ -35,6 +36,7 @@ startupMigrations
         process.exit(1);
       }
       logger.info({ port }, "Server listening");
+      startLibraryBackupCoordinator();
 
       // Health/readiness must be available as soon as the required schema
       // gate has passed. These cleanup and recovery tasks are safe to run

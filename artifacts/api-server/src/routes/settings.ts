@@ -11,6 +11,11 @@ import { logger } from "../lib/logger";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
+import {
+  getLibraryBackupStatus,
+  requestLibraryBackup,
+  updateLibraryBackupSettings,
+} from "../lib/backup-coordinator.ts";
 
 const router: IRouter = Router();
 
@@ -253,6 +258,38 @@ router.post("/settings/test-nas", async (req, res) => {
       enumerable: false,
       writable: false,
     });
+  }
+});
+
+// Database protection is intentionally a separate, non-secret settings surface.
+// Credentials and NAS paths never leave the launcher/server boundary.
+router.get("/settings/backup", async (_req, res) => {
+  try {
+    res.json(await getLibraryBackupStatus());
+  } catch {
+    res.status(500).json({ error: "Failed to load backup status" });
+  }
+});
+
+router.put("/settings/backup", async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const status = await updateLibraryBackupSettings({
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+      scheduleHours: typeof body.scheduleHours === "number" ? body.scheduleHours : undefined,
+    });
+    res.json(status);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid backup settings" });
+  }
+});
+
+router.post("/settings/backup", async (_req, res) => {
+  try {
+    await requestLibraryBackup("manual backup");
+    res.status(202).json(await getLibraryBackupStatus());
+  } catch {
+    res.status(500).json({ error: "Backup could not be started" });
   }
 });
 

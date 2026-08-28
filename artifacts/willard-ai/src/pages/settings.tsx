@@ -15,6 +15,9 @@ import {
   useGetLibraryHealth, getGetLibraryHealthQueryKey,
   usePauseIndexing,
   useResumeIndexing,
+  useGetLibraryBackupStatus, getGetLibraryBackupStatusQueryKey,
+  useCreateLibraryBackup,
+  useUpdateLibraryBackupSettings,
 } from "@workspace/api-client-react";
 import {
   invalidateLibraryScanQueries,
@@ -154,6 +157,7 @@ export default function Settings() {
       </div>
 
       <LibrarySection />
+      <LibraryProtectionSection />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
@@ -569,6 +573,175 @@ interface ScannerSettings {
   followSymlinks:              boolean;
   indexOtherFiles:             boolean;
   watcherPollIntervalSeconds:  number;
+}
+
+function LibraryProtectionSection() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: backup, isLoading } = useGetLibraryBackupStatus({
+    query: {
+      queryKey: getGetLibraryBackupStatusQueryKey(),
+      refetchInterval: 10_000,
+    },
+  });
+  const [scheduleHours, setScheduleHours] = useState(24);
+
+  useEffect(() => {
+    if (backup?.scheduleHours) setScheduleHours(backup.scheduleHours);
+  }, [backup?.scheduleHours]);
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: getGetLibraryBackupStatusQueryKey() });
+  const manualBackup = useCreateLibraryBackup({
+    mutation: {
+      onSuccess: (result) => {
+        refresh();
+        if (result.status === "PROTECTED") {
+          toast({ title: "Library backup verified" });
+        } else if (result.status === "PENDING") {
+          toast({ title: "Backup pending", description: result.pendingReason ?? "Willard will retry automatically." });
+        } else {
+          toast({ title: "Backup needs attention", description: result.lastError ?? "Complete backup protection setup." });
+        }
+      },
+      onError: (error: any) => toast({ title: "Backup failed", description: error?.message, variant: "destructive" }),
+    },
+  });
+  const updateBackup = useUpdateLibraryBackupSettings({
+    mutation: {
+      onSuccess: () => {
+        refresh();
+        toast({ title: "Backup schedule saved" });
+      },
+      onError: (error: any) => toast({ title: "Backup schedule was not saved", description: error?.message, variant: "destructive" }),
+    },
+  });
+
+  const statusDisplay = {
+    PROTECTED: {
+      label: "Library Protected",
+      detail: "The latest PostgreSQL library knowledge is encrypted and verified on the NAS.",
+      className: "text-green-400 border-green-500/30 bg-green-500/5",
+      icon: CheckCircle2,
+    },
+    PENDING: {
+      label: "Backup Pending",
+      detail: backup?.pendingReason ?? "Willard is waiting and will retry safely.",
+      className: "text-amber-400 border-amber-500/30 bg-amber-500/5",
+      icon: RefreshCw,
+    },
+    FAILED: {
+      label: "Backup Failed",
+      detail: backup?.lastError ?? "The latest backup did not complete.",
+      className: "text-destructive border-destructive/30 bg-destructive/5",
+      icon: AlertCircle,
+    },
+    NEVER_CONFIGURED: {
+      label: "Backup Not Configured",
+      detail: "Finish Windows backup protection setup and create the separate portable recovery export.",
+      className: "text-muted-foreground border-border bg-secondary/20",
+      icon: Lock,
+    },
+  }[backup?.status ?? "NEVER_CONFIGURED"];
+  const StatusIcon = statusDisplay.icon;
+
+  return (
+    <Card data-testid="library-protection-panel">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Shield className="w-5 h-5 text-primary" />
+          Library Protection
+        </CardTitle>
+        <CardDescription>
+          Encrypted, verified generations of albums, tags, favorites, people, faces, settings, and scan history.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading ? (
+          <Skeleton className="h-40 w-full" />
+        ) : (
+          <>
+            <div className={`rounded-lg border px-4 py-3 flex items-start gap-3 ${statusDisplay.className}`}>
+              <StatusIcon className={`w-5 h-5 mt-0.5 shrink-0 ${backup?.status === "PENDING" ? "animate-spin" : ""}`} />
+              <div>
+                <p className="font-semibold">{statusDisplay.label}</p>
+                <p className="text-xs mt-1 opacity-90">{statusDisplay.detail}</p>
+              </div>
+              <Badge variant="outline" className="ml-auto shrink-0 font-mono text-[10px]">NAS</Badge>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Backup</p>
+                <p className="text-sm">{backup?.lastSuccessAt ? formatDate(backup.lastSuccessAt) : "Never"}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Last Verified</p>
+                <p className="text-sm">{backup?.lastVerifiedAt ? formatDate(backup.lastVerifiedAt) : "Never"}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1">Destination</p>
+                <p className="text-sm font-mono">{backup?.destinationLabel ?? "WillardAI/backups"}</p>
+              </div>
+            </div>
+
+            <div className={`rounded-lg border px-4 py-3 ${backup?.recoveryExportReady ? "border-green-500/30 bg-green-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+              <div className="flex items-center gap-2">
+                {backup?.recoveryExportReady
+                  ? <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  : <AlertTriangle className="w-4 h-4 text-amber-500" />}
+                <p className="text-sm font-medium">
+                  {backup?.recoveryExportReady ? "Portable recovery export ready" : "Portable recovery export required"}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                Keep the export and its passphrase away from this NAS. A replacement computer needs both; the Windows-only credential is intentionally not enough.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="backup-schedule">Automatic backup interval</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="backup-schedule"
+                    type="number"
+                    min={1}
+                    max={168}
+                    value={scheduleHours}
+                    onChange={(event) => setScheduleHours(Number(event.target.value))}
+                    className="w-28"
+                  />
+                  <span className="text-sm text-muted-foreground">hours</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 sm:pb-2">
+                <Switch
+                  id="backup-enabled"
+                  checked={backup?.enabled ?? true}
+                  onCheckedChange={(enabled) => updateBackup.mutate({ data: { enabled } })}
+                />
+                <Label htmlFor="backup-enabled">Automatic backups</Label>
+              </div>
+              <Button
+                variant="outline"
+                disabled={updateBackup.isPending || scheduleHours < 1 || scheduleHours > 168}
+                onClick={() => updateBackup.mutate({ data: { scheduleHours } })}
+              >
+                Save Schedule
+              </Button>
+              <Button
+                disabled={manualBackup.isPending || backup?.enabled === false}
+                onClick={() => manualBackup.mutate()}
+              >
+                {manualBackup.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Shield className="w-4 h-4 mr-2" />}
+                Back Up Now
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function AiPrivacySection() {

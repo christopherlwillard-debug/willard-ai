@@ -5,6 +5,7 @@
  * Willard AI — NAS Media & Data Center API
  * OpenAPI spec version: 0.1.0
  */
+import type { AppSettingsBackupStatus } from './appSettingsBackupStatus';
 import type { AppSettingsOptimizeProfile } from './appSettingsOptimizeProfile';
 import type { AppSettingsScanPerformance } from './appSettingsScanPerformance';
 
@@ -37,4 +38,15 @@ export interface AppSettings {
   aiConsentProvider?: string | null;
   /** @nullable */
   aiConsentVersion?: string | null;
+  backupEnabled?: boolean;
+  backupScheduleHours?: number;
+  backupStatus?: AppSettingsBackupStatus;
+  /** @nullable */
+  backupLastAttemptAt?: string | null;
+  /** @nullable */
+  backupLastSuccessAt?: string | null;
+  /** @nullable */
+  backupLastVerifiedAt?: string | null;
+  /** @nullable */
+  backupLastError?: string | null;
 }
