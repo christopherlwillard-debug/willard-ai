@@ -92,7 +92,7 @@ Write-Ok "Database ready"
 
 # -- Backup protection ---------------------------------------------------------
 try {
-    Initialize-WillardBackupProtection $true | Out-Null
+    Initialize-WillardBackupProtection $true -OfferCredentialReset | Out-Null
 } catch {
     Show-Failure "Library backup protection is not ready." $_.Exception.Message
     Write-Host "  Setup cannot finish until a separate portable recovery export is created." -ForegroundColor White

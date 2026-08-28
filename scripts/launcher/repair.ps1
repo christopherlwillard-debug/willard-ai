@@ -90,6 +90,17 @@ if ((Test-Command "node") -and (Test-Path $envPath)) {
     }
 }
 
+# -- Backup protection -----------------------------------------------------------
+if ((Test-Command "node") -and (Test-Path $envPath)) {
+    try {
+        Initialize-WillardBackupProtection $true -OfferCredentialReset | Out-Null
+        Write-Ok "Library backup protection is ready."
+    } catch {
+        Write-Bad "Library backup protection is not ready."
+        $problems += $_.Exception.Message
+    }
+}
+
 
 # -- Verdict ------------------------------------------------------------------
 Write-Host ""
