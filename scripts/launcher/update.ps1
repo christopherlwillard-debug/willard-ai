@@ -240,7 +240,7 @@ function Prepare-DeveloperCandidate($candidate) {
         $buildCode = Invoke-PreparationCommand "Building the updated library service..." $buildLog {
             & $pnpmCommand --filter @workspace/api-server run build
         }
-        if ($buildCode -ne 0 -or -not (Test-Path (Join-Path $candidate "artifacts\api-server\dist\index.mjs"))) {
+        if ($buildCode -ne 0 -or -not (Test-WillardApiBuild $candidate)) {
             throw "The API rebuild failed. See $buildLog."
         }
         Test-InjectedUpdateFailure "build"
@@ -248,8 +248,12 @@ function Prepare-DeveloperCandidate($candidate) {
         Pop-Location
     }
 
-    foreach ($required in @("package.json", "node_modules", "artifacts\api-server\dist\index.mjs")) {
-        if (-not (Test-Path (Join-Path $candidate $required))) {
+    $requiredComponents = @(
+        (Join-Path $candidate "package.json"),
+        (Join-Path $candidate "node_modules")
+    ) + @(Get-WillardApiBuildArtifacts $candidate)
+    foreach ($required in $requiredComponents) {
+        if (-not (Test-Path $required)) {
             throw "The prepared update is missing a runnable component: $required"
         }
     }
