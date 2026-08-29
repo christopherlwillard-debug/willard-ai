@@ -14,12 +14,17 @@ async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
 
+  // Keep the Pino plugin's generated worker paths relocatable. When `outdir`
+  // is absolute, the plugin embeds the temporary update-candidate directory
+  // in index.mjs; moving that candidate into place then makes every worker
+  // launch point at a directory that no longer exists.
+  process.chdir(artifactDir);
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
     bundle: true,
     format: "esm",
-    outdir: distDir,
+    outdir: "dist",
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
     // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
