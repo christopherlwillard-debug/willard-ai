@@ -61,3 +61,10 @@ uri = "file://build/Willard-AI-Windows-startup-fix.zip"
 type = "unspecified"
 title = "Willard AI Windows startup fix"
 description = "Complete replacement source folder with the relocatable API worker fix, automatic FFmpeg repair, and verified Windows launchers. SHA-256: 3a507f2ad70135cc378994aefa939dc30efd0eb5aca419aac6a5de085f7544db"
+
+[[outputs]]
+id = "BFdIJdrmdjYRWLqZs4GYI"
+uri = "file://build/Willard-AI-Windows-backup-fix.zip"
+type = "unspecified"
+title = "Willard AI Windows backup fix"
+description = "Complete replacement source folder. Windows backup now locates psql.exe, pg_dump.exe, and pg_restore.exe in standard PostgreSQL installation folders without requiring PATH edits. SHA-256: 78c3012dc8e3be314ef9f0d1c4fc36f314917a1452a77396e7ca57886ffcb6cc"

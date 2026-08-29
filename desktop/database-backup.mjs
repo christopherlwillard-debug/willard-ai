@@ -19,7 +19,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   mkdir,
   readdir,
@@ -146,8 +146,54 @@ function resolveBackupRoot(options) {
   );
 }
 
+function uniqueStrings(values) {
+  return [...new Set(values.filter((value) => typeof value === "string" && value.trim()))];
+}
+
+function findWindowsPostgresBinary(binaryName, environment = process.env) {
+  const pathEntries = uniqueStrings([environment.Path, environment.PATH])
+    .flatMap((value) => value.split(";"))
+    .map((value) => value.trim());
+  const programRoots = uniqueStrings([
+    environment.ProgramW6432,
+    environment.ProgramFiles,
+    environment["ProgramFiles(x86)"],
+  ]);
+  const candidates = [
+    ...pathEntries.map((entry) => path.join(entry, binaryName)),
+    ...uniqueStrings([
+      environment.ChocolateyInstall
+        ? path.join(environment.ChocolateyInstall, "bin")
+        : null,
+      ...programRoots,
+    ]).map((entry) => path.join(entry, binaryName)),
+  ];
+
+  for (const root of programRoots) {
+    const postgresRoot = path.join(root, "PostgreSQL");
+    let versions = [];
+    try {
+      versions = readdirSync(postgresRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+    } catch {
+      // PostgreSQL may be installed through a package manager instead.
+    }
+    candidates.push(
+      ...versions.map((version) => path.join(postgresRoot, version, "bin", binaryName)),
+    );
+  }
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
 function resolveBinary(environmentName, unixName, windowsName) {
-  return process.env[environmentName] || (process.platform === "win32" ? windowsName : unixName);
+  if (process.env[environmentName]) return process.env[environmentName];
+  if (process.platform === "win32") {
+    return findWindowsPostgresBinary(windowsName) ?? windowsName;
+  }
+  return unixName;
 }
 
 function connectionEnvironment(connectionString) {
@@ -1333,6 +1379,7 @@ export {
   buildLibraryRemapSql,
   decryptDump,
   encryptDump,
+  findWindowsPostgresBinary,
   stableJson,
   validateManifest,
 };

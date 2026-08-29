@@ -8,7 +8,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
-import { buildLibraryRemapSql } from "./database-backup.mjs";
+import {
+  buildLibraryRemapSql,
+  findWindowsPostgresBinary,
+} from "./database-backup.mjs";
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
   ensureLibraryIdentity,
@@ -124,6 +127,39 @@ test("library path reconciliation is transactional and boundary-aware", () => {
   );
   assert.ok(unc.includes("\\\\nas-a\\photos\\Willard"));
   assert.ok(unc.includes("\\\\nas-b\\recovered\\Willard"));
+});
+
+test("Windows backup tools are found in standard PostgreSQL installation folders", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-postgres-tools-"));
+  try {
+    const bin = path.join(root, "PostgreSQL", "16", "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, "psql.exe"), "");
+    await writeFile(path.join(bin, "pg_dump.exe"), "");
+
+    assert.equal(
+      findWindowsPostgresBinary("psql.exe", {
+        ProgramFiles: root,
+        ProgramW6432: "",
+        "ProgramFiles(x86)": "",
+        Path: "",
+        PATH: "",
+      }),
+      path.join(bin, "psql.exe"),
+    );
+    assert.equal(
+      findWindowsPostgresBinary("pg_dump.exe", {
+        ProgramFiles: root,
+        ProgramW6432: "",
+        "ProgramFiles(x86)": "",
+        Path: "",
+        PATH: "",
+      }),
+      path.join(bin, "pg_dump.exe"),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("portable recovery exports are encrypted, authenticated, and fail closed", () => {
