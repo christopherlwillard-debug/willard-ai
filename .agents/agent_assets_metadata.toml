@@ -47,3 +47,10 @@ uri = "file://build/Willard-AI-Windows-fixed.zip"
 type = "unspecified"
 title = "Willard AI Windows — Detached Update Fix"
 description = "Clean Windows copy whose updater prepares everything first, waits for the updater window to close, and then swaps folders from a separate helper so Windows cannot lock the live installation."
+
+[[outputs]]
+id = "XMloEUfRns_X_tZoHOkw0"
+uri = "file://build/Willard-AI-Windows-thumbnail-fix.zip"
+type = "unspecified"
+title = "Willard AI Windows Thumbnail Fix"
+description = "Corrected Windows package. Setup and Repair now automatically install and verify FFmpeg/FFprobe so thumbnail jobs do not repeatedly fail because media support is missing."

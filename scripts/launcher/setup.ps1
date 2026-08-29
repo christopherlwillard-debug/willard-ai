@@ -38,6 +38,16 @@ if (-not $pnpmCommand) {
     Pause-BeforeClose; exit 1
 }
 
+# -- Media support -------------------------------------------------------------
+if (Install-WillardMediaTools) {
+    Write-Ok "Media thumbnails and previews are ready"
+} else {
+    Show-Failure "Media support could not be installed automatically." `
+        ("See " + (Join-Path $LogDir "media-tools-install.log"))
+    Write-Host "  Setup stopped before scans could create repeated thumbnail failures." -ForegroundColor White
+    Pause-BeforeClose; exit 1
+}
+
 # -- Settings file (.env) -----------------------------------------------------
 if (Ensure-EnvFile) {
     Write-Ok "Created settings file"

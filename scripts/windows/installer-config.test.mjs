@@ -171,6 +171,18 @@ test("installer deliberately leaves external services outside its payload", () =
   assert.doesNotMatch(installSources.join("\n"), /postgres|PostgreSQL|ffmpeg/i);
 });
 
+test("source Setup and Repair automatically restore thumbnail media tools", () => {
+  assert.match(launcherCommon, /function Install-WillardMediaTools/);
+  assert.match(launcherCommon, /winget install --id Gyan\.FFmpeg --exact --silent/);
+  assert.match(launcherCommon, /choco install ffmpeg -y --no-progress/);
+  assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "Machine"\)/);
+  assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "User"\)/);
+  assert.match(setupLauncher, /if \(Install-WillardMediaTools\)/);
+  assert.match(setupLauncher, /Setup stopped before scans could create repeated thumbnail failures/);
+  assert.match(repairLauncher, /if \(Install-WillardMediaTools\)/);
+  assert.doesNotMatch(repairLauncher, /To add it:\s+winget install/);
+});
+
 test("backup shutdown terminates the full Windows process tree", () => {
   assert.match(backupCoordinator, /taskkill\.exe/);
   assert.match(backupCoordinator, /\["\/PID", String\(child\.pid\), "\/T", "\/F"\]/);

@@ -50,11 +50,15 @@ if (Test-Command "pnpm") {
 
 $pnpmCommand = Get-WillardPnpmCommand
 
-if (Test-Command "ffmpeg") {
+if (Test-WillardMediaTools) {
     Write-Ok "Media processing is available."
 } else {
-    Write-Warn "Media processing (FFmpeg) is not installed. Willard AI still works, but thumbnails/previews will be off."
-    Write-Host "        To add it:  winget install Gyan.FFmpeg" -ForegroundColor Gray
+    if (Install-WillardMediaTools) {
+        Write-Ok "Installed media support for thumbnails and previews."
+    } else {
+        Write-Bad "Media support could not be installed."
+        $problems += ("Automatic media support installation failed - see " + (Join-Path $LogDir "media-tools-install.log"))
+    }
 }
 
 # -- Configuration ------------------------------------------------------------
