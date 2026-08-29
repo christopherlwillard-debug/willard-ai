@@ -6,6 +6,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 
 const router = Router();
@@ -35,11 +36,6 @@ type HealthReport = {
     unusedCacheFiles: number;
   };
 };
-
-async function configuredNas(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  return row?.nasPath?.trim() || null;
-}
 
 function walkDirectories(root: string, skip: string): { empty: string[]; files: string[] } {
   const empty: string[] = [];
@@ -167,13 +163,14 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
 
 router.get("/media/health", async (_req, res) => {
   try {
-    const nasPath = await configuredNas();
-    if (!nasPath) return res.json({
-      checkedAt: new Date().toISOString(), libraryPath: null, status: "attention",
+    const library = await getActiveLibraryContext();
+    if (!library) return res.json({
+      checkedAt: new Date().toISOString(), libraryPath: null, libraryKey: null, indexedFiles: 0, status: "attention",
       issues: { missingFiles: 0, orphanedIndexRecords: 0, missingThumbnails: 0, orphanedThumbnails: 0, emptyFolders: 0, brokenMetadataReferences: 0, unusedCacheBytes: 0, unusedCacheFiles: 0 },
       error: "No library is configured",
     });
-    return res.json((await inspectLibrary(nasPath)).report);
+    const inspected = await inspectLibrary(library.nasPath);
+    return res.json({ ...inspected.report, libraryKey: library.libraryKey, indexedFiles: inspected.rows.length });
   } catch { return res.status(500).json({ error: "Health scan failed" }); }
 });
 
@@ -181,7 +178,7 @@ router.post("/media/cleanup", async (req, res) => {
   const requested = Array.isArray(req.body?.actions) ? req.body.actions : [];
   const allowed = new Set(["orphanedRecords", "orphanedDerivedData", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
   const actions = requested.filter((action: unknown): action is string => typeof action === "string" && allowed.has(action));
-  const nasPath = await configuredNas();
+  const nasPath = (await getActiveLibraryContext())?.nasPath ?? null;
   if (!nasPath) return res.status(409).json({ error: "No library is configured" });
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });

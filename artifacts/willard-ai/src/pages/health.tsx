@@ -9,6 +9,8 @@ import { apiUrl } from "@/lib/api";
 type Report = {
   checkedAt: string;
   libraryPath: string | null;
+  libraryKey?: string | null;
+  indexedFiles?: number;
   status: "healthy" | "attention" | "action_required";
   issues: Record<string, number>;
   error?: string;
@@ -103,7 +105,11 @@ export default function Health() {
           {report?.status === "healthy" ? <CheckCircle2 className="h-10 w-10 text-emerald-400" /> : <AlertTriangle className={`h-10 w-10 ${statusColor}`} />}
           <div className="flex-1 min-w-[220px]">
             <p className={`text-xl font-semibold ${statusColor}`}>{loading ? "Checking library…" : statusLabel}</p>
-            <p className="text-sm text-muted-foreground">{report?.libraryPath ?? "No library configured"}{issueCount > 0 ? ` · ${issueCount.toLocaleString()} issue${issueCount === 1 ? "" : "s"} found` : ""}</p>
+             <p className="text-sm text-muted-foreground">
+               {report?.libraryPath ?? "No library configured"}
+               {report?.libraryPath ? ` · ${(report.indexedFiles ?? 0).toLocaleString()} indexed files` : ""}
+               {issueCount > 0 ? ` · ${issueCount.toLocaleString()} issue${issueCount === 1 ? "" : "s"} found` : ""}
+             </p>
           </div>
           <div className="text-right text-xs text-muted-foreground font-mono">
             <p>LAST VERIFIED</p><p>{report?.checkedAt ? new Date(report.checkedAt).toLocaleString() : "—"}</p>

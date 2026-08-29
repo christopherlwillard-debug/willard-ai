@@ -10,6 +10,8 @@ import {
   type ScanPerformance, type ThrottleProfile, type SkippedFile, type ScanDiagnostics,
   EMPTY_COUNTERS, PRIORITY_RANK, THROTTLE_PROFILES, SCANNER_VERSION, MAX_SKIPPED_LISTED,
 } from "./types.ts";
+import { getDuplicateSummary } from "../duplicate-summary.ts";
+import { getActiveAppSettings, getActiveNasPath } from "../active-library.ts";
 import {
   walkNas, walkNasAsync, classifyMediaType, guessMimeType,
   extractPhotoMeta, extractVideoMeta, extractPdfMeta, hashFile, hashFileBounded,
@@ -837,9 +839,8 @@ export async function forceDiscardActiveJob(): Promise<{ discarded: boolean; job
 
 async function getThrottleProfile(): Promise<ThrottleProfile> {
   try {
-    const [row] = await db.select({ perf: appSettingsTable.scanPerformance })
-      .from(appSettingsTable).limit(1);
-    const perf = (row?.perf ?? "BALANCED") as ScanPerformance;
+    const settings = await getActiveAppSettings();
+    const perf = (settings?.scanPerformance ?? "BALANCED") as ScanPerformance;
     return THROTTLE_PROFILES[perf] ?? THROTTLE_PROFILES.BALANCED;
   } catch {
     return THROTTLE_PROFILES.BALANCED;
@@ -1175,12 +1176,7 @@ async function getPreviousElapsedMs(nasPath: string, profile: string): Promise<n
 // ── NAS availability check ───────────────────────────────────────────────────
 
 async function getConfiguredNasPath(): Promise<string | null> {
-  const [settings] = await db
-    .select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable)
-    .limit(1);
-  const configured = settings?.nasPath?.trim();
-  return configured || null;
+  return getActiveNasPath();
 }
 
 function sameLibraryPath(left: string, right: string): boolean {
@@ -2365,9 +2361,13 @@ async function runScanJob(
     // ── Duplicate detection (two-stage: size+fingerprint groups → confirm with
     //    full SHA-256 only for candidates) ──────────────────────────────────
     let duplicateGroups = 0;
+    let duplicateCandidates = 0;
     const _t0Dupes = Date.now();
     try {
       duplicateGroups = await detectDuplicates(state);
+      const currentDuplicates = await getDuplicateSummary(state.nasPath);
+      duplicateGroups = currentDuplicates.confirmedGroups;
+      duplicateCandidates = currentDuplicates.unconfirmedCandidates;
     } catch (dupeErr: any) {
       const _de = dupeErr instanceof Error ? dupeErr : new Error(String(dupeErr));
       slog('duplicate_detection_failed', { err: _de, elapsedMs: Date.now() - _t0Dupes });
@@ -2407,6 +2407,7 @@ async function runScanJob(
       skippedFiles:        state.counters.skipped,
       skippedList:         state.skippedList,
       duplicateGroups,
+      duplicateCandidates,
       scanStartedAt:       scanStartedAt.toISOString(),
       categories,
     };
@@ -2767,9 +2768,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
     }
 
     // Read thumbnail quality setting
-    const [settingsRow] = await db
-      .select({ thumbnailQuality: appSettingsTable.thumbnailQuality })
-      .from(appSettingsTable).limit(1);
+    const settingsRow = await getActiveAppSettings();
     const thumbQuality = settingsRow?.thumbnailQuality ?? "BALANCED";
 
     // Count total files that need thumbnails

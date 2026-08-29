@@ -13,6 +13,8 @@ import { sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { logger } from "../lib/logger.ts";
+import { getActiveLibraryContext } from "../lib/active-library.ts";
+import { getDuplicateSummary } from "../lib/duplicate-summary.ts";
 
 const router: IRouter = Router();
 
@@ -24,9 +26,7 @@ function cleanupLogPath(nasPath: string) {
 }
 
 async function getConfiguredNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
+  return (await getActiveLibraryContext())?.nasPath ?? null;
 }
 
 // ── GET /cleanup/duplicates — enriched with mediaFilesTable data ───────────
@@ -278,8 +278,7 @@ router.get("/cleanup/old-files", async (req, res) => {
 
 router.get("/cleanup/empty-folders", async (_req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = (await getActiveLibraryContext())?.nasPath ?? "";
 
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.json([]);
@@ -327,43 +326,19 @@ router.get("/cleanup/summary", async (_req, res) => {
   try {
     const nasPath = await getConfiguredNasPath();
     if (!nasPath) {
-      res.json({ duplicateGroups: 0, duplicateWastedBytes: 0, largeFileCount: 0, largeFilesBytes: 0, oldFileCount: 0, emptyFolderCount: 0 });
+      res.json({
+        duplicateGroups: 0,
+        duplicateWastedBytes: 0,
+        duplicateCandidates: 0,
+        candidateWastedBytes: 0,
+        largeFileCount: 0,
+        largeFilesBytes: 0,
+        oldFileCount: 0,
+        emptyFolderCount: 0,
+      });
       return;
     }
-    // Exact-hash duplicate groups
-    const exactDupResult = await db.execute(sql`
-      SELECT COUNT(*) as "dupGroups", COALESCE(SUM(t.wasted), 0) as "dupWasted" FROM (
-        SELECT (COUNT(*) - 1) * MAX(size_bytes) as wasted
-        FROM ${mediaFilesTable}
-         WHERE nas_path = ${nasPath} AND content_hash IS NOT NULL AND ${activeMediaCondition}
-        GROUP BY content_hash HAVING COUNT(*) > 1
-      ) t
-    `);
-
-    // Perceptual-hash duplicate groups (same fingerprint, not all same content_hash)
-    const perceptualDupResult = await db.execute(sql`
-      SELECT COUNT(*) as "percGroups", COALESCE(SUM(t.wasted), 0) as "percWasted" FROM (
-        SELECT (COUNT(DISTINCT m.id) - 1) * MAX(m.size_bytes) AS wasted
-        FROM ${mediaFilesTable} m
-        WHERE m.nas_path = ${nasPath}
-          AND m.quick_fingerprint IS NOT NULL AND m.quick_fingerprint != ''
-           AND ${sql.raw(activeMediaSql("m"))}
-        GROUP BY m.quick_fingerprint
-        HAVING COUNT(DISTINCT m.id) > 1
-          AND NOT (
-            COUNT(m.content_hash) = COUNT(*)
-            AND COUNT(DISTINCT m.content_hash) = 1
-          )
-      ) t
-    `);
-
-    const exactDupGroups  = Number((exactDupResult.rows[0] as any)?.dupGroups  ?? 0);
-    const exactDupWasted  = Number((exactDupResult.rows[0] as any)?.dupWasted   ?? 0);
-    const percDupGroups   = Number((perceptualDupResult.rows[0] as any)?.percGroups ?? 0);
-    const percDupWasted   = Number((perceptualDupResult.rows[0] as any)?.percWasted  ?? 0);
-
-    const dupGroups = exactDupGroups + percDupGroups;
-    const dupWasted = exactDupWasted + percDupWasted;
+    const duplicateSummary = await getDuplicateSummary(nasPath);
 
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
@@ -400,8 +375,11 @@ router.get("/cleanup/summary", async (_req, res) => {
     }
 
     res.json({
-      duplicateGroups:       dupGroups,
-      duplicateWastedBytes:  dupWasted,
+      libraryKey:            (await getActiveLibraryContext())?.libraryKey,
+      duplicateGroups:       duplicateSummary.confirmedGroups,
+      duplicateWastedBytes:  duplicateSummary.confirmedWastedBytes,
+      duplicateCandidates:   duplicateSummary.unconfirmedCandidates,
+      candidateWastedBytes:  duplicateSummary.unconfirmedWastedBytes,
       largeFileCount:        largeFiles,
       largeFilesBytes:       largeBytes,
       oldFileCount:          oldFiles,
@@ -570,8 +548,7 @@ router.post("/cleanup/execute", async (req, res) => {
 
 router.get("/cleanup/trash", async (_req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = (await getActiveLibraryContext())?.nasPath ?? "";
     if (!nasPath) {
       res.json({ entries: [] });
       return;
@@ -617,8 +594,7 @@ router.post("/cleanup/restore", async (req, res) => {
       return;
     }
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = (await getActiveLibraryContext())?.nasPath ?? "";
     if (!nasPath) {
       res.status(409).json({ error: "No library configured" });
       return;
@@ -809,8 +785,7 @@ router.post("/cleanup/restore", async (req, res) => {
 
 router.get("/cleanup/history", async (_req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = (await getActiveLibraryContext())?.nasPath ?? "";
     if (!nasPath) {
       res.json({ sessions: [] });
       return;

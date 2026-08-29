@@ -70,6 +70,7 @@ interface ScanResult {
   totalSavingsBytes: number;
   groups:            FormatGroup[];
   fromCache?:        boolean;
+  libraryKey?:       string;
 }
 
 function timeAgo(isoDate: string): string {
@@ -1518,7 +1519,7 @@ export default function Optimize() {
           <div className="flex flex-col items-end gap-0.5">
             {scanResult?.fromCache && !scanMutation.isPending && (
               <p className="text-[10px] font-mono text-muted-foreground">
-                Last scanned {timeAgo(scanResult.scannedAt)}
+                Last analyzed {timeAgo(scanResult.scannedAt)}
               </p>
             )}
             <Button
@@ -1528,10 +1529,10 @@ export default function Optimize() {
             >
               <ScanLine className="w-4 h-4" />
               {scanMutation.isPending
-                ? (scanResult?.fromCache ? "Checking…" : "Scanning…")
+                ? (scanResult?.fromCache ? "Checking…" : "Analyzing…")
                 : scanResult
-                ? "Re-scan NAS"
-                : "Scan NAS"}
+                ? "Re-analyze library"
+                : "Analyze library"}
             </Button>
           </div>
         </div>
@@ -1563,11 +1564,11 @@ export default function Optimize() {
             <div>
               <p className="font-mono font-medium">Ready to find optimization opportunities</p>
               <p className="text-sm text-muted-foreground font-mono mt-1">
-                Scan your NAS to see which formats can be converted for space savings
+                Analyze the active library for formats that can be converted for space savings
               </p>
             </div>
             <Button onClick={() => scanMutation.mutate(true)} className="font-mono gap-2 mt-2">
-              <ScanLine className="w-4 h-4" /> Start Scan
+              <ScanLine className="w-4 h-4" /> Start Analysis
             </Button>
           </CardContent>
         </Card>
@@ -1578,7 +1579,7 @@ export default function Optimize() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
             <ScanLine className="w-8 h-8 text-primary animate-pulse" />
-            <p className="font-mono text-muted-foreground text-sm">Scanning NAS for media files…</p>
+             <p className="font-mono text-muted-foreground text-sm">Analyzing the active library for optimization opportunities…</p>
             <div className="w-48 space-y-2">
               <Skeleton className="h-2 w-full" />
               <Skeleton className="h-2 w-3/4" />

@@ -1252,6 +1252,8 @@ export const GetEmptyFoldersResponse = zod.array(GetEmptyFoldersResponseItem)
 export const GetCleanupSummaryResponse = zod.object({
   "duplicateGroups": zod.number(),
   "duplicateWastedBytes": zod.number(),
+  "duplicateCandidates": zod.number(),
+  "candidateWastedBytes": zod.number(),
   "largeFileCount": zod.number(),
   "largeFilesBytes": zod.number(),
   "oldFileCount": zod.number(),

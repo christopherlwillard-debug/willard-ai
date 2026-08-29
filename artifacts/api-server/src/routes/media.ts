@@ -12,6 +12,7 @@ import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router = Router();
 
@@ -29,8 +30,7 @@ async function getNasPath(): Promise<string | null> {
   if (_nasPathCached !== undefined && now - _nasPathCachedAt < NAS_PATH_TTL_MS) {
     return _nasPathCached;
   }
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  _nasPathCached = row?.nasPath ?? null;
+  _nasPathCached = await getActiveNasPath();
   _nasPathCachedAt = now;
   return _nasPathCached;
 }

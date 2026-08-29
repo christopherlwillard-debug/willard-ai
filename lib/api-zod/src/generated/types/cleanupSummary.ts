@@ -9,6 +9,8 @@
 export interface CleanupSummary {
   duplicateGroups: number;
   duplicateWastedBytes: number;
+  duplicateCandidates: number;
+  candidateWastedBytes: number;
   largeFileCount: number;
   largeFilesBytes: number;
   oldFileCount: number;

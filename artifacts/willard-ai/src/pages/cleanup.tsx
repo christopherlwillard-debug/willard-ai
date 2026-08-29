@@ -501,6 +501,7 @@ export default function Cleanup() {
   };
 
   const totalSavings = (summary?.duplicateWastedBytes ?? 0) + (summary?.largeFilesBytes ?? 0);
+  const duplicateCandidates = Number((summary as typeof summary & { duplicateCandidates?: number })?.duplicateCandidates ?? 0);
   const queueSavings = queue.reduce((s, e) => s + e.totalSavedBytes, 0);
   const queueDeleteCount = queue.reduce((s, e) => s + e.deleteFileIds.length, 0);
   const scanCurrent = scanStatus?.current as {
@@ -563,7 +564,10 @@ export default function Cleanup() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{summary?.duplicateGroups?.toLocaleString() ?? "--"}</div>
-            <p className="text-xs text-muted-foreground mt-1">Wasting {formatBytes(summary?.duplicateWastedBytes ?? 0)}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Confirmed · wasting {formatBytes(summary?.duplicateWastedBytes ?? 0)}
+              {duplicateCandidates > 0 ? ` · ${duplicateCandidates.toLocaleString()} unconfirmed candidate${duplicateCandidates === 1 ? "" : "s"}` : ""}
+            </p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-amber-500">

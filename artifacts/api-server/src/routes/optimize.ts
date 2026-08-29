@@ -6,7 +6,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
@@ -21,10 +21,20 @@ import {
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
 import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
+import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
 
 const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
+
+async function getActiveConversionJob(id: number) {
+  const nasPath = (await getActiveLibraryContext())?.nasPath;
+  if (!nasPath) return null;
+  const [job] = await db.select().from(conversionJobsTable).where(
+    and(eq(conversionJobsTable.id, id), eq(conversionJobsTable.nasPath, nasPath)),
+  ).limit(1);
+  return job ?? null;
+}
 
 // ── Format classification types ────────────────────────────────────────────────
 
@@ -833,8 +843,7 @@ function appendConversionLog(nasPath: string, entry: Record<string, unknown>): v
  */
 router.get("/optimize/status", async (_req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
+    const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const nasPath = settings.nasPath;
     const profile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
     const rawConversionEnabled = settings.rawConversionEnabled ?? false;
@@ -894,22 +903,22 @@ router.get("/optimize/status", async (_req, res) => {
 
 router.get("/optimize/scan", async (req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
-    const nasPath        = settings.nasPath;
+    const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
+    const library = await getActiveLibraryContext();
+    const nasPath = library?.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
 
-    const profile: OptimizeProfile = (settingsRows[0]?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
-    const rawConversionEnabled = settingsRows[0]?.rawConversionEnabled ?? false;
+    const profile: OptimizeProfile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settings.rawConversionEnabled ?? false;
     const force = req.query.force === "true";
 
     if (!force) {
       const cached = readScanCache(nasPath, profile, rawConversionEnabled);
       if (cached) {
-        res.json({ ...cached, fromCache: true, profile });
+        res.json({ ...cached, libraryKey: library.libraryKey, fromCache: true, profile });
         return;
       }
     }
@@ -1164,16 +1173,15 @@ router.post("/optimize/run", async (req, res) => {
       return;
     }
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] ?? {} as typeof appSettingsTable.$inferSelect;
+    const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const nasPath: string | null | undefined = settings.nasPath;
     if (!nasPath || !fs.existsSync(nasPath)) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
 
-    const profile: OptimizeProfile = (settingsRows[0]?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
-    const rawConversionEnabled = settingsRows[0]?.rawConversionEnabled ?? false;
+    const profile: OptimizeProfile = (settings.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settings.rawConversionEnabled ?? false;
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
 
     // Load scan cache to check per-file decisions for codec-detected formats.
@@ -1245,7 +1253,10 @@ router.post("/optimize/run", async (req, res) => {
 
 router.get("/optimize/jobs", async (_req, res) => {
   try {
+    const nasPath = (await getActiveLibraryContext())?.nasPath;
+    if (!nasPath) { res.json([]); return; }
     const jobs = await db.select().from(conversionJobsTable)
+      .where(eq(conversionJobsTable.nasPath, nasPath))
       .orderBy(desc(conversionJobsTable.createdAt))
       .limit(20);
     res.json(jobs);
@@ -1258,7 +1269,7 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
   try {
   const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "failed" && job.status !== "awaiting_action") {
       res.status(409).json({ error: `Cannot retry a job with status '${job.status}' — only failed or awaiting-action jobs can be retried` });
@@ -1288,7 +1299,7 @@ router.post("/optimize/jobs/:id/cancel", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "running") {
       res.status(409).json({ error: `Cannot cancel a job with status '${job.status}'` });
@@ -1332,7 +1343,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       return;
     }
 
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "awaiting_action") {
       res.status(409).json({ error: `Job is not awaiting action (current status: ${job.status})` });
@@ -1476,7 +1487,7 @@ router.post("/optimize/jobs/:id/finalize", finalizeHandlerImpl);
 router.get("/optimize/jobs/:id", async (req, res) => {
   try {
   const id = parseInt(req.params.id);
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
   } catch (e: any) {
@@ -1488,8 +1499,7 @@ router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
   const id = parseInt(req.params.id);
   if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
-    const [job] = await db.select().from(conversionJobsTable)
-      .where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "pending") {
       res.status(409).json({ error: `Job cannot start from status '${job.status}'` });
@@ -1527,7 +1537,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
   let capacityReservation: CapacityReservation | null = null;
   try {
-    const [job] = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const job = await getActiveConversionJob(id);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
     if (job.status === "running") { send("error", { message: "Job is already running" }); res.end(); return; }
     if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
@@ -1535,9 +1545,9 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     }
 
     // Read current profile from settings for this run
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const profile: OptimizeProfile = (settingsRows[0]?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
-    const rawConversionEnabled = settingsRows[0]?.rawConversionEnabled ?? false;
+    const settings = await getActiveAppSettings();
+    const profile: OptimizeProfile = (settings?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
+    const rawConversionEnabled = settings?.rawConversionEnabled ?? false;
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
 
     const nasPath        = job.nasPath;

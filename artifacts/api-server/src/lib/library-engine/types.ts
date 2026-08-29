@@ -55,6 +55,7 @@ export interface JobSummary {
   skippedFiles?:      number;
   skippedList?:       SkippedFile[];
   duplicateGroups?:   number;
+  duplicateCandidates?: number;
   scanStartedAt?:     string; // ISO — key for querying per-action file subsets
   categories?:        Record<string, number>; // files per media type in this scan
   reprocessedFiles?:  number; // METADATA jobs

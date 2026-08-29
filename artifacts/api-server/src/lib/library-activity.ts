@@ -65,7 +65,7 @@ export function describeChanges(c: ScanChangeCounts): string | null {
   if (c.newFiles > 0) parts.push(`${c.newFiles.toLocaleString()} new file${c.newFiles === 1 ? "" : "s"}`);
   if (c.modifiedFiles > 0) parts.push(`${c.modifiedFiles.toLocaleString()} updated`);
   if (c.movedFiles > 0) parts.push(`${c.movedFiles.toLocaleString()} moved`);
-  if (c.deletedFiles > 0) parts.push(`${c.deletedFiles.toLocaleString()} deleted`);
+  if (c.deletedFiles > 0) parts.push(`${c.deletedFiles.toLocaleString()} missing from NAS`);
   if (parts.length === 0) return null;
   return parts.join(", ");
 }

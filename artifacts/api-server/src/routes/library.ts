@@ -18,6 +18,7 @@ import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/lib
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { CapacityAdmissionError } from "../lib/capacity-service.ts";
 
 const router = Router();
@@ -25,9 +26,7 @@ const jobStreamId = randomUUID();
 let jobStreamSequence = 0;
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
+  return getActiveNasPath();
 }
 
 async function getScopedJob(id: number, nasPath: string) {

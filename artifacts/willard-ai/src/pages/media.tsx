@@ -95,6 +95,7 @@ interface JobSummary {
   skippedFiles?: number;
   skippedList?: SkippedFile[];
   duplicateGroups?: number;
+  duplicateCandidates?: number;
   scanStartedAt?: string;
   categories?: Record<string, number>;
   reprocessedFiles?: number;
@@ -391,7 +392,7 @@ function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; j
         {summary.newFiles       > 0 && <button className={countBtn} onClick={() => toggle("NEW")} data-testid="button-summary-new">+{summary.newFiles.toLocaleString()} new</button>}
         {summary.modifiedFiles  > 0 && <button className={countBtn} onClick={() => toggle("MODIFIED")} data-testid="button-summary-modified">~{summary.modifiedFiles.toLocaleString()} modified</button>}
         {summary.movedFiles     > 0 && <button className={countBtn} onClick={() => toggle("MOVED")} data-testid="button-summary-moved">→{summary.movedFiles.toLocaleString()} moved</button>}
-        {summary.deletedFiles   > 0 && <button className={cn(countBtn, "text-red-400 hover:text-red-200")} onClick={() => toggle("DELETED")} data-testid="button-summary-deleted">✕{summary.deletedFiles.toLocaleString()} deleted</button>}
+        {summary.deletedFiles   > 0 && <button className={cn(countBtn, "text-amber-400 hover:text-amber-200")} onClick={() => toggle("DELETED")} data-testid="button-summary-deleted">✕{summary.deletedFiles.toLocaleString()} missing from NAS</button>}
         {summary.unchangedFiles > 0 && <span className="text-green-600">{summary.unchangedFiles.toLocaleString()} unchanged</span>}
         {summary.thumbnailsGenerated > 0 && <span>{summary.thumbnailsGenerated.toLocaleString()} thumbnails</span>}
         {(summary.skippedFiles ?? 0) > 0 && (
@@ -404,8 +405,16 @@ function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; j
             ⧉{summary.duplicateGroups!.toLocaleString()} duplicate group{summary.duplicateGroups! > 1 ? "s" : ""}
           </button>
         )}
+        {(summary.duplicateCandidates ?? 0) > 0 && (
+          <span className="text-amber-400">
+            {summary.duplicateCandidates!.toLocaleString()} unconfirmed duplicate candidate{summary.duplicateCandidates! > 1 ? "s" : ""}
+          </span>
+        )}
         {(summary.reprocessedFiles ?? 0) > 0 && <span>{summary.reprocessedFiles!.toLocaleString()} re-processed</span>}
       </div>
+      <p className="mt-2 text-[11px] text-green-500">
+        Scanning only updates Willard&apos;s catalog. Original media on the NAS was not deleted.
+      </p>
 
       {summary.categories && Object.keys(summary.categories).length > 0 && (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-green-600 mt-1.5">
@@ -653,7 +662,7 @@ function ScanBanner({
           {progress.counters.new       > 0 && <span className="text-green-400">+{progress.counters.new}</span>}
           {progress.counters.modified  > 0 && <span className="text-yellow-400">~{progress.counters.modified}</span>}
           {progress.counters.moved     > 0 && <span className="text-cyan-400">→{progress.counters.moved}</span>}
-          {progress.counters.deleted   > 0 && <span className="text-red-400" title="Files removed from library in this scan">{progress.counters.deleted.toLocaleString()} removed</span>}
+          {progress.counters.deleted   > 0 && <span className="text-amber-400" title="Cataloged files not found on the NAS; originals were not deleted by Willard">{progress.counters.deleted.toLocaleString()} missing from NAS</span>}
         </div>
       </div>
 

@@ -3644,6 +3644,10 @@ components:
           type: integer
         duplicateWastedBytes:
           type: integer
+        duplicateCandidates:
+          type: integer
+        candidateWastedBytes:
+          type: integer
         largeFileCount:
           type: integer
         largeFilesBytes:
@@ -3655,6 +3659,8 @@ components:
       required:
         - duplicateGroups
         - duplicateWastedBytes
+        - duplicateCandidates
+        - candidateWastedBytes
         - largeFileCount
         - largeFilesBytes
         - oldFileCount
