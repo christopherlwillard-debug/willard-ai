@@ -206,6 +206,58 @@ function Test-Command($name) {
     return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+function Refresh-WillardPath {
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $segments = @($machinePath, $userPath) | Where-Object { $_ }
+    if ($segments.Count -gt 0) {
+        $env:Path = $segments -join ";"
+    }
+}
+
+function Test-WillardMediaTools {
+    return (Test-Command "ffmpeg") -and (Test-Command "ffprobe")
+}
+
+function Get-WillardApiBuildArtifacts($applicationRoot = $Root) {
+    $dist = Join-Path $applicationRoot "artifacts\api-server\dist"
+    return @(
+        (Join-Path $dist "index.mjs"),
+        (Join-Path $dist "thread-stream-worker.mjs"),
+        (Join-Path $dist "pino-worker.mjs"),
+        (Join-Path $dist "pino-file.mjs"),
+        (Join-Path $dist "pino-pretty.mjs")
+    )
+}
+
+function Test-WillardApiBuild($applicationRoot = $Root) {
+    foreach ($artifact in @(Get-WillardApiBuildArtifacts $applicationRoot)) {
+        if (-not (Test-Path $artifact -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
+function Install-WillardMediaTools {
+    if (Test-WillardMediaTools) { return $true }
+
+    Ensure-LogDir
+    $installLog = Join-Path $LogDir "media-tools-install.log"
+    Write-Info "Installing media support for thumbnails and previews..."
+
+    if (Test-Command "winget") {
+        & winget install --id Gyan.FFmpeg --exact --silent `
+            --accept-package-agreements --accept-source-agreements *> $installLog
+    } elseif (Test-Command "choco") {
+        & choco install ffmpeg -y --no-progress *> $installLog
+    } else {
+        "Neither winget nor Chocolatey is available." | Set-Content $installLog -Encoding ASCII
+        return $false
+    }
+
+    Refresh-WillardPath
+    return (Test-WillardMediaTools)
+}
+
 function Get-WillardGitCommand {
     foreach ($candidate in @("git.exe", "git")) {
         $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
