@@ -81,6 +81,10 @@ const startupSmoke = await readFile(
   new URL("./startup-smoke.ps1", import.meta.url),
   "utf8",
 );
+const apiBuild = await readFile(
+  new URL("../../artifacts/api-server/build.mjs", import.meta.url),
+  "utf8",
+);
 const updateSmoke = await readFile(
   new URL("./update-smoke.ps1", import.meta.url),
   "utf8",
@@ -181,6 +185,23 @@ test("source Setup and Repair automatically restore thumbnail media tools", () =
   assert.match(setupLauncher, /Setup stopped before scans could create repeated thumbnail failures/);
   assert.match(repairLauncher, /if \(Install-WillardMediaTools\)/);
   assert.doesNotMatch(repairLauncher, /To add it:\s+winget install/);
+});
+
+test("developer API builds remain runnable after the update candidate is moved", () => {
+  assert.match(apiBuild, /process\.chdir\(artifactDir\)/);
+  assert.match(apiBuild, /outdir:\s*"dist"/);
+  assert.doesNotMatch(apiBuild, /outdir:\s*distDir/);
+  for (const worker of [
+    "thread-stream-worker.mjs",
+    "pino-worker.mjs",
+    "pino-file.mjs",
+    "pino-pretty.mjs",
+  ]) {
+    assert.match(launcherCommon, new RegExp(worker.replace(".", "\\.")));
+  }
+  assert.match(developerLauncher, /Test-WillardApiBuild \$Root/);
+  assert.match(updater, /Test-WillardApiBuild \$candidate/);
+  assert.match(developerLauncher, /Error output:/);
 });
 
 test("backup shutdown terminates the full Windows process tree", () => {

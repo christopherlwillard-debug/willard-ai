@@ -219,6 +219,24 @@ function Test-WillardMediaTools {
     return (Test-Command "ffmpeg") -and (Test-Command "ffprobe")
 }
 
+function Get-WillardApiBuildArtifacts($applicationRoot = $Root) {
+    $dist = Join-Path $applicationRoot "artifacts\api-server\dist"
+    return @(
+        (Join-Path $dist "index.mjs"),
+        (Join-Path $dist "thread-stream-worker.mjs"),
+        (Join-Path $dist "pino-worker.mjs"),
+        (Join-Path $dist "pino-file.mjs"),
+        (Join-Path $dist "pino-pretty.mjs")
+    )
+}
+
+function Test-WillardApiBuild($applicationRoot = $Root) {
+    foreach ($artifact in @(Get-WillardApiBuildArtifacts $applicationRoot)) {
+        if (-not (Test-Path $artifact -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
 function Install-WillardMediaTools {
     if (Test-WillardMediaTools) { return $true }
 

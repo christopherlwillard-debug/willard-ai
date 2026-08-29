@@ -145,14 +145,14 @@ if ($dependenciesReady) {
 
 # -- Build when first-run or after a local dependency change -------------------
 $apiDist = Join-Path $Root "artifacts\api-server\dist\index.mjs"
-if (-not (Test-Path $apiDist)) {
+if (-not (Test-WillardApiBuild $Root)) {
     $buildLog = Join-Path $LogDir "startup-build.log"
     $buildCode = Invoke-LoggedCommand "Preparing the library service..." $buildLog {
         & $pnpmCommand --filter @workspace/api-server run build
     }
-    if ($buildCode -ne 0 -or -not (Test-Path $apiDist)) {
+    if ($buildCode -ne 0 -or -not (Test-WillardApiBuild $Root)) {
         Stop-And-Exit "Willard AI couldn't prepare its library service." `
-            ("The service build failed. Details are in " + $buildLog)
+            ("The service build is incomplete. Details are in " + $buildLog)
     }
 }
 Write-Ok "Library service ready"
@@ -275,8 +275,9 @@ function Fail-And-CleanUp($friendly, $technical) {
 # -- Readiness ------------------------------------------------------------------
 $apiReadyTimeout = 180
 if (-not (Wait-ForUrl $ApiUrl "your library service" $apiReadyTimeout $services.api.Id $ApiLog)) {
+    $apiErrorTail = Get-LogTail (Join-Path $LogDir "api-error.log")
     Fail-And-CleanUp "Willard AI couldn't start its library service." `
-        (($script:LastWaitFailureReason) + " See " + $ApiLog + " and " + (Join-Path $LogDir "api-error.log"))
+        (($script:LastWaitFailureReason) + " Error output: " + $apiErrorTail)
 }
 Write-Ok "Media library ready"
 
