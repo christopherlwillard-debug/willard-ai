@@ -54,3 +54,10 @@ uri = "file://build/Willard-AI-Windows-thumbnail-fix.zip"
 type = "unspecified"
 title = "Willard AI Windows Thumbnail Fix"
 description = "Corrected Windows package. Setup and Repair now automatically install and verify FFmpeg/FFprobe so thumbnail jobs do not repeatedly fail because media support is missing."
+
+[[outputs]]
+id = "r0yeXPTo-SpF9-zCx7MeM"
+uri = "file://build/Willard-AI-Windows-startup-fix.zip"
+type = "unspecified"
+title = "Willard AI Windows startup fix"
+description = "Complete replacement source folder with the relocatable API worker fix, automatic FFmpeg repair, and verified Windows launchers. SHA-256: 3a507f2ad70135cc378994aefa939dc30efd0eb5aca419aac6a5de085f7544db"
