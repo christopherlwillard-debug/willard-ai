@@ -42,7 +42,11 @@ function Invoke-Launcher($arguments, $outputPath) {
     -RedirectStandardError ($outputPath + ".err") -PassThru
   if (-not $process.WaitForExit(240000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "Launcher process did not exit within 240 seconds."
+    throw (
+      "Launcher process did not exit within 240 seconds.`n" +
+      (Read-Text $outputPath) +
+      (Read-Text ($outputPath + ".err"))
+    )
   }
   return $process.ExitCode
 }
