@@ -147,9 +147,7 @@ interface HealthStatusResponse {
 }
 
 interface ScanStatusResponse {
-  isRunning: boolean;
-  current: unknown;
-  lastCompleted: unknown;
+  status: string;
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -215,15 +213,18 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
 
     // ── 4. Trigger a scan ─────────────────────────────────────────────────
     const scanRes = await apiPost("/library/scan", { profile: "FULL" });
+    const scanText = await scanRes.text();
     assert.ok(
       scanRes.status === 202 || scanRes.status === 200,
-      `Scan trigger returned unexpected status ${scanRes.status}: ${await scanRes.text()}`,
+      `Scan trigger returned unexpected status ${scanRes.status}: ${scanText}`,
     );
+    const scanJob = JSON.parse(scanText) as { jobId?: number };
+    assert.ok(scanJob.jobId, "Scan trigger should return a job id");
 
     // ── 5. Wait for the scan to complete (polling, no fixed sleeps) ────────
     await pollUntil<ScanStatusResponse>(
       async () => {
-        const r = await apiGet("/library/jobs/active");
+        const r = await apiGet(`/library/jobs/${scanJob.jobId}`);
         assert.strictEqual(
           r.status,
           200,
@@ -231,7 +232,7 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
         );
         return r.json() as Promise<ScanStatusResponse>;
       },
-      (s) => s?.status !== "RUNNING",
+      (s) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(s.status),
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
   });
