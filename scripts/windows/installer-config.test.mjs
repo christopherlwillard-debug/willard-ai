@@ -300,7 +300,7 @@ test("Windows release publication is preceded by every required quality gate", (
     ["unit and packaging contracts", "pnpm run test:database-backup"],
     ["unit and packaging contracts", "pnpm run test:release-contracts"],
     ["API server backend audit", "pnpm run audit:backend"],
-    ["browser E2E suites", "pnpm exec playwright test"],
+    ["browser E2E suites", "pnpm exec playwright test --workers=1"],
     ["storage-policy conformance", "pnpm run test:storage-conformance"],
     ["payload validation and dependency audit gate", "make-release.ps1"],
     ["Compile the Windows installer", "compile-installer.ps1"],

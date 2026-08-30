@@ -273,7 +273,7 @@ jobs:
       - name: Gate release on browser E2E suites
         env:
           WILLARD_START_LOCAL_SERVERS: "true"
-        run: pnpm exec playwright test
+        run: pnpm exec playwright test --workers=1
 
       - name: Gate release on storage-policy conformance
         run: pnpm run test:storage-conformance
