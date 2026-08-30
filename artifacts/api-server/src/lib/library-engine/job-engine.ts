@@ -2758,14 +2758,16 @@ class ThumbnailStorageUnavailable extends Error {
 export async function reconcileThumbnailPointers(
   nasPath: string,
   limit = THUMBNAIL_JOB_MAX_FILES,
+  afterId = 0,
 ): Promise<{
   reused: number;
   invalidated: number;
   examined: number;
+  nextCursor: number;
   files: Array<{ id: number; relativePath: string; extension: string }>;
 }> {
   const boundedLimit = Math.max(0, Math.min(limit, THUMBNAIL_JOB_MAX_FILES));
-  if (boundedLimit === 0) return { reused: 0, invalidated: 0, examined: 0, files: [] };
+  if (boundedLimit === 0) return { reused: 0, invalidated: 0, examined: 0, nextCursor: afterId, files: [] };
 
   // Inspect exactly the bounded NULL-pointer slice the job can consume.
   // The existing 250-row background reconciler handles non-null invalid paths.
@@ -2782,6 +2784,7 @@ export async function reconcileThumbnailPointers(
       eq(mediaFilesTable.mediaType, "video"),
       eq(mediaFilesTable.extension, "pdf"),
     ),
+    gt(mediaFilesTable.id, afterId),
   )).orderBy(
     sql`${mediaFilesTable.thumbnailPath} IS NULL DESC`,
     mediaFilesTable.id,
@@ -2830,6 +2833,7 @@ export async function reconcileThumbnailPointers(
     reused: rows.filter((row) => reusablePaths.has(row.id)).length,
     invalidated: invalidPointers.length,
     examined: rows.length,
+    nextCursor: rows.at(-1)?.id ?? afterId,
     files: rows.filter((row) => !reusablePaths.has(row.id)),
   };
 }
@@ -2856,8 +2860,20 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
     const settingsRow = await getActiveAppSettings();
     const thumbQuality = settingsRow?.thumbnailQuality ?? "BALANCED";
 
-    const prepared = await reconcileThumbnailPointers(nasPath);
-    state.filesTotal = prepared.files.length;
+    let prepared = await reconcileThumbnailPointers(nasPath);
+    const [{ totalMissing }] = await db.select({
+      totalMissing: sql<number>`count(*)::int`,
+    }).from(mediaFilesTable).where(and(
+      eq(mediaFilesTable.nasPath, nasPath),
+      activeMediaCondition,
+      isNull(mediaFilesTable.thumbnailPath),
+      or(
+        eq(mediaFilesTable.mediaType, "photo"),
+        eq(mediaFilesTable.mediaType, "video"),
+        eq(mediaFilesTable.extension, "pdf"),
+      ),
+    ));
+    state.filesTotal = totalMissing ?? prepared.files.length;
     state.filesProcessed = 0;
 
     await db.update(libraryJobsTable)
@@ -2865,7 +2881,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         totalFiles: state.filesTotal,
         startedAt: state.startedAt,
         diagnostics: {
-          storagePolicy: { requiresNas: true, bounded: true, maxFiles: THUMBNAIL_JOB_MAX_FILES },
+          storagePolicy: { requiresNas: true, paged: true, pageSize: THUMBNAIL_JOB_MAX_FILES },
         },
       })
       .where(eq(libraryJobsTable.id, jobId));
@@ -2881,11 +2897,11 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       phase: 'thumbnail_job_started',
       cursor,
       eligibleFiles: prepared.files.length,
-      boundedTo: THUMBNAIL_JOB_MAX_FILES,
+      pageSize: THUMBNAIL_JOB_MAX_FILES,
       cacheReused: prepared.reused,
       invalidated: prepared.invalidated,
       reconciliationExamined: prepared.examined,
-    }, `[thumbnail-job] Starting bounded idempotent sweep — eligibleFiles=${prepared.files.length}, cacheReused=${prepared.reused}`);
+    }, `[thumbnail-job] Starting paged full-library sweep — missingFiles=${state.filesTotal}, cacheReused=${prepared.reused}`);
 
     // Helper: pause/cancel handling
     const handlePauseCancel = async (): Promise<boolean> => {
@@ -2924,10 +2940,7 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 
     // Helper: process a single file
     const processFile = async (file: { id: number; relativePath: string; extension: string }): Promise<void> => {
-      if (
-        state.filesProcessed >= THUMBNAIL_JOB_MAX_FILES ||
-        state.cancelRequested
-      ) return;
+      if (state.cancelRequested) return;
       const currentReach = await checkNasReachableAsync(nasPath);
       if (!currentReach.online || !currentReach.writable) {
         throw new ThumbnailStorageUnavailable(
@@ -3010,27 +3023,34 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       state.filesProcessed++;
     };
 
-    // Process only the prepared bounded slice. Priority IDs within that slice
-    // move first; no second catalog query can expand the job beyond its budget.
-    const prioritySet = thumbPriorityIds.get(nasPath);
-    const files = [...prepared.files].sort((left, right) => {
-      const leftPriority = prioritySet?.has(left.id) ? 1 : 0;
-      const rightPriority = prioritySet?.has(right.id) ? 1 : 0;
-      return rightPriority - leftPriority || left.id - right.id;
-    });
-    if (prioritySet) clearThumbnailPriority(nasPath);
+    // Work through the whole catalog in bounded pages. The thumbnail pointer is
+    // still the durable checkpoint, so a restart safely begins at zero and
+    // reuses completed derivatives instead of regenerating them.
+    while (prepared.examined > 0) {
+      const prioritySet = thumbPriorityIds.get(nasPath);
+      const files = [...prepared.files].sort((left, right) => {
+        const leftPriority = prioritySet?.has(left.id) ? 1 : 0;
+        const rightPriority = prioritySet?.has(right.id) ? 1 : 0;
+        return rightPriority - leftPriority || left.id - right.id;
+      });
+      if (prioritySet) clearThumbnailPriority(nasPath);
 
-    for (let i = 0; i < files.length; i += workerCount) {
-      if (await handlePauseCancel()) return;
-      const batch = files.slice(i, i + workerCount);
-      await Promise.all(batch.map((file) => {
-        cursor = Math.max(cursor, file.id);
-        return thumbnailWorker(() => processFile(file));
-      }));
+      for (let i = 0; i < files.length; i += workerCount) {
+        if (await handlePauseCancel()) return;
+        const batch = files.slice(i, i + workerCount);
+        await Promise.all(batch.map((file) => thumbnailWorker(() => processFile(file))));
+        await db.update(libraryJobsTable)
+          .set({ processedFiles: state.filesProcessed, cursor: String(cursor) })
+          .where(eq(libraryJobsTable.id, jobId));
+      }
 
+      cursor = prepared.nextCursor;
       await db.update(libraryJobsTable)
         .set({ processedFiles: state.filesProcessed, cursor: String(cursor) })
         .where(eq(libraryJobsTable.id, jobId));
+      prepared = await reconcileThumbnailPointers(nasPath, THUMBNAIL_JOB_MAX_FILES, cursor);
+      thumbnailsReused += prepared.reused;
+      state.filesProcessed += prepared.reused;
     }
 
     // Done
@@ -3055,8 +3075,8 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
       diagnostics: {
         storagePolicy: {
           requiresNas: true,
-          bounded: true,
-          maxFiles: THUMBNAIL_JOB_MAX_FILES,
+          paged: true,
+          pageSize: THUMBNAIL_JOB_MAX_FILES,
           cacheBytes: cacheStats.bytes,
           cacheFiles: cacheStats.files,
           reclaimableBytes: cacheStats.reclaimableBytes,

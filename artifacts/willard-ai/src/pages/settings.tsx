@@ -1395,7 +1395,7 @@ function ThumbnailManagerSection() {
           THUMBNAIL_CACHE
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
-           Manage lazy thumbnail generation and its NAS cache. Explicit backfills are bounded to 500 files per job.
+           Generate and reuse thumbnails across the full active library. Work runs in safe 500-file pages and continues automatically until complete.
         </p>
       </div>
 
