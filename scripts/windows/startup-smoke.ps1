@@ -63,9 +63,13 @@ try {
     "NODE_ENV=development"
   ) | Set-Content (Join-Path $Root ".env")
 
-  Write-Host "Starting clean source checkout through Start Willard AI.bat..."
-  $exitCode = Invoke-Launcher @("-File", $Batch) $SmokeOutput
-  Assert-True ($exitCode -eq 0) ("Developer launcher failed:`n" + (Read-Text $SmokeOutput))
+  Write-Host "Starting clean source checkout through the developer launcher..."
+  $exitCode = Invoke-Launcher @("-File", $Start) $SmokeOutput
+  Assert-True ($exitCode -eq 0) (
+    "Developer launcher failed:`n" +
+    (Read-Text $SmokeOutput) +
+    (Read-Text ($SmokeOutput + ".err"))
+  )
   Wait-Http "http://127.0.0.1:8080/api/healthz" {
     param($content) $content -match '"status"\s*:\s*"ok"'
   }

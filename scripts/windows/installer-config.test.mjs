@@ -799,6 +799,8 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   assert.match(startupSmoke, /\$env:WILLARD_NO_PAUSE = "1"/);
   assert.match(startupSmoke, /\$launcherArguments = @\([^)]*\) \+ @\(\$arguments\)/);
   assert.match(startupSmoke, /-ArgumentList \$launcherArguments/);
+  assert.match(startupSmoke, /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/);
+  assert.doesNotMatch(startupSmoke, /Invoke-Launcher @\("-File", \$Batch\)/);
   assert.match(
     workflow,
     /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,
