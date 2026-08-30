@@ -48,6 +48,10 @@ Thumbs.db
 .cache/
 .local/
 
+# Replit reference uploads are local workspace artifacts, not application source.
+# The Windows developer updater preserves this folder across updates.
+attached_assets/
+
 # NAS mount paths that may exist in development (Windows drive letters)
 artifacts/api-server/[a-zA-Z]:/
 
