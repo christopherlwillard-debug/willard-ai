@@ -812,6 +812,7 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   assert.match(startupSmoke, /Launcher process did not exit within 240 seconds[\s\S]*Read-Text \$outputPath[\s\S]*Read-Text \(\$outputPath \+ "\.err"\)/);
   assert.match(startupSmoke, /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/);
   assert.doesNotMatch(startupSmoke, /Invoke-Launcher @\("-File", \$Batch\)/);
+  assert.match(startupSmoke, /echo deliberate web startup failure\r?\nexit \/b 1/);
   assert.match(
     workflow,
     /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,

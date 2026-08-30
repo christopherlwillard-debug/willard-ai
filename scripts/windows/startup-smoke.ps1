@@ -104,7 +104,7 @@ try {
   New-Item -ItemType Directory -Force -Path $ShimDir | Out-Null
   @"
 @echo off
-echo deliberate web startup failure > "%CD%\logs\web.log"
+echo deliberate web startup failure
 exit /b 1
 "@ | Set-Content $Shim
   $env:PATH = "$ShimDir;$env:PATH"
