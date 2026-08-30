@@ -791,6 +791,7 @@ test("launcher database helper also uses target-first least-privilege setup", ()
 
 test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
   assert.match(workflow, /startup-smoke\.ps1/);
+  assert.match(workflow, /fetch-depth:\s*0/);
   assert.match(
     workflow,
     /Install PostgreSQL for the source launcher smoke test/,
