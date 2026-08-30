@@ -35,8 +35,9 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 180) {
 
 function Invoke-Launcher($arguments, $outputPath) {
   $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $launcherArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass") + @($arguments)
   $process = Start-Process -FilePath $powershell `
-    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass") + $arguments `
+    -ArgumentList $launcherArguments `
     -WorkingDirectory $Root -RedirectStandardOutput $outputPath `
     -RedirectStandardError ($outputPath + ".err") -PassThru -Wait
   return $process.ExitCode
