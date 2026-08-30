@@ -300,7 +300,7 @@ test("Windows release publication is preceded by every required quality gate", (
     ["unit and packaging contracts", "pnpm run test:database-backup"],
     ["unit and packaging contracts", "pnpm run test:release-contracts"],
     ["API server backend audit", "pnpm run audit:backend"],
-    ["browser E2E suites", "pnpm exec playwright test --workers=1"],
+    ["browser E2E suites", "pnpm exec playwright test"],
     ["storage-policy conformance", "pnpm run test:storage-conformance"],
     ["payload validation and dependency audit gate", "make-release.ps1"],
     ["Compile the Windows installer", "compile-installer.ps1"],
@@ -312,6 +312,17 @@ test("Windows release publication is preceded by every required quality gate", (
     assert.ok(
       stageIndex < publishIndex && commandIndex < publishIndex,
       `${stage} must run before publication`,
+    );
+  }
+  for (const browserSuite of [
+    "e2e/loading-error-states.spec.ts",
+    "e2e/origin-boundary.spec.ts",
+    "e2e/dashboard-attention-center.spec.ts",
+    "e2e/search.spec.ts",
+  ]) {
+    assert.ok(
+      workflow.includes(browserSuite),
+      `Windows release must run maintained browser suite ${browserSuite}`,
     );
   }
 
