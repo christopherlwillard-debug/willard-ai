@@ -95,33 +95,40 @@ function New-WillardBackupCredential {
 
 function Initialize-WillardBackupProtection([bool]$RequireRecoveryExport = $false, [switch]$OfferCredentialReset) {
     New-Item -ItemType Directory -Force -Path $BackupProtectionRoot | Out-Null
-    if (-not (Test-Path $BackupCredentialFile)) {
-        New-WillardBackupCredential
-    }
-
-    try {
-        $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
-    } catch {
-        if (-not $OfferCredentialReset) {
-            throw "Windows could not unlock the locally protected backup credential for this account."
+    if ($env:CI -eq "true" -and $env:WILLARD_CI_BACKUP_PASSPHRASE) {
+        $env:WILLARD_BACKUP_PASSPHRASE = $env:WILLARD_CI_BACKUP_PASSPHRASE
+    } else {
+        if (-not (Test-Path $BackupCredentialFile)) {
+            New-WillardBackupCredential
         }
 
-        Write-Host ""
-        Write-Warn "An older Windows backup credential belongs to a different account or Windows profile."
-        Write-Host "  The old credential will be preserved, and a new one can be created for this account." -ForegroundColor White
-        Write-Host "  Existing encrypted backups may require the old credential or a portable recovery export." -ForegroundColor Yellow
-        $answer = Read-Host "  Create a new backup credential for this account? (y/N)"
-        if ($answer -notmatch '^[Yy]') {
-            throw "Windows could not unlock the locally protected backup credential for this account."
-        }
-
-        $preservedCredential = $BackupCredentialFile + ".unreadable-" + [guid]::NewGuid().ToString()
-        Move-Item -LiteralPath $BackupCredentialFile -Destination $preservedCredential -Force -ErrorAction Stop
-        New-WillardBackupCredential
         try {
             $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
         } catch {
-            throw "Windows could not create a locally protected backup credential for this account."
+            if (-not $OfferCredentialReset) {
+                throw "Windows could not unlock the locally protected backup credential for this account."
+            }
+
+            Write-Host ""
+            Write-Warn "An older Windows backup credential belongs to a different account or Windows profile."
+            Write-Host "  The old credential will be preserved, and a new one can be created for this account." -ForegroundColor White
+            Write-Host "  Existing encrypted backups may require the old credential or a portable recovery export." -ForegroundColor Yellow
+            $answer = Read-Host "  Create a new backup credential for this account? (y/N)"
+            if ($answer -notmatch '^[Yy]') {
+                throw "Windows could not unlock the locally protected backup credential for this account."
+            }
+
+            $preservedCredential = $BackupCredentialFile + ".unreadable-" + [guid]::NewGuid().ToString()
+            Move-Item -LiteralPath $BackupCredentialFile -Destination $preservedCredential -Force -ErrorAction Stop
+            New-WillardBackupCredential
+            try {
+                $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
+            } catch {
+                throw "Windows could not create a locally protected backup credential for this account."
+            }
+        }
+        if (-not $env:WILLARD_BACKUP_PASSPHRASE) {
+            throw "Windows could not unlock the locally protected backup credential for this account."
         }
     }
     $env:WILLARD_BACKUP_SCRIPT = Join-Path $Root "desktop\database-backup.mjs"

@@ -799,6 +799,8 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   assert.match(startupSmoke, /\$env:WILLARD_NO_PAUSE = "1"/);
   assert.match(startupSmoke, /\$env:LOCALAPPDATA = Join-Path \$env:RUNNER_TEMP "willard-startup-localappdata"/);
   assert.match(startupSmoke, /\$env:WILLARD_SKIP_BROWSER = "1"/);
+  assert.match(startupSmoke, /\$env:WILLARD_CI_BACKUP_PASSPHRASE = /);
+  assert.match(launcherCommon, /\$env:CI -eq "true" -and \$env:WILLARD_CI_BACKUP_PASSPHRASE/);
   assert.match(developerLauncher, /\$env:WILLARD_SKIP_BROWSER -ne "1"/);
   assert.match(startupSmoke, /\$env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path \$env:RUNNER_TEMP/);
   assert.match(startupSmoke, /\$env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = /);

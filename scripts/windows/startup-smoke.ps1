@@ -67,6 +67,7 @@ try {
   New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
   $env:WILLARD_NO_PAUSE = "1"
   $env:WILLARD_SKIP_BROWSER = "1"
+  $env:WILLARD_CI_BACKUP_PASSPHRASE = "windows-startup-smoke-backup-passphrase"
   $env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path $env:RUNNER_TEMP "willard-startup-recovery.willard-recovery.json"
   $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "windows-startup-smoke-passphrase"
   @(
