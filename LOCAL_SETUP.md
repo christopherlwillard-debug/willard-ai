@@ -22,7 +22,8 @@ Node runtime, and the launcher. It does **not** include PostgreSQL, your media,
 the database, or FFmpeg. PostgreSQL remains an external service because it owns
 your library and authentication data; FFmpeg is optional.
 
-The packaged installer is built and validated by the Windows release pipeline.
+The packaged installer is built and validated automatically by the Windows
+release pipeline after successful pushes to `main`.
 Before publishing, a disposable Windows runner installs it as a standard user,
 starts it against external PostgreSQL, upgrades it, proves interrupted-update
 recovery, checks failure diagnostics, uninstalls it, and confirms external data
@@ -153,11 +154,13 @@ Open `.env` and set at least:
 The `.env` file is git-ignored and never committed.
 
 That's it — from now on, just open **Willard Media Center** from the desktop or
-Start Menu. When you want a pushed update, double-click **Update Willard AI.bat**;
-you do not need to download or extract another ZIP. The updater keeps `.env`,
-logs, PostgreSQL data, and media libraries untouched. The shortcut is separate
-from the browser PWA: it starts the local services first, then opens the browser
-at the local app address.
+Start Menu. After a new commit reaches `main` and the Windows release workflow
+finishes, the packaged launcher downloads and verifies the update
+automatically. You do not need to download or extract another ZIP. The updater
+keeps `.env`, logs, PostgreSQL data, and media libraries untouched. The
+developer-folder path still uses **Update Willard AI.bat** to pull source code
+directly from GitHub. The shortcut is separate from the browser PWA: it starts
+the local services first, then opens the browser at the local app address.
 
 ### Protect the PostgreSQL database
 

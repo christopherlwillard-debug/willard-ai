@@ -224,6 +224,8 @@ test("release helper produces a checksum-bearing update artifact", () => {
 });
 
 test("Windows release workflow builds and publishes the versioned package", () => {
+  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
+  assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /runs-on: windows-latest/);
   assert.match(
     workflow,
@@ -239,6 +241,8 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
   assert.match(workflow, /softprops\/action-gh-release@[0-9a-f]{40}/);
   assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
+  assert.match(workflow, /Reject an existing release tag/);
+  assert.match(workflow, /git ls-remote --exit-code --tags origin/);
   assert.match(workflow, /Install media fixture tools for backend audit/);
   assert.match(workflow, /choco install ffmpeg/);
   assert.match(workflow, /choco install zip/);

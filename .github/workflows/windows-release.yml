@@ -1,6 +1,9 @@
 name: Windows release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
@@ -329,6 +332,18 @@ jobs:
           "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Reject an existing release tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & git ls-remote --exit-code --tags origin "refs/tags/$env:RELEASE_TAG" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release tag $env:RELEASE_TAG already exists. Supply a new version for a manual run."
+          }
+          if ($LASTEXITCODE -ne 2) {
+            throw "Could not verify whether release tag $env:RELEASE_TAG already exists."
+          }
 
       - name: Create, validate, and package the release (payload validation and dependency audit gate)
         shell: pwsh

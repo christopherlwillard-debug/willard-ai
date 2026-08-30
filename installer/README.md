@@ -5,7 +5,7 @@ experience. It is deliberately a thin installer around a staged application
 release. The normal release path is the Windows GitHub Action:
 
 1. Push to `main`.
-2. The Windows runner builds the web/API payload, downloads the private Node
+2. The Windows runner automatically builds the web/API payload, downloads the private Node
    runtime, validates the payload, creates the update ZIP and checksum
    manifest, compiles Setup.exe, and publishes all three assets to a GitHub
    release.
@@ -27,9 +27,10 @@ First-install checklist:
    API becomes ready on port 8080, the web service becomes ready on port 5000,
    and the browser opens to `http://localhost:5000`.
 6. Sign in, choose a local Windows/NAS path, and confirm the library starts.
-7. Publish a newer release, open the shortcut again, and confirm the looping
-   loading screen appears, the packaged ZIP is checksum-verified, and the
-   installed version updates before the app opens.
+7. Push a newer commit to `main`, wait for the Windows release workflow to
+   finish, then open the shortcut again. Confirm the looping loading screen
+   appears, the packaged ZIP is checksum-verified, and the installed version
+   updates before the app opens.
 
 For a developer source folder rather than a packaged release, run
 `Setup Willard AI.bat` once. It connects the folder to the public GitHub source
@@ -48,7 +49,9 @@ For a local pre-publication build, run
 from a Windows checkout. It creates Setup.exe but does not publish an update
 manifest, so it is not an update source for installed copies.
 
-The manual release steps performed by the action are:
+The release workflow runs automatically after a push to `main`. A manual
+workflow dispatch remains available when a release needs to be rebuilt with an
+explicit version:
 
 1. On a Windows build runner, install the supported Node runtime for the
    release pipeline and set `WILLARD_NODE_RUNTIME` to the directory containing
