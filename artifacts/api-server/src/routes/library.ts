@@ -5,7 +5,7 @@ import { libraryJobsTable, appSettingsTable, mediaFilesTable } from "@workspace/
 import { eq, desc, and, lt, sql, gte, inArray, isNull, or } from "drizzle-orm";
 import {
   getActiveJobId, getJobProgress, getLastCompletedProgress, startJob, requestPause, requestCancel, resumeJob,
-  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq, getAllJobProgress,
+  forceDiscardActiveJob, addThumbnailPriority, getLibrarySeq, getAllJobProgress, reconcileThumbnailPointers,
 } from "../lib/library-engine";
 import {
   getThumbnailCacheStats,
@@ -559,6 +559,10 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
     ),
     activeMediaCondition,
   );
+
+  // Validate only one job-sized slice; never traverse the whole cache in a
+  // request. NULL pointers are ordered first, followed by stale stored paths.
+  await reconcileThumbnailPointers(nasPath);
 
   const [{ total }] = await db
     .select({ total: sql<number>`count(*)::int` })

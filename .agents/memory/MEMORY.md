@@ -18,7 +18,7 @@
 - [wouter not react-router-dom](wouter-router.md) — project uses wouter; replace useSearchParams→useSearch+URLSearchParams, useNavigate→useLocation from wouter
 - [isScanning source must be libraryJobsTable](isscanning-source.md) — dashboard isScanning must read libraryJobsTable status="RUNNING"; never scanJobsTable (legacy, lowercase "running")
 - [Job engine stuck-scan root cause](job-engine-stuck-scan.md) — fs.statSync in resolveSkippedDirs blocks event loop inside walkDone.then(); queue never closes, workers stuck at queue.pop() forever
-- [Thumbnail cursor bug + monitor cancel rule](thumbnail-cursor-bug.md) — cursor must only resume from restart-interrupted FAILED jobs; monitor must cancel (not pause) thumbnail jobs when NAS goes offline
+- [Thumbnail restart checkpoints](thumbnail-cursor-bug.md) — thumbnailPath is the durable checkpoint; restart sweeps begin at zero so completed files skip and failed files retry
 - [Canonical duplicate fingerprints](full-scan-fingerprints.md) — FULL scans must fingerprint first-seen files or clean-library duplicate discovery stays empty
 - [Node 24 DB test imports](node24-db-test-imports.md) — strip-types tests need explicit .ts imports in the shared DB package and matching TS compiler support
 - [Node 24 local test imports](node24-local-test-imports.md) — directly run strip-types tests need explicit .ts suffixes through every imported local module

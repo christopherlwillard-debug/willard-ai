@@ -11,6 +11,9 @@ import {
   getThumbnailCacheStats,
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
+  findValidThumbnailPath,
+  findReusableThumbnailPaths,
+  THUMBNAIL_REUSE_PROBE_MAX_FILES,
 } from "../lib/thumbnail-engine.ts";
 
 let roots: string[] = [];
@@ -18,6 +21,7 @@ let roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
 
 async function createSource(root: string): Promise<string> {
   const sharp = (await import("sharp")).default;
@@ -112,5 +116,69 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(fs.existsSync(second.destPath!), true);
     assert.equal(fs.existsSync(first.destPath!), false);
     assert.equal(kept.files, 1);
+  });
+
+  test("reuses a real-size thumbnail cache after restart without rewriting completed files", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const fileCount = 128;
+
+    const buildStarted = process.hrtime.bigint();
+    const firstPass = await Promise.all(
+      Array.from({ length: fileCount }, (_, index) =>
+        generateThumbnail(10_000 + index, source, "jpg", root)),
+    );
+    const buildMs = Number(process.hrtime.bigint() - buildStarted) / 1_000_000;
+    assert.ok(firstPass.every((result) => result.error === null && result.reused === false));
+
+    const mtimes = firstPass.map((result) => fs.statSync(result.destPath).mtimeMs);
+    const reuseStarted = process.hrtime.bigint();
+    const secondPass = await Promise.all(
+      Array.from({ length: fileCount }, (_, index) =>
+        generateThumbnail(10_000 + index, source, "jpg", root)),
+    );
+    const reuseMs = Number(process.hrtime.bigint() - reuseStarted) / 1_000_000;
+    const reuseThroughput = fileCount / Math.max(reuseMs / 1000, 0.001);
+
+    assert.ok(secondPass.every((result) => result.error === null && result.reused === true));
+    assert.deepEqual(
+      secondPass.map((result) => fs.statSync(result.destPath).mtimeMs),
+      mtimes,
+    );
+    assert.equal(getThumbnailCacheStats(root).files, fileCount);
+    assert.equal(findValidThumbnailPath(10_000, root, null), secondPass[0]!.destPath);
+    assert.ok(reuseMs < buildMs, `expected cache reuse (${reuseMs}ms) to beat generation (${buildMs}ms)`);
+    assert.ok(reuseThroughput >= 64, `cache reuse throughput regressed to ${reuseThroughput}/s`);
+
+    console.info("[thumbnail-regression]", {
+      files: fileCount,
+      buildMs: Math.round(buildMs),
+      reuseMs: Math.round(reuseMs),
+      reuseThroughputFilesPerSec: Math.round(reuseThroughput),
+      cacheReuse: `${fileCount}/${fileCount}`,
+    });
+
+    const oversizedIds = Array.from(
+      { length: THUMBNAIL_REUSE_PROBE_MAX_FILES + 100 },
+      (_, index) => 20_000 + index,
+    );
+    for (const id of oversizedIds) {
+      fs.copyFileSync(secondPass[0]!.destPath, path.join(getThumbnailDir(root), `${id}.webp`));
+    }
+    const boundedReuse = findReusableThumbnailPaths(oversizedIds, root);
+    assert.equal(boundedReuse.size, THUMBNAIL_REUSE_PROBE_MAX_FILES);
+    assert.equal(boundedReuse.has(oversizedIds[THUMBNAIL_REUSE_PROBE_MAX_FILES]!), false);
+
+    const stalePointer = path.join(root, ".willard-ai", "thumbnails", "stale.webp");
+    fs.mkdirSync(path.dirname(stalePointer), { recursive: true });
+    fs.writeFileSync(stalePointer, "not a webp");
+    const invalidStored = findReusableThumbnailPaths(
+      [99_999],
+      root,
+      1,
+      new Map([[99_999, stalePointer]]),
+    );
+    assert.equal(invalidStored.size, 0, "an invalid stored pointer must remain pending");
   });
 });

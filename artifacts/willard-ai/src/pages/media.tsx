@@ -99,6 +99,8 @@ interface JobSummary {
   scanStartedAt?: string;
   categories?: Record<string, number>;
   reprocessedFiles?: number;
+  thumbnailsFailed?: number;
+  thumbnailsReused?: number;
 }
 
 interface JobActionFile {
@@ -504,6 +506,24 @@ function ScanBanner({
 
   const isThumbs = progress.jobType === "THUMBNAILS";
 
+  if (progress.status === "DONE" && progress.summary && isThumbs) {
+    const reused = progress.summary.thumbnailsReused ?? 0;
+    const failed = progress.summary.thumbnailsFailed ?? 0;
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-mono bg-purple-900/30 border-purple-700/40 text-purple-300">
+        <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <span>
+          Thumbnails complete — {progress.summary.thumbnailsGenerated.toLocaleString()} generated
+          {reused > 0 ? `, ${reused.toLocaleString()} reused` : ""}
+          {failed > 0 ? `, ${failed.toLocaleString()} still pending` : ""}.
+        </span>
+        <button onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   if (progress.status === "DONE" && progress.summary) {
     return <ScanSummaryCard summary={progress.summary} jobId={progress.jobId} onDismiss={onDismiss} />;
   }
@@ -546,7 +566,7 @@ function ScanBanner({
   // ── Thumbnail job running banner ─────────────────────────────────────────────
   if (isThumbs) {
     const pct      = progress.progress;
-    const built    = progress.counters.thumbnails;
+    const processed = progress.filesProcessed;
     const total    = progress.filesTotal;
     const filename = progress.currentPath ? progress.currentPath.split("/").pop() : "";
     const isStalled = progress.currentFileStartedAt !== null
@@ -565,7 +585,7 @@ function ScanBanner({
             </span>
           )}
           <span className="text-xs text-purple-500 shrink-0">
-            {built.toLocaleString()}{total > 0 ? ` / ${total.toLocaleString()}` : ""} built
+            {processed.toLocaleString()}{total > 0 ? ` / ${total.toLocaleString()}` : ""} processed
           </span>
         </div>
 

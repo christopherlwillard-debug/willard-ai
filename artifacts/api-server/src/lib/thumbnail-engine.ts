@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
-import { getWillardAIDir } from "./nas-storage.ts";
+import { getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { formatMediaToolError } from "./media-tools.ts";
 import { StoragePolicyError } from "./storage-policy.ts";
 
@@ -46,6 +46,63 @@ export function ensureThumbnailDir(nasPath: string): string {
 
 export function thumbnailFilename(mediaFileId: number): string {
   return `${mediaFileId}.webp`;
+}
+
+/**
+ * Return the first usable derivative for a catalog row. The database pointer is
+ * preferred, but the canonical id-based cache path is also checked so a
+ * process restart between publishing the file and saving the pointer does not
+ * queue work that is already complete.
+ */
+export function findValidThumbnailPath(
+  mediaFileId: number,
+  nasPath: string,
+  storedPath?: string | null,
+): string | null {
+  const root = getWillardAIDir(nasPath);
+  if (storedPath) {
+    try {
+      const safePath = resolveWithinRoot(storedPath, root);
+      if (isThumbnailFileValid(safePath)) return safePath;
+    } catch {
+      // A stale or unsafe pointer is treated as a cache miss.
+    }
+  }
+
+  try {
+    const canonicalPath = resolveWithinRoot(
+      path.join(getThumbnailDir(nasPath), thumbnailFilename(mediaFileId)),
+      root,
+    );
+    return isThumbnailFileValid(canonicalPath) ? canonicalPath : null;
+  } catch {
+    return null;
+  }
+}
+
+export const THUMBNAIL_REUSE_PROBE_MAX_FILES = 500;
+
+/**
+ * Inspect at most one thumbnail-job slice. This keeps restart cache healing
+ * independent of total library size and makes the probe budget testable.
+ */
+export function findReusableThumbnailPaths(
+  mediaFileIds: number[],
+  nasPath: string,
+  limit = THUMBNAIL_REUSE_PROBE_MAX_FILES,
+  storedPaths = new Map<number, string | null>(),
+): Map<number, string> {
+  const boundedLimit = Math.max(0, Math.min(
+    limit,
+    THUMBNAIL_REUSE_PROBE_MAX_FILES,
+    mediaFileIds.length,
+  ));
+  const reusable = new Map<number, string>();
+  for (const id of mediaFileIds.slice(0, boundedLimit)) {
+    const validPath = findValidThumbnailPath(id, nasPath, storedPaths.get(id) ?? null);
+    if (validPath) reusable.set(id, validPath);
+  }
+  return reusable;
 }
 
 // A tiny valid WebP can be smaller than 100 bytes, so use the minimum size
@@ -276,6 +333,8 @@ function generateImageThumbnailFfmpeg(
 export interface ThumbnailResult {
   destPath: string;
   error: string | null;
+  /** True when an existing valid derivative was reused without regeneration. */
+  reused?: boolean;
 }
 
 export interface ThumbnailCacheStats {
@@ -413,7 +472,7 @@ export async function generateThumbnail(
   // Publishers never write directly to the final path, so this fast path
   // cannot expose an in-progress file. Invalid legacy output is handled only
   // after acquiring the destination lock.
-  if (isThumbnailFileValid(destPath)) return { destPath, error: null };
+  if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
 
   let releaseLock: (() => void) | null = null;
   try {
@@ -425,7 +484,7 @@ export async function generateThumbnail(
   const tempPath = uniqueThumbnailTempPath(destPath);
   try {
     // Re-check after waiting: another process may have published it.
-    if (isThumbnailFileValid(destPath)) return { destPath, error: null };
+    if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
     try { fs.rmSync(destPath, { force: true }); } catch { /* regenerate below */ }
 
     const preset = qualityPreset(quality);
@@ -453,7 +512,7 @@ export async function generateThumbnail(
     if (error) return { destPath: "", error };
     publishThumbnail(tempPath, destPath);
     enforceThumbnailCacheQuota(nasPath, THUMBNAIL_CACHE_MAX_BYTES, destPath);
-    return { destPath, error: null };
+    return { destPath, error: null, reused: false };
   } catch (err: any) {
     return { destPath: "", error: err?.message ?? "Thumbnail publication failed" };
   } finally {

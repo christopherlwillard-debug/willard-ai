@@ -23,4 +23,5 @@ export {
   notifyUiConnected,
   waitForUiConnected,
   getLibrarySeq,
+  reconcileThumbnailPointers,
 } from "./job-engine.ts";

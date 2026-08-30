@@ -1,21 +1,25 @@
 ---
-name: Thumbnail cursor bug pattern
-description: runThumbnailJob cursor-resume must only pick up from restart-interrupted jobs; monitor must cancel (not pause) thumbnail jobs when NAS goes offline
+name: Thumbnail restart checkpoint pattern
+description: Thumbnail jobs use durable derivative pointers rather than numeric cursors across restarts; monitor cancellation rules remain job-type-sensitive
 ---
 
 ## The cursor-resume bug pattern
 
-`runThumbnailJob` originally loaded cursor from ANY previous THUMBNAILS job.
-After a completed pass cursor=max_file_id. New job runs `WHERE id > max_id
-AND thumbnailPath IS NULL` → 0 rows → exits with 0 thumbnails immediately.
-This is the "0 of 24,489 forever" symptom after clearing the thumbnail cache.
+`runThumbnailJob` originally loaded a numeric cursor from previous jobs. A
+completed cursor could skip every new cache miss, while an interrupted cursor
+could strand failed rows below the checkpoint.
 
-**Rule:** Only resume cursor from FAILED jobs with `error LIKE '%Interrupted by
-server restart%'`. Never from DONE, CANCELLED, or NAS_OFFLINE-failed jobs.
+**Rule:** Start every thumbnail sweep at ID zero and treat a valid durable
+`thumbnailPath` as the checkpoint. Reconcile published canonical files into the
+catalog before counting pending work.
 
-**Why:** Completed jobs' cursors are poisonous — they sit at max_id and
-silently kill the next run. Only restart-interrupted jobs have a cursor that
-points to genuinely unprocessed files.
+**Why:** Completed rows are naturally excluded without replaying expensive work,
+while failed or interrupted rows remain eligible. A numeric cursor cannot
+represent both states safely.
+
+**How to apply:** Numeric cursors may optimize work inside one uninterrupted
+run, but restart and pause recovery must re-sweep from zero and rely on valid
+catalog pointers to skip completed derivatives.
 
 ## Monitor must cancel, not pause, thumbnail jobs
 
