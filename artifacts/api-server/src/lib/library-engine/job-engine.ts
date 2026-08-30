@@ -2466,14 +2466,18 @@ async function runScanJob(
     });
     slog('scan_finished', { completionReason: 'completed' });
 
+    const completedAt = new Date();
     await db.update(libraryJobsTable).set({
       status:         "DONE",
-      finishedAt:     new Date(),
+      finishedAt:     completedAt,
       processedFiles: state.filesProcessed,
       totalFiles:     state.filesTotal,
       summary,
       diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
     }).where(eq(libraryJobsTable.id, jobId));
+    await db.update(appSettingsTable).set({
+      lastScanAt: completedAt,
+    }).where(eq(appSettingsTable.nasPath, state.nasPath));
 
     // Thumbnail generation remains lazy after a scan. A user can request an
     // explicitly bounded backfill, while normal browsing generates only the
