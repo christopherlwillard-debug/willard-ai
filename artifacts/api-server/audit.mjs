@@ -10,11 +10,26 @@ const apiTestFiles = readdirSync(testDirectory)
   .filter((name) => name.endsWith(".test.ts"))
   .sort()
   .map((name) => path.join(testDirectory, name));
+const cleanupIntegrationTest = path.join(
+  workspaceDirectory,
+  "e2e",
+  "cleanup-execute.test.ts",
+);
 const integrationTestFiles = [
-  path.join(workspaceDirectory, "e2e", "cleanup-execute.test.ts"),
+  // This suite intentionally exercises Linux .Trash behavior and creates
+  // hostile archive fixtures with GNU tar/zip options. Windows cleanup uses
+  // the Recycle Bin and is validated by the Windows lifecycle smoke test.
+  ...(process.platform === "win32" ? [] : [cleanupIntegrationTest]),
   path.join(workspaceDirectory, "e2e", "dashboard-after-scan.test.ts"),
 ];
 const testFiles = [...apiTestFiles, ...integrationTestFiles];
+
+if (process.platform === "win32") {
+  console.log(
+    `[backend-audit] SKIP ${path.basename(cleanupIntegrationTest)} ` +
+      "(Linux .Trash and GNU archive fixture assertions)",
+  );
+}
 
 const timeoutMs = Number(process.env.WILLARD_AUDIT_TEST_TIMEOUT_MS ?? 300_000);
 const heartbeatMs = Number(process.env.WILLARD_AUDIT_HEARTBEAT_MS ?? 30_000);
