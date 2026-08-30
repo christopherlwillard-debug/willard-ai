@@ -913,6 +913,8 @@ test("Windows update swaps are journaled and recoverable across copied, locked, 
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
   assert.match(updateSmoke, /git clone/);
+  assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
+  assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
   assert.match(updateSmoke, /WILLARD_UPDATE_REPO/);
   assert.match(updateSmoke, /Local changes were not protected/);
   assert.match(updateSmoke, /unreachable\/willard-ai/);

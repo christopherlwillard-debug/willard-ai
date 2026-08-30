@@ -19,6 +19,22 @@ function Read-Text($path) {
   return ""
 }
 
+function Wait-ForUpdateSwap($installPath, $timeoutSeconds = 60) {
+  $parent = Split-Path -Parent $installPath
+  $leaf = Split-Path -Leaf $installPath
+  $resultPath = Join-Path $parent ("." + $leaf + ".willard-update-result.json")
+  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $resultPath) {
+      $result = Get-Content $resultPath -Raw | ConvertFrom-Json
+      Assert-True ($result.status -eq "ok") ("The safe folder swap failed: " + $result.message)
+      return
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  throw "The safe folder swap did not finish within $timeoutSeconds seconds."
+}
+
 try {
   Assert-True ($env:OS -eq "Windows_NT" -or $IsWindows) "This smoke test must run on Windows."
   Assert-True (Get-Command git -ErrorAction SilentlyContinue) "Git is required."
@@ -116,6 +132,7 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Install "scripts\launcher\update.ps1")
     Assert-True ($LASTEXITCODE -eq 0) "A clean Git update failed."
   } finally { Pop-Location }
+  Wait-ForUpdateSwap $Install
   Assert-True (Test-Path (Join-Path $Install "update-smoke-marker.txt")) "The pushed commit was not installed."
   Assert-True ((Read-Text (Join-Path $Install ".env")) -match "preserved") ".env was not preserved."
   Assert-True ((Read-Text (Join-Path $logs "api.log")) -match "preserve logs") "Logs were not preserved."
