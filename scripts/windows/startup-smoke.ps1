@@ -54,6 +54,7 @@ try {
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
   $env:DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/willard"
   $env:SESSION_SECRET = "windows-startup-smoke-session-secret"
+  $env:WILLARD_NO_PAUSE = "1"
   @(
     "DATABASE_URL=$env:DATABASE_URL"
     "PORT=8080"

@@ -796,6 +796,7 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
     /Install PostgreSQL for the source launcher smoke test/,
   );
   assert.match(workflow, /postgresql-16\.15-1-windows-x64-binaries\.zip/);
+  assert.match(startupSmoke, /\$env:WILLARD_NO_PAUSE = "1"/);
   assert.match(
     workflow,
     /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,
