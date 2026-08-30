@@ -245,8 +245,8 @@ function Start-WillardServices {
             -WindowStyle Minimized -PassThru
         Save-TrackedPids $apiProc.Id $webProc.Id
         if (-not (Test-ProcessAlive $webProc.Id)) {
-            throw "The Media Center process exited immediately after launch. " +
-                (Get-LogTail $WebLog)
+            throw "The Media Center process exited immediately after launch. See " +
+                $WebLog + ". Recent output: " + (Get-LogTail $WebLog)
         }
         return @{ api = $apiProc; web = $webProc }
     } catch {
