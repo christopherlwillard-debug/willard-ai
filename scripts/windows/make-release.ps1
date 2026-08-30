@@ -8,6 +8,7 @@ if (-not $ArtifactBaseUrl) { throw "Set WILLARD_ARTIFACT_BASE_URL to the public 
 
 Write-Host "Staging Willard Media Center $Version..."
 node (Join-Path $Root "scripts/windows/build-release.mjs")
+if ($LASTEXITCODE -ne 0) { throw "Windows release staging failed." }
 
 $releaseDir = Join-Path $Root "build\windows"
 $outputDir = Join-Path $Root "build\release"
@@ -39,9 +40,11 @@ $sourceArtifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Versi
   minimumWindowsVersion = "10"
 } | ConvertTo-Json | Set-Content $manifest -Encoding UTF8
 node (Join-Path $Root "scripts/windows/sign-release.mjs") $manifest
+if ($LASTEXITCODE -ne 0) { throw "Release manifest signing failed." }
 $env:WILLARD_RELEASE_ZIP = $zip
 $env:WILLARD_RELEASE_MANIFEST = $manifest
 node (Join-Path $Root "scripts/windows/validate-release.mjs")
+if ($LASTEXITCODE -ne 0) { throw "Release payload validation failed." }
 Write-Host "Release ZIP: $zip"
 Write-Host "Source update ZIP: $sourceZip"
 Write-Host "Release manifest: $manifest"

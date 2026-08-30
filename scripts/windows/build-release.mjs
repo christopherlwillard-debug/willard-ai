@@ -1,23 +1,49 @@
 import { cp, lstat, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
 import { assertStorageConformance } from "./storage-conformance.mjs";
 
-const run = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
 const version = process.env.WILLARD_VERSION || "0.1.0";
 const nodeRuntime = process.env.WILLARD_NODE_RUNTIME;
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const pnpmRunOptions = process.platform === "win32" ? { shell: true } : {};
 const webBuildEnv = {
   ...process.env,
   PORT: process.env.PORT || "5000",
   BASE_PATH: process.env.BASE_PATH || "/",
 };
+
+function quoteWindowsArgument(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function runPnpm(args, options = {}) {
+  const command = process.platform === "win32"
+    ? (process.env.ComSpec || "cmd.exe")
+    : pnpmCommand;
+  const commandArgs = process.platform === "win32"
+    ? ["/d", "/s", "/c", [pnpmCommand, ...args].map(quoteWindowsArgument).join(" ")]
+    : args;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      ...options,
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `pnpm ${args.join(" ")} failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}.`,
+      ));
+    });
+  });
+}
 
 async function copy(source, destination) {
   await mkdir(path.dirname(destination), { recursive: true });
@@ -144,12 +170,11 @@ async function main() {
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
 
-  await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { ...pnpmRunOptions, cwd: root, env: webBuildEnv, stdio: "inherit" });
-  await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { ...pnpmRunOptions, cwd: root, stdio: "inherit" });
+  await runPnpm(["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv });
+  await runPnpm(["--filter", "@workspace/api-server", "run", "build"], { cwd: root });
   const deployOutput = path.join(output, ".api-deploy");
   const apiOutput = path.join(output, "api-runtime");
-  await run(
-    pnpmCommand,
+  await runPnpm(
     [
       "--filter",
       "@workspace/api-server",
@@ -159,7 +184,7 @@ async function main() {
       "--config.inject-workspace-packages=true",
       deployOutput,
     ],
-    { ...pnpmRunOptions, cwd: root, stdio: "inherit" },
+    { cwd: root },
   );
   await pruneWindowsPayload(deployOutput);
   await copyDereferenced(deployOutput, apiOutput);
