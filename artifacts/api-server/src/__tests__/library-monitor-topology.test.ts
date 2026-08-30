@@ -62,6 +62,9 @@ mock.module("../lib/library-engine/index.ts", {
 mock.module("../lib/library-activity.ts", {
   namedExports: { recordActivity: async () => {} },
 });
+mock.module("../lib/backup-coordinator.ts", {
+  namedExports: { requestLibraryBackup: async () => {} },
+});
 mock.module("../lib/logger.ts", {
   namedExports: { logger: { info() {}, warn() {} } },
 });
