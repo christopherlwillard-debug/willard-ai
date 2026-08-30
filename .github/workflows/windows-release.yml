@@ -194,7 +194,7 @@ jobs:
                 WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"
                 WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"
               } `
-              -WorkingDirectory $env:GITHUB_WORKSPACE `
+              -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "artifacts\api-server") `
               -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -PassThru
             $ready = $false
             $deadline = (Get-Date).AddSeconds(180)
@@ -209,8 +209,8 @@ jobs:
               Start-Sleep -Seconds 2
             }
             if (-not $ready) {
-              $tail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 -Raw } else { "" }
-              $errorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 -Raw } else { "" }
+              $tail = if (Test-Path $apiLog) { Get-Content $apiLog -Tail 80 | Out-String } else { "" }
+              $errorTail = if (Test-Path $apiErrorLog) { Get-Content $apiErrorLog -Tail 80 | Out-String } else { "" }
               throw "Backend audit API did not become ready.`n$tail`n$errorTail"
             }
 

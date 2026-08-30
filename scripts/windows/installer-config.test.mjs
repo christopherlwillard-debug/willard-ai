@@ -260,6 +260,11 @@ test("Windows release workflow builds and publishes the versioned package", () =
     auditStep,
     /-Environment\s+@\{[\s\S]*WILLARD_LOCAL_DATA_ROOT = \$env:RUNNER_TEMP[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES = "0"[\s\S]*WILLARD_NAS_SAFETY_MARGIN_BYTES = "0"/,
   );
+  assert.match(
+    auditStep,
+    /-WorkingDirectory \(Join-Path \$env:GITHUB_WORKSPACE "artifacts\\api-server"\)/,
+  );
+  assert.doesNotMatch(auditStep, /Get-Content [^\r\n]+ -Tail 80 -Raw/);
   assert.doesNotMatch(
     auditStep,
     /env:\s*[\s\S]*WILLARD_LOCAL_CAPACITY_FLOOR_BYTES:\s*"0"/,
