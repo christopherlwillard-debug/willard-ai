@@ -12,6 +12,7 @@ const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "
 const version = process.env.WILLARD_VERSION || "0.1.0";
 const nodeRuntime = process.env.WILLARD_NODE_RUNTIME;
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const pnpmRunOptions = process.platform === "win32" ? { shell: true } : {};
 const webBuildEnv = {
   ...process.env,
   PORT: process.env.PORT || "5000",
@@ -143,8 +144,8 @@ async function main() {
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
 
-  await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv, stdio: "inherit" });
-  await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { cwd: root, stdio: "inherit" });
+  await run(pnpmCommand, ["--filter", "@workspace/willard-ai", "run", "build"], { ...pnpmRunOptions, cwd: root, env: webBuildEnv, stdio: "inherit" });
+  await run(pnpmCommand, ["--filter", "@workspace/api-server", "run", "build"], { ...pnpmRunOptions, cwd: root, stdio: "inherit" });
   const deployOutput = path.join(output, ".api-deploy");
   const apiOutput = path.join(output, "api-runtime");
   await run(
@@ -158,7 +159,7 @@ async function main() {
       "--config.inject-workspace-packages=true",
       deployOutput,
     ],
-    { cwd: root, stdio: "inherit" },
+    { ...pnpmRunOptions, cwd: root, stdio: "inherit" },
   );
   await pruneWindowsPayload(deployOutput);
   await copyDereferenced(deployOutput, apiOutput);

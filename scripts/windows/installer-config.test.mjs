@@ -563,6 +563,7 @@ test("Windows payload prunes non-Windows native dependencies and bundles only no
 test("Windows release builds provide Vite's required build-time environment", () => {
   assert.match(releaseStager, /PORT: process\.env\.PORT \|\| "5000"/);
   assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);
+  assert.match(releaseStager, /process\.platform === "win32" \? \{ shell: true \} : \{\}/);
   assert.match(workflow, /PORT: "5000"/);
   assert.match(workflow, /BASE_PATH: "\/"/);
 });
