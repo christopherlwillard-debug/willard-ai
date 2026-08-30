@@ -63,6 +63,8 @@ try {
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
   $env:DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/willard"
   $env:SESSION_SECRET = "windows-startup-smoke-session-secret"
+  $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "willard-startup-localappdata"
+  New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
   $env:WILLARD_NO_PAUSE = "1"
   $env:WILLARD_SKIP_BROWSER = "1"
   $env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path $env:RUNNER_TEMP "willard-startup-recovery.willard-recovery.json"
