@@ -34,7 +34,7 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 180) {
 }
 
 function Invoke-Launcher($arguments, $outputPath) {
-  $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $powershell = (Get-Process -Id $PID).Path
   $launcherArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass") + @($arguments)
   $process = Start-Process -FilePath $powershell `
     -ArgumentList $launcherArguments `
