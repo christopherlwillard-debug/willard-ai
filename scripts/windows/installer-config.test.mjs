@@ -915,6 +915,8 @@ test("Windows update smoke test exercises Git, preservation, and rollback on a r
   assert.match(updateSmoke, /git clone/);
   assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
+  assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
+  assert.match(updater, /Injected update failure after creating the rollback version/);
   assert.match(updateSmoke, /WILLARD_UPDATE_REPO/);
   assert.match(updateSmoke, /Local changes were not protected/);
   assert.match(updateSmoke, /unreachable\/willard-ai/);

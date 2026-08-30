@@ -19,7 +19,7 @@ function Read-Text($path) {
   return ""
 }
 
-function Wait-ForUpdateSwap($installPath, $timeoutSeconds = 60) {
+function Wait-ForUpdateSwap($installPath, $timeoutSeconds = 60, $expectedStatus = "ok") {
   $parent = Split-Path -Parent $installPath
   $leaf = Split-Path -Leaf $installPath
   $resultPath = Join-Path $parent ("." + $leaf + ".willard-update-result.json")
@@ -27,7 +27,9 @@ function Wait-ForUpdateSwap($installPath, $timeoutSeconds = 60) {
   while ((Get-Date) -lt $deadline) {
     if (Test-Path $resultPath) {
       $result = Get-Content $resultPath -Raw | ConvertFrom-Json
-      Assert-True ($result.status -eq "ok") ("The safe folder swap failed: " + $result.message)
+      Assert-True ($result.status -eq $expectedStatus) (
+        "The safe folder swap returned " + $result.status + " instead of " + $expectedStatus + ": " + $result.message
+      )
       return
     }
     Start-Sleep -Milliseconds 250
@@ -188,6 +190,7 @@ try {
   Push-Location $Install
   try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Install "scripts\launcher\update.ps1") } finally { Pop-Location }
   Remove-Item Env:\WILLARD_UPDATE_FAIL_AT -ErrorAction SilentlyContinue
+  Wait-ForUpdateSwap $Install 60 "failed"
   $swapAfter = (& git -C $Install rev-parse HEAD).Trim()
   Assert-True ($swapAfter -eq $swapBefore) "An interrupted directory swap did not restore the prior revision."
   Assert-True (-not (Test-Path (Join-Path $Install "swap-failure-marker.txt"))) "Interrupted swap files remained installed."

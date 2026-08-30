@@ -68,6 +68,7 @@ function Start-ExternalDeveloperVersionSwap($candidate, $backup) {
     $leaf = Split-Path -Leaf $Root
     $journal = Join-Path $parent ("." + $leaf + ".willard-update.json")
     $result = Join-Path $parent ("." + $leaf + ".willard-update-result.json")
+    Remove-Item $result -Force -ErrorAction SilentlyContinue
     $helper = Join-Path $env:TEMP ("willard-update-swap-" + [guid]::NewGuid().ToString() + ".ps1")
     $helperSource = @'
 param(
@@ -112,16 +113,24 @@ try {
     Write-Journal "prepared"
     Move-Item -LiteralPath $Root -Destination $Backup -ErrorAction Stop
     Write-Journal "backup-created"
+    if ($env:WILLARD_UPDATE_FAIL_AT -eq "swap-after-backup") {
+        throw "Injected update failure after creating the rollback version."
+    }
     Move-Item -LiteralPath $Candidate -Destination $Root -ErrorAction Stop
     Write-Journal "swapped"
     Write-Result "ok" $UpdateLabel
 } catch {
+    $restored = $false
     try {
         if (-not (Test-Path $Root) -and (Test-Path $Backup)) {
             Move-Item -LiteralPath $Backup -Destination $Root -ErrorAction Stop
+            $restored = $true
         }
     } catch {
         $message = $_.Exception.Message
+    }
+    if ($restored) {
+        Remove-Item $Journal -Force -ErrorAction SilentlyContinue
     }
     Write-Result "failed" $_.Exception.Message
 } finally {
