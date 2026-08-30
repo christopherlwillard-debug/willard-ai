@@ -39,7 +39,11 @@ function Invoke-Launcher($arguments, $outputPath) {
   $process = Start-Process -FilePath $powershell `
     -ArgumentList $launcherArguments `
     -WorkingDirectory $Root -RedirectStandardOutput $outputPath `
-    -RedirectStandardError ($outputPath + ".err") -PassThru -Wait
+    -RedirectStandardError ($outputPath + ".err") -PassThru
+  if (-not $process.WaitForExit(240000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "Launcher process did not exit within 240 seconds."
+  }
   return $process.ExitCode
 }
 

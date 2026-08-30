@@ -804,6 +804,8 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   assert.match(startupSmoke, /\$launcherArguments = @\([^)]*\) \+ @\(\$arguments\)/);
   assert.match(startupSmoke, /\$powershell = \(Get-Process -Id \$PID\)\.Path/);
   assert.match(startupSmoke, /-ArgumentList \$launcherArguments/);
+  assert.match(startupSmoke, /\$process\.WaitForExit\(240000\)/);
+  assert.doesNotMatch(startupSmoke, /-PassThru -Wait/);
   assert.match(startupSmoke, /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/);
   assert.doesNotMatch(startupSmoke, /Invoke-Launcher @\("-File", \$Batch\)/);
   assert.match(
