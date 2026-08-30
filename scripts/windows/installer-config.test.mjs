@@ -242,7 +242,8 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /softprops\/action-gh-release@[0-9a-f]{40}/);
   assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /Reject an existing release tag/);
-  assert.match(workflow, /git ls-remote --exit-code --tags origin/);
+  assert.match(workflow, /\$existingTag = @\(& git ls-remote --tags origin/);
+  assert.match(workflow, /\$existingTag\.Count -gt 0/);
   assert.match(workflow, /Install media fixture tools for backend audit/);
   assert.match(workflow, /choco install ffmpeg/);
   assert.match(workflow, /choco install zip/);
