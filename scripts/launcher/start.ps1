@@ -299,7 +299,9 @@ if (-not (Test-Command "ffmpeg")) {
 
 Write-Host ""
 Write-Host "  Opening Willard Media Center..." -ForegroundColor Cyan
-Start-Process $AppUrl
+if ($env:WILLARD_SKIP_BROWSER -ne "1") {
+    Start-Process $AppUrl
+}
 Write-Host ""
 Write-Host "  Willard Media Center is ready." -ForegroundColor Green
 Write-Host ("  Logs: " + $LogDir) -ForegroundColor Gray

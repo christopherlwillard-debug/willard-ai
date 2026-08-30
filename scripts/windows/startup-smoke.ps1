@@ -56,6 +56,7 @@ try {
   $env:DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/willard"
   $env:SESSION_SECRET = "windows-startup-smoke-session-secret"
   $env:WILLARD_NO_PAUSE = "1"
+  $env:WILLARD_SKIP_BROWSER = "1"
   $env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path $env:RUNNER_TEMP "willard-startup-recovery.willard-recovery.json"
   $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "windows-startup-smoke-passphrase"
   @(
