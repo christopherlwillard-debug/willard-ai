@@ -199,8 +199,11 @@ function Copy-PreservedDeveloperState($destination, [switch]$IncludeLogs) {
     # Archive fallbacks do not contain the local settings, library data, or
     # diagnostics. Carry them forward deliberately; the full old version stays
     # intact as the rollback directory until the next healthy start.
-    $entries = @(".env", "library-data", "media-path.txt")
-    if ($IncludeLogs) { $entries = @(".env", "logs", "library-data", "media-path.txt") }
+    # attached_assets is a workspace-local collection of reference uploads, not
+    # runnable source. Preserve it across a developer update without allowing
+    # tracked source edits to slip through the safety check below.
+    $entries = @(".env", "attached_assets", "library-data", "media-path.txt")
+    if ($IncludeLogs) { $entries = @(".env", "attached_assets", "logs", "library-data", "media-path.txt") }
     foreach ($entry in $entries) {
         $source = Join-Path $Root $entry
         if (-not (Test-Path $source)) { continue }
@@ -327,10 +330,21 @@ try {
     if ($gitCommand -and (Test-Path (Join-Path $Root ".git"))) {
         $before = (& $gitCommand -C $Root rev-parse HEAD 2>$null).Trim()
         if ($LASTEXITCODE -ne 0) { throw "This developer folder has an invalid Git checkout. Run setup again to repair it." }
-        $dirty = @(& $gitCommand -C $Root status --porcelain)
-        if ($dirty.Count -gt 0) {
+        $dirty = @(& $gitCommand -C $Root status --porcelain=v1 --untracked-files=all)
+        # Replit reference uploads are local workspace artifacts. They are
+        # deliberately carried into the candidate, but must not make an
+        # otherwise clean developer checkout refuse an update. Any tracked
+        # change, or any other untracked file, remains a hard stop.
+        $unsafeDirty = @(
+            $dirty | Where-Object {
+                $line = [string]$_
+                $path = if ($line.Length -gt 3) { $line.Substring(3).Trim() } else { $line.Trim() }
+                -not ($line.StartsWith("??") -and $path -match '^(?:attached_assets)[\\/]')
+            }
+        )
+        if ($unsafeDirty.Count -gt 0) {
             $dirtyPaths = @(
-                $dirty | ForEach-Object {
+                $unsafeDirty | ForEach-Object {
                     $line = ([string]$_)
                     if ($line.Length -gt 3) { $line.Substring(3).Trim() } else { $line.Trim() }
                 } | Select-Object -First 8

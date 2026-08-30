@@ -612,6 +612,14 @@ test("developer setup enables one-click GitHub updates without affecting package
   assert.match(updater, /signed release archive remains a fallback/);
 });
 
+test("developer updates preserve local reference assets without ignoring source edits", () => {
+  assert.match(updater, /attached_assets/);
+  assert.match(updater, /status --porcelain=v1 --untracked-files=all/);
+  assert.match(updater, /StartsWith\("\?\?"\)/);
+  assert.match(updater, /Copy-PreservedDeveloperState \$candidate -IncludeLogs/);
+  assert.match(updater, /tracked source edits/);
+});
+
 test("Windows backup credentials use native user-scoped DPAPI with legacy compatibility", () => {
   for (const credentialLauncher of [launcherCommon, launcher]) {
     assert.match(credentialLauncher, /ProtectedData\]::Protect/);
