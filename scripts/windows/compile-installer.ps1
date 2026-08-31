@@ -11,14 +11,12 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
   throw "WILLARD_VERSION must be MAJOR.MINOR.PATCH."
 }
 
-$output = @(& $Inno "--messages-jsonl" "/DMyAppVersion=$Version" $Script 2>&1)
+$output = @(& $Inno "/DMyAppVersion=$Version" $Script 2>&1)
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) { throw "Inno Setup compilation failed with exit code $exitCode." }
 
-$warnings = @($output | Where-Object {
-  ([string]$_) -match '"(?:type|kind|severity)"\s*:\s*"warning"'
-})
+$warnings = @($output | Where-Object { ([string]$_) -match '(?i)\bwarning\b' })
 if ($warnings.Count -gt 0) {
   throw ("Inno Setup emitted warnings; release packaging stops on warnings:`n" + ($warnings -join [Environment]::NewLine))
 }
