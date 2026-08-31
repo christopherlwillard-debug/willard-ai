@@ -96,14 +96,16 @@ try {
   # Create the user profile and discover the exact per-user local app-data path.
   $profileProbe = Join-Path $TempRoot "profile-probe.ps1"
   Set-Content $profileProbe @'
+"IDENTITY=$([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
 "USERNAME=$env:USERNAME"
 "USERPROFILE=$env:USERPROFILE"
-"LOCALAPPDATA=$env:LOCALAPPDATA"
+"LOCALAPPDATA=$([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"
 '@ -Encoding ASCII
   $profileResult = Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
     "-NoProfile -ExecutionPolicy Bypass -File `"$profileProbe`"" "profile-probe"
   Assert-True ($profileResult.exitCode -eq 0) ("Could not initialize the standard-user profile:`n" + $profileResult.output)
-  Assert-True (($profileResult.output -split "\r?\n") -contains "USERNAME=$UserName") `
+  $identityLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "IDENTITY=*" })[0]
+  Assert-True ($identityLine -match "[\\/]$([regex]::Escape($UserName))$") `
     ("Lifecycle process did not run as the disposable standard user:`n" + $profileResult.output)
   $localAppDataLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "LOCALAPPDATA=*" })[0]
   $script:UserLocalAppData = $localAppDataLine.Substring("LOCALAPPDATA=".Length).Trim()
