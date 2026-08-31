@@ -18,6 +18,7 @@ $Credential = [pscredential]::new(".\$UserName", $Password)
 $Database = "willard_lifecycle_$([guid]::NewGuid().ToString("N").Substring(0, 8))"
 $InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\$UserName"
 $MediaRoot = Join-Path $TempRoot "external-media"
+$RecoveryExport = Join-Path $TempRoot "Willard-Library-Recovery.willard-recovery.json"
 $Runner = Join-Path $TempRoot "run-installed-launcher.ps1"
 $script:UserProfile = Join-Path $env:SystemDrive "Users\$UserName"
 $script:UserLocalAppData = Join-Path $script:UserProfile "AppData\Local"
@@ -140,16 +141,20 @@ try {
   ) | Set-Content (Join-Path $script:DataRoot ".env") -Encoding UTF8
   Set-Content (Join-Path $script:DataRoot "settings.marker") "preserve settings" -Encoding UTF8
 
-  @'
+  $recoveryExportLiteral = $RecoveryExport.Replace("'", "''")
+  $runnerContents = @'
 param(
   [Parameter(Mandatory = $true)][string]$Launcher,
   [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure")][string]$Mode
 )
 $env:WILLARD_SKIP_UPDATE = "1"
+$env:WILLARD_RECOVERY_EXPORT_PATH = '__RECOVERY_EXPORT_PATH__'
+$env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = 'installer-lifecycle-recovery-passphrase'
 if ($Mode -eq "failure") { $env:WILLARD_SUPPRESS_STARTUP_DIALOG = "1" }
 if ($Mode -eq "stop") { & $Launcher -Stop } else { & $Launcher }
 exit $LASTEXITCODE
-'@ | Set-Content $Runner -Encoding ASCII
+'@
+  $runnerContents.Replace("__RECOVERY_EXPORT_PATH__", $recoveryExportLiteral) | Set-Content $Runner -Encoding ASCII
 
   Write-Host "Lifecycle: first install"
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"

@@ -406,6 +406,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /TEMP = \$script:UserTemp/);
   assert.match(installedLifecycleSmoke, /WaitForExit/);
   assert.match(installedLifecycleSmoke, /Lifecycle: first install/);
+  assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PATH/);
+  assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
   const lifecycleIndex = workflow.indexOf(
     "Verify installed Windows lifecycle with external PostgreSQL",
