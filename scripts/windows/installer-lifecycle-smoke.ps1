@@ -26,6 +26,10 @@ $script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
 $LifecycleProcessTimeoutSeconds = 180
+$script:ParentEnvironment = @{}
+foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP")) {
+  $script:ParentEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+}
 
 function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
@@ -53,14 +57,6 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
   $stderr = Join-Path $TempRoot "$label.err.log"
   $process = Start-Process -FilePath $filePath -ArgumentList $argumentLine `
     -Credential $Credential -LoadUserProfile -WorkingDirectory $TempRoot `
-    -Environment @{
-      USERNAME = $UserName
-      USERPROFILE = $script:UserProfile
-      LOCALAPPDATA = $script:UserLocalAppData
-      APPDATA = $script:UserAppData
-      TEMP = $script:UserTemp
-      TMP = $script:UserTemp
-    } `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
   if (-not $process.WaitForExit($LifecycleProcessTimeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -112,6 +108,12 @@ try {
   New-Item -ItemType Directory -Force -Path $script:UserTemp, $script:UserAppData | Out-Null
   $profileAclOutput = & icacls $script:UserProfile /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
   Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the generated profile:`n" + ($profileAclOutput -join "`n"))
+  $env:USERNAME = $UserName
+  $env:USERPROFILE = $script:UserProfile
+  $env:LOCALAPPDATA = $script:UserLocalAppData
+  $env:APPDATA = $script:UserAppData
+  $env:TEMP = $script:UserTemp
+  $env:TMP = $script:UserTemp
 
   # Create the user profile and discover the exact per-user local app-data path.
   $profileProbe = Join-Path $TempRoot "profile-probe.ps1"
@@ -271,5 +273,12 @@ exit $LASTEXITCODE
           }
         }
     }
+  foreach ($entry in $script:ParentEnvironment.GetEnumerator()) {
+    if ($null -eq $entry.Value) {
+      Remove-Item "Env:$($entry.Key)" -ErrorAction SilentlyContinue
+    } else {
+      Set-Item "Env:$($entry.Key)" $entry.Value
+    }
+  }
   }
 }

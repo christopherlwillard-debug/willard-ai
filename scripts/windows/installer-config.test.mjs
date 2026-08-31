@@ -398,7 +398,6 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /Could not grant lifecycle user access/);
   assert.match(installedLifecycleSmoke, /Lifecycle file:/);
   assert.match(installedLifecycleSmoke, /UserProfile = Join-Path/);
-  assert.match(installedLifecycleSmoke, /-Environment/);
   assert.match(installedLifecycleSmoke, /TEMP = \$script:UserTemp/);
   assert.match(installedLifecycleSmoke, /WaitForExit/);
   assert.match(installedLifecycleSmoke, /Lifecycle: first install/);
