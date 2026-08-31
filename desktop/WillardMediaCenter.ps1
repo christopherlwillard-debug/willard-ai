@@ -573,7 +573,8 @@ try {
     Set-Content $UpdateCheckFile (Get-Date).ToString("o")
   }
   Good "Media Center is ready."
-  if (-not (Test-Path $LoadingScreen)) { Start-Process $WebUrl }
+  Close-LoadingScreen
+  Start-Process $WebUrl
 } catch {
   Stop-Services
   try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }

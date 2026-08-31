@@ -196,6 +196,10 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /stopped before becoming ready/);
   assert.match(launcher, /Wait-Ready \$ApiUrl "library service" \$apiProc/);
   assert.match(launcher, /Wait-Ready \$WebUrl "Media Center" \$webProc/);
+  assert.match(
+    launcher,
+    /Wait-Ready \$WebUrl "Media Center" \$webProc[\s\S]*Close-LoadingScreen[\s\S]*Start-Process \$WebUrl/,
+  );
   assert.match(launcher, /swap-journal\.json/);
   assert.match(launcher, /Invoke-PackagedVersionSwap/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);
