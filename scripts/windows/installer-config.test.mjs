@@ -387,6 +387,8 @@ test("installer compilation stops on warnings", () => {
 });
 
 test("Windows release gate proves the installed lifecycle with external data", () => {
+  assert.match(installedLifecycleSmoke, /RUNNER_TEMP.*postgresql\\pgsql\\bin/);
+  assert.doesNotMatch(installedLifecycleSmoke, /ProgramFiles.*PostgreSQL\\16/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
   const lifecycleIndex = workflow.indexOf(
     "Verify installed Windows lifecycle with external PostgreSQL",
