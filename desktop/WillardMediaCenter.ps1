@@ -299,9 +299,19 @@ function Invoke-PackagedVersionSwap($candidate, $backup) {
 function Get-SchemaFingerprint {
   $parts = @()
   foreach ($path in @($SetupDb, $VersionFile)) {
-    if (Test-Path $path) { $parts += (Get-FileHash $path -Algorithm SHA256).Hash }
+    if (Test-Path $path) { $parts += Get-WillardSha256 $path }
   }
   return ($parts -join ":")
+}
+function Get-WillardSha256($path) {
+  $stream = [IO.File]::OpenRead($path)
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "")
+  } finally {
+    $hasher.Dispose()
+    $stream.Dispose()
+  }
 }
 function Ensure-Schema {
   $fingerprint = Get-SchemaFingerprint
@@ -421,7 +431,7 @@ function Try-Update {
     $artifactResponse = Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $zip -PassThru -TimeoutSec 120
     Assert-TrustedDownloadResponse $artifactResponse
     $script:UpdateStage = "checksum verification"
-    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = (Get-WillardSha256 $zip).ToLowerInvariant()
     if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
     $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
     try {

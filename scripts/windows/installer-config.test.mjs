@@ -138,6 +138,8 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /last-update-check\.txt/);
   assert.match(launcher, /UpdateStage/);
   assert.match(launcher, /checksum verification/);
+  assert.match(launcher, /function Get-WillardSha256/);
+  assert.doesNotMatch(launcher, /Get-FileHash/);
   assert.match(launcher, /Test-ProcessIdentity/);
   assert.match(launcher, /StatusCode -eq 200/);
   assert.match(launcher, /The previous working release was restored/);
