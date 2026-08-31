@@ -397,6 +397,7 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /Lifecycle diagnostics preserved/);
   assert.match(installedLifecycleSmoke, /Could not grant lifecycle user access/);
   assert.match(installedLifecycleSmoke, /Lifecycle file:/);
+  assert.match(installedLifecycleSmoke, /Lifecycle process did not run as the disposable standard user/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
   const lifecycleIndex = workflow.indexOf(
     "Verify installed Windows lifecycle with external PostgreSQL",

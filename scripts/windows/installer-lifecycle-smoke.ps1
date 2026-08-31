@@ -14,7 +14,7 @@ $Dropdb = Join-Path $PostgresBin "dropdb.exe"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-installer-lifecycle-$([guid]::NewGuid().ToString())"
 $UserName = "wl_life_$([guid]::NewGuid().ToString("N").Substring(0, 8))"
 $Password = ConvertTo-SecureString "WillardLifecycle!1" -AsPlainText -Force
-$Credential = [pscredential]::new("$env:COMPUTERNAME\$UserName", $Password)
+$Credential = [pscredential]::new(".\$UserName", $Password)
 $Database = "willard_lifecycle_$([guid]::NewGuid().ToString("N").Substring(0, 8))"
 $InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\$UserName"
 $MediaRoot = Join-Path $TempRoot "external-media"
@@ -95,11 +95,18 @@ try {
 
   # Create the user profile and discover the exact per-user local app-data path.
   $profileProbe = Join-Path $TempRoot "profile-probe.ps1"
-  Set-Content $profileProbe '$env:LOCALAPPDATA' -Encoding ASCII
+  Set-Content $profileProbe @'
+"USERNAME=$env:USERNAME"
+"USERPROFILE=$env:USERPROFILE"
+"LOCALAPPDATA=$env:LOCALAPPDATA"
+'@ -Encoding ASCII
   $profileResult = Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
     "-NoProfile -ExecutionPolicy Bypass -File `"$profileProbe`"" "profile-probe"
   Assert-True ($profileResult.exitCode -eq 0) ("Could not initialize the standard-user profile:`n" + $profileResult.output)
-  $script:UserLocalAppData = $profileResult.output.Trim()
+  Assert-True (($profileResult.output -split "\r?\n") -contains "USERNAME=$UserName") `
+    ("Lifecycle process did not run as the disposable standard user:`n" + $profileResult.output)
+  $localAppDataLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "LOCALAPPDATA=*" })[0]
+  $script:UserLocalAppData = $localAppDataLine.Substring("LOCALAPPDATA=".Length).Trim()
   Assert-True $script:UserLocalAppData "The standard-user profile did not provide LOCALAPPDATA."
   $script:DataRoot = Join-Path $script:UserLocalAppData "Willard Media Center"
   $userProfile = Split-Path -Parent (Split-Path -Parent $script:UserLocalAppData)
