@@ -456,6 +456,8 @@ test("release payload validation requires the bundled runtime and app entrypoint
 });
 
 test("release validation gates high and critical image parser advisories in both runtime graphs", () => {
+  assert.match(releaseValidator, /ComSpec \|\| "cmd\.exe"/);
+  assert.match(releaseValidator, /pnpm\.cmd/);
   const findings = findHighSeverityImageAdvisories(
     {
       advisories: {

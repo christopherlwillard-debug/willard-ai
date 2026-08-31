@@ -58,10 +58,15 @@ export function findHighSeverityImageAdvisories(report, scopes = {}) {
 }
 
 async function auditResolvedDependencies() {
-  const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const pnpm = process.platform === "win32"
+    ? (process.env.ComSpec || "cmd.exe")
+    : "pnpm";
+  const pnpmArgs = process.platform === "win32"
+    ? ["/d", "/c", "pnpm.cmd", "audit", "--json"]
+    : ["audit", "--json"];
   let stdout;
   try {
-    ({ stdout } = await execFileAsync(pnpm, ["audit", "--json"], {
+    ({ stdout } = await execFileAsync(pnpm, pnpmArgs, {
       cwd: root,
       maxBuffer: 10 * 1024 * 1024,
     }));
