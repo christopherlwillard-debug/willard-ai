@@ -837,6 +837,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     catch { res.status(403).json({ error: "Job source is outside the configured library" }); return; }
 
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
+    let archiveInspectionWarning: string | null = null;
 
     if (job.sourceType === "archive") {
       const archivePath = resolveActiveArchivePath(job.sourcePath, nasPath);
@@ -875,7 +876,22 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
             operation: `Archive inspection #${id}`,
             nasBytes: archiveBytes,
           });
-          entries = await peekArchiveEntries(archivePath, path.basename(archivePath), peekScratch);
+          try {
+            entries = await peekArchiveEntries(archivePath, path.basename(archivePath), peekScratch);
+          } catch (error) {
+            // Keep the job analyzable so the user can explicitly approve the
+            // guarded execution path. safeExtractArchive performs the final
+            // rejection before any destination is touched.
+            if (
+              error instanceof ArchiveSafetyError &&
+              /archive traversal rejected/i.test(error.message)
+            ) {
+              archiveInspectionWarning = error.message;
+              entries = [];
+            } else {
+              throw error;
+            }
+          }
         } catch (error) {
           if (error instanceof CapacityAdmissionError) {
             await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(eq(organizationJobsTable.id, id));
@@ -959,6 +975,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       totalFiles: fileEntries.length, totalSizeBytes, routes,
       excludeCategories: [], excludePaths: [],
       summary, destinations, archiveDisposition: job.archiveDisposition,
+      archiveInspectionWarning,
       aiConfidence:     aiResult?.confidence     ?? null,
       aiReason:         aiResult?.reason         ?? null,
       aiRecommendation: aiResult?.recommendation ?? null,
@@ -1050,7 +1067,12 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       const isBlank = !settings[key]?.trim();
       if (isBlank && activeRoutes.some((r: any) => r.fileType === category)) {
         const defaultDest = routeDestination(category, settings, nasPath);
-        checks.push({ name: label, ok: false, detail: `No destination configured — set a custom path in Settings. Without it, files would go to the default: ${defaultDest}` });
+        checks.push({
+          name: label,
+          ok: false,
+          warning: true,
+          detail: `No destination configured — set a custom path in Settings. Without it, files would go to the default: ${defaultDest}`,
+        });
       }
     }
 
@@ -1082,7 +1104,13 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       const validationScratch = getTempDir(nasPath, `org-validate-${id}`);
       try {
         const v = await validateArchive(job.sourcePath, validationScratch);
-        checks.push({ name: "Archive integrity", ok: v.ok, detail: v.detail });
+        const traversalWarning = !v.ok && /archive traversal rejected/i.test(v.detail);
+        checks.push({
+          name: "Archive integrity",
+          ok: v.ok,
+          warning: traversalWarning,
+          detail: v.detail,
+        });
       } finally {
         cleanTempDir(validationScratch);
       }

@@ -90,6 +90,18 @@ async function mockLibrary(page: Page): Promise<void> {
   await page.route("**/api/media/tags", (route) =>
     route.fulfill({ json: { tags: [] } }),
   );
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({ json: { nasPath: "/test-media" } }),
+  );
+  await page.route("**/api/system/environment", (route) =>
+    route.fulfill({ json: { isLocal: true } }),
+  );
+  await page.route("**/api/settings/logo*", (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  );
+  await page.route("**/api/collections", (route) =>
+    route.fulfill({ json: { collections: [] } }),
+  );
   await page.route("**/api/media/files?*", (route) =>
     route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } }),
   );
@@ -99,6 +111,12 @@ async function mockLibrary(page: Page): Promise<void> {
   await page.route("**/api/library/jobs?*", (route) =>
     route.fulfill({ json: { jobs: [] } }),
   );
+  await page.route("**/api/library/jobs/history", (route) =>
+    route.fulfill({ json: { jobs: [] } }),
+  );
+  await page.route("**/api/library/jobs/events", (route) =>
+    route.fulfill({ json: { events: [] } }),
+  );
   await page.route("**/api/library/seq", (route) =>
     route.fulfill({ json: { seq: 1, total: files.length } }),
   );
@@ -107,6 +125,9 @@ async function mockLibrary(page: Page): Promise<void> {
   );
   await page.route("**/api/media/file/*/stream", (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: png1x1 }),
+  );
+  await page.route("**/api/media/files/*/detail", (route) =>
+    route.fulfill({ json: { ai: { analyzed: false, description: null } } }),
   );
   await page.route("**/api/media/files/*/favorite", (route) =>
     route.fulfill({ json: { ok: true } }),

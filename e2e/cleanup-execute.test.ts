@@ -461,7 +461,10 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     assert.ok(body.sessions.length > 0, "Expected at least 1 history session");
 
     const ourSession = body.sessions.find((s) =>
-      s.files.some((f) => f.path.startsWith(tempNasDir)),
+      s.recycled === 1 &&
+      s.files.length === 1 &&
+      s.errors.length === 0 &&
+      s.files[0]?.path === "[REDACTED]",
     );
 
     assert.ok(
@@ -472,6 +475,11 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       ourSession.recycled,
       1,
       `Session recycled should be 1, got ${ourSession.recycled}`,
+    );
+    assert.strictEqual(
+      ourSession.files[0]?.path,
+      "[REDACTED]",
+      "private cleanup history must not persist the source path",
     );
     assert.deepEqual(ourSession.errors, [], "Session should have no errors");
     assert.ok(
@@ -849,6 +857,8 @@ describe("Cleanup execute API", { concurrency: false }, () => {
     const archivePath = path.join(tempNasDir, "malicious-archive.tar");
     const archiveInputDir = path.join(tempNasDir, "malicious-archive-input");
     const outsidePath = path.join(tempNasDir, "tar-escape.txt");
+    const waitingDir = path.join(tempNasDir, "Waiting to be Organized");
+    const waitingEntriesBefore = new Set(fs.readdirSync(waitingDir));
     fs.mkdirSync(archiveInputDir, { recursive: true });
     fs.writeFileSync(
       path.join(archiveInputDir, "escape.txt"),
@@ -917,11 +927,10 @@ describe("Cleanup execute API", { concurrency: false }, () => {
       !fs.existsSync(outsidePath),
       "TAR traversal must not write outside the staging area",
     );
-    assert.equal(
-      fs.readdirSync(path.join(tempNasDir, "Waiting to be Organized"), {
-        withFileTypes: true,
-      }).length,
-      0,
+    const waitingEntriesAfter = fs.readdirSync(waitingDir);
+    assert.deepEqual(
+      waitingEntriesAfter.filter((entry) => !waitingEntriesBefore.has(entry)),
+      [],
       "TAR traversal must not partially move files",
     );
   });
