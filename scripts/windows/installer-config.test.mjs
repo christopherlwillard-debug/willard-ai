@@ -565,6 +565,7 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);
   assert.match(releaseStager, /process\.env\.ComSpec \|\| "cmd\.exe"/);
   assert.match(releaseStager, /\["\/d", "\/c", pnpmCommand, \.\.\.args\]/);
+  assert.match(releaseStager, /"--no-frozen-lockfile"/);
   assert.match(releaseStager, /stdio: "inherit"/);
   assert.match(releaseBuilder, /Windows release staging failed/);
   assert.match(workflow, /PORT: "5000"/);
