@@ -564,6 +564,7 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(releaseStager, /PORT: process\.env\.PORT \|\| "5000"/);
   assert.match(releaseStager, /BASE_PATH: process\.env\.BASE_PATH \|\| "\/"/);
   assert.match(releaseStager, /process\.env\.ComSpec \|\| "cmd\.exe"/);
+  assert.match(releaseStager, /\[pnpmCommand, \.\.\.args\.map\(quoteWindowsArgument\)\]/);
   assert.match(releaseStager, /stdio: "inherit"/);
   assert.match(releaseBuilder, /Windows release staging failed/);
   assert.match(workflow, /PORT: "5000"/);

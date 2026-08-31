@@ -25,7 +25,7 @@ function runPnpm(args, options = {}) {
     ? (process.env.ComSpec || "cmd.exe")
     : pnpmCommand;
   const commandArgs = process.platform === "win32"
-    ? ["/d", "/s", "/c", [pnpmCommand, ...args].map(quoteWindowsArgument).join(" ")]
+    ? ["/d", "/s", "/c", [pnpmCommand, ...args.map(quoteWindowsArgument)].join(" ")]
     : args;
   return new Promise((resolve, reject) => {
     const child = spawn(command, commandArgs, {
