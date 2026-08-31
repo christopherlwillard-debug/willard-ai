@@ -5,6 +5,7 @@ packages:
   - scripts
 
 autoInstallPeers: false
+forceLegacyDeploy: true
 
 supportedArchitectures:
   os:

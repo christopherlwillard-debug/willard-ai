@@ -73,6 +73,10 @@ const backupCoordinator = await readFile(
 const rootPackage = JSON.parse(
   await readFile(new URL("../../package.json", import.meta.url), "utf8"),
 );
+const pnpmWorkspace = await readFile(
+  new URL("../../pnpm-workspace.yaml", import.meta.url),
+  "utf8",
+);
 const releaseValidator = await readFile(
   new URL("./validate-release.mjs", import.meta.url),
   "utf8",
@@ -569,6 +573,7 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(releaseStager, /"--config\.inject-workspace-packages=true",\s+"--filter"/);
   assert.match(releaseStager, /stdio: "inherit"/);
   assert.match(releaseBuilder, /Windows release staging failed/);
+  assert.match(pnpmWorkspace, /forceLegacyDeploy:\s*true/);
   assert.match(workflow, /PORT: "5000"/);
   assert.match(workflow, /BASE_PATH: "\/"/);
 });
