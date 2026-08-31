@@ -368,6 +368,11 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(trustMetadataStep, /SignerCertificate/);
   assert.match(trustMetadataStep, /TimeStamperCertificate/);
   assert.match(trustMetadataStep, /expected 'Willard Media Center'/);
+  assert.match(trustMetadataStep, /Release URL:/);
+  assert.match(trustMetadataStep, /Signer valid from:/);
+  assert.match(trustMetadataStep, /Signer certification path: Valid/);
+  assert.match(trustMetadataStep, /Timestamp signer valid from:/);
+  assert.match(trustMetadataStep, /Timestamp certification path: Valid/);
   assert.match(trustMetadataStep, /GITHUB_STEP_SUMMARY/);
   assert.match(trustMetadataStep, /SmartScreen check: required separately/);
   assert.match(

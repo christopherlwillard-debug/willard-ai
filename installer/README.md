@@ -72,18 +72,25 @@ GitHub release before calling a release trust-ready.
      ) } else { $null }
      SignerSubject = if ($signer) { $signer.Subject } else { $null }
      SignerIssuer = if ($signer) { $signer.Issuer } else { $null }
+      SignerNotBefore = if ($signer) { $signer.NotBefore } else { $null }
      SignerNotAfter = if ($signer) { $signer.NotAfter } else { $null }
      TimestampSigner = if ($timestampSigner) { $timestampSigner.GetNameInfo(
        [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
      ) } else { $null }
+      TimestampSubject = if ($timestampSigner) { $timestampSigner.Subject } else { $null }
+      TimestampIssuer = if ($timestampSigner) { $timestampSigner.Issuer } else { $null }
+      TimestampNotBefore = if ($timestampSigner) { $timestampSigner.NotBefore } else { $null }
      TimestampNotAfter = if ($timestampSigner) { $timestampSigner.NotAfter } else { $null }
+      CertificationPath = if ($signature.Status -eq "Valid") { "Valid" } else { "Invalid" }
+      TimestampCertificationPath = if ($timestampSigner) { "Valid" } else { "Invalid" }
    } | Format-List
    ```
 
    `Status` must be `Valid`, `Signer` must be `Willard Media Center`, and a
    timestamp signer must be present with a valid certification path. A
    timestamp that remains valid after the signing certificate expires is
-   required; record the timestamp signer and its expiry in the evidence.
+   required; record both certificates' subjects, issuers, validity windows,
+   and certification-path status in the evidence.
 
 4. Start the installer normally, without suppressing dialogs. Record the
    publisher shown in the UAC install prompt. It must be **Willard Media
@@ -189,10 +196,31 @@ uninstall, and preservation of external database, settings, and media markers.
 The runner is intentionally disposable; the first-install checklist above
 remains useful for validating a family’s real PostgreSQL and NAS topology.
 
-Trust-validation baseline: the public `v0.1.145` installer published on
-2026-08-31 was checked from this Linux workspace. Its SHA-256 was
-`ff10d0b80026f4382642dec2e17308fe8926ec98bf4940ece1e1dfd601096638`, and its
-PE Authenticode security directory was empty. It is therefore an unsigned
-baseline, not a valid clean-Windows trust result; no SmartScreen observation
-was recorded for it. The next release published by the signed workflow must
-replace this baseline and complete the checklist above.
+## Current trust-validation evidence record
+
+This record is intentionally **BLOCKED**, not a clean-machine PASS. It
+documents the exact public artifact that was available while the first signed
+release was still pending. The asset was downloaded directly from the release
+URL and inspected on Linux on 2026-08-31 UTC:
+
+```text
+Release/version: v0.1.145 / 0.1.145
+Release URL: https://github.com/christopherlwillard-debug/willard-ai/releases/download/v0.1.145/WillardMediaCenter-0.1.145-Setup.exe
+Release page: https://github.com/christopherlwillard-debug/willard-ai/releases/tag/v0.1.145
+Windows edition/build: Not tested — this workspace is Linux
+Test date (UTC): 2026-08-31
+SHA-256: ff10d0b80026f4382642dec2e17308fe8926ec98bf4940ece1e1dfd601096638
+Details publisher/product: Not tested; no signed Windows trust metadata available
+UAC publisher: Not observed
+Authenticode status: NotSigned; PE security directory RVA=0, size=0
+Signer subject/issuer/expiry: Not present
+Timestamp signer/expiry: Not present
+Certification path: Not available
+SmartScreen result/message: Not observed; SmartScreen requires clean Windows
+Acceptance: BLOCKED
+Block reason: No signed Setup.exe or clean, fully updated standard-user Windows 10/11 machine was available in this environment.
+```
+
+Replace this record with the signed release's completed record after the exact
+signed `Setup.exe` is published. Do not infer the UAC or SmartScreen result
+from this Linux inspection.

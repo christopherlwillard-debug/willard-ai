@@ -403,14 +403,23 @@ jobs:
           )
           @"
           ## Windows installer trust metadata
+          - Release/version: $env:GITHUB_REPOSITORY / v$env:WILLARD_VERSION
+          - Release URL: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/v$env:WILLARD_VERSION/WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe
+          - Build: $env:WILLARD_VERSION
           - SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
           - Authenticode status: $($signature.Status)
           - Signer: $signer
           - Signer subject: $($signature.SignerCertificate.Subject)
           - Signer issuer: $($signature.SignerCertificate.Issuer)
+          - Signer valid from: $($signature.SignerCertificate.NotBefore.ToUniversalTime().ToString("o"))
           - Signer expires: $($signature.SignerCertificate.NotAfter.ToUniversalTime().ToString("o"))
+          - Signer certification path: Valid (Authenticode status Valid)
           - Timestamp signer: $timestampSigner
+          - Timestamp signer subject: $($signature.TimeStamperCertificate.Subject)
+          - Timestamp signer issuer: $($signature.TimeStamperCertificate.Issuer)
+          - Timestamp signer valid from: $($signature.TimeStamperCertificate.NotBefore.ToUniversalTime().ToString("o"))
           - Timestamp signer expires: $($signature.TimeStamperCertificate.NotAfter.ToUniversalTime().ToString("o"))
+          - Timestamp certification path: Valid (trusted timestamp present and /tw verification passed)
           - Clean-machine SmartScreen check: required separately; CI cannot establish reputation
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
