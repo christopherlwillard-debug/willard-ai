@@ -52,3 +52,4 @@
 - [Capacity admission](capacity-admission.md) — every media writer needs known headroom, a local floor, NAS margin, and a re-probed reservation; never fall back locally
 - [Storage-policy conformance gate](storage-policy-conformance-gate.md) — packaging must validate one canonical cross-surface matrix before staging
 - [Library recovery consistency](library-recovery-consistency.md) — bind dump and facts to one DB snapshot, then verify every cataloged original before path activation
+- [Windows PowerShell standard-user compatibility](windows-powershell-standard-user-compatibility.md) — packaged launchers need explicit .NET assemblies and safe special-folder fallbacks under disposable profiles
