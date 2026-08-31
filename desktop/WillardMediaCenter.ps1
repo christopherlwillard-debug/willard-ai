@@ -71,17 +71,18 @@ function Read-WillardBackupCredential {
 function Initialize-BackupProtection {
   New-Item -ItemType Directory -Force -Path $BackupProtectionRoot | Out-Null
   if (-not (Test-Path $BackupCredentialFile)) {
-    $bytes = New-Object byte[] 32
-    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $generated = [Convert]::ToBase64String($bytes)
-    $protected = Protect-WillardBackupCredential $generated
-    $protected | Set-Content $BackupCredentialFile -Encoding ASCII
+    try {
+      $bytes = New-Object byte[] 32
+      [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      $generated = [Convert]::ToBase64String($bytes)
+      $protected = Protect-WillardBackupCredential $generated
+      $protected | Set-Content $BackupCredentialFile -Encoding ASCII
+    } catch {
+      throw "Windows could not create the locally protected backup credential: $($_.Exception.Message)"
+    }
   }
-  try {
-    $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential
-  } catch {
-    throw "Windows could not unlock the locally protected backup credential for this account."
-  }
+  try { $env:WILLARD_BACKUP_PASSPHRASE = Read-WillardBackupCredential }
+  catch { throw "Windows could not unlock the locally protected backup credential for this account: $($_.Exception.Message)" }
   $env:WILLARD_BACKUP_SCRIPT = $BackupScript
   $hasher = [Security.Cryptography.SHA256]::Create()
   try {
