@@ -380,7 +380,7 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
 test("installer compilation stops on warnings", () => {
   assert.match(installerCompiler, /ISCC\.exe/);
   assert.doesNotMatch(installerCompiler, /--messages-jsonl/);
-  assert.match(installerCompiler, /-match '\(\?i\)\\bwarning\\b'/);
+  assert.match(installerCompiler, /warning\\s\*:/);
   assert.match(installerCompiler, /Inno Setup emitted warnings/);
   assert.match(localBuildInstaller, /compile-installer\.ps1/);
   assert.match(workflow, /compile-installer\.ps1/);

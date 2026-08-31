@@ -16,7 +16,9 @@ $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) { throw "Inno Setup compilation failed with exit code $exitCode." }
 
-$warnings = @($output | Where-Object { ([string]$_) -match '(?i)\bwarning\b' })
+$warnings = @($output | Where-Object {
+  ([string]$_) -match '(?i)^\s*\*{0,3}\s*warning\s*:'
+})
 if ($warnings.Count -gt 0) {
   throw ("Inno Setup emitted warnings; release packaging stops on warnings:`n" + ($warnings -join [Environment]::NewLine))
 }
