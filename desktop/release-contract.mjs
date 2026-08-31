@@ -9,7 +9,7 @@ export const RELEASE_SCHEMA = 2;
 export const RELEASE_PRODUCT = "Willard Media Center";
 export const RELEASE_REPOSITORY = "christopherlwillard-debug/willard-ai";
 export const RELEASE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAqZpJr3+XIwOcfVedmX7cifIx+2pHjfEYGq83P5URpbA=
+MCowBQYDK2VwAyEAG/IGtev3II4CtYzBjfYKnc5BWsSeQed+VFgRV2fYVxM=
 -----END PUBLIC KEY-----
 `;
 
