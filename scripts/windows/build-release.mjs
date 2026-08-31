@@ -172,13 +172,13 @@ async function main() {
   const apiOutput = path.join(output, "api-runtime");
   await runPnpm(
     [
+      "--config.frozen-lockfile=false",
+      "--config.inject-workspace-packages=true",
       "--filter",
       "@workspace/api-server",
       "deploy",
       "--prod",
       "--no-optional",
-      "--config.frozen-lockfile=false",
-      "--config.inject-workspace-packages=true",
       deployOutput,
     ],
     { cwd: root },
