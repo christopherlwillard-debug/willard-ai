@@ -128,6 +128,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /setup-db\.cjs/);
   assert.match(launcher, /database\.log/);
   assert.match(launcher, /automation-credential\.dpapi/);
+  assert.match(launcher, /Add-Type -AssemblyName System\.Security/);
   assert.match(launcher, /ProtectedData\]::Protect/);
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
   assert.match(launcher, /portable recovery export/i);

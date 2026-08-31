@@ -30,6 +30,12 @@ $UpdateJournal = Join-Path $DataRoot "updates\swap-journal.json"
 $script:UpdateStage = "startup"
 $script:LoadingProcess = $null
 
+try {
+  Add-Type -AssemblyName System.Security -ErrorAction Stop
+} catch {
+  throw "Windows could not load the System.Security assembly required for user-scoped backup protection."
+}
+
 function Say($message) { Write-Host "  $message" -ForegroundColor Gray }
 function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
 function Warn($message) { Write-Host "  [!]  $message" -ForegroundColor Yellow }
