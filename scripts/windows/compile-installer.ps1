@@ -28,13 +28,15 @@ $setup = Join-Path $Root "build\installer\WillardMediaCenter-$Version-Setup.exe"
 if (-not (Test-Path $setup)) { throw "Installer compilation did not produce $setup." }
 if ((Get-Item $setup).Length -le 0) { throw "Installer compilation produced an empty setup executable." }
 $versionInfo = (Get-Item $setup).VersionInfo
-if ($versionInfo.CompanyName -ne $ExpectedPublisher) {
-  throw "Installer publisher metadata was '$($versionInfo.CompanyName)', expected '$ExpectedPublisher'."
+$installerPublisher = ([string]$versionInfo.CompanyName).Trim()
+$installerProduct = ([string]$versionInfo.ProductName).Trim()
+if ($installerPublisher -ne $ExpectedPublisher) {
+  throw "Installer publisher metadata was '$installerPublisher', expected '$ExpectedPublisher'."
 }
-if ($versionInfo.ProductName -ne $ExpectedPublisher) {
-  throw "Installer product metadata was '$($versionInfo.ProductName)', expected '$ExpectedPublisher'."
+if ($installerProduct -ne $ExpectedPublisher) {
+  throw "Installer product metadata was '$installerProduct', expected '$ExpectedPublisher'."
 }
-Write-Host "Installer publisher metadata: $($versionInfo.CompanyName)"
+Write-Host "Installer publisher metadata: $installerPublisher"
 Write-Host "Installer SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())"
 
 function Find-SignTool {

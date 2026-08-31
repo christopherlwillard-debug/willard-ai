@@ -291,8 +291,10 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
   assert.match(installerCompiler, /\$ExpectedPublisher = "Willard Media Center"/);
   assert.match(installerCompiler, /VersionInfo/);
-  assert.match(installerCompiler, /CompanyName -ne \$ExpectedPublisher/);
-  assert.match(installerCompiler, /ProductName -ne \$ExpectedPublisher/);
+  assert.match(installerCompiler, /\$installerPublisher = \(\[string\]\$versionInfo\.CompanyName\)\.Trim\(\)/);
+  assert.match(installerCompiler, /\$installerProduct = \(\[string\]\$versionInfo\.ProductName\)\.Trim\(\)/);
+  assert.match(installerCompiler, /\$installerPublisher -ne \$ExpectedPublisher/);
+  assert.match(installerCompiler, /\$installerProduct -ne \$ExpectedPublisher/);
   assert.match(installerCompiler, /WILLARD_REQUIRE_WINDOWS_SIGNING/);
   assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64/);
   assert.match(
