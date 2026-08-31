@@ -27,4 +27,79 @@ $setup = Join-Path $Root "build\installer\WillardMediaCenter-$Version-Setup.exe"
 if (-not (Test-Path $setup)) { throw "Installer compilation did not produce $setup." }
 if ((Get-Item $setup).Length -le 0) { throw "Installer compilation produced an empty setup executable." }
 Write-Host "Installer SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+function Find-SignTool {
+  $onPath = Get-Command "signtool.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($onPath) { return $onPath.Source }
+
+  $windowsKits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+  if (Test-Path $windowsKits) {
+    $candidate = Get-ChildItem -Path $windowsKits -Filter "signtool.exe" -File -Recurse -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+      Sort-Object FullName -Descending |
+      Select-Object -First 1
+    if ($candidate) { return $candidate.FullName }
+  }
+
+  return $null
+}
+
+$certificateBase64 = $env:WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64
+$certificatePassword = $env:WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD
+$signingRequired = $env:WILLARD_REQUIRE_WINDOWS_SIGNING -eq "true"
+$signingRequested = $signingRequired -or
+  -not [string]::IsNullOrWhiteSpace($certificateBase64) -or
+  -not [string]::IsNullOrWhiteSpace($certificatePassword)
+
+if ($signingRequested) {
+  if ([string]::IsNullOrWhiteSpace($certificateBase64)) {
+    throw "WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 is required for a signed installer."
+  }
+  if ([string]::IsNullOrWhiteSpace($certificatePassword)) {
+    throw "WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD is required for a signed installer."
+  }
+
+  $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } elseif ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
+  $certificatePath = Join-Path $tempRoot "willard-media-center-signing.pfx"
+  try {
+    try {
+      $certificateBytes = [Convert]::FromBase64String(($certificateBase64 -replace "\s", ""))
+    } catch {
+      throw "WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 is not valid base64."
+    }
+    if ($certificateBytes.Length -eq 0) {
+      throw "WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 decoded to an empty certificate."
+    }
+    [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+
+    $signTool = Find-SignTool
+    if (-not $signTool) {
+      throw "signtool.exe was not found on PATH or in the Windows 10 SDK."
+    }
+    $timestampUrl = if ($env:WILLARD_WINDOWS_SIGNING_TIMESTAMP_URL) {
+      $env:WILLARD_WINDOWS_SIGNING_TIMESTAMP_URL
+    } else {
+      "http://timestamp.digicert.com"
+    }
+
+    & $signTool sign "/fd" "SHA256" "/td" "SHA256" "/tr" $timestampUrl `
+      "/f" $certificatePath "/p" $certificatePassword "/d" "Willard Media Center" $setup
+    if ($LASTEXITCODE -ne 0) {
+      throw "signtool.exe failed to sign the installer with exit code $LASTEXITCODE."
+    }
+
+    & $signTool verify "/pa" "/all" "/tw" $setup
+    if ($LASTEXITCODE -ne 0) {
+      throw "signtool.exe could not verify the Authenticode signature on the installer."
+    }
+    Write-Host "Installer Authenticode signature verified." -ForegroundColor Green
+  } finally {
+    Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+  }
+} elseif ($signingRequired) {
+  throw "WILLARD_REQUIRE_WINDOWS_SIGNING=true but no signing certificate was supplied."
+} else {
+  Write-Host "Installer signing skipped for this local build; CI release builds require signing."
+}
+
 Write-Host "Installer ready: $setup" -ForegroundColor Green

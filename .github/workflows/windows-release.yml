@@ -368,12 +368,19 @@ jobs:
 
       - name: Compile the Windows installer
         shell: pwsh
+        env:
+          WILLARD_REQUIRE_WINDOWS_SIGNING: "true"
+          WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\compile-installer.ps1
 
       - name: Verify installed Windows lifecycle with external PostgreSQL
         shell: pwsh
         env:
           PGPASSWORD: "postgres"
+          WILLARD_REQUIRE_WINDOWS_SIGNING: "true"
+          WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\installer-lifecycle-smoke.ps1
 
       - name: Publish installer, update ZIP, and manifest

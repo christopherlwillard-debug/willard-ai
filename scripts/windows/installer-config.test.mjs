@@ -245,12 +245,32 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
+  assert.match(installerCompiler, /WILLARD_REQUIRE_WINDOWS_SIGNING/);
+  assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64/);
+  assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD/);
+  assert.match(installerCompiler, /FromBase64String/);
+  assert.match(installerCompiler, /signtool\.exe/);
+  assert.match(installerCompiler, /\/fd.*SHA256/);
+  assert.match(installerCompiler, /\/td.*SHA256/);
+  assert.match(installerCompiler, /\/tr.*\$timestampUrl/);
+  assert.match(installerCompiler, /verify.*\/pa.*\/all.*\/tw/);
+  assert.match(installerCompiler, /Installer Authenticode signature verified/);
+  assert.match(installerCompiler, /Remove-Item -LiteralPath \$certificatePath/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /WillardMediaCenter-.*-Setup\.exe/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/);
   assert.match(workflow, /softprops\/action-gh-release@[0-9a-f]{40}/);
   assert.match(workflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY/);
+  assert.match(
+    workflow,
+    /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64:\s*\$\{\{\s*secrets\.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64\s*\}\}/,
+  );
+  assert.match(
+    workflow,
+    /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD:\s*\$\{\{\s*secrets\.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD\s*\}\}/,
+  );
+  assert.match(workflow, /WILLARD_REQUIRE_WINDOWS_SIGNING:\s*"true"/);
   assert.match(workflow, /Reject an existing release tag/);
   assert.match(workflow, /\$existingTag = @\(& git ls-remote --tags origin/);
   assert.match(workflow, /\$existingTag\.Count -gt 0/);
