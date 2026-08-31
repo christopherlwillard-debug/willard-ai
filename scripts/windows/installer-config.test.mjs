@@ -108,6 +108,10 @@ const installedLifecycleSmoke = await readFile(
   new URL("./installer-lifecycle-smoke.ps1", import.meta.url),
   "utf8",
 );
+const replacementRecoverySmoke = await readFile(
+  new URL("./replacement-recovery-smoke.ps1", import.meta.url),
+  "utf8",
+);
 
 function selectImportedCertificateCleanupCandidates({
   snapshotSucceeded,
@@ -1034,6 +1038,22 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   assert.match(startupSmoke, /scripts\\launcher\\stop\.ps1/);
   assert.doesNotMatch(startupSmoke, /desktop\\WillardMediaCenter\.ps1/);
   assert.match(config, /WillardMediaCenter\.ps1/);
+});
+
+test("Windows release runs replacement recovery from the packaged payload", () => {
+  assert.match(workflow, /replacement-recovery-smoke\.ps1/);
+  assert.match(replacementRecoverySmoke, /source checkout, package manager/);
+  assert.match(replacementRecoverySmoke, /runtime\\node\.exe/);
+  assert.match(replacementRecoverySmoke, /desktop\\database-backup\.mjs/);
+  assert.match(replacementRecoverySmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
+  assert.match(replacementRecoverySmoke, /wrong-passphrase/);
+  assert.match(replacementRecoverySmoke, /missing-nas/);
+  assert.match(replacementRecoverySmoke, /partial-backup/);
+  assert.match(replacementRecoverySmoke, /recovery-attempts/);
+  assert.match(replacementRecoverySmoke, /"COMPLETE"/);
+  assert.match(replacementRecoverySmoke, /\/api\/healthz/);
+  assert.match(replacementRecoverySmoke, /New-LocalUser/);
+  assert.match(replacementRecoverySmoke, /-Credential \$Credential -LoadUserProfile/);
 });
 
 test("installer coordinates upgrades and repair reports failures", async () => {

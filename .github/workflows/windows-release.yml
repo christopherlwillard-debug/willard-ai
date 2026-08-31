@@ -376,6 +376,12 @@ jobs:
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\compile-installer.ps1
 
+      - name: Verify replacement Windows recovery from the packaged payload
+        shell: pwsh
+        env:
+          PGPASSWORD: "postgres"
+        run: .\scripts\windows\replacement-recovery-smoke.ps1
+
       - name: Verify installed Windows lifecycle with external PostgreSQL
         shell: pwsh
         env:
