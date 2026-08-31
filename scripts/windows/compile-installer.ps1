@@ -63,6 +63,7 @@ if ($signingRequested) {
   $certificatePath = Join-Path $tempRoot ("willard-media-center-signing-{0}.pfx" -f ([guid]::NewGuid().ToString("N")))
   $certificateThumbprint = $null
   $certificateStoreThumbprintsBefore = @()
+  $certificateStoreSnapshotSucceeded = $false
   $importedCertificateThumbprints = @()
   try {
     try {
@@ -81,6 +82,7 @@ if ($signingRequested) {
         ForEach-Object { [string]$_.Thumbprint } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
+    $certificateStoreSnapshotSucceeded = $true
     $importedCertificates = @(Import-PfxCertificate `
       -FilePath $certificatePath `
       -Password $securePassword `
@@ -141,28 +143,30 @@ if ($signingRequested) {
     }
     Write-Host "Installer Authenticode signature verified." -ForegroundColor Green
   } finally {
-    $currentCertificateThumbprints = @(
-      Get-ChildItem -Path "Cert:\CurrentUser\My" |
-        ForEach-Object { [string]$_.Thumbprint } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    )
-    $newCertificateThumbprints = @(
-      $currentCertificateThumbprints | Where-Object {
-        $certificateStoreThumbprintsBefore -notcontains $_
-      }
-    )
-    $certificateThumbprintsToRemove = @(
-      @($importedCertificateThumbprints) + @($newCertificateThumbprints) |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Sort-Object -Unique
-    )
-    foreach ($thumbprint in $certificateThumbprintsToRemove) {
-      $certificateStorePath = "Cert:\CurrentUser\My\$thumbprint"
-      if (Test-Path -LiteralPath $certificateStorePath) {
-        Remove-Item -LiteralPath $certificateStorePath -Force -ErrorAction Stop
-      }
-      if (Test-Path -LiteralPath $certificateStorePath) {
-        throw "A temporary code-signing certificate could not be removed from the current-user store."
+    if ($certificateStoreSnapshotSucceeded -and $importedCertificateThumbprints.Count -gt 0) {
+      $currentCertificateThumbprints = @(
+        Get-ChildItem -Path "Cert:\CurrentUser\My" |
+          ForEach-Object { [string]$_.Thumbprint } |
+          Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+      )
+      $introducedCertificateThumbprints = @(
+        $currentCertificateThumbprints | Where-Object {
+          $certificateStoreThumbprintsBefore -notcontains $_
+        }
+      )
+      $certificateThumbprintsToRemove = @(
+        $importedCertificateThumbprints |
+          Where-Object { $introducedCertificateThumbprints -contains $_ } |
+          Sort-Object -Unique
+      )
+      foreach ($thumbprint in $certificateThumbprintsToRemove) {
+        $certificateStorePath = "Cert:\CurrentUser\My\$thumbprint"
+        if (Test-Path -LiteralPath $certificateStorePath) {
+          Remove-Item -LiteralPath $certificateStorePath -Force -ErrorAction Stop
+        }
+        if (Test-Path -LiteralPath $certificateStorePath) {
+          throw "A temporary code-signing certificate could not be removed from the current-user store."
+        }
       }
     }
     if (Test-Path -LiteralPath $certificatePath) {

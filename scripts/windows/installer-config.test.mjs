@@ -109,6 +109,22 @@ const installedLifecycleSmoke = await readFile(
   "utf8",
 );
 
+function selectImportedCertificateCleanupCandidates({
+  snapshotSucceeded,
+  before,
+  imported,
+  current,
+}) {
+  if (!snapshotSucceeded) return [];
+  const original = new Set(before);
+  const introduced = new Set(
+    current.filter((thumbprint) => !original.has(thumbprint)),
+  );
+  return [
+    ...new Set(imported.filter((thumbprint) => introduced.has(thumbprint))),
+  ].sort();
+}
+
 test("installer creates both normal Windows shortcuts", () => {
   assert.match(config, /Name: "\{autoprograms\}\\\{#MyAppName\}"/);
   assert.match(config, /Name: "\{autodesktop\}\\\{#MyAppName\}"/);
@@ -283,6 +299,19 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(installerCompiler, /TimeStamperCertificate/);
   assert.match(installerCompiler, /Installer Authenticode signature verified/);
   assert.match(installerCompiler, /certificateThumbprintsToRemove/);
+  assert.match(
+    installerCompiler,
+    /certificateStoreSnapshotSucceeded = \$false/,
+  );
+  assert.match(installerCompiler, /certificateStoreSnapshotSucceeded = \$true/);
+  assert.match(
+    installerCompiler,
+    /certificateStoreSnapshotSucceeded -and \$importedCertificateThumbprints\.Count -gt 0/,
+  );
+  assert.match(
+    installerCompiler,
+    /introducedCertificateThumbprints -contains \$_/,
+  );
   assert.match(installerCompiler, /foreach \(\$thumbprint/);
   assert.match(
     installerCompiler,
@@ -361,6 +390,39 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(
     localBuildInstaller,
     /e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50/,
+  );
+});
+
+test("installer signing cleanup preserves certificates not introduced by this run", () => {
+  assert.deepEqual(
+    selectImportedCertificateCleanupCandidates({
+      snapshotSucceeded: false,
+      before: [],
+      imported: [],
+      current: ["EXISTING"],
+    }),
+    [],
+    "malformed base64 or a failed snapshot must not remove store certificates",
+  );
+  assert.deepEqual(
+    selectImportedCertificateCleanupCandidates({
+      snapshotSucceeded: true,
+      before: ["EXISTING"],
+      imported: ["EXISTING"],
+      current: ["EXISTING"],
+    }),
+    [],
+    "an imported thumbprint that already existed must be preserved",
+  );
+  assert.deepEqual(
+    selectImportedCertificateCleanupCandidates({
+      snapshotSucceeded: true,
+      before: ["EXISTING"],
+      imported: ["LEAF", "CHAIN", "EXISTING"],
+      current: ["EXISTING", "LEAF", "CHAIN", "UNRELATED"],
+    }),
+    ["CHAIN", "LEAF"],
+    "only certificates both imported and introduced by this run are removable",
   );
 });
 
