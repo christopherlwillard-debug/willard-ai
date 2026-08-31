@@ -88,8 +88,10 @@ try {
   $administrators = @(Get-LocalGroupMember -Group "Administrators" | ForEach-Object Name)
   Assert-True ($administrators -notcontains "$env:COMPUTERNAME\$UserName") "Lifecycle account must remain a standard user."
   New-Item -ItemType Directory -Force (Split-Path -Parent $InstallRoot) | Out-Null
-  & icacls $TempRoot /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C | Out-Null
-  & icacls (Split-Path -Parent $InstallRoot) /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C | Out-Null
+  $tempAclOutput = & icacls $TempRoot /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
+  Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the test workspace:`n" + ($tempAclOutput -join "`n"))
+  $installAclOutput = & icacls (Split-Path -Parent $InstallRoot) /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
+  Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the install root:`n" + ($installAclOutput -join "`n"))
 
   # Create the user profile and discover the exact per-user local app-data path.
   $profileProbe = Join-Path $TempRoot "profile-probe.ps1"
@@ -223,5 +225,14 @@ exit $LASTEXITCODE
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
   } else {
     Write-Host "Lifecycle diagnostics preserved at $TempRoot" -ForegroundColor Yellow
+    if (Test-Path $TempRoot) {
+      Get-ChildItem $TempRoot -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object {
+          Write-Host "Lifecycle file: $($_.FullName)"
+          if ($_.Extension -eq ".log") {
+            Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+          }
+        }
+    }
   }
 }
