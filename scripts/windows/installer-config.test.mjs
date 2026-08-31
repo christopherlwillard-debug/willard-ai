@@ -130,6 +130,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /automation-credential\.dpapi/);
   assert.match(launcher, /Add-Type -AssemblyName System\.Security/);
   assert.match(launcher, /could not unlock the locally protected backup credential.*Exception\.Message/);
+  assert.match(launcher, /stored\.Substring\("dpapi-v2:"\.Length\)/);
   assert.match(launcher, /ProtectedData\]::Protect/);
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
   assert.match(launcher, /portable recovery export/i);

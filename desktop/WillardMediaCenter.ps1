@@ -58,7 +58,7 @@ function Protect-WillardBackupCredential($plainText) {
 function Read-WillardBackupCredential {
   $stored = (Get-Content $BackupCredentialFile -Raw -ErrorAction Stop).Trim()
   if ($stored.StartsWith("dpapi-v2:")) {
-    $protectedBytes = [Convert]::FromBase64String($stored.Substring(8))
+    $protectedBytes = [Convert]::FromBase64String($stored.Substring("dpapi-v2:".Length))
     $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
       $protectedBytes,
       $null,
