@@ -123,7 +123,9 @@ exit $LASTEXITCODE
 '@ | Set-Content $Runner -Encoding ASCII
 
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
-  $installResult = Invoke-AsLifecycleUser $FirstInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$firstInstallLog`" /DIR=`"$InstallRoot`"" "first-install"
+  $firstInstallerForUser = Join-Path $TempRoot "first-install-Setup.exe"
+  Copy-Item $FirstInstaller $firstInstallerForUser -Force
+  $installResult = Invoke-AsLifecycleUser $firstInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$firstInstallLog`" /DIR=`"$InstallRoot`"" "first-install"
   Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed with exit code $($installResult.exitCode):`n" + $installResult.output + "`n" + (Read-Text $firstInstallLog))
   Assert-True (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1")) "First install did not include the native launcher."
   $desktopShortcut = Join-Path $userProfile "Desktop\Willard Media Center.lnk"
@@ -149,7 +151,9 @@ exit $LASTEXITCODE
   $upgradeInstaller = Join-Path $Root "build\installer\WillardMediaCenter-$upgradeVersion-Setup.exe"
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
   $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
-  $upgradeResult = Invoke-AsLifecycleUser $upgradeInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
+  $upgradeInstallerForUser = Join-Path $TempRoot "upgrade-install-Setup.exe"
+  Copy-Item $upgradeInstaller $upgradeInstallerForUser -Force
+  $upgradeResult = Invoke-AsLifecycleUser $upgradeInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
   Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
   Assert-ExternalState
 
