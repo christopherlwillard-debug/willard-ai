@@ -19,8 +19,10 @@ $Database = "willard_lifecycle_$([guid]::NewGuid().ToString("N").Substring(0, 8)
 $InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\$UserName"
 $MediaRoot = Join-Path $TempRoot "external-media"
 $Runner = Join-Path $TempRoot "run-installed-launcher.ps1"
-$script:UserLocalAppData = $null
-$script:UserProfile = $null
+$script:UserProfile = Join-Path $env:SystemDrive "Users\$UserName"
+$script:UserLocalAppData = Join-Path $script:UserProfile "AppData\Local"
+$script:UserAppData = Join-Path $script:UserProfile "AppData\Roaming"
+$script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
 
@@ -50,6 +52,14 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
   $stderr = Join-Path $TempRoot "$label.err.log"
   $process = Start-Process -FilePath $filePath -ArgumentList $argumentLine `
     -Credential $Credential -LoadUserProfile -WorkingDirectory $TempRoot `
+    -Environment @{
+      USERNAME = $UserName
+      USERPROFILE = $script:UserProfile
+      LOCALAPPDATA = $script:UserLocalAppData
+      APPDATA = $script:UserAppData
+      TEMP = $script:UserTemp
+      TMP = $script:UserTemp
+    } `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
   return @{
     exitCode = $process.ExitCode
@@ -93,6 +103,9 @@ try {
   Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the test workspace:`n" + ($tempAclOutput -join "`n"))
   $installAclOutput = & icacls (Split-Path -Parent $InstallRoot) /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
   Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the install root:`n" + ($installAclOutput -join "`n"))
+  New-Item -ItemType Directory -Force -Path $script:UserTemp, $script:UserAppData | Out-Null
+  $profileAclOutput = & icacls $script:UserProfile /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
+  Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the generated profile:`n" + ($profileAclOutput -join "`n"))
 
   # Create the user profile and discover the exact per-user local app-data path.
   $profileProbe = Join-Path $TempRoot "profile-probe.ps1"
@@ -108,13 +121,9 @@ try {
   $identityLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "IDENTITY=*" })[0]
   Assert-True ($identityLine -match "[\\/]$([regex]::Escape($UserName))$") `
     ("Lifecycle process did not run as the disposable standard user:`n" + $profileResult.output)
-  $script:UserProfile = Join-Path $env:SystemDrive "Users\$UserName"
-  $script:UserLocalAppData = Join-Path $script:UserProfile "AppData\Local"
   $script:DataRoot = Join-Path $script:UserLocalAppData "Willard Media Center"
   $userProfile = Split-Path -Parent (Split-Path -Parent $script:UserLocalAppData)
   New-Item -ItemType Directory -Force $script:DataRoot | Out-Null
-  $profileAclOutput = & icacls $script:UserProfile /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
-  Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the generated profile:`n" + ($profileAclOutput -join "`n"))
   @(
     "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/$Database",
     "PORT=8080",
