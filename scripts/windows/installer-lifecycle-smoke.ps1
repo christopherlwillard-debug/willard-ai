@@ -119,8 +119,9 @@ if ($Mode -eq "stop") { & $Launcher -Stop } else { & $Launcher }
 exit $LASTEXITCODE
 '@ | Set-Content $Runner -Encoding ASCII
 
-  $installResult = Invoke-AsLifecycleUser $FirstInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=`"$InstallRoot`"" "first-install"
-  Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed:`n" + $installResult.output)
+  $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
+  $installResult = Invoke-AsLifecycleUser $FirstInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$firstInstallLog`" /DIR=`"$InstallRoot`"" "first-install"
+  Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed:`n" + $installResult.output + "`n" + (Read-Text $firstInstallLog))
   Assert-True (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1")) "First install did not include the native launcher."
   $desktopShortcut = Join-Path $userProfile "Desktop\Willard Media Center.lnk"
   $startMenuRoot = Join-Path $userProfile "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
@@ -144,8 +145,9 @@ exit $LASTEXITCODE
   & (Join-Path $Root "scripts\windows\compile-installer.ps1")
   $upgradeInstaller = Join-Path $Root "build\installer\WillardMediaCenter-$upgradeVersion-Setup.exe"
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
-  $upgradeResult = Invoke-AsLifecycleUser $upgradeInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=`"$InstallRoot`"" "upgrade-install"
-  Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed:`n" + $upgradeResult.output)
+  $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
+  $upgradeResult = Invoke-AsLifecycleUser $upgradeInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
+  Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed:`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
   Assert-ExternalState
 
   $upgradeStart = Invoke-InstalledLauncher "start" "upgrade-start"

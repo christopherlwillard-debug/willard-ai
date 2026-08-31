@@ -390,6 +390,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /RUNNER_TEMP.*postgresql\\pgsql\\bin/);
   assert.doesNotMatch(installedLifecycleSmoke, /ProgramFiles.*PostgreSQL\\16/);
   assert.match(installedLifecycleSmoke, /\$UserName = "wl_life_/);
+  assert.match(installedLifecycleSmoke, /first-install-setup\.log/);
+  assert.match(installedLifecycleSmoke, /upgrade-install-setup\.log/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
   const lifecycleIndex = workflow.indexOf(
     "Verify installed Windows lifecycle with external PostgreSQL",
