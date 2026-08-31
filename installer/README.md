@@ -32,6 +32,96 @@ First-install checklist:
    appears, the packaged ZIP is checksum-verified, and the installed version
    updates before the app opens.
 
+## Windows trust and SmartScreen acceptance
+
+The disposable Windows runner proves that the installer can be compiled,
+signed, verified, installed, and upgraded. It cannot prove what a person sees
+on a clean Windows machine: the UAC publisher text and SmartScreen reputation
+depend on the machine's trust state and Microsoft's reputation service. Run
+this check against the exact `Setup.exe` downloaded from the newly published
+GitHub release before calling a release trust-ready.
+
+1. Use a clean, fully updated Windows 10 or Windows 11 VM. Do not install the
+   signing certificate, change SmartScreen settings, or use an administrator
+   account. Record the Windows edition, build, VM date, release URL, and
+   installer SHA-256:
+
+   ```powershell
+   $installer = "$env:USERPROFILE\Downloads\WillardMediaCenter-<version>-Setup.exe"
+   Get-FileHash $installer -Algorithm SHA256
+   ```
+
+2. In **Properties**, check **Details**. **Company**, **Product name**, and
+   **Product version** must identify Willard Media Center and the published
+   version. Open **Digital Signatures**, select the signature, and confirm
+   **Digital Signature Information** reports that the signature is valid.
+   Open **View Certificate** and record the signer subject, issuer, validity
+   dates, and certification-path status. The signer name must be exactly
+   **Willard Media Center**.
+
+3. Before installing, capture the machine-readable trust result as well:
+
+   ```powershell
+   $signature = Get-AuthenticodeSignature -FilePath $installer
+   $signer = $signature.SignerCertificate
+   $timestampSigner = $signature.TimeStamperCertificate
+   [pscustomobject]@{
+     Status = $signature.Status
+     Signer = if ($signer) { $signer.GetNameInfo(
+       [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
+     ) } else { $null }
+     SignerSubject = if ($signer) { $signer.Subject } else { $null }
+     SignerIssuer = if ($signer) { $signer.Issuer } else { $null }
+     SignerNotAfter = if ($signer) { $signer.NotAfter } else { $null }
+     TimestampSigner = if ($timestampSigner) { $timestampSigner.GetNameInfo(
+       [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false
+     ) } else { $null }
+     TimestampNotAfter = if ($timestampSigner) { $timestampSigner.NotAfter } else { $null }
+   } | Format-List
+   ```
+
+   `Status` must be `Valid`, `Signer` must be `Willard Media Center`, and a
+   timestamp signer must be present with a valid certification path. A
+   timestamp that remains valid after the signing certificate expires is
+   required; record the timestamp signer and its expiry in the evidence.
+
+4. Start the installer normally, without suppressing dialogs. Record the
+   publisher shown in the UAC install prompt. It must be **Willard Media
+   Center**. Record the complete SmartScreen result as one of:
+
+   - **No warning**: Windows allowed the installer after the normal UAC prompt.
+   - **Reputation warning**: SmartScreen warned that the app is not commonly
+     downloaded or from an unrecognized publisher; record the exact message
+     and whether **More info → Run anyway** was available.
+   - **Blocked**: SmartScreen prevented the run; record the exact message and
+     do not bypass it for release acceptance.
+
+5. Add the following evidence to the release record (screenshots may be
+   stored privately; never commit certificate private material):
+
+   ```text
+   Release/version:
+   Release URL:
+   Windows edition/build:
+   Test date (UTC):
+   SHA-256:
+   Details publisher/product:
+   UAC publisher:
+   Authenticode status:
+   Signer subject/issuer/expiry:
+   Timestamp signer/expiry:
+   Certification path:
+   SmartScreen result/message:
+   Acceptance: PASS / FAIL / BLOCKED
+   ```
+
+Do not mark the release **PASS** from CI output alone. If the signer,
+timestamp, certificate path, or UAC publisher differs from the expected
+values, stop publication and investigate. A new signing certificate may still
+produce a reputation warning even when the signature and publisher are valid;
+that warning is an observation to record, not evidence that the signature is
+broken.
+
 For a developer source folder rather than a packaged release, run
 `Setup Willard AI.bat` once. It connects the folder to the public GitHub source
 branch, creates desktop and Start Menu shortcuts that point to
@@ -98,3 +188,11 @@ interrupted packaged-version recovery, actionable database-failure diagnostics,
 uninstall, and preservation of external database, settings, and media markers.
 The runner is intentionally disposable; the first-install checklist above
 remains useful for validating a family’s real PostgreSQL and NAS topology.
+
+Trust-validation baseline: the public `v0.1.145` installer published on
+2026-08-31 was checked from this Linux workspace. Its SHA-256 was
+`ff10d0b80026f4382642dec2e17308fe8926ec98bf4940ece1e1dfd601096638`, and its
+PE Authenticode security directory was empty. It is therefore an unsigned
+baseline, not a valid clean-Windows trust result; no SmartScreen observation
+was recorded for it. The next release published by the signed workflow must
+replace this baseline and complete the checklist above.

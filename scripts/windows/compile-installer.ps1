@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Version = if ($env:WILLARD_VERSION) { $env:WILLARD_VERSION } else { "0.1.0" }
+$ExpectedPublisher = "Willard Media Center"
 $Inno = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
 $Script = Join-Path $Root "installer\WillardMediaCenter.iss"
 
@@ -26,6 +27,14 @@ if ($warnings.Count -gt 0) {
 $setup = Join-Path $Root "build\installer\WillardMediaCenter-$Version-Setup.exe"
 if (-not (Test-Path $setup)) { throw "Installer compilation did not produce $setup." }
 if ((Get-Item $setup).Length -le 0) { throw "Installer compilation produced an empty setup executable." }
+$versionInfo = (Get-Item $setup).VersionInfo
+if ($versionInfo.CompanyName -ne $ExpectedPublisher) {
+  throw "Installer publisher metadata was '$($versionInfo.CompanyName)', expected '$ExpectedPublisher'."
+}
+if ($versionInfo.ProductName -ne $ExpectedPublisher) {
+  throw "Installer product metadata was '$($versionInfo.ProductName)', expected '$ExpectedPublisher'."
+}
+Write-Host "Installer publisher metadata: $($versionInfo.CompanyName)"
 Write-Host "Installer SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())"
 
 function Find-SignTool {
@@ -141,6 +150,15 @@ if ($signingRequested) {
     if (-not $signature.TimeStamperCertificate) {
       throw "The installer signature did not contain a trusted timestamp."
     }
+    $signerPublisher = $signature.SignerCertificate.GetNameInfo(
+      [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+      $false
+    )
+    if ($signerPublisher -ne $ExpectedPublisher) {
+      throw "Installer signer publisher was '$signerPublisher', expected '$ExpectedPublisher'."
+    }
+    Write-Host "Installer signer publisher: $signerPublisher"
+    Write-Host "Installer timestamp signer: $($signature.TimeStamperCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false))"
     Write-Host "Installer Authenticode signature verified." -ForegroundColor Green
   } finally {
     if ($certificateStoreSnapshotSucceeded -and $importedCertificateThumbprints.Count -gt 0) {

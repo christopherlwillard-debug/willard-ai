@@ -376,6 +376,44 @@ jobs:
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\compile-installer.ps1
 
+      - name: Record installer trust metadata
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:GITHUB_WORKSPACE "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
+          $signature = Get-AuthenticodeSignature -FilePath $setup
+          if ($signature.Status -ne "Valid") {
+            throw "Published installer signature status was $($signature.Status), not Valid."
+          }
+          if (-not $signature.SignerCertificate) {
+            throw "Published installer has no signer certificate."
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw "Published installer has no trusted timestamp certificate."
+          }
+          $signer = $signature.SignerCertificate.GetNameInfo(
+            [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+            $false
+          )
+          if ($signer -ne "Willard Media Center") {
+            throw "Published installer signer was '$signer', expected 'Willard Media Center'."
+          }
+          $timestampSigner = $signature.TimeStamperCertificate.GetNameInfo(
+            [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+            $false
+          )
+          @"
+          ## Windows installer trust metadata
+          - SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
+          - Authenticode status: $($signature.Status)
+          - Signer: $signer
+          - Signer subject: $($signature.SignerCertificate.Subject)
+          - Signer issuer: $($signature.SignerCertificate.Issuer)
+          - Signer expires: $($signature.SignerCertificate.NotAfter.ToUniversalTime().ToString("o"))
+          - Timestamp signer: $timestampSigner
+          - Timestamp signer expires: $($signature.TimeStamperCertificate.NotAfter.ToUniversalTime().ToString("o"))
+          - Clean-machine SmartScreen check: required separately; CI cannot establish reputation
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Verify replacement Windows recovery from the packaged payload
         shell: pwsh
         env:

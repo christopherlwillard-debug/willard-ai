@@ -289,6 +289,10 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
+  assert.match(installerCompiler, /\$ExpectedPublisher = "Willard Media Center"/);
+  assert.match(installerCompiler, /VersionInfo/);
+  assert.match(installerCompiler, /CompanyName -ne \$ExpectedPublisher/);
+  assert.match(installerCompiler, /ProductName -ne \$ExpectedPublisher/);
   assert.match(installerCompiler, /WILLARD_REQUIRE_WINDOWS_SIGNING/);
   assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64/);
   assert.match(
@@ -310,6 +314,9 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(installerCompiler, /verify.*\/pa.*\/all.*\/tw/);
   assert.match(installerCompiler, /Get-AuthenticodeSignature/);
   assert.match(installerCompiler, /TimeStamperCertificate/);
+  assert.match(installerCompiler, /SignerCertificate\.GetNameInfo/);
+  assert.match(installerCompiler, /signerPublisher -ne \$ExpectedPublisher/);
+  assert.match(installerCompiler, /Installer signer publisher/);
   assert.match(installerCompiler, /Installer Authenticode signature verified/);
   assert.match(installerCompiler, /certificateThumbprintsToRemove/);
   assert.match(
@@ -351,6 +358,16 @@ test("Windows release workflow builds and publishes the versioned package", () =
     /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD:\s*\$\{\{\s*secrets\.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD\s*\}\}/,
   );
   assert.match(workflow, /WILLARD_REQUIRE_WINDOWS_SIGNING:\s*"true"/);
+  const trustMetadataStep = workflow.slice(
+    workflow.indexOf("Record installer trust metadata"),
+    workflow.indexOf("Verify replacement Windows recovery from the packaged payload"),
+  );
+  assert.match(trustMetadataStep, /Get-AuthenticodeSignature/);
+  assert.match(trustMetadataStep, /SignerCertificate/);
+  assert.match(trustMetadataStep, /TimeStamperCertificate/);
+  assert.match(trustMetadataStep, /expected 'Willard Media Center'/);
+  assert.match(trustMetadataStep, /GITHUB_STEP_SUMMARY/);
+  assert.match(trustMetadataStep, /SmartScreen check: required separately/);
   assert.match(
     workflow,
     /WILLARD_VERSION_INPUT:\s*\$\{\{\s*inputs\.version\s*\}\}/,
