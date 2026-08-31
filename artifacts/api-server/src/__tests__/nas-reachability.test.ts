@@ -18,9 +18,15 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { bootstrapWillardAIDir, checkNasReachable, checkNasReachableAsync } from "../lib/nas-storage.ts";
+import { bootstrapWillardAIDir, checkNasReachable, checkNasReachableAsync, normalizeNasPath } from "../lib/nas-storage.ts";
 
 const onPosix = process.platform !== "win32";
+
+test("normalizes a bare Windows drive letter to the drive root", () => {
+  assert.equal(normalizeNasPath(" Z: "), "Z:\\");
+  assert.equal(normalizeNasPath("Z:\\Media"), "Z:\\Media");
+  assert.equal(normalizeNasPath("\\\\nas\\share"), "\\\\nas\\share");
+});
 
 // ── Platform-spoof helpers ────────────────────────────────────────────────────
 // Temporarily override process.platform so the function-under-test believes it

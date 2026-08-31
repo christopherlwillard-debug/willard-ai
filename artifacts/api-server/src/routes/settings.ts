@@ -6,7 +6,7 @@ import { asc, desc, eq, isNotNull } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
-import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream } from "../lib/nas-storage";
+import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream, normalizeNasPath } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
@@ -142,8 +142,9 @@ router.put("/settings", async (req, res) => {
     // save must not commit. Also never auto-create a WillardAI directory for a
     // location we cannot reach (e.g. a Windows "Z:" drive) — doing so creates a
     // fake local folder that later masks the offline state by reporting "online".
-    if (body.nasPath && body.nasPath !== existing.nasPath) {
-      const reach = await checkNasReachableAsync(body.nasPath);
+    const normalizedNasPath = body.nasPath ? normalizeNasPath(body.nasPath) : body.nasPath;
+    if (normalizedNasPath && normalizedNasPath !== existing.nasPath) {
+      const reach = await checkNasReachableAsync(normalizedNasPath);
       if (!reach.online) {
         res.status(422).json({
           error: `Library Offline — ${reach.message}. The library location was NOT saved because it cannot be reached from this server.`,
@@ -151,17 +152,20 @@ router.put("/settings", async (req, res) => {
         return;
       }
       try {
-        bootstrapWillardAIDir(body.nasPath);
-        nasLogStream.setNasPath(body.nasPath).catch(() => {});
-        logger.info({ nasPath: body.nasPath }, "WillardAI directory bootstrapped on NAS");
+        bootstrapWillardAIDir(normalizedNasPath);
+        nasLogStream.setNasPath(normalizedNasPath).catch(() => {});
+        logger.info({ nasPath: normalizedNasPath }, "WillardAI directory bootstrapped on NAS");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
-        logger.warn({ err, nasPath: body.nasPath }, "Failed to create WillardAI directory on NAS");
+        logger.warn({ err, nasPath: normalizedNasPath }, "Failed to create WillardAI directory on NAS");
         res.status(422).json({
-          error: `Library location was NOT saved: the WillardAI directory could not be created at '${body.nasPath}/WillardAI': ${msg}. Ensure the path is mounted and writable.`,
+          error: `Library location was NOT saved: the WillardAI directory could not be created at '${normalizedNasPath}/WillardAI': ${msg}. Ensure the path is mounted and writable.`,
         });
         return;
       }
+    }
+    if (body.nasPath) {
+      (rest as Record<string, unknown>).nasPath = normalizedNasPath;
     }
 
     const [updated] = await db
@@ -170,7 +174,7 @@ router.put("/settings", async (req, res) => {
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
 
-    if (body.nasPath && body.nasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
+    if (normalizedNasPath && normalizedNasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
       const cancelledJobs = cancelJobsForLibrary(existing.nasPath);
       if (cancelledJobs > 0) {
         logger.info(

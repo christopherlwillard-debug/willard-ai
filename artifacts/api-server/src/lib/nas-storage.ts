@@ -19,8 +19,18 @@ export const WILLARD_SUBDIRS = [
 
 export type WillardSubdir = (typeof WILLARD_SUBDIRS)[number];
 
+/**
+ * Windows treats `Z:` as a drive-relative path, not the root of the mapped
+ * drive. Canonicalize a bare drive letter before any filesystem operation so
+ * the NAS check does not look under the process's current directory on Z:.
+ */
+export function normalizeNasPath(nasPath: string): string {
+  const trimmed = nasPath.trim();
+  return /^[A-Za-z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
+}
+
 export function getWillardAIDir(nasPath: string): string {
-  return path.join(nasPath, "WillardAI");
+  return path.join(normalizeNasPath(nasPath), "WillardAI");
 }
 
 const PRIVATE_DIR_MODE = 0o700;
@@ -191,7 +201,7 @@ export function checkNasReachable(nasPath: string | null | undefined): NasReacha
       readable: false, enumerable: false, writable: false, message: "Invalid library location",
     };
   }
-  const trimmed = nasPath.trim();
+  const trimmed = normalizeNasPath(nasPath);
   // On a non-Windows host (this server runs on Linux), Windows-style locations
   // can never be reached. Reject them explicitly instead of letting
   // path.resolve() turn e.g. "Z:" into a local relative folder that may exist
@@ -348,7 +358,7 @@ export function checkNasReachableAsync(
       readable: false, enumerable: false, writable: false, message: "Invalid library location",
     });
   }
-  const trimmed = nasPath.trim();
+  const trimmed = normalizeNasPath(nasPath);
   if (process.platform !== "win32") {
     if (/^[A-Za-z]:/.test(trimmed)) {
       return Promise.resolve({
