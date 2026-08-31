@@ -20,6 +20,7 @@ $InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\$UserName"
 $MediaRoot = Join-Path $TempRoot "external-media"
 $Runner = Join-Path $TempRoot "run-installed-launcher.ps1"
 $script:UserLocalAppData = $null
+$script:UserProfile = $null
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
 
@@ -107,12 +108,13 @@ try {
   $identityLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "IDENTITY=*" })[0]
   Assert-True ($identityLine -match "[\\/]$([regex]::Escape($UserName))$") `
     ("Lifecycle process did not run as the disposable standard user:`n" + $profileResult.output)
-  $localAppDataLine = @($profileResult.output -split "\r?\n" | Where-Object { $_ -like "LOCALAPPDATA=*" })[0]
-  $script:UserLocalAppData = $localAppDataLine.Substring("LOCALAPPDATA=".Length).Trim()
-  Assert-True $script:UserLocalAppData "The standard-user profile did not provide LOCALAPPDATA."
+  $script:UserProfile = Join-Path $env:SystemDrive "Users\$UserName"
+  $script:UserLocalAppData = Join-Path $script:UserProfile "AppData\Local"
   $script:DataRoot = Join-Path $script:UserLocalAppData "Willard Media Center"
   $userProfile = Split-Path -Parent (Split-Path -Parent $script:UserLocalAppData)
   New-Item -ItemType Directory -Force $script:DataRoot | Out-Null
+  $profileAclOutput = & icacls $script:UserProfile /grant "$env:COMPUTERNAME\${UserName}:(OI)(CI)F" /T /C 2>&1
+  Assert-True ($LASTEXITCODE -eq 0) ("Could not grant lifecycle user access to the generated profile:`n" + ($profileAclOutput -join "`n"))
   @(
     "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/$Database",
     "PORT=8080",
