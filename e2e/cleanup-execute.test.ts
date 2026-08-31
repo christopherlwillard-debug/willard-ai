@@ -30,6 +30,7 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { acquireLibraryTestLock } from "./test-library-lock.ts";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -173,11 +174,13 @@ let tempNasDir = "";
 let originalNasPath = "";
 let deleteFileId = -1;
 let deletedFilePath = "";
+let releaseLibraryTestLock: (() => void) | undefined;
 
 // ─── Suite ──────────────────────────────────────────────────────────────────
 
 describe("Cleanup execute API", { concurrency: false }, () => {
   before(async () => {
+    releaseLibraryTestLock = await acquireLibraryTestLock();
     // ── 1. Authenticate ────────────────────────────────────────────────────
     const statusRes = await fetch(`${API_BASE}/api/auth/status`);
     assert.strictEqual(statusRes.status, 200, "Auth status should be 200");
@@ -322,23 +325,30 @@ describe("Cleanup execute API", { concurrency: false }, () => {
   });
 
   after(async () => {
-    if (originalNasPath) {
-      await apiPut("/settings", { nasPath: originalNasPath }).catch(() => {});
-    }
     try {
-      fs.rmSync(tempNasDir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-    try {
-      if (
-        fs.existsSync(TEMP_NAS_BASE) &&
-        fs.readdirSync(TEMP_NAS_BASE).length === 0
-      ) {
-        fs.rmdirSync(TEMP_NAS_BASE);
+      if (originalNasPath) {
+        await apiPut("/settings", { nasPath: originalNasPath }).catch(() => {});
+      }
+      try {
+        fs.rmSync(tempNasDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (
+          fs.existsSync(TEMP_NAS_BASE) &&
+          fs.readdirSync(TEMP_NAS_BASE).length === 0
+        ) {
+          fs.rmdirSync(TEMP_NAS_BASE);
+        }
+      } catch {
+        /* ignore */
       }
     } catch {
-      /* ignore */
+      /* best effort cleanup */
+    } finally {
+      releaseLibraryTestLock?.();
+      releaseLibraryTestLock = undefined;
     }
   });
 

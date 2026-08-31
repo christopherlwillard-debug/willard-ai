@@ -24,6 +24,7 @@
 
 import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
+import { acquireLibraryTestLock } from "./test-library-lock.ts";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ const TEST_PASSWORD = "willard123";
 let sessionCookie = "";
 let originalNasPath = "";
 let settingsSnapshotTaken = false;
+let releaseLibraryTestLock: (() => void) | undefined;
 
 function authHeaders(): Record<string, string> {
   return sessionCookie ? { Cookie: sessionCookie } : {};
@@ -154,6 +156,7 @@ interface ScanStatusResponse {
 
 describe("Dashboard after scan", { concurrency: false }, async () => {
   before(async () => {
+    releaseLibraryTestLock = await acquireLibraryTestLock();
     // ── 1. Authenticate ────────────────────────────────────────────────────
     const statusRes = await fetch(`${API_BASE}/api/auth/status`);
     assert.strictEqual(
@@ -238,12 +241,17 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
   });
 
   after(async () => {
-    if (!settingsSnapshotTaken) return;
-    const restoreRes = await apiPut("/settings", { nasPath: originalNasPath });
-    assert.ok(
-      restoreRes.ok,
-      `Could not restore the original NAS path "${originalNasPath}": ${await restoreRes.text()}`,
-    );
+    try {
+      if (!settingsSnapshotTaken) return;
+      const restoreRes = await apiPut("/settings", { nasPath: originalNasPath });
+      assert.ok(
+        restoreRes.ok,
+        `Could not restore the original NAS path "${originalNasPath}": ${await restoreRes.text()}`,
+      );
+    } finally {
+      releaseLibraryTestLock?.();
+      releaseLibraryTestLock = undefined;
+    }
   });
 
   // ── Test 1 ───────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import * as crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { db, pool, appSettingsTable, conversionJobsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { acquireLibraryTestLock } from "../../../../e2e/test-library-lock.ts";
 
 const API_BASE = process.env["WILLARD_API_URL"]
   ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "http://localhost:8080");
@@ -23,6 +24,7 @@ let cookie = "";
 let root = "";
 let jobId = 0;
 let originalSettings: { id: number; nasPath: string; optimizeProfile: string; rawConversionEnabled: boolean } | undefined;
+let releaseLibraryTestLock: (() => void) | undefined;
 
 async function request(route: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -56,6 +58,7 @@ function createAvi(filePath: string): void {
 
 describe("optimize scan and conversion cycle", { concurrency: false }, () => {
   before(async () => {
+    releaseLibraryTestLock = await acquireLibraryTestLock();
     const [settings] = await db.select({
       id: appSettingsTable.id,
       nasPath: appSettingsTable.nasPath,
@@ -84,18 +87,23 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
   });
 
   after(async () => {
-    if (jobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
-    if (originalSettings) {
-      await db.update(appSettingsTable)
-        .set({
-          nasPath: originalSettings.nasPath,
-          optimizeProfile: originalSettings.optimizeProfile,
-          rawConversionEnabled: originalSettings.rawConversionEnabled,
-        })
-        .where(eq(appSettingsTable.id, originalSettings.id));
+    try {
+      if (jobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
+      if (originalSettings) {
+        await db.update(appSettingsTable)
+          .set({
+            nasPath: originalSettings.nasPath,
+            optimizeProfile: originalSettings.optimizeProfile,
+            rawConversionEnabled: originalSettings.rawConversionEnabled,
+          })
+          .where(eq(appSettingsTable.id, originalSettings.id));
+      }
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+    } finally {
+      releaseLibraryTestLock?.();
+      releaseLibraryTestLock = undefined;
+      await pool.end();
     }
-    try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
-    await pool.end();
   });
 
   test("scans PNGs and reports the expected convertible group", async () => {
