@@ -21,6 +21,7 @@ $MediaRoot = Join-Path $TempRoot "external-media"
 $Runner = Join-Path $TempRoot "run-installed-launcher.ps1"
 $script:UserLocalAppData = $null
 $script:DataRoot = $null
+$script:LifecyclePassed = $false
 
 function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
@@ -121,7 +122,7 @@ exit $LASTEXITCODE
 
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
   $installResult = Invoke-AsLifecycleUser $FirstInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$firstInstallLog`" /DIR=`"$InstallRoot`"" "first-install"
-  Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed:`n" + $installResult.output + "`n" + (Read-Text $firstInstallLog))
+  Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed with exit code $($installResult.exitCode):`n" + $installResult.output + "`n" + (Read-Text $firstInstallLog))
   Assert-True (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1")) "First install did not include the native launcher."
   $desktopShortcut = Join-Path $userProfile "Desktop\Willard Media Center.lnk"
   $startMenuRoot = Join-Path $userProfile "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
@@ -147,7 +148,7 @@ exit $LASTEXITCODE
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
   $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
   $upgradeResult = Invoke-AsLifecycleUser $upgradeInstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
-  Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed:`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
+  Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
   Assert-ExternalState
 
   $upgradeStart = Invoke-InstalledLauncher "start" "upgrade-start"
@@ -207,6 +208,7 @@ exit $LASTEXITCODE
   Assert-True (-not (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"))) "Uninstall left packaged launcher files behind."
   Assert-True (-not (Test-Path $desktopShortcut)) "Uninstall left the desktop shortcut behind."
   Assert-ExternalState
+  $script:LifecyclePassed = $true
   Write-Host "Installed lifecycle smoke passed: standard user, install, start, upgrade, rollback, diagnostics, and uninstall."
 } finally {
   try { Stop-InstalledWillard } catch {}
@@ -217,5 +219,9 @@ exit $LASTEXITCODE
   Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item ($InstallRoot + ".lifecycle-backup") -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item ($InstallRoot + ".lifecycle-candidate") -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  if ($script:LifecyclePassed) {
+    Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  } else {
+    Write-Host "Lifecycle diagnostics preserved at $TempRoot" -ForegroundColor Yellow
+  }
 }
