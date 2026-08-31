@@ -60,7 +60,10 @@ if ($signingRequested) {
   }
 
   $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } elseif ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
-  $certificatePath = Join-Path $tempRoot "willard-media-center-signing.pfx"
+  $certificatePath = Join-Path $tempRoot ("willard-media-center-signing-{0}.pfx" -f ([guid]::NewGuid().ToString("N")))
+  $certificateThumbprint = $null
+  $certificateStoreThumbprintsBefore = @()
+  $importedCertificateThumbprints = @()
   try {
     try {
       $certificateBytes = [Convert]::FromBase64String(($certificateBase64 -replace "\s", ""))
@@ -71,6 +74,40 @@ if ($signingRequested) {
       throw "WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 decoded to an empty certificate."
     }
     [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+
+    $securePassword = ConvertTo-SecureString $certificatePassword -AsPlainText -Force
+    $certificateStoreThumbprintsBefore = @(
+      Get-ChildItem -Path "Cert:\CurrentUser\My" |
+        ForEach-Object { [string]$_.Thumbprint } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $importedCertificates = @(Import-PfxCertificate `
+      -FilePath $certificatePath `
+      -Password $securePassword `
+      -CertStoreLocation "Cert:\CurrentUser\My")
+    $importedCertificateThumbprints = @(
+      $importedCertificates |
+        ForEach-Object { [string]$_.Thumbprint } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+    )
+    if ($importedCertificateThumbprints.Count -eq 0) {
+      throw "The code-signing certificate could not be imported into the current-user certificate store."
+    }
+    $codeSigningOid = "1.3.6.1.5.5.7.3.3"
+    $signingCertificates = @(
+      $importedCertificates | Where-Object {
+        $candidate = $_
+        $candidate.HasPrivateKey -and
+          @($candidate.EnhancedKeyUsageList | Where-Object {
+            $_.ObjectId.Value -eq $codeSigningOid
+          }).Count -gt 0
+      }
+    )
+    if ($signingCertificates.Count -ne 1) {
+      throw "The PFX must contain exactly one private-key certificate with the code-signing enhanced key usage."
+    }
+    $certificateThumbprint = [string]$signingCertificates[0].Thumbprint
 
     $signTool = Find-SignTool
     if (-not $signTool) {
@@ -83,7 +120,7 @@ if ($signingRequested) {
     }
 
     & $signTool sign "/fd" "SHA256" "/td" "SHA256" "/tr" $timestampUrl `
-      "/f" $certificatePath "/p" $certificatePassword "/d" "Willard Media Center" $setup
+      "/sha1" $certificateThumbprint "/d" "Willard Media Center" $setup
     if ($LASTEXITCODE -ne 0) {
       throw "signtool.exe failed to sign the installer with exit code $LASTEXITCODE."
     }
@@ -92,12 +129,49 @@ if ($signingRequested) {
     if ($LASTEXITCODE -ne 0) {
       throw "signtool.exe could not verify the Authenticode signature on the installer."
     }
+    $signature = Get-AuthenticodeSignature -FilePath $setup
+    if ($signature.Status -ne "Valid") {
+      throw "The installer Authenticode signature status was $($signature.Status), not Valid."
+    }
+    if (-not $signature.SignerCertificate) {
+      throw "The installer did not contain a signer certificate."
+    }
+    if (-not $signature.TimeStamperCertificate) {
+      throw "The installer signature did not contain a trusted timestamp."
+    }
     Write-Host "Installer Authenticode signature verified." -ForegroundColor Green
   } finally {
-    Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+    $currentCertificateThumbprints = @(
+      Get-ChildItem -Path "Cert:\CurrentUser\My" |
+        ForEach-Object { [string]$_.Thumbprint } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $newCertificateThumbprints = @(
+      $currentCertificateThumbprints | Where-Object {
+        $certificateStoreThumbprintsBefore -notcontains $_
+      }
+    )
+    $certificateThumbprintsToRemove = @(
+      @($importedCertificateThumbprints) + @($newCertificateThumbprints) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+    )
+    foreach ($thumbprint in $certificateThumbprintsToRemove) {
+      $certificateStorePath = "Cert:\CurrentUser\My\$thumbprint"
+      if (Test-Path -LiteralPath $certificateStorePath) {
+        Remove-Item -LiteralPath $certificateStorePath -Force -ErrorAction Stop
+      }
+      if (Test-Path -LiteralPath $certificateStorePath) {
+        throw "A temporary code-signing certificate could not be removed from the current-user store."
+      }
+    }
+    if (Test-Path -LiteralPath $certificatePath) {
+      Remove-Item -LiteralPath $certificatePath -Force -ErrorAction Stop
+      if (Test-Path -LiteralPath $certificatePath) {
+        throw "The temporary code-signing certificate file could not be removed."
+      }
+    }
   }
-} elseif ($signingRequired) {
-  throw "WILLARD_REQUIRE_WINDOWS_SIGNING=true but no signing certificate was supplied."
 } else {
   Write-Host "Installer signing skipped for this local build; CI release builds require signing."
 }

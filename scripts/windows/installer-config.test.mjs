@@ -67,7 +67,10 @@ const backendAudit = await readFile(
   "utf8",
 );
 const backupCoordinator = await readFile(
-  new URL("../../artifacts/api-server/src/lib/backup-coordinator.ts", import.meta.url),
+  new URL(
+    "../../artifacts/api-server/src/lib/backup-coordinator.ts",
+    import.meta.url,
+  ),
   "utf8",
 );
 const rootPackage = JSON.parse(
@@ -129,7 +132,10 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /database\.log/);
   assert.match(launcher, /automation-credential\.dpapi/);
   assert.match(launcher, /Add-Type -AssemblyName System\.Security/);
-  assert.match(launcher, /could not unlock the locally protected backup credential.*Exception\.Message/);
+  assert.match(
+    launcher,
+    /could not unlock the locally protected backup credential.*Exception\.Message/,
+  );
   assert.match(launcher, /stored\.Substring\("dpapi-v2:"\.Length\)/);
   assert.match(launcher, /ProtectedData\]::Protect/);
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
@@ -187,12 +193,18 @@ test("installer deliberately leaves external services outside its payload", () =
 
 test("source Setup and Repair automatically restore thumbnail media tools", () => {
   assert.match(launcherCommon, /function Install-WillardMediaTools/);
-  assert.match(launcherCommon, /winget install --id Gyan\.FFmpeg --exact --silent/);
+  assert.match(
+    launcherCommon,
+    /winget install --id Gyan\.FFmpeg --exact --silent/,
+  );
   assert.match(launcherCommon, /choco install ffmpeg -y --no-progress/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "Machine"\)/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "User"\)/);
   assert.match(setupLauncher, /if \(Install-WillardMediaTools\)/);
-  assert.match(setupLauncher, /Setup stopped before scans could create repeated thumbnail failures/);
+  assert.match(
+    setupLauncher,
+    /Setup stopped before scans could create repeated thumbnail failures/,
+  );
   assert.match(repairLauncher, /if \(Install-WillardMediaTools\)/);
   assert.doesNotMatch(repairLauncher, /To add it:\s+winget install/);
 });
@@ -216,7 +228,10 @@ test("developer API builds remain runnable after the update candidate is moved",
 
 test("backup shutdown terminates the full Windows process tree", () => {
   assert.match(backupCoordinator, /taskkill\.exe/);
-  assert.match(backupCoordinator, /\["\/PID", String\(child\.pid\), "\/T", "\/F"\]/);
+  assert.match(
+    backupCoordinator,
+    /\["\/PID", String\(child\.pid\), "\/T", "\/F"\]/,
+  );
   assert.match(backupCoordinator, /SIGKILL/);
   assert.match(backupCoordinator, /Promise\.race/);
 });
@@ -247,15 +262,38 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
   assert.match(installerCompiler, /WILLARD_REQUIRE_WINDOWS_SIGNING/);
   assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64/);
-  assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD/);
+  assert.match(
+    installerCompiler,
+    /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD/,
+  );
   assert.match(installerCompiler, /FromBase64String/);
+  assert.match(installerCompiler, /Import-PfxCertificate/);
+  assert.match(installerCompiler, /ConvertTo-SecureString/);
+  assert.match(installerCompiler, /EnhancedKeyUsageList/);
+  assert.match(installerCompiler, /1\.3\.6\.1\.5\.5\.7\.3\.3/);
+  assert.match(installerCompiler, /signingCertificates\.Count -ne 1/);
+  assert.match(installerCompiler, /\/sha1.*\$certificateThumbprint/);
+  assert.doesNotMatch(installerCompiler, /\/p.*\$certificatePassword/);
   assert.match(installerCompiler, /signtool\.exe/);
   assert.match(installerCompiler, /\/fd.*SHA256/);
   assert.match(installerCompiler, /\/td.*SHA256/);
   assert.match(installerCompiler, /\/tr.*\$timestampUrl/);
   assert.match(installerCompiler, /verify.*\/pa.*\/all.*\/tw/);
+  assert.match(installerCompiler, /Get-AuthenticodeSignature/);
+  assert.match(installerCompiler, /TimeStamperCertificate/);
   assert.match(installerCompiler, /Installer Authenticode signature verified/);
+  assert.match(installerCompiler, /certificateThumbprintsToRemove/);
+  assert.match(installerCompiler, /foreach \(\$thumbprint/);
+  assert.match(
+    installerCompiler,
+    /Remove-Item -LiteralPath \$certificateStorePath/,
+  );
+  assert.match(
+    installerCompiler,
+    /could not be removed from the current-user store/,
+  );
   assert.match(installerCompiler, /Remove-Item -LiteralPath \$certificatePath/);
+  assert.match(installerCompiler, /could not be removed\./);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /WillardMediaCenter-.*-Setup\.exe/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
@@ -271,6 +309,14 @@ test("Windows release workflow builds and publishes the versioned package", () =
     /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD:\s*\$\{\{\s*secrets\.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD\s*\}\}/,
   );
   assert.match(workflow, /WILLARD_REQUIRE_WINDOWS_SIGNING:\s*"true"/);
+  assert.match(
+    workflow,
+    /WILLARD_VERSION_INPUT:\s*\$\{\{\s*inputs\.version\s*\}\}/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /\$version = "\$\{\{\s*inputs\.version\s*\}\}"/,
+  );
   assert.match(workflow, /Reject an existing release tag/);
   assert.match(workflow, /\$existingTag = @\(& git ls-remote --tags origin/);
   assert.match(workflow, /\$existingTag\.Count -gt 0/);
@@ -393,7 +439,10 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
       failureCatch.indexOf("Report-StartupFailure"),
   );
   assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 150000/);
-  assert.match(loaderPage, /const elapsed = document\.getElementById\("elapsed"\)/);
+  assert.match(
+    loaderPage,
+    /const elapsed = document\.getElementById\("elapsed"\)/,
+  );
   assert.match(loaderPage, /STARTING LOCAL SERVICES/);
   assert.match(loaderPage, /STARTUP NEEDS ATTENTION/);
   assert.match(loaderPage, /detail\.hidden = false/);
@@ -421,7 +470,10 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /first-install-Setup\.exe/);
   assert.match(installedLifecycleSmoke, /upgrade-install-Setup\.exe/);
   assert.match(installedLifecycleSmoke, /Lifecycle diagnostics preserved/);
-  assert.match(installedLifecycleSmoke, /Could not grant lifecycle user access/);
+  assert.match(
+    installedLifecycleSmoke,
+    /Could not grant lifecycle user access/,
+  );
   assert.match(installedLifecycleSmoke, /Lifecycle file:/);
   assert.match(installedLifecycleSmoke, /UserProfile = Join-Path/);
   assert.match(installedLifecycleSmoke, /TEMP = \$script:UserTemp/);
@@ -612,7 +664,10 @@ test("Windows release builds provide Vite's required build-time environment", ()
   assert.match(releaseStager, /process\.env\.ComSpec \|\| "cmd\.exe"/);
   assert.match(releaseStager, /\["\/d", "\/c", pnpmCommand, \.\.\.args\]/);
   assert.match(releaseStager, /"--config\.frozen-lockfile=false"/);
-  assert.match(releaseStager, /"--config\.inject-workspace-packages=true",\s+"--filter"/);
+  assert.match(
+    releaseStager,
+    /"--config\.inject-workspace-packages=true",\s+"--filter"/,
+  );
   assert.match(releaseStager, /stdio: "inherit"/);
   assert.match(releaseBuilder, /Windows release staging failed/);
   assert.match(pnpmWorkspace, /forceLegacyDeploy:\s*true/);
@@ -690,7 +745,10 @@ test("developer updates preserve local reference assets without ignoring source 
   assert.match(updater, /attached_assets/);
   assert.match(updater, /status --porcelain=v1 --untracked-files=all/);
   assert.match(updater, /StartsWith\("\?\?"\)/);
-  assert.match(updater, /Copy-PreservedDeveloperState \$candidate -IncludeLogs/);
+  assert.match(
+    updater,
+    /Copy-PreservedDeveloperState \$candidate -IncludeLogs/,
+  );
   assert.match(updater, /tracked source edits/);
 });
 
@@ -852,22 +910,43 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
   );
   assert.match(workflow, /postgresql-16\.15-1-windows-x64-binaries\.zip/);
   assert.match(startupSmoke, /\$env:WILLARD_NO_PAUSE = "1"/);
-  assert.match(startupSmoke, /\$env:LOCALAPPDATA = Join-Path \$env:RUNNER_TEMP "willard-startup-localappdata"/);
+  assert.match(
+    startupSmoke,
+    /\$env:LOCALAPPDATA = Join-Path \$env:RUNNER_TEMP "willard-startup-localappdata"/,
+  );
   assert.match(startupSmoke, /\$env:WILLARD_SKIP_BROWSER = "1"/);
   assert.match(startupSmoke, /\$env:WILLARD_CI_BACKUP_PASSPHRASE = /);
-  assert.match(launcherCommon, /\$env:CI -eq "true" -and \$env:WILLARD_CI_BACKUP_PASSPHRASE/);
+  assert.match(
+    launcherCommon,
+    /\$env:CI -eq "true" -and \$env:WILLARD_CI_BACKUP_PASSPHRASE/,
+  );
   assert.match(developerLauncher, /\$env:WILLARD_SKIP_BROWSER -ne "1"/);
-  assert.match(startupSmoke, /\$env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path \$env:RUNNER_TEMP/);
+  assert.match(
+    startupSmoke,
+    /\$env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path \$env:RUNNER_TEMP/,
+  );
   assert.match(startupSmoke, /\$env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = /);
-  assert.match(startupSmoke, /\$launcherArguments = @\([^)]*\) \+ @\(\$arguments\)/);
+  assert.match(
+    startupSmoke,
+    /\$launcherArguments = @\([^)]*\) \+ @\(\$arguments\)/,
+  );
   assert.match(startupSmoke, /\$powershell = \(Get-Process -Id \$PID\)\.Path/);
   assert.match(startupSmoke, /-ArgumentList \$launcherArguments/);
   assert.match(startupSmoke, /\$process\.WaitForExit\(240000\)/);
   assert.doesNotMatch(startupSmoke, /-PassThru -Wait/);
-  assert.match(startupSmoke, /Launcher process did not exit within 240 seconds[\s\S]*Read-Text \$outputPath[\s\S]*Read-Text \(\$outputPath \+ "\.err"\)/);
-  assert.match(startupSmoke, /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/);
+  assert.match(
+    startupSmoke,
+    /Launcher process did not exit within 240 seconds[\s\S]*Read-Text \$outputPath[\s\S]*Read-Text \(\$outputPath \+ "\.err"\)/,
+  );
+  assert.match(
+    startupSmoke,
+    /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/,
+  );
   assert.doesNotMatch(startupSmoke, /Invoke-Launcher @\("-File", \$Batch\)/);
-  assert.match(startupSmoke, /echo deliberate web startup failure\r?\nexit \/b 1/);
+  assert.match(
+    startupSmoke,
+    /echo deliberate web startup failure\r?\nexit \/b 1/,
+  );
   assert.match(
     workflow,
     /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,
@@ -919,8 +998,14 @@ test("developer updater preserves full runnable versions and rolls back failed c
   assert.match(updater, /New-CandidateDirectory/);
   assert.match(updater, /clone --quiet --no-hardlinks/);
   assert.match(updater, /--branch \$GithubBranch --single-branch \$GithubRepo/);
-  assert.match(updater, /New-Item -ItemType Directory -Force \(Join-Path \$candidate "logs"\)/);
-  assert.match(updater, /Copy-PreservedDeveloperState \$candidate -IncludeLogs/);
+  assert.match(
+    updater,
+    /New-Item -ItemType Directory -Force \(Join-Path \$candidate "logs"\)/,
+  );
+  assert.match(
+    updater,
+    /Copy-PreservedDeveloperState \$candidate -IncludeLogs/,
+  );
   assert.match(updater, /Exclude @\("update\.log"\)/);
   assert.match(updater, /Copy-PreservedDeveloperState \$candidate/);
   assert.match(updater, /Start-ExternalDeveloperVersionSwap/);
@@ -970,7 +1055,10 @@ test("Windows update smoke test exercises Git, preservation, and rollback on a r
   assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
-  assert.match(updater, /Injected update failure after creating the rollback version/);
+  assert.match(
+    updater,
+    /Injected update failure after creating the rollback version/,
+  );
   assert.match(updateSmoke, /WILLARD_UPDATE_REPO/);
   assert.match(updateSmoke, /Local changes were not protected/);
   assert.match(updateSmoke, /unreachable\/willard-ai/);

@@ -330,8 +330,10 @@ jobs:
       - name: Choose release version
         id: version
         shell: pwsh
+        env:
+          WILLARD_VERSION_INPUT: ${{ inputs.version }}
         run: |
-          $version = "${{ inputs.version }}"
+          $version = $env:WILLARD_VERSION_INPUT
           if (-not $version) { $version = "0.1.${{ github.run_number }}" }
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
             throw "Release version must use MAJOR.MINOR.PATCH format."

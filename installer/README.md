@@ -71,6 +71,14 @@ explicit version:
    reject unsigned, altered, wrong-product, wrong-repository, or redirected
    update metadata before downloading or installing it.
 
+The Windows release workflow also requires these GitHub Actions secrets for the installer:
+`WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64` must contain a base64-encoded code-signing
+PFX that includes its private key, and `WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD`
+must contain that PFX password. The runner imports the PFX into the temporary
+current-user certificate store, signs Setup.exe with SHA-256 and a trusted timestamp,
+verifies the Authenticode signature and timestamp, then removes the certificate and
+temporary PFX before publication. Never commit the certificate or password.
+
 To create the signing key once, run
 `openssl genpkey -algorithm ED25519 -out release-signing-private.pem`, export the matching public key in
 `desktop/release-contract.mjs`, and store the base64-encoded PKCS#8 private key
