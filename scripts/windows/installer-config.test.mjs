@@ -156,6 +156,11 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /ProtectedData\]::Protect/);
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
   assert.match(launcher, /portable recovery export/i);
+  assert.match(
+    launcher,
+    /\$version = \[string\]\(\(Get-Content \$VersionFile -Raw \| ConvertFrom-Json\)\.version\)\.Trim\(\)/,
+  );
+  assert.match(launcher, /return "0\.0\.0"/);
   assert.match(launcher, /credentialFingerprint/);
   assert.match(launcher, /documentsRoot/);
   assert.match(launcher, /schema-ready\.json/);
@@ -183,6 +188,10 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /untrusted host/);
   assert.match(launcher, /release-assets\.githubusercontent\.com/);
   assert.match(launcher, /Start-LoadingScreen/);
+  assert.match(launcher, /function Read-StartupLogTail/);
+  assert.match(launcher, /stopped before becoming ready/);
+  assert.match(launcher, /Wait-Ready \$ApiUrl "library service" \$apiProc/);
+  assert.match(launcher, /Wait-Ready \$WebUrl "Media Center" \$webProc/);
   assert.match(launcher, /swap-journal\.json/);
   assert.match(launcher, /Invoke-PackagedVersionSwap/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);

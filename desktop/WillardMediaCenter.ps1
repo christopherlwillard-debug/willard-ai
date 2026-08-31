@@ -180,7 +180,11 @@ function Report-StartupFailure($message) {
 }
 function Read-Version {
   if (-not (Test-Path $VersionFile)) { return "0.0.0" }
-  try { return ((Get-Content $VersionFile -Raw | ConvertFrom-Json).version) } catch { return "0.0.0" }
+  try {
+    $version = [string]((Get-Content $VersionFile -Raw | ConvertFrom-Json).version).Trim()
+    if ($version -match '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') { return $version }
+  } catch {}
+  return "0.0.0"
 }
 function Read-Pids {
   if (-not (Test-Path $PidFile)) { return $null }
@@ -349,9 +353,24 @@ function Ensure-Schema {
   } | ConvertTo-Json | Set-Content $SchemaMarker
   Good "Media database is ready."
 }
-function Wait-Ready($url, $label) {
+function Read-StartupLogTail($path) {
+  if (-not (Test-Path $path)) { return "(log not found: $path)" }
+  $tail = (Get-Content $path -Tail 40 -ErrorAction SilentlyContinue | Out-String).Trim()
+  if (-not $tail) { return "(log is empty: $path)" }
+  return $tail
+}
+function Wait-Ready($url, $label, $process, $errorLog, $outputLog) {
   $until = (Get-Date).AddSeconds(60)
   while ((Get-Date) -lt $until) {
+    if ($process) {
+      try {
+        if ($process.HasExited) {
+          throw "$label stopped before becoming ready.`nError log:`n$(Read-StartupLogTail $errorLog)`nOutput log:`n$(Read-StartupLogTail $outputLog)"
+        }
+      } catch {
+        if ($_.Exception.Message -match "stopped before becoming ready") { throw }
+      }
+    }
     try {
       $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
       $content = [string]$response.Content
@@ -538,9 +557,15 @@ try {
     throw
   }
   Say "Starting the library service..."
-  if (-not (Wait-Ready $ApiUrl "library service")) { Stop-Services; throw "The local library service did not become ready. Check the logs in '$LogRoot'." }
+  if (-not (Wait-Ready $ApiUrl "library service" $apiProc (Join-Path $LogRoot "api-error.log") (Join-Path $LogRoot "api.log"))) {
+    Stop-Services
+    throw "The local library service did not become ready. Check the logs in '$LogRoot'."
+  }
   Say "Starting the Media Center..."
-  if (-not (Wait-Ready $WebUrl "Media Center")) { Stop-Services; throw "The Media Center did not become ready. Check the logs in '$LogRoot'." }
+  if (-not (Wait-Ready $WebUrl "Media Center" $webProc (Join-Path $LogRoot "web-error.log") (Join-Path $LogRoot "web.log"))) {
+    Stop-Services
+    throw "The Media Center did not become ready. Check the logs in '$LogRoot'."
+  }
   if ($script:UpdateBackup) {
     Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
     $script:UpdateBackup = $null
