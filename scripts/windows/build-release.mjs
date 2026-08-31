@@ -16,16 +16,12 @@ const webBuildEnv = {
   BASE_PATH: process.env.BASE_PATH || "/",
 };
 
-function quoteWindowsArgument(value) {
-  return `"${String(value).replaceAll('"', '""')}"`;
-}
-
 function runPnpm(args, options = {}) {
   const command = process.platform === "win32"
     ? (process.env.ComSpec || "cmd.exe")
     : pnpmCommand;
   const commandArgs = process.platform === "win32"
-    ? ["/d", "/s", "/c", [pnpmCommand, ...args.map(quoteWindowsArgument)].join(" ")]
+    ? ["/d", "/c", pnpmCommand, ...args]
     : args;
   return new Promise((resolve, reject) => {
     const child = spawn(command, commandArgs, {
