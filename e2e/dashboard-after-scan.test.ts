@@ -24,7 +24,7 @@
 
 import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
-import { acquireLibraryTestLock } from "./test-library-lock.ts";
+import { acquireLibraryTestLock } from "../artifacts/api-server/src/__tests__/test-library-lock.ts";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 

@@ -14,7 +14,7 @@ import * as crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { db, pool, appSettingsTable, conversionJobsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { acquireLibraryTestLock } from "../../../../e2e/test-library-lock.ts";
+import { acquireLibraryTestLock } from "./test-library-lock.ts";
 
 const API_BASE = process.env["WILLARD_API_URL"]
   ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "http://localhost:8080");
