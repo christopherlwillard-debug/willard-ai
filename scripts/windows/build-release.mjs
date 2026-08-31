@@ -177,7 +177,7 @@ async function main() {
       "deploy",
       "--prod",
       "--no-optional",
-      "--no-frozen-lockfile",
+      "--config.frozen-lockfile=false",
       "--config.inject-workspace-packages=true",
       deployOutput,
     ],
