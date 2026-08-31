@@ -25,6 +25,7 @@ $script:UserAppData = Join-Path $script:UserProfile "AppData\Roaming"
 $script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
+$LifecycleProcessTimeoutSeconds = 180
 
 function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
@@ -60,7 +61,12 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
       TEMP = $script:UserTemp
       TMP = $script:UserTemp
     } `
-    -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+    -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  if (-not $process.WaitForExit($LifecycleProcessTimeoutSeconds * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "$label timed out after $LifecycleProcessTimeoutSeconds seconds."
+  }
+  $process.Refresh()
   return @{
     exitCode = $process.ExitCode
     output = (Read-Text $stdout) + (Read-Text $stderr)
@@ -115,6 +121,7 @@ try {
 "USERPROFILE=$env:USERPROFILE"
 "LOCALAPPDATA=$([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"
 '@ -Encoding ASCII
+  Write-Host "Lifecycle: profile probe"
   $profileResult = Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
     "-NoProfile -ExecutionPolicy Bypass -File `"$profileProbe`"" "profile-probe"
   Assert-True ($profileResult.exitCode -eq 0) ("Could not initialize the standard-user profile:`n" + $profileResult.output)
@@ -142,6 +149,7 @@ if ($Mode -eq "stop") { & $Launcher -Stop } else { & $Launcher }
 exit $LASTEXITCODE
 '@ | Set-Content $Runner -Encoding ASCII
 
+  Write-Host "Lifecycle: first install"
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
   $firstInstallerForUser = Join-Path $TempRoot "first-install-Setup.exe"
   Copy-Item $FirstInstaller $firstInstallerForUser -Force
@@ -154,6 +162,7 @@ exit $LASTEXITCODE
   Assert-True (@(Get-ChildItem $startMenuRoot -Filter "Willard Media Center.lnk" -Recurse -ErrorAction SilentlyContinue).Count -eq 1) `
     "First install did not create the standard-user Start Menu shortcut."
 
+  Write-Host "Lifecycle: first start"
   $startResult = Invoke-InstalledLauncher "start" "first-start"
   Assert-True ($startResult.exitCode -eq 0) ("Installed launcher failed after first install:`n" + $startResult.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
@@ -165,6 +174,7 @@ exit $LASTEXITCODE
 
   # Upgrade through a newer Setup.exe version while retaining the same external
   # database, app-data settings, and media root.
+  Write-Host "Lifecycle: upgrade compile and install"
   $upgradeVersion = "0.1.$([int]$env:GITHUB_RUN_NUMBER + 1)"
   $env:WILLARD_VERSION = $upgradeVersion
   & (Join-Path $Root "scripts\windows\compile-installer.ps1")
@@ -177,6 +187,7 @@ exit $LASTEXITCODE
   Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
   Assert-ExternalState
 
+  Write-Host "Lifecycle: interrupted update recovery"
   $upgradeStart = Invoke-InstalledLauncher "start" "upgrade-start"
   Assert-True ($upgradeStart.exitCode -eq 0) ("Installed launcher failed after upgrade:`n" + $upgradeStart.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
@@ -213,6 +224,7 @@ exit $LASTEXITCODE
 
   # A database failure must persist diagnostics and return control without a
   # modal dialog in this noninteractive test run.
+  Write-Host "Lifecycle: database failure diagnostics"
   $envFile = Join-Path $script:DataRoot ".env"
   Copy-Item $envFile ($envFile + ".good") -Force
   @(
@@ -227,6 +239,7 @@ exit $LASTEXITCODE
   Move-Item ($envFile + ".good") $envFile -Force
   Assert-ExternalState
 
+  Write-Host "Lifecycle: uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
   Assert-True (Test-Path $uninstaller) "Installed copy did not contain Inno Setup uninstaller."
   $uninstallResult = Invoke-AsLifecycleUser $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" "uninstall"
