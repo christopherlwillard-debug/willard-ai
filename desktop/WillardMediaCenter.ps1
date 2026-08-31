@@ -102,7 +102,12 @@ function Initialize-BackupProtection {
   }
   Warn "A separate portable recovery export is required before Willard can start."
   Say "Store it on a USB drive or another location outside WillardAI\backups."
-  $defaultExport = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Willard-Library-Recovery.willard-recovery.json"
+  $documentsRoot = [Environment]::GetFolderPath("MyDocuments")
+  $defaultExport = if ($documentsRoot) {
+    Join-Path $documentsRoot "Willard-Library-Recovery.willard-recovery.json"
+  } else {
+    Join-Path $DataRoot "Willard-Library-Recovery.willard-recovery.json"
+  }
   $exportPath = if ($env:WILLARD_RECOVERY_EXPORT_PATH) { $env:WILLARD_RECOVERY_EXPORT_PATH } else { Read-Host "  Recovery export path [$defaultExport]" }
   if (-not $exportPath) { $exportPath = $defaultExport }
   if ($exportPath -match "(?i)[\\/]WillardAI[\\/]backups(?:[\\/]|$)") {

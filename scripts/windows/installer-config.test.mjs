@@ -135,6 +135,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /WILLARD_BACKUP_RECOVERY_EXPORT_READY/);
   assert.match(launcher, /portable recovery export/i);
   assert.match(launcher, /credentialFingerprint/);
+  assert.match(launcher, /documentsRoot/);
   assert.match(launcher, /schema-ready\.json/);
   assert.match(launcher, /Get-SchemaFingerprint/);
   assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
