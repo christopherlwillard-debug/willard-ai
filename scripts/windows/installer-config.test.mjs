@@ -58,6 +58,10 @@ const releaseStager = await readFile(
   new URL("./build-release.mjs", import.meta.url),
   "utf8",
 );
+const officialSevenZipBootstrap = await readFile(
+  new URL("./prepare-official-7zip.ps1", import.meta.url),
+  "utf8",
+);
 const workflow = await readFile(
   new URL("../../.github/workflows/windows-release.yml", import.meta.url),
   "utf8",
@@ -1201,4 +1205,15 @@ test("developer setup creates identity shortcuts for the batch launcher", () => 
   assert.match(launcherCommon, /WorkingDirectory/);
   assert.match(launcherCommon, /IconLocation/);
   assert.match(releaseStager, /icons\/willard\.ico/);
+});
+
+test("Windows release stages only hash-verified official 7-Zip binaries", () => {
+  assert.match(releaseStager, /prepare-official-7zip\.ps1/);
+  assert.match(releaseStager, /vendor", "7zip"/);
+  assert.match(launcher, /api-runtime\\\\vendor\\\\7zip\\\\7z\.exe/);
+  assert.match(launcher, /WILLARD_7ZIP_PATH/);
+  assert.match(officialSevenZipBootstrap, /Get-FileHash .*SHA256/);
+  assert.match(officialSevenZipBootstrap, /9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7/);
+  assert.match(officialSevenZipBootstrap, /f27a8f103c84785026edcba1f67faf1357225df9d19ddb0b7760d55947141bc7/);
+  assert.match(officialSevenZipBootstrap, /fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0/);
 });
