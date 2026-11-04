@@ -24,3 +24,23 @@ export function setMediaStreamContentHeaders(
   if (!safeInline) response.setHeader("Content-Disposition", "attachment");
   return contentType;
 }
+
+/**
+ * A file may disappear between an existence check and open(). Handle that
+ * asynchronous stream error without leaving an unhandled EventEmitter error
+ * that can terminate the API process or attempting a second response.
+ */
+export function handlePrivateMediaStreamError(
+  response: {
+    headersSent: boolean;
+    status(code: number): { json(body: unknown): unknown };
+    destroy(error?: Error): unknown;
+  },
+  error: unknown,
+): void {
+  if (!response.headersSent) {
+    response.status(404).json({ error: "Media file not found" });
+    return;
+  }
+  response.destroy(error instanceof Error ? error : undefined);
+}
