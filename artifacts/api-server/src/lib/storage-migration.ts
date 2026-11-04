@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream, createWriteStream } from "node:fs";
-import { pool } from "@workspace/db";
 import { resolveWithinRoot } from "./nas-storage.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
@@ -270,7 +269,10 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   const hashFile = options.hashFile ?? defaultHashFile;
   const getFreeBytes = options.freeBytesAt ?? freeBytesAt;
   const query = options.query;
-  const connect = options.connect ?? (() => pool.connect() as any);
+  const connect = options.connect ?? (async () => {
+    const { pool } = await import("@workspace/db");
+    return pool.connect() as any;
+  });
 
   async function preview(input: Omit<MigrationPreviewOptions, "manifestDir">): Promise<StorageMigrationManifest> {
     const sourceRoot = safeRoot(input.sourceRoot);
@@ -574,5 +576,8 @@ export const storageMigrationService = createStorageMigrationService({
       || (process.env.LOCALAPPDATA?.trim() ? path.join(process.env.LOCALAPPDATA.trim(), "Willard Media Center") : process.cwd()),
     "migrations",
   ),
-  query: async (text, values) => pool.query(text, values),
+  query: async (text, values) => {
+    const { pool } = await import("@workspace/db");
+    return pool.query(text, values);
+  },
 });
