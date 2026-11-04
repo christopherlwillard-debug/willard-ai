@@ -230,7 +230,9 @@ function Save-Services($apiPid, $webPid) {
 function Write-UpdateJournal($phase, $candidate, $backup) {
   $journalDirectory = Split-Path $UpdateJournal
   New-Item -ItemType Directory -Force $journalDirectory | Out-Null
-  $temporary = "$UpdateJournal.$([guid]::NewGuid().ToString('N')).tmp"
+  $writeId = [guid]::NewGuid().ToString('N')
+  $temporary = "$UpdateJournal.$writeId.tmp"
+  $journalBackup = "$UpdateJournal.$writeId.bak"
   $contents = @{
     version = 1
     phase = $phase
@@ -242,14 +244,17 @@ function Write-UpdateJournal($phase, $candidate, $backup) {
   try {
     [IO.File]::WriteAllText($temporary, $contents + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     if (Test-Path -LiteralPath $UpdateJournal -PathType Leaf) {
-      # Replace is atomic on the same volume: a crash leaves either the old
-      # complete journal or the new complete journal, never a truncated file.
-      [IO.File]::Replace($temporary, $UpdateJournal, $null)
+      # Replace is atomic on the same volume. Supply a unique backup path
+      # because current .NET runtimes reject a null backup-file argument.
+      # A crash leaves either the old complete journal or the new complete
+      # journal; a leftover .bak is harmless and removed on the next write.
+      [IO.File]::Replace($temporary, $UpdateJournal, $journalBackup)
     } else {
       [IO.File]::Move($temporary, $UpdateJournal)
     }
   } finally {
     Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $journalBackup -Force -ErrorAction SilentlyContinue
   }
 }
 function Read-UpdateJournal {
