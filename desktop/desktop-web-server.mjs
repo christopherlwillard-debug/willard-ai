@@ -62,7 +62,6 @@ const server = http.createServer((request, response) => {
       "cache-control": file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
       "content-type": mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream",
       "x-content-type-options": "nosniff",
-      "content-security-policy": "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
     });
     response.end(data);
   });
