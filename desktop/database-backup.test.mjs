@@ -8,6 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import {
   buildLibraryRemapSql,
   findWindowsPostgresBinary,
@@ -26,6 +28,7 @@ import {
   decryptRecoveryExport,
   validateRecoveryExport,
 } from "./backup-credentials.mjs";
+import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -702,3 +705,46 @@ test(
     }
   },
 );
+function createSnapshotChild(writeError = null) {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killedSignals = [];
+  child.stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(writeError);
+    },
+  });
+  child.kill = (signal) => {
+    child.killedSignals.push(signal);
+    if (signal === "SIGKILL") child.emit("close", null, signal);
+    return true;
+  };
+  return child;
+}
+
+test("PostgreSQL snapshot process resolves only after receiving a valid snapshot token", async () => {
+  const child = createSnapshotChild();
+  const pending = waitForExportedSnapshot(child);
+  child.stdout.write("BEGIN\\n00000003-0000001A-1\\n");
+  assert.equal(await pending, "00000003-0000001A-1");
+});
+
+test("PostgreSQL snapshot process handles stdin EPIPE and escalates termination", async () => {
+  const child = createSnapshotChild(new Error("EPIPE"));
+  await assert.rejects(waitForExportedSnapshot(child, { killGraceMs: 5 }), /input failed: EPIPE/);
+  assert.deepEqual(child.killedSignals, ["SIGTERM"]);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual(child.killedSignals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("PostgreSQL snapshot process kills a hung child after its timeout", async () => {
+  const child = createSnapshotChild();
+  await assert.rejects(
+    waitForExportedSnapshot(child, { timeoutMs: 5, killGraceMs: 5 }),
+    /Timed out while exporting/,
+  );
+  assert.deepEqual(child.killedSignals, ["SIGTERM"]);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual(child.killedSignals, ["SIGTERM", "SIGKILL"]);
+});
