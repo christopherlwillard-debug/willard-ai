@@ -8,7 +8,7 @@ import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { logger } from "../lib/logger.ts";
-import { persistSessionIfCredentialUnchanged } from "../lib/auth-session-guard.ts";
+import { persistSessionUnderCredentialLock, type CredentialLock } from "../lib/auth-session-guard.ts";
 
 const router: IRouter = Router();
 
@@ -72,43 +72,60 @@ async function destroySession(req: Request): Promise<void> {
   }
 }
 
+async function acquireCredentialLock(settingsId: number): Promise<CredentialLock> {
+  const client = await pool.connect();
+  let finished = false;
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{ password_hash: string | null }>(
+      "SELECT password_hash FROM app_settings WHERE id = $1 FOR SHARE",
+      [settingsId],
+    );
+    return {
+      passwordHash: result.rows[0]?.password_hash ?? null,
+      commit: async () => {
+        if (finished) return;
+        await client.query("COMMIT");
+        finished = true;
+        client.release();
+      },
+      rollback: async () => {
+        if (finished) return;
+        try {
+          await client.query("ROLLBACK");
+        } finally {
+          finished = true;
+          client.release();
+        }
+      },
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    client.release();
+    throw error;
+  }
+}
+
 /**
- * Save the new session before re-reading the credential. If a password reset
- * committed first, the stale login is removed here. If it commits after the
- * recheck, the reset transaction's DELETE FROM session removes this saved row.
+ * Regenerate and persist the session while holding a shared lock on the
+ * credential row. Password changes take an update lock on that same row
+ * before deleting sessions, so neither operation can pass the other between
+ * credential verification and session persistence.
  */
 async function establishSessionForPassword(
   req: Request,
   settingsId: number,
   expectedPasswordHash: string,
 ): Promise<boolean> {
-  await establishSession(req);
-  try {
-    return await persistSessionIfCredentialUnchanged(
-      expectedPasswordHash,
-      () => saveSession(req),
-      async () => {
-        const [current] = await db.select({
-          passwordHash: appSettingsTable.passwordHash,
-        }).from(appSettingsTable)
-          .where(eq(appSettingsTable.id, settingsId))
-          .limit(1);
-        return current?.passwordHash ?? null;
-      },
-      () => destroySession(req),
-    );
-  } catch (error) {
-    // Fail closed if persistence or the credential recheck itself fails.
-    try {
-      await destroySession(req);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "Authentication session could not be safely finalized",
-      );
-    }
-    throw error;
-  }
+  return persistSessionUnderCredentialLock(
+    expectedPasswordHash,
+    () => acquireCredentialLock(settingsId),
+    async () => {
+      await establishSession(req);
+      await saveSession(req);
+    },
+    () => destroySession(req),
+  );
 }
 
 function normalizeRecoveryKey(key: string): string {
