@@ -310,3 +310,18 @@ test("rollbackMoves: restores files in last-in-first-out order", async () => {
   assert.equal(restoredOrder[1], "second.txt");
   assert.equal(restoredOrder[2], "first.txt",  "first should be restored last (LIFO)");
 });
+
+test("organization execution is claimed atomically before capacity reservation", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const claimAt = source.indexOf("const [claimedJob] = await db.update(organizationJobsTable)");
+  const reserveAt = source.indexOf("capacityReservation = await reserveCapacity", claimAt);
+  assert.ok(claimAt >= 0, "execution route must use a conditional database claim");
+  assert.ok(reserveAt > claimAt, "the claim must happen before capacity reservation and staging");
+  const claimBlock = source.slice(claimAt, reserveAt);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.id, id\)/);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.status, "verified"\)/);
+  assert.match(claimBlock, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+  assert.match(source, /\.set\(\{ status: "verified", error: message \}\)/);
+});
