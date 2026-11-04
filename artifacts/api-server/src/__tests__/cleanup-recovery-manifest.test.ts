@@ -63,6 +63,20 @@ test("trash manifest preserves library identity and integrity metadata", () => {
   }
 });
 
+test("trash manifest refuses a symlinked logs directory outside the library", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  try {
+    fs.mkdirSync(path.join(nasPath, "WillardAI"));
+    fs.symlinkSync(outside, path.join(nasPath, "WillardAI", "logs"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => manifestPath(nasPath), /symlink/);
+    assert.equal(fs.existsSync(path.join(outside, "trash-manifest.jsonl")), false);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("removing one manifest entry is idempotent and preserves unknown lines", () => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
