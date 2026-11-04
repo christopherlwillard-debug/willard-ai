@@ -39,7 +39,6 @@ test("Linux deployment retains only the selected static 7-Zip binary", async () 
     assert.equal(readFileSync(result.requiredPath, "utf8"), "linux/x64/7zzs");
     assert.equal(readFileSync(path.join(root, "index.js"), "utf8"), "index.js");
     assert.equal(readFileSync(path.join(root, "LICENSE"), "utf8"), "LICENSE");
-    assert.equal(path.existsSync?.(path.join(root, "linux", "x64", "7zz")), undefined);
     assert.throws(() => readFileSync(path.join(root, "linux", "x64", "7zz"), "utf8"), { code: "ENOENT" });
     assert.throws(() => readFileSync(path.join(root, "win", "x64", "7z.exe"), "utf8"), { code: "ENOENT" });
     assert.throws(() => readFileSync(path.join(root, "linux", "arm64", "7zzs"), "utf8"), { code: "ENOENT" });
