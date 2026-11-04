@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { Transform } from "node:stream";
 import { assertWithinRoot } from "./nas-storage.ts";
 
 /**
@@ -17,8 +18,23 @@ export const ARCHIVE_LIMITS = Object.freeze({
   maxArchiveBytes: 128 * 1024 ** 3,
   maxBufferedZipBytes: 1 * 1024 ** 3,
   maxBufferedZipEntryBytes: 512 * 1024 ** 2,
+  maxDecompressedTarBytes: 66 * 1024 ** 3,
 });
 
+export function createArchiveExpansionLimiter(maxBytes: number): Transform {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("Invalid archive expansion limit");
+  let bytesWritten = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytesWritten += chunk.length;
+      if (bytesWritten > maxBytes) {
+        callback(new ArchiveSafetyError("Decompressed archive exceeds the " + formatBytes(maxBytes) + " safety limit"));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
 export class ArchiveSafetyError extends Error {
   readonly code = "ARCHIVE_SAFETY_LIMIT";
 
