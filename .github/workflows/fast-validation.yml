@@ -116,7 +116,7 @@ jobs:
         shell: pwsh
         run: |
           $env:WILLARD_7ZIP_BIN_FULL_PACKAGE = Join-Path $env:RUNNER_TEMP "7zip-bin-full\node_modules\7zip-bin-full"
-          $binary = node -e 'process.stdout.write(require(process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE).path7z)'
+          $binary = node -e 'process.stdout.write(require(process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE).path7zzs)'
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Official 7-Zip binary was not installed." }
           $version = (& $binary i 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0 -or $version -notmatch '7-Zip(?: \(z\))? 26\.') { throw "Unexpected or unsupported 7-Zip version: $version" }
