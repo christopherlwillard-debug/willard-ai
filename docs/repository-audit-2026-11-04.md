@@ -162,3 +162,12 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - `purgeExpiredTrashEntries` previously treated an invalid `expiresAt` date as expired because `NaN >= Date.now()` is false. A malformed or edited manifest record could therefore authorize immediate permanent deletion.
 - Added `isTrashEntryExpired`, which returns true only for a non-empty, parseable timestamp strictly earlier than the current time. Missing, malformed, and future dates now fail closed and remain in trash.
 - Added deterministic regression cases for missing, blank, malformed, future, and elapsed dates. The helper test is database-independent; full retention/deletion integration remains to be exercised against the disposable test database.
+
+
+## Authentication session creation race (2026-11-04)
+
+- Confirmed a race between credential verification and session creation. A login can read and verify the old password hash, then a concurrent password reset can commit the new hash and delete all existing sessions, after which the in-flight login can regenerate and save a fresh authenticated session based on the now-revoked password.
+- Added a shared session-finalization guard. Successful setup, login, recovery, and password-change flows now persist the new session first and then re-read the current password hash. If the credential changed, the just-created session is destroyed and the response is rejected. If a reset commits after the recheck, its transactional session deletion sees the already-persisted session.
+- Session persistence or credential-check failures fail closed; stale-session cleanup retries the exact session-row deletion if the session-store callback fails.
+- Added unit coverage for save/read/destroy ordering, stale credentials, current credentials, persistence failures, and cleanup failures. Added route-level regression assertions and included both auth suites in Fast Validation.
+- Validation status: pending the latest Fast Validation run on this branch. The previous head's Fast Validation passed, but that result does not validate these new changes.
