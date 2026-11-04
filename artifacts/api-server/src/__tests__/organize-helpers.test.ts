@@ -325,3 +325,18 @@ test("organization execution is claimed atomically before capacity reservation",
   assert.match(claimBlock, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
   assert.match(source, /\.set\(\{ status: "verified", error: message \}\)/);
 });
+
+test("rollbackMoves: preserves a new file at the original path instead of overwriting it", async () => {
+  const originalPath = writeFile(path.join(mkTmp("rb-conflict-src"), "important.txt"), "original moved content");
+  const destinationPath = path.join(mkTmp("rb-conflict-dest"), "important.txt");
+  const record = await verifiedMove(originalPath, destinationPath);
+
+  writeFile(originalPath, "new independent file");
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a conflicting original path must not be overwritten");
+  assert.equal(fs.readFileSync(originalPath, "utf8"), "new independent file");
+  assert.equal(fs.readFileSync(destinationPath, "utf8"), "original moved content");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_FAIL") && message.includes("EEXIST")));
+});
