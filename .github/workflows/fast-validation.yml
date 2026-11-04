@@ -123,6 +123,24 @@ jobs:
       - name: Download, hash-verify, and stage official Windows 7-Zip
         shell: pwsh
         run: |
+          $guard = Join-Path $env:RUNNER_TEMP ("official-7zip-guard-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $guard | Out-Null
+          $marker = Join-Path $guard "preserve-me.txt"
+          Set-Content -LiteralPath $marker -Value "preserve" -NoNewline
+          $rejected = $false
+          try {
+            try {
+              .\scripts\windows\prepare-official-7zip.ps1 -Destination $guard
+            } catch {
+              $rejected = $true
+            }
+            if (-not $rejected) { throw "7-Zip staging accepted a non-empty destination." }
+            if ((Get-Content -LiteralPath $marker -Raw) -ne "preserve") {
+              throw "7-Zip staging altered existing destination content."
+            }
+          } finally {
+            Remove-Item -LiteralPath $guard -Recurse -Force -ErrorAction SilentlyContinue
+          }
           $destination = Join-Path $env:RUNNER_TEMP "official-7zip"
           .\scripts\windows\prepare-official-7zip.ps1 -Destination $destination -ExportPathToGitHubEnvironment
           $binary = Join-Path $destination "7z.exe"

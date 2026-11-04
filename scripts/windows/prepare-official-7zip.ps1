@@ -30,7 +30,38 @@ function Download-And-Verify([string]$Name, [string]$ExpectedHash, [string]$Path
   }
 }
 
+function Assert-SafeEmptyDestination([string]$Path) {
+  $FullPath = [IO.Path]::GetFullPath($Path)
+  $RootPath = [IO.Path]::GetPathRoot($FullPath)
+  $CurrentPath = $RootPath
+  $RelativePath = $FullPath.Substring($RootPath.Length)
+
+  foreach ($Segment in ($RelativePath -split '[\\/]' | Where-Object { $_ })) {
+    $CurrentPath = Join-Path $CurrentPath $Segment
+    if (Test-Path -LiteralPath $CurrentPath) {
+      $Item = Get-Item -LiteralPath $CurrentPath -Force
+      if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "7-Zip destination path contains a reparse point; refusing to write through it: $CurrentPath"
+      }
+    }
+  }
+
+  if (Test-Path -LiteralPath $FullPath) {
+    $DestinationInfo = Get-Item -LiteralPath $FullPath -Force
+    if (-not $DestinationInfo.PSIsContainer) {
+      throw "7-Zip destination exists but is not a directory: $FullPath"
+    }
+    $ExistingEntries = @(Get-ChildItem -LiteralPath $FullPath -Force)
+    if ($ExistingEntries.Count -gt 0) {
+      throw "7-Zip destination must be empty; refusing to remove or overwrite existing content: $FullPath"
+    }
+  } else {
+    New-Item -ItemType Directory -Path $FullPath -Force | Out-Null
+  }
+}
+
 try {
+  Assert-SafeEmptyDestination $Destination
   New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $ExtractRoot -Force | Out-Null
 
@@ -69,10 +100,6 @@ try {
     throw "The official 7-Zip license text was not found in the verified release assets."
   }
 
-  if (Test-Path -LiteralPath $Destination) {
-    Remove-Item -LiteralPath $Destination -Recurse -Force
-  }
-  New-Item -ItemType Directory -Path $Destination -Force | Out-Null
   $DestinationExe = Join-Path $Destination "7z.exe"
   Copy-Item -LiteralPath $SevenZipExe.FullName -Destination $DestinationExe -Force
   Copy-Item -LiteralPath $SevenZipDll.FullName -Destination (Join-Path $Destination "7z.dll") -Force

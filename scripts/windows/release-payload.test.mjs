@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import os from "node:os";
 import path from "node:path";
@@ -50,15 +50,29 @@ test("payload validation detects generated drift and missing files", async () =>
   }
 });
 
-test("release scripts reject stale build directories but allow isolated test output", async () => {
+test("release scripts only accept canonical staging and reject symlinked build paths", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-release-root-"));
   try {
-    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(path.join(root, "build", "windows"), root));
+    const canonical = path.join(root, "build", "windows");
+    await mkdir(canonical, { recursive: true });
+    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(canonical, root));
     assert.throws(
       () => assertCanonicalReleaseDirectory(path.join(root, "build", "windows-clean"), root),
       /canonical staging directory/,
     );
-    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(path.join(root, "tmp", "release"), root));
+    assert.throws(
+      () => assertCanonicalReleaseDirectory(path.join(root, "tmp", "release"), root),
+      /canonical staging directory/,
+    );
+
+    const realBuild = path.join(root, "real-build");
+    await mkdir(realBuild);
+    await rm(path.join(root, "build"), { recursive: true, force: true });
+    await symlink(realBuild, path.join(root, "build"), "dir");
+    assert.throws(
+      () => assertCanonicalReleaseDirectory(canonical, root),
+      /real directory, not a symlink or file/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
