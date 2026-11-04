@@ -76,7 +76,8 @@ overrides:
   js-yaml: 4.3.2
   metro@0.83.3: 0.83.8
   metro@0.83.7: 0.83.8
-  sharp@0.34.5: 0.35.2
+  sharp@0.34.5: 0.35.5
+  sharp: 0.35.5
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-arm64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-x64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-freebsd-ia32': '-'
