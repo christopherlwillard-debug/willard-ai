@@ -171,3 +171,10 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - Session persistence or credential-check failures fail closed; stale-session cleanup retries the exact session-row deletion if the session-store callback fails.
 - Added unit coverage for save/read/destroy ordering, stale credentials, current credentials, persistence failures, and cleanup failures. Added route-level regression assertions and included both auth suites in Fast Validation.
 - Validation status: pending the latest Fast Validation run on this branch. The previous head's Fast Validation passed, but that result does not validate these new changes.
+
+
+## Restore operations refuse destination replacement (2026-11-04)
+
+- Manual trash restore checked that the original destination did not exist, then used `renameSync`. On POSIX filesystems a concurrent file creation between those steps could be overwritten. Startup recovery used the same overwrite-capable move helper.
+- Added `moveFileNoReplace`: it first attempts an atomic same-volume hard link and falls back to an exclusive copy on filesystems without link support. It never replaces an existing destination. Source-removal failure rolls back only the destination created by this operation; if that rollback fails, both errors are preserved.
+- Manual restore, restore rollback, and startup restore reconciliation now use the no-replace helper. Added tests for destination collision preservation, successful moves, and route/recovery wiring. Fast Validation remains pending for the latest commit.
