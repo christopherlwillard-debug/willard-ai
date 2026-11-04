@@ -17,6 +17,15 @@ const {
 } = await import("../lib/cleanup-recovery.ts");
 const { pool } = await import("@workspace/db");
 
+test("manual restore and startup recovery use no-replace moves", () => {
+  const sourceDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  assert.match(cleanupRoute, /moveFileNoReplace\(resolvedTrashPath, resolvedOriginalPath\)/);
+  assert.match(cleanupRoute, /moveFileNoReplace\(resolvedOriginalPath, resolvedTrashPath\)/);
+  assert.match(recoverySource, /moveFileNoReplace\(sourceTrash, destination\)/);
+});
+
 test("trash retention fails closed when expiration metadata is missing or malformed", () => {
   const now = Date.parse("2026-11-04T12:00:00.000Z");
   assert.equal(isTrashEntryExpired(undefined, now), false);
