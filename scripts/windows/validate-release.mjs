@@ -120,6 +120,9 @@ export async function validateRelease() {
     "web/willard-loading.mp4",
     "api-runtime/node_modules/onnxruntime-node/package.json",
     "api-runtime/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime.dll",
+    "api-runtime/vendor/7zip/7z.exe",
+    "api-runtime/vendor/7zip/7z.dll",
+    "api-runtime/vendor/7zip/License.txt",
   ];
 
   for (const relative of requiredFiles) {
@@ -142,6 +145,16 @@ export async function validateRelease() {
     if (!launcher.includes(requiredReference)) {
       throw new Error(`Packaged launcher does not reference required payload: ${requiredReference}`);
     }
+  }
+
+  const officialSevenZipPath = path.join(releaseDir, "api-runtime", "vendor", "7zip", "7z.exe");
+  const sevenZipVersion = await execFileAsync(officialSevenZipPath, ["i"], {
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  const sevenZipVersionText = `${sevenZipVersion.stdout ?? ""}\n${sevenZipVersion.stderr ?? ""}`;
+  if (!/7-Zip(?: \(z\))? 26\.05/.test(sevenZipVersionText)) {
+    throw new Error("Packaged Windows release must contain verified official 7-Zip 26.05.");
   }
 
   await assertLocalHtmlReferences(releaseDir, "desktop/loading.html");
