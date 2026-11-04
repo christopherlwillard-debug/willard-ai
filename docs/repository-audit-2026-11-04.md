@@ -262,5 +262,18 @@ Remaining archive hardening:
 
 - `getTempDir` previously used recursive directory creation under `WillardAI/temp` without checking whether an existing path component was a symlink. A library path could therefore redirect temporary archive/media work outside the configured storage root.
 - Added `ensureDirectoryWithinRoot`, which canonicalizes the root and target, checks every existing path component with `lstat`, rejects symlinks and non-directory components, creates missing components one at a time, and returns the canonical path. `getTempDir` now secures the shared temp parent and the per-job directory with private permissions before returning it.
-- Added regression tests for a `WillardAI` symlink, `temp` symlink, job-directory symlink, and expected private permissions. Also corrected the organization rollback/reset routes to return a clear 404 when no NAS path is configured; the typecheck had caught nullable `getNasPath()` handling in those routes. Fast Validation for the current commit is pending.
+- Added regression tests for a `WillardAI` symlink, `temp` symlink, job-directory symlink, and expected private permissions. Also corrected the organization rollback/reset routes to return a clear 404 when no NAS path is configured. These tests passed as part of Fast Validation on commit `a9a2a23b36c175cd558148cdc2c3e85c7f5961ac`.
 - Residual limitation: component-by-component `lstat` and `mkdir` do not provide an OS-level `openat`/directory-handle guarantee against a hostile local process racing the path between checks. This is a substantial improvement against pre-existing symlinks, not a claim of race-free protection against an attacker with write access to the library root.
+
+
+## Recovery-center status contract and badge typing (2026-11-04)
+
+- The recovery UI added a `rolling_back` state, but the OpenAPI enum and generated API types still omitted it. This caused TypeScript to reject the state comparison even though the backend can return that status. Updated the OpenAPI source and regenerated the React and Zod status types/schemas.
+- The recovery card needed badge metadata (`label` and `cls`) while the existing table needed a JSX badge element. Split the pure metadata lookup from the JSX renderer so both callers have the correct types, and added the `preflight` label.
+- Fast Validation passed on commit `a9a2a23b36c175cd558148cdc2c3e85c7f5961ac`: TypeScript, API contract codegen/diff, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 Linux compatibility, targeted backend regressions, and the Windows updater smoke job all passed. The run also passed the updated organization execution-claim assertion after adding the durable stage timestamp.
+
+## Official 7-Zip 26.05 compatibility result (2026-11-04)
+
+- Downloaded the official static Linux x64 archive from the upstream 7-Zip release and verified its pinned SHA-256 before executing it. The compatibility test passed with the repository's existing `node-7z` wrapper: version check, archive creation, technical listing metadata, size/CRC parsing, POSIX symbolic-link metadata detection, and extraction.
+- The Windows runner independently downloaded and hash-verified official 7-Zip 26.05 assets, then passed create/extract content verification. This validates the official binary on both CI platforms without adopting the third-party `7zip-bin-full` package.
+- Production dependency replacement is still pending: the repository currently uses its existing `7zip-bin` path. The next safe step is to package the verified official 7-Zip binary into the Windows/Linux deployment artifacts with explicit license/provenance and platform-aware selection, then run packaged-install tests. No production dependency was changed in this audit step.
