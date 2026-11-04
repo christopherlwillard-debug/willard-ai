@@ -74,7 +74,7 @@ export function isZipSymlinkEntry(externalAttributes: number | undefined): boole
 export function isSevenZipLinkEntry(attributes: string | undefined): boolean {
   if (typeof attributes !== "string") return false;
   return attributes.includes("L") ||
-    /(?:^|\\s)l[rwxstST-]{9}(?:\\s|$)/.test(attributes);
+    /(?:^|\s)l[rwxstST-]{9}(?:\s|$)/.test(attributes);
 }
 
 export function createArchiveBudget(): ArchiveBudget {
