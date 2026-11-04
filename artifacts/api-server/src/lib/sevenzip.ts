@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { path7zzs as bundledPath7za } from "7zip-bin-full";
+import { path7za as bundledPath7za } from "7zip-bin";
 
 export interface SevenZipResolutionOptions {
   platform?: NodeJS.Platform;
