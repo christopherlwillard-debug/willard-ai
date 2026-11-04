@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { ensurePrivateDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { ensureDirectoryWithinRoot, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 import { isTrashEntryExpired } from "./cleanup-retention.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
@@ -45,7 +45,9 @@ function affectedRows(result: unknown): number {
 }
 
 export function manifestPath(nasPath: string): string {
-  return path.join(nasPath, "WillardAI", "logs", "trash-manifest.jsonl");
+  const logsDir = path.join(nasPath, "WillardAI", "logs");
+  ensureDirectoryWithinRoot(logsDir, nasPath);
+  return path.join(logsDir, "trash-manifest.jsonl");
 }
 
 function trashRoot(nasPath: string): string {
@@ -62,16 +64,28 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
   const filePath = manifestPath(nasPath);
   if (!fs.existsSync(filePath)) return { lines: [], entries: [] };
   const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
-  const entries = lines.flatMap((line) => {
+  const removedPaths: string[] = [];
+  const entries: TrashManifestEntry[] = [];
+  for (const line of lines) {
     try {
-      const entry = JSON.parse(line) as Partial<TrashManifestEntry>;
-      if (typeof entry.originalPath !== "string" || typeof entry.trashPath !== "string") return [];
-      return [entry as TrashManifestEntry];
+      const record = JSON.parse(line) as Record<string, unknown>;
+      if (record.recordType === "REMOVE" && typeof record.trashPath === "string") {
+        removedPaths.push(record.trashPath);
+        continue;
+      }
+      if (typeof record.originalPath === "string" && typeof record.trashPath === "string") {
+        entries.push(record as unknown as TrashManifestEntry);
+      }
     } catch {
-      return [];
+      // Preserve malformed/unknown lines for diagnostics; they are not active entries.
     }
-  });
-  return { lines, entries };
+  }
+  return {
+    lines,
+    entries: entries.filter((entry) =>
+      !removedPaths.some((removedPath) => samePath(entry.trashPath, removedPath)),
+    ),
+  };
 }
 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
@@ -96,46 +110,33 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
   const filePath = manifestPath(nasPath);
   if (!fs.existsSync(filePath)) return false;
 
-  const { lines } = readTrashManifest(nasPath);
   const root = trashRoot(nasPath);
-  let removed = false;
-  const kept = lines.filter((line) => {
-    try {
-      const entry = JSON.parse(line) as Record<string, unknown>;
-      if (typeof entry.trashPath !== "string") return true;
-      const resolved = resolveWithinRoot(entry.trashPath, root);
-      if (samePath(resolved, targetTrashPath)) {
-        removed = true;
-        return false;
-      }
-    } catch {
-      // Preserve malformed/unknown lines rather than destroying recovery data.
-    }
-    return true;
-  });
-  if (!removed) return false;
-
-  const tempPath = `${filePath}.${operationId}.tmp`;
-  const content = kept.length ? `${kept.join("\n")}\n` : "";
-  const fd = fs.openSync(tempPath, "w", 0o600);
+  let resolvedTarget: string;
   try {
-    fs.writeSync(fd, content);
+    resolvedTarget = resolveWithinRoot(targetTrashPath, root);
+  } catch {
+    return false;
+  }
+  const { entries } = readTrashManifest(nasPath);
+  if (!entries.some((entry) => {
+    try { return samePath(resolveWithinRoot(entry.trashPath, root), resolvedTarget); }
+    catch { return false; }
+  })) return false;
+
+  // The manifest is an append-only journal. A tombstone makes removal durable
+  // without replacing the file; a crash can never erase unrelated trash rows.
+  const tombstone = {
+    recordType: "REMOVE",
+    operationId,
+    trashPath: resolvedTarget,
+    removedAt: new Date().toISOString(),
+  };
+  const fd = fs.openSync(filePath, "a", 0o600);
+  try {
+    fs.writeSync(fd, JSON.stringify(tombstone) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
-  }
-  try {
-    try {
-      fs.renameSync(tempPath, filePath);
-    } catch (error: any) {
-      // Windows cannot replace an existing file with renameSync. The durable
-      // operation state still makes this recoverable if this small gap fails.
-      if (process.platform !== "win32") throw error;
-      fs.rmSync(filePath, { force: true });
-      fs.renameSync(tempPath, filePath);
-    }
-  } finally {
-    fs.rmSync(tempPath, { force: true });
   }
   try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
   return true;
