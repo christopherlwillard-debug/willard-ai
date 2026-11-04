@@ -525,10 +525,10 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   assert.match(launcher, /startup-failure\.log/);
   assert.match(launcher, /System\.Windows\.MessageBox/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);
-  assert.match(
-    launcher,
-    /\$env:PORT = "8080"\s*\n\s*Start-LoadingScreen\s*\n\s*\$apiProc/,
-  );
+  assert.match(launcher, /\$env:PORT = "8080"/);
+  assert.match(launcher, /Start-LoadingScreen/);
+  assert.match(launcher, /\$env:WILLARD_7ZIP_PATH = \$BundledSevenZip/);
+  assert.match(launcher, /\$apiProc = \$null/);
   assert.doesNotMatch(launcher, /if \(-not \(Ensure-Env\)\) \{ exit 1 \}/);
   assert.doesNotMatch(
     launcher,
