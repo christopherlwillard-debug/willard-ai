@@ -509,8 +509,12 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
     );
   }
   const suffix = (jobId ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
-  const tempDir = path.join(getWillardAIDir(nasPath), "temp", suffix);
+  const tempRoot = path.join(getWillardAIDir(nasPath), "temp");
+  const tempDir = path.join(tempRoot, suffix);
   try {
+    // The shared temp parent must be private before per-job directories are
+    // created beneath it, preventing other NAS users from swapping a child.
+    ensureDirectoryWithinRoot(tempRoot, nasPath, PRIVATE_DIR_MODE);
     return ensureDirectoryWithinRoot(tempDir, nasPath, PRIVATE_DIR_MODE);
   } catch (err) {
     throw new StoragePolicyError(
