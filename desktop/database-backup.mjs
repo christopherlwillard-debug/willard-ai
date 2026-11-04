@@ -1357,18 +1357,22 @@ async function discoverBackups(options) {
     try {
       const { encrypted } = await readBackup(backup.path);
       const dump = decryptDump(encrypted, backup.manifest, secret);
-      if (dump.length !== backup.manifest.dump.plaintextBytes || sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256) {
-        continue;
+      try {
+        if (dump.length !== backup.manifest.dump.plaintextBytes || sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256) {
+          continue;
+        }
+        entries.push({
+          backupDir: backup.path,
+          createdAt: backup.manifest.createdAt,
+          libraryId: backup.manifest.library?.libraryId ?? null,
+          applicationSchemaVersion: backup.manifest.compatibility.applicationSchemaVersion,
+          postgresMajor: backup.manifest.compatibility.postgresMajor,
+          catalogMediaCount: backup.manifest.library?.catalogMediaCount ?? null,
+          verified: true,
+        });
+      } finally {
+        dump.fill(0);
       }
-      entries.push({
-        backupDir: backup.path,
-        createdAt: backup.manifest.createdAt,
-        libraryId: backup.manifest.library?.libraryId ?? null,
-        applicationSchemaVersion: backup.manifest.compatibility.applicationSchemaVersion,
-        postgresMajor: backup.manifest.compatibility.postgresMajor,
-        catalogMediaCount: backup.manifest.library?.catalogMediaCount ?? null,
-        verified: true,
-      });
     } catch {
       // Discovery is fail-closed: corrupt/incomplete generations are omitted.
     }
