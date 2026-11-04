@@ -290,3 +290,10 @@ Remaining archive hardening:
 - Confirmed that the destructive extraction path rejects ZIP symbolic links and TAR symbolic/hard links before writing extracted files. The 7-Zip inspection path also detects links.
 - The earlier ZIP/TAR inspection paths are inconsistent: `peekArchiveEntries` and `validateArchive` validate names and sizes but do not reject ZIP symlink metadata or TAR link entry types. A ZIP/TAR archive containing a link can therefore appear readable during preview/analysis and fail only when execution reaches the guarded extraction stage. This is a usability and preflight-correctness gap, not a bypass of the current extraction guard.
 - No code change was made in this pass. Highest-priority follow-up: share the format-specific link checks between preview, validation, and extraction, then add ZIP/TAR fixture tests proving unsafe link entries are reported before approval/execution.
+
+
+## Remove vulnerable legacy 7-Zip fallback (2026-11-04)
+
+- The API previously preferred official 7-Zip from `WILLARD_7ZIP_PATH`, the packaged `vendor/7zip` directory, or PATH, but silently fell back to `7zip-bin@5.2.0` when none existed. On Linux this package supplies p7zip 16.02, leaving unprovisioned environments exposed to old archive-parser vulnerabilities.
+- Removed the direct `7zip-bin` dependency and its lockfile entries. The resolver now verifies the executable reports official 7-Zip 26.01 or newer before selecting it. Old, missing, or unrecognized executables are skipped. Archive routes resolve the executable lazily and return an actionable error when none is available, so the API itself still starts and non-archive functionality remains usable.
+- Replit uses the pinned official static 7-Zip 26.05 derivation; packaged Windows builds stage hash-verified official 7-Zip 26.05 into `api-runtime/vendor/7zip`. CI tests both platforms and `node-7z` compatibility. Resolver regression tests cover configured/system/packaged priority, version rejection, missing-binary behavior, and the actionable error. Latest Fast Validation for this resolver/dependency removal is pending.
