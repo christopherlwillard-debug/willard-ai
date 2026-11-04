@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
 import { assertStorageConformance } from "./storage-conformance.mjs";
-import { copyOfficialWindows7Zip } from "./official-7zip-payload.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
@@ -188,15 +187,6 @@ async function main() {
 
   await runPnpm(["--filter", "@workspace/willard-ai", "run", "build"], { cwd: root, env: webBuildEnv });
   await runPnpm(["--filter", "@workspace/api-server", "run", "build"], { cwd: root });
-  if (process.platform === "win32") {
-    if (!process.env.WILLARD_7ZIP_PATH) {
-      throw new Error("Set WILLARD_7ZIP_PATH to the hash-verified official Windows 7-Zip executable before building the release.");
-    }
-    await copyOfficialWindows7Zip(
-      process.env.WILLARD_7ZIP_PATH,
-      path.join(root, "artifacts", "api-server", "dist", "vendor"),
-    );
-  }
   const deployOutput = path.join(output, ".api-deploy");
   const apiOutput = path.join(output, "api-runtime");
   await runPnpm(
