@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveSevenZipPath } from "../lib/sevenzip.ts";
+import { getSevenZipPath, resolveSevenZipPath } from "../lib/sevenzip.ts";
 
 const officialVersion = () => "26.05";
 
@@ -120,5 +120,17 @@ test("compiled API resolves the bundled official 7-Zip folder beside api-runtime
       getVersion: officialVersion,
     }),
     packaged,
+  );
+});
+
+test("archive operations return an actionable error when no official binary is available", () => {
+  assert.throws(
+    () => getSevenZipPath({
+      platform: "linux",
+      pathEnv: "",
+      exists: () => false,
+      getVersion: () => undefined,
+    }),
+    /official 7-Zip 26\.01 or newer.*WILLARD_7ZIP_PATH/,
   );
 });
