@@ -60,9 +60,16 @@ function getBrandingDir(): string {
 // Defense-in-depth: only ever read/delete files inside the branding dir, even if
 // the stored DB path were somehow tampered with.
 function isWithinBrandingDir(targetPath: string): boolean {
-  const root = path.resolve(getBrandingDir());
-  const resolved = path.resolve(targetPath);
-  return resolved === root || resolved.startsWith(root + path.sep);
+  try {
+    // Lexical containment alone does not stop a symlink inside branding/
+    // from pointing at an arbitrary readable file elsewhere on the machine.
+    const root = fs.realpathSync(getBrandingDir());
+    const resolved = fs.realpathSync(targetPath);
+    const relative = path.relative(root, resolved);
+    return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
+  } catch {
+    return false;
+  }
 }
 
 async function getOrCreateSettings() {
