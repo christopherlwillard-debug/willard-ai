@@ -565,6 +565,8 @@ try {
   $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
   Start-LoadingScreen
+  $BundledSevenZip = Join-Path $InstallRoot "api-runtime\vendor\7zip\7z.exe"
+  if (Test-Path -LiteralPath $BundledSevenZip -PathType Leaf) { $env:WILLARD_7ZIP_PATH = $BundledSevenZip }
   $apiProc = $null
   try {
     $apiProc = Start-Process $Node -ArgumentList @("--env-file=`"$EnvFile`"", "`"$Api`"") -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
