@@ -277,3 +277,10 @@ Remaining archive hardening:
 - Downloaded the official static Linux x64 archive from the upstream 7-Zip release and verified its pinned SHA-256 before executing it. The compatibility test passed with the repository's existing `node-7z` wrapper: version check, archive creation, technical listing metadata, size/CRC parsing, POSIX symbolic-link metadata detection, and extraction.
 - The Windows runner independently downloaded and hash-verified official 7-Zip 26.05 assets, then passed create/extract content verification. This validates the official binary on both CI platforms without adopting the third-party `7zip-bin-full` package.
 - Production dependency replacement is still pending: the repository currently uses its existing `7zip-bin` path. The next safe step is to package the verified official 7-Zip binary into the Windows/Linux deployment artifacts with explicit license/provenance and platform-aware selection, then run packaged-install tests. No production dependency was changed in this audit step.
+
+
+## Release staging and official 7-Zip destination safety (2026-11-04)
+
+- The Windows release builder recursively deletes and recreates `build/windows`; a symlinked `build` parent or target could redirect destructive cleanup. Release staging now accepts only the canonical `build/windows` path and rejects symlinked/non-directory `build` or target paths before cleanup.
+- The official 7-Zip staging script previously removed an existing destination recursively before copying verified binaries. It now requires an empty destination and checks each existing path component for Windows reparse points before writing. A regression smoke deliberately supplies a non-empty destination and verifies the existing marker file remains unchanged.
+- Updated release payload tests cover rejection of alternate staging paths and symlinked build roots. Fast Validation passed on commit `ce7ce8e7426f4938e7568ade5885bff87e047f21`, including Linux typecheck/contracts, release/storage checks, official 7-Zip Linux compatibility, targeted backend regressions, and the Windows updater/7-Zip smoke job.
