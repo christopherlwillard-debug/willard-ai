@@ -61,7 +61,7 @@ test("Windows continues to use its bundled executable unless explicitly configur
       platform: "win32",
       pathEnv: "C:\\tools",
       fallbackPath: "C:\\app\\7za.exe",
-      exists: () => true,
+      exists: (candidate) => candidate === "C:\\app\\7za.exe",
     }),
     "C:\\app\\7za.exe",
   );
