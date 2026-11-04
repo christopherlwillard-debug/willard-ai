@@ -13,10 +13,14 @@
       mkdir -p "$out/bin"
       tar -xJf "$src" -C "$TMPDIR"
       install -m 0555 "$TMPDIR/7zzs" "$out/bin/7zzs"
+      license_file="$(find "$TMPDIR" -maxdepth 2 -iname 'License.txt' -type f | head -n 1)"
+      test -n "$license_file"
+      install -Dm444 "$license_file" "$out/share/licenses/7zip/License.txt"
     '';
     meta = {
       description = "Official static 7-Zip 26.05 binary";
       homepage = "https://www.7-zip.org/";
+      license = with pkgs.lib.licenses; [ lgpl21Plus bsd3 ];
     };
   };
 in {
