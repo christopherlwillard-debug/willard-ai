@@ -139,8 +139,10 @@ export function ensureDirectoryWithinRoot(
   mode = PRIVATE_DIR_MODE,
 ): string {
   const canonicalRoot = canonicalizePath(root);
-  const canonicalTarget = resolveWithinRoot(targetPath, canonicalRoot);
-  const relative = path.relative(canonicalRoot, canonicalTarget);
+  // Keep the target's lexical suffix rather than realpath-canonicalizing it:
+  // doing so lets us lstat each descendant and reject even an in-root symlink
+  // that could redirect cleanup into another job's staging directory.
+  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
   if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
     throw new Error("Path traversal rejected: directory is outside the allowed root");
   }
@@ -157,7 +159,7 @@ export function ensureDirectoryWithinRoot(
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
-        throw new Error(`Storage directory contains a symlink: "${current}"`);
+        throw new Error(`Storage directory contains a symlink and cannot be used for staging: "${current}"`);
       }
       if (!stat.isDirectory()) {
         throw new Error(`Storage path component is not a directory: "${current}"`);
