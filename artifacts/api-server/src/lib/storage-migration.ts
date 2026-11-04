@@ -536,6 +536,16 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
       const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
       const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+      // A previous cleanup attempt may have removed the source and crashed
+      // before persisting its final manifest. The verified destination is the
+      // recovery copy; accept that already-completed deletion idempotently.
+      if (!fs.existsSync(safeSourcePath)) {
+        const destinationHash = await hashFile(safeDestinationPath);
+        if (destinationHash !== entry.sourceHash) {
+          throw new Error("Original is missing and destination is not verified: " + entry.relativePath);
+        }
+        continue;
+      }
       // Cleanup is destructive: verify BOTH copies still match the preview hash.
       const [currentSourceHash, destinationHash] = await Promise.all([
         hashFile(safeSourcePath),
