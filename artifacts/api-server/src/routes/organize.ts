@@ -652,7 +652,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
     await new Promise<void>((resolve, reject) => {
       const s = Seven.extractFull(archivePath, stagingDir, {
         $bin: path7za,
-        overwrite: "qs",
+        overwrite: "a",
         $progress: false,
       } as any);
       s.on("end",   resolve);
