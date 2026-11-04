@@ -244,7 +244,14 @@ function databaseConnection(options, restore = false) {
   return connectionEnvironment(connectionString);
 }
 
-function runTool(command, args, environment, label) {
+export function runTool(command, args, environment, label, {
+  maxOutputBytes = 64 * 1024 * 1024,
+  maxStderrBytes = 16 * 1024,
+} = {}) {
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 ||
+      !Number.isSafeInteger(maxStderrBytes) || maxStderrBytes < 1) {
+    return Promise.reject(new Error("Process output limits must be positive safe integers."));
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: ROOT,
@@ -253,23 +260,37 @@ function runTool(command, args, environment, label) {
       windowsHide: true,
     });
     let stdout = "";
-    let stderr = "";
+    let stdoutBytes = 0;
+    let stderr = Buffer.alloc(0);
+    let settled = false;
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+    };
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      reject(new Error(`${label} could not start: ${error.message}`));
-    });
-    child.on("close", (code, signal) => {
-      if (code !== 0) {
-        const detail = stderr.trim() || stdout.trim() || (signal ? `signal ${signal}` : `exit code ${code}`);
-        reject(new Error(`${label} failed: ${detail}`));
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxOutputBytes) {
+        try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }
+        settle(reject, new Error(`${label} exceeded its ${maxOutputBytes}-byte output limit.`));
         return;
       }
-      resolve(stdout);
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = Buffer.concat([stderr, chunk]).subarray(-maxStderrBytes);
+    });
+    child.on("error", (error) => {
+      settle(reject, new Error(`${label} could not start: ${error.message}`));
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      if (code !== 0) {
+        const detail = stderr.toString("utf8").trim() || stdout.trim() || (signal ? `signal ${signal}` : `exit code ${code}`);
+        settle(reject, new Error(`${label} failed: ${detail}`));
+        return;
+      }
+      settle(resolve, stdout);
     });
   });
 }
@@ -1413,6 +1434,8 @@ export {
   findWindowsPostgresBinary,
   stableJson,
   overwriteFileWithZeroes,
+  createPrivateBackupWorkDirectory,
+  runTool,
   secureRemove,
   validateManifest,
 };
