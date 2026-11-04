@@ -9,11 +9,8 @@ import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
 
-const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
-test("official 7-Zip binary package works with node-7z and archive safety metadata", {
-  skip: !packagePath ? "candidate binary package not installed" : false,
-}, async () => {
-  const { path7zzs } = createRequire(path.join(packagePath, "package.json"))(packagePath);
+test("official 7-Zip binary package works with node-7z and archive safety metadata", async () => {
+  const { path7zzs } = createRequire(import.meta.url)("7zip-bin-full");
   assert.equal(typeof path7zzs, "string");
   assert.ok(fs.existsSync(path7zzs), `7-Zip binary is missing: ${path7zzs}`);
 
