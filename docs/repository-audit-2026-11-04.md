@@ -193,12 +193,6 @@ Remaining archive hardening:
 - References: `https://raw.githubusercontent.com/develar/7zip-bin/master/linux/x64/do-build.sh`; `https://github.com/develar/7zip-bin/pull/28`; `https://www.debian.org/lts/security/` (DLA-4681-1, 2026-07-13); `https://www.npmjs.com/package/7zip-bin-full`.
 
 
-## Temporary NAS staging directory symlink containment (2026-11-04)
-
-- `getTempDir` previously used recursive `mkdir` under `<library>/WillardAI/temp` without canonicalizing existing ancestors. A symlink at `WillardAI`, `temp`, or the per-job directory could redirect temporary archive/media work outside the configured library.
-- Added `ensureDirectoryWithinRoot`, which canonicalizes the root, retains the target's lexical suffix so every descendant can be checked with `lstat`, rejects all descendant symlinks (including links to another path inside the library), creates directory components individually, and returns the canonical path. `getTempDir` now validates the shared `temp` directory and makes it private before creating per-job directories, then applies private permissions to each job directory. Archive extraction revalidates the staging chain immediately before resetting it, and redundant recursive `mkdir` calls were removed.
-- Added regression tests for a normal private temp directory and symlink escapes at each of the three path levels. Included the tests in Fast Validation. Latest test result is pending.
-
 ## Invalid 7-Zip overwrite switch (2026-11-04)
 
 - The organize extractor passed `overwrite: "qs"` to `node-7z`, which emits `-aoqs`. The documented 7-Zip switch accepts exactly one mode character (`a`, `s`, `t`, or `u`); the actual 26.05 candidate binary rejected `-aoqs` with `Command Line Error: Too long switch`, so valid 7z-family archive extraction could fail before writing any files.
@@ -206,25 +200,10 @@ Remaining archive hardening:
 - The first candidate smoke run failed on the invalid option, which confirmed the defect. The corrected candidate run is pending; the production dependency has not yet been upgraded.
 
 
-## NAS temporary directory symlink containment (2026-11-04)
-
-- Confirmed `getTempDir()` used recursive `mkdir` under `<LIBRARY>/WillardAI/temp/<job>`, without checking whether `WillardAI` or `temp` had been replaced by a symlink. A local filesystem/NAS user able to alter those directories could redirect temporary archive extraction and media staging outside the configured library.
-- Added `ensureDirectoryWithinRoot()` to canonicalize and check the target against the configured NAS root, then create and verify each directory component without following symlinks. `getTempDir()` now secures the shared `temp` parent and per-job directory with private permissions before returning the canonical path.
-- Added regression tests for normal private directory creation and symlink rejection at `WillardAI`, `temp`, the per-job directory, and an in-root link to another job. Added the suite to Fast Validation.
-- Validation status: the prior Fast Validation run passed typecheck, release/storage contracts, and the Windows updater smoke job, but was cancelled after the candidate 7-Zip compatibility step failed. The NAS-specific suite has not yet completed in CI.
-- Candidate 7-Zip compatibility test failure was traced to an invalid `node-7z` option (`overwrite: "qs"` emitted unsupported `-aoqs`). Corrected the test to use the wrapper's supported `overwrite: "a"` option; production 7-Zip dependency remains unchanged pending a passing Linux/Windows compatibility run.
-
-
 ## Dependency-review action fallback (2026-11-04)
 
 - The GitHub `dependency-review-action` was attempted for the audit PR, but GitHub returned `Dependency review is not supported on this repository` because Dependency Graph is disabled. This is a repository setting limitation, not a code or dependency finding.
-- The PR workflow now uses `pnpm audit --prod --audit-level high`, which does not require GitHub Dependency Graph. Enabling Dependency Graph later would allow richer PR diff review, but is no longer required for the current audit workflow. No repository settings or main-branch changes were made.
-
-
-## Dependency-review workflow compatibility (2026-11-04)
-
-- The GitHub `dependency-review-action` failed on this repository because GitHub's Dependency Graph feature is not enabled for the repository. This is a repository setting limitation, not a dependency finding.
-- Replaced the PR job's dependency-review action with `pnpm audit --prod --audit-level high`, which evaluates the locked production dependency graph without requiring GitHub Dependency Graph. The scheduled audit already uses this pnpm audit path. The updated PR audit run is pending.
+- The PR workflow inventories all production advisories with `pnpm audit --prod --audit-level low` and enforces a separate `pnpm audit --prod --audit-level high` gate; neither requires GitHub Dependency Graph. Enabling Dependency Graph later would allow richer PR diff review, but is no longer required for the current audit workflow. No repository settings or main-branch changes were made.
 
 
 ## Bounded-memory cleanup of temporary database dumps (2026-11-04)
@@ -266,7 +245,6 @@ Remaining archive hardening:
 
 ## Further production dependency patching (2026-11-04)
 
-- The first clean high-severity production audit still reported 16 moderate and 1 low advisories. The report inventory identified remaining vulnerable production paths through `qs`, `ip-address`, `postcss`, `brace-expansion`, `uuid`, `glob`, and `minimatch`.
-- Updated workspace overrides to patched versions: `qs` 6.16.1, `ip-address` 10.7.4, `postcss` 8.5.23, `brace-expansion` 1.1.21/2.1.7/5.0.12, `uuid` 11.1.1, `glob` 14.0.2, and `minimatch` 11.0.1. These include major-version overrides for transitive tooling packages; the workspace typecheck and app/runtime compatibility validation are required before treating them as safe.
-- The audit-branch lockfile refresh completed successfully and committed the regenerated lockfile. A frozen-install Fast Validation run against that refreshed commit is required; an earlier run on the pre-refresh commit failed as expected with an override/lockfile mismatch.
-- One moderate advisory remains without an available patched release in the current advisory data: `deepmerge` 4.3.1 (advisory reports no patched version). It is brought in by Expo configuration tooling; do not claim a fully clean advisory report until Expo upstream ships a safe dependency or the affected package is removed/replaced.
+- The first advisory inventory reported 16 moderate and 1 low findings after the high/critical issues were removed. Updated workspace overrides to patched versions: `qs` 6.16.1, `ip-address` 10.7.4, `postcss` 8.5.23, `brace-expansion` 1.1.21/2.1.7/5.0.12, `uuid` 11.1.1, `glob` 14.0.2, and `minimatch` 11.0.1.
+- The regenerated lockfile completed a frozen install and full workspace typecheck. The production audit now reports no critical, high, or moderate advisories; one low advisory remains for `deepmerge` 4.3.1 in the Expo configuration tooling chain. The advisory database lists no patched release. This is documented as a residual low-severity issue rather than forcing an unreviewed fork.
+- The `uuid`, `glob`, and `minimatch` overrides cross major versions for transitive Expo tooling. Workspace typecheck and the Expo CLI configuration smoke are required before treating those overrides as runtime-validated.
