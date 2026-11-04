@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Destination = [IO.Path]::GetFullPath($Destination)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $ReleaseBase = "https://github.com/ip7z/7zip/releases/download/26.05"
@@ -93,6 +94,9 @@ try {
   }
 
   Write-Host "Official 7-Zip 26.05 Windows binary verified and smoke-tested at $DestinationExe"
+  if ($env:GITHUB_ENV) {
+    "WILLARD_7ZIP_PATH=$DestinationExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+  }
 } finally {
   Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
