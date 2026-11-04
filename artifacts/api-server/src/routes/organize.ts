@@ -11,7 +11,7 @@ import { createGunzip } from "node:zlib";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
-import { path7za } from "../lib/sevenzip.ts";
+import { getSevenZipPath } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
@@ -294,7 +294,7 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
   } else if (SEVENZIP_EXTS.has(ext)) {
     let validationError: Error | undefined;
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
+      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
           const info = getSevenZipEntryInfo(d);
@@ -367,7 +367,7 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
     } else if (SEVENZIP_EXTS.has(ext)) {
       let validationError: Error | undefined;
       await new Promise<void>((resolve, reject) => {
-        const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
+        const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
           const info = getSevenZipEntryInfo(entry);
@@ -644,7 +644,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
+      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
       let failed = false;
       const fail = (error: unknown) => {
         if (failed) return;
@@ -678,7 +678,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     await new Promise<void>((resolve, reject) => {
       const s = Seven.extractFull(archivePath, stagingDir, {
-        $bin: path7za,
+        $bin: getSevenZipPath(),
         overwrite: "a",
         $progress: false,
       } as any);
