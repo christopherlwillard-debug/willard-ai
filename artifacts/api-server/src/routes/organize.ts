@@ -22,6 +22,7 @@ import {
   createArchiveBudget,
   inspectExtractedTree,
   isZipSymlinkEntry,
+  isSevenZipLinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -272,6 +273,10 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
           const isDir = typeof d.attributes === "string" && d.attributes[0] === "D";
+          if (isSevenZipLinkEntry(d.attributes)) {
+            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`);
+            return;
+          }
           try {
             const checked = validateArchiveEntry({ path: d.file, sizeBytes: d.size, isDirectory: isDir }, budget);
             entries.push({ path: d.file, sizeBytes: checked.sizeBytes, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
@@ -339,6 +344,10 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
         const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
+          if (isSevenZipLinkEntry(entry.attributes)) {
+            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`);
+            return;
+          }
           try {
             validateArchiveEntry({
               path: entry.file,
