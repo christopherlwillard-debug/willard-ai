@@ -61,6 +61,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare hash-verified official Windows 7-Zip binary
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "official-7zip"
+          .\scripts\windows\prepare-official-7zip.ps1 -Destination $destination
+
       - name: Restore portable PostgreSQL
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
