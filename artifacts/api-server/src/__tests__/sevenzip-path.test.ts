@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveSevenZipPath } from "../lib/sevenzip.ts";
 
 test("configured 7-Zip path takes precedence when it exists", () => {
@@ -74,6 +75,21 @@ test("packaged official Windows binary takes precedence over legacy fallback", (
       pathEnv: "C:\\tools",
       packagedPath: packaged,
       fallbackPath: "C:\\app\\7za.exe",
+      exists: (candidate) => candidate === packaged,
+    }),
+    packaged,
+  );
+});
+
+test("compiled API resolves the bundled 7-Zip folder beside api-runtime", () => {
+  const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
+  const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7zzs");
+  assert.equal(
+    resolveSevenZipPath({
+      platform: "linux",
+      pathEnv: "",
+      moduleUrl,
+      fallbackPath: "/legacy/7za",
       exists: (candidate) => candidate === packaged,
     }),
     packaged,
