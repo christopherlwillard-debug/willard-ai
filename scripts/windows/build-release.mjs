@@ -41,6 +41,25 @@ function runPnpm(args, options = {}) {
   });
 }
 
+function runPowerShell(scriptPath, args = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pwsh", ["-NoProfile", "-File", scriptPath, ...args], {
+      cwd: root,
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `PowerShell step ${path.basename(scriptPath)} failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}.`,
+      ));
+    });
+  });
+}
+
 async function copy(source, destination) {
   await mkdir(path.dirname(destination), { recursive: true });
   await cp(source, destination, { recursive: true });
@@ -182,6 +201,11 @@ async function main() {
       deployOutput,
     ],
     { cwd: root },
+  );
+  const bundledSevenZip = path.join(deployOutput, "vendor", "7zip");
+  await runPowerShell(
+    path.join(root, "scripts", "windows", "prepare-official-7zip.ps1"),
+    ["-Destination", bundledSevenZip],
   );
   await pruneWindowsPayload(deployOutput);
   await copyDereferenced(deployOutput, apiOutput);
