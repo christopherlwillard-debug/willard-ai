@@ -11,6 +11,7 @@ export function waitForExportedSnapshot(child, {
     let stderr = "";
     let settled = false;
     let childClosed = false;
+    let stopping = false;
     let timeout;
     let killTimer;
 
@@ -25,6 +26,8 @@ export function waitForExportedSnapshot(child, {
       callback(value);
     };
     const stopChild = () => {
+      if (stopping || childClosed) return;
+      stopping = true;
       try { child.kill("SIGTERM"); } catch { /* process may already have exited */ }
       killTimer = setTimeout(() => {
         try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }
