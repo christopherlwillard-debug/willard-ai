@@ -60,6 +60,14 @@ try {
     throw "The official Windows release did not contain both 7z.exe and 7z.dll."
   }
 
+  $SevenZipLicense = Get-ChildItem -LiteralPath $ExtractRoot -Filter "License.txt" -File -Recurse | Select-Object -First 1
+  if (-not $SevenZipLicense -and $InstallRoot -and (Test-Path -LiteralPath $InstallRoot)) {
+    $SevenZipLicense = Get-ChildItem -LiteralPath $InstallRoot -Filter "License.txt" -File -Recurse | Select-Object -First 1
+  }
+  if (-not $SevenZipLicense) {
+    throw "The official 7-Zip license text was not found in the verified release assets."
+  }
+
   if (Test-Path -LiteralPath $Destination) {
     Remove-Item -LiteralPath $Destination -Recurse -Force
   }
@@ -67,6 +75,7 @@ try {
   $DestinationExe = Join-Path $Destination "7z.exe"
   Copy-Item -LiteralPath $SevenZipExe.FullName -Destination $DestinationExe -Force
   Copy-Item -LiteralPath $SevenZipDll.FullName -Destination (Join-Path $Destination "7z.dll") -Force
+  Copy-Item -LiteralPath $SevenZipLicense.FullName -Destination (Join-Path $Destination "License.txt") -Force
 
   $VersionText = (& $DestinationExe i 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -or $VersionText -notmatch '7-Zip(?: \(z\))? 26\.05') {
