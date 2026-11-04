@@ -189,9 +189,12 @@ exit $LASTEXITCODE
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
   $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
   $upgradeInstallerForUser = Join-Path $TempRoot "upgrade-install-Setup.exe"
+  $obsoletePayloadFile = Join-Path $InstallRoot "desktop\\obsolete-release-file.txt"
+  Set-Content $obsoletePayloadFile "must not survive an in-place installer upgrade" -Encoding UTF8
   Copy-Item $upgradeInstaller $upgradeInstallerForUser -Force
   $upgradeResult = Invoke-AsLifecycleUser $upgradeInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
   Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
+  Assert-True (-not (Test-Path $obsoletePayloadFile)) "An obsolete packaged file survived the in-place installer upgrade."
   Assert-ExternalState
 
   Write-Host "Lifecycle: interrupted update recovery"
