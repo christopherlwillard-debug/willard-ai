@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { eq, desc, inArray, or, and, isNotNull } from "drizzle-orm";
+import { eq, desc, inArray, or, and, isNotNull, isNull, lt } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -58,6 +58,37 @@ async function getScopedOrganizationJob(id: number, nasPath: string) {
     eq(organizationJobsTable.nasPath, nasPath),
   )).limit(1);
   return job;
+}
+
+const ORGANIZATION_EXECUTION_LEASE_MS = 5 * 60 * 1000;
+const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
+
+/**
+ * Keep a durable execution lease fresh while an organization worker is alive.
+ * A resume request may reclaim an "executing" job only after this heartbeat
+ * becomes stale, which distinguishes a crashed worker from a live one.
+ */
+function startOrganizationJobHeartbeat(id: number, nasPath: string): () => void {
+  let inFlight = false;
+  const timer = setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      await db.update(organizationJobsTable)
+        .set({ stageUpdatedAt: new Date() })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.status, "executing"),
+        ));
+    } catch (error) {
+      logger.warn({ err: error, jobId: id }, "Organization execution heartbeat failed");
+    } finally {
+      inFlight = false;
+    }
+  }, ORGANIZATION_EXECUTION_HEARTBEAT_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 const ZIP_EXTS    = new Set(["zip"]);
@@ -1428,6 +1459,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   const correlationId = req.id;
   const operationLogger = logger.child({ correlationId, operation: "organize", jobId: id });
   let capacityReservation: CapacityReservation | null = null;
+  let stopHeartbeat: (() => void) | null = null;
   let logWriteFailureReported = false;
   const opLog = (line: string) => {
     try {
@@ -1475,6 +1507,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       res.end();
       return;
     }
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
 
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1493,8 +1526,10 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     } catch (error) {
       const admission = error instanceof CapacityAdmissionError ? error.admission : null;
       const message = error instanceof Error ? error.message : "Organization capacity admission failed";
+      stopHeartbeat?.();
+      stopHeartbeat = null;
       await db.update(organizationJobsTable)
-        .set({ status: "verified", error: message })
+        .set({ status: "verified", error: message, stageUpdatedAt: new Date() })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
@@ -1863,6 +1898,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     send("error", { message: errMsg, rolledBack });
   } finally {
+    stopHeartbeat?.();
     if (capacityReservation) releaseCapacity(capacityReservation.id);
     for (const td of tempDirs) cleanTempDir(td);
     res.end();
@@ -2065,6 +2101,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   // Declared outside try so catch can restore DB fileMoves to pre-resume baseline on failure
   let existingMoves: FileMoveRecord[] = [];
   let capacityReservation: CapacityReservation | null = null;
+  let stopHeartbeat: (() => void) | null = null;
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
@@ -2082,6 +2119,34 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     try { resolveWithinRoot(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
+    // Resume only a failed job or an executing job whose heartbeat has gone
+    // stale. The conditional update is the cross-process compare-and-swap:
+    // only one resume request can acquire the lease.
+    const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    const [claimedResume] = await db.update(organizationJobsTable)
+      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPath),
+        or(
+          eq(organizationJobsTable.status, "failed"),
+          and(
+            eq(organizationJobsTable.status, "executing"),
+            or(
+              isNull(organizationJobsTable.stageUpdatedAt),
+              lt(organizationJobsTable.stageUpdatedAt, staleBefore),
+            ),
+          ),
+        ),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedResume) {
+      send("error", { message: "This organization job is already running. Wait for it to stop before resuming." });
+      res.end();
+      return;
+    }
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
+
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
     const excludedPaths = new Set<string>(plan.excludePaths ?? []);
     const activeRoutes: any[] = (plan.routes ?? []).filter((r: any) =>
@@ -2097,15 +2162,21 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     } catch (error) {
       const admission = error instanceof CapacityAdmissionError ? error.admission : null;
       const message = error instanceof Error ? error.message : "Organization resume capacity admission failed";
-      await db.update(organizationJobsTable).set({ error: message }).where(eq(organizationJobsTable.id, id));
+      stopHeartbeat?.();
+      stopHeartbeat = null;
+      await db.update(organizationJobsTable)
+        .set({ status: job.status, lastStage: job.lastStage, stageUpdatedAt: job.stageUpdatedAt, error: message })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.status, "executing"),
+        ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
       return;
     }
 
-    // Mark as executing so a re-interruption is still detectable as a crashed job
-    await db.update(organizationJobsTable)
-      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
-      .where(eq(organizationJobsTable.id, id));
+    // The job was claimed atomically before capacity admission; do not
+    // issue an unconditional status update that could overwrite the lease.
 
     // Stage checkpoint helper for resume — awaited, non-throwing
     const setStage = async (stage: string): Promise<void> => {
@@ -2302,6 +2373,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
     send("error", { message: errMsg, rolledBack });
   } finally {
+    stopHeartbeat?.();
     if (capacityReservation) releaseCapacity(capacityReservation.id);
     for (const td of tempDirs) cleanTempDir(td);
     res.end();
