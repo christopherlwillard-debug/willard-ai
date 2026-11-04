@@ -1414,7 +1414,7 @@ export const SendOpenaiMessageResponse = zod.unknown()
  */
 export const ListOrganizeJobsResponseItem = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
@@ -1450,7 +1450,7 @@ export const CreateOrganizeJobBody = zod.object({
 
 export const CreateOrganizeJobResponse = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
@@ -1481,7 +1481,7 @@ export const GetOrganizeJobParams = zod.object({
 
 export const GetOrganizeJobResponse = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
@@ -1524,7 +1524,7 @@ export const AnalyzeOrganizeJobParams = zod.object({
 
 export const AnalyzeOrganizeJobResponse = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
@@ -1555,7 +1555,7 @@ export const PreflightOrganizeJobParams = zod.object({
 
 export const PreflightOrganizeJobResponse = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
@@ -1601,7 +1601,7 @@ export const UpdateOrganizeJobPlanBody = zod.object({
 
 export const UpdateOrganizeJobPlanResponse = zod.object({
   "id": zod.number(),
-  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'completed', 'failed', 'rolled_back']),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
   "sourceType": zod.string(),
   "sourcePath": zod.string(),
   "archiveId": zod.number().nullish(),
