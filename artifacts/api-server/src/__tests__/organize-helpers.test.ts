@@ -355,6 +355,19 @@ test("organization resume and reset require a stale execution lease", () => {
   assert.match(resetRoute, /eq\(organizationJobsTable\.status, "failed"\)/);
   assert.match(resetRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
   assert.match(resetRoute, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
+  const rollbackRoute = source.slice(rollbackStart, rollbackEnd);
+  assert.match(rollbackRoute, /status: "rolling_back"/);
+  assert.match(rollbackRoute, /startOrganizationJobHeartbeat\(id, nasPath, "rolling_back"\)/);
+  assert.match(rollbackRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+
+  const helperSource = fs.readFileSync(new URL("../lib/organize-helpers.ts", import.meta.url), "utf8");
+  const rollbackMovesStart = helperSource.indexOf("export async function rollbackMoves");
+  const rollbackMovesSource = helperSource.slice(rollbackMovesStart);
+  assert.match(rollbackMovesSource, /moveFileNoReplace\(mv\.to, mv\.from\)/);
+  assert.doesNotMatch(rollbackMovesSource, /moveFile\(mv\.to, mv\.from\)/);
 });
 
 test("rollbackMoves: repeated recovery recognizes a file already restored", async () => {
