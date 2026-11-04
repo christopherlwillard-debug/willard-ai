@@ -8,7 +8,7 @@ import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
 import Seven from "node-7z";
-import { path7zzs as path7za } from "7zip-bin-full";
+import { path7za } from "../lib/sevenzip.ts";
 import {
   archiveByIdScope,
   archiveScope,
