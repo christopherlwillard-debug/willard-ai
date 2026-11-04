@@ -3,12 +3,15 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import {
   ARCHIVE_LIMITS,
   ArchiveSafetyError,
   assertArchiveFileUnchanged,
   createArchiveBudget,
+  createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
   isSevenZipLinkEntry,
@@ -184,4 +187,16 @@ test("detects 7-Zip links from Windows and POSIX attribute strings", () => {
   assert.equal(isSevenZipLinkEntry("D  drwxr-xr-x"), false);
   assert.equal(isSevenZipLinkEntry("A  -rw-r--r--"), false);
   assert.equal(isSevenZipLinkEntry(undefined), false);
+});
+
+test("stops decompression when the expanded TAR byte budget is exceeded", async () => {
+  let received = 0;
+  const sink = new Writable({
+    write(chunk, _encoding, callback) { received += chunk.length; callback(); },
+  });
+  await assert.rejects(
+    pipeline(Readable.from([Buffer.alloc(4), Buffer.alloc(4)]), createArchiveExpansionLimiter(7), sink),
+    /Decompressed archive exceeds/,
+  );
+  assert.equal(received, 4);
 });
