@@ -14,9 +14,9 @@ const {
   readTrashManifest,
   removeTrashManifestEntry,
   reconcileCleanupOperations,
-  isTrashEntryExpired,
 } = await import("../lib/cleanup-recovery.ts");
 const { pool } = await import("@workspace/db");
+const { isTrashEntryExpired } = await import("../lib/cleanup-retention.ts");
 
 test("manual restore and startup recovery use no-replace moves", () => {
   const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
