@@ -8,6 +8,7 @@ import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { logger } from "../lib/logger.ts";
+import { persistSessionIfCredentialUnchanged } from "../lib/auth-session-guard.ts";
 
 const router: IRouter = Router();
 
@@ -43,6 +44,71 @@ async function establishSession(req: Request): Promise<void> {
   sess.ip = req.ip ?? "";
   sess.createdAt = now;
   sess.lastSeenAt = now;
+}
+
+function saveSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.save((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function destroySession(req: Request): Promise<void> {
+  const sid = req.sessionID;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((err) => (err ? reject(err) : resolve()));
+    });
+  } catch (error) {
+    // The session store normally uses this same database. Retry the exact
+    // session row directly if the store callback fails during revocation.
+    try {
+      await pool.query("DELETE FROM session WHERE sid = $1", [sid]);
+    } catch (fallbackError) {
+      throw new AggregateError(
+        [error, fallbackError],
+        "Could not revoke a stale authentication session",
+      );
+    }
+  }
+}
+
+/**
+ * Save the new session before re-reading the credential. If a password reset
+ * committed first, the stale login is removed here. If it commits after the
+ * recheck, the reset transaction's DELETE FROM session removes this saved row.
+ */
+async function establishSessionForPassword(
+  req: Request,
+  settingsId: number,
+  expectedPasswordHash: string,
+): Promise<boolean> {
+  await establishSession(req);
+  try {
+    return await persistSessionIfCredentialUnchanged(
+      expectedPasswordHash,
+      () => saveSession(req),
+      async () => {
+        const [current] = await db.select({
+          passwordHash: appSettingsTable.passwordHash,
+        }).from(appSettingsTable)
+          .where(eq(appSettingsTable.id, settingsId))
+          .limit(1);
+        return current?.passwordHash ?? null;
+      },
+      () => destroySession(req),
+    );
+  } catch (error) {
+    // Fail closed if persistence or the credential recheck itself fails.
+    try {
+      await destroySession(req);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Authentication session could not be safely finalized",
+      );
+    }
+    throw error;
+  }
 }
 
 function normalizeRecoveryKey(key: string): string {
@@ -196,11 +262,16 @@ router.post("/auth/setup", async (req: Request, res: Response) => {
       return;
     }
 
-    await establishSession(req);
+    if (!await establishSessionForPassword(req, updated.id, passwordHash)) {
+      res.clearCookie("willard.sid");
+      res.status(409).json({ error: "Password changed while setup was finishing. Please log in again." });
+      return;
+    }
 
     res.json({ ok: true, recoveryKey });
   } catch (err) {
     logger.error({ err, operation: "auth_setup" }, "Authentication setup failed");
+    res.clearCookie("willard.sid");
     res.status(500).json({ error: "Setup failed" });
   }
 });
@@ -223,10 +294,15 @@ router.post("/auth/login", loginRateLimiter, async (req: Request, res: Response)
       res.status(401).json({ error: "Incorrect password." });
       return;
     }
-    await establishSession(req);
+    if (!await establishSessionForPassword(req, settings.id, settings.passwordHash)) {
+      res.clearCookie("willard.sid");
+      res.status(401).json({ error: "Password changed during login. Please try again." });
+      return;
+    }
 
     res.json({ ok: true });
   } catch {
+    res.clearCookie("willard.sid");
     res.status(500).json({ error: "Login failed" });
   }
 });
@@ -273,10 +349,15 @@ router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Respo
       return;
     }
 
-    await establishSession(req);
+    if (!await establishSessionForPassword(req, settings.id, newHash)) {
+      res.clearCookie("willard.sid");
+      res.status(409).json({ error: "Password changed while recovery was finishing. Please log in again." });
+      return;
+    }
 
     res.json({ ok: true });
   } catch {
+    res.clearCookie("willard.sid");
     res.status(500).json({ error: "Recovery failed" });
   }
 });
@@ -366,9 +447,14 @@ router.post("/auth/change-password", async (req: Request, res: Response) => {
       res.status(409).json({ error: "Password changed in another session. Please log in again." });
       return;
     }
-    await establishSession(req);
+    if (!await establishSessionForPassword(req, settings.id, newHash)) {
+      res.clearCookie("willard.sid");
+      res.status(409).json({ error: "Password changed while the update was finishing. Please log in again." });
+      return;
+    }
     res.json({ ok: true });
   } catch {
+    res.clearCookie("willard.sid");
     res.status(500).json({ error: "Failed to change password" });
   }
 });
