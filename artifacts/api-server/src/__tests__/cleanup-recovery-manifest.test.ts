@@ -89,7 +89,11 @@ test("removing one manifest entry is idempotent and preserves unknown lines", ()
     const raw = fs.readFileSync(manifestPath(nasPath), "utf8");
     assert.match(raw, /2_second\.jpg/);
     assert.match(raw, /\{not-json\}/);
-    assert.doesNotMatch(raw, /1_first\.jpg/);
+    assert.match(raw, /"recordType":"REMOVE"/);
+    assert.match(raw, /1_first\.jpg/, "append-only journal retains original record for crash recovery");
+    const active = readTrashManifest(nasPath).entries;
+    assert.equal(active.some((entry) => entry.trashPath === firstTrashPath), false);
+    assert.equal(active.some((entry) => entry.trashPath === secondTrashPath), true);
   } finally {
     fs.rmSync(nasPath, { recursive: true, force: true });
   }
