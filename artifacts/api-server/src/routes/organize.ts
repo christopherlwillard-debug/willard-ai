@@ -13,7 +13,7 @@ import * as tar from "tar";
 import Seven from "node-7z";
 import { path7za } from "7zip-bin";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, pruneOperationalFiles } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import {
   ARCHIVE_LIMITS,
@@ -410,25 +410,21 @@ interface ExtractionChecksumRecord {
   verified:           boolean;
 }
 
-async function safeExtractArchive(archivePath: string, stagingDir: string): Promise<{
+async function safeExtractArchive(archivePath: string, stagingDir: string, nasRoot: string): Promise<{
   entriesExtracted: number;
   crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string };
   extractionChecksums: ExtractionChecksumRecord[];
 }> {
   const ext    = getArchiveExt(path.basename(archivePath));
   const archiveSnapshot = snapshotArchiveFile(archivePath);
-  try {
-    const stagingStat = fs.lstatSync(stagingDir);
-    if (stagingStat.isSymbolicLink()) {
-      throw new ArchiveSafetyError("Archive staging path is a symlink");
-    }
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error;
-  }
+  // Validate the entire parent chain, not only the final staging component.
+  // The shared temp parent is private, but revalidate immediately before the
+  // destructive reset so stale or replaced paths fail closed.
+  stagingDir = ensureDirectoryWithinRoot(stagingDir, nasRoot, 0o700);
   // Staging is disposable. Starting from a fresh directory prevents files
   // left by an interrupted run from becoming unvalidated extraction input.
   fs.rmSync(stagingDir, { recursive: true, force: true });
-  fs.mkdirSync(stagingDir, { recursive: true, mode: 0o700 });
+  stagingDir = ensureDirectoryWithinRoot(stagingDir, nasRoot, 0o700);
   const pass1Budget = createArchiveBudget();
 
   function assertSafeEntryPath(
@@ -1523,7 +1519,6 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     const tempDir = getTempDir(nasPath, `org-${id}`);
     tempDirs.push(tempDir);
-    fs.mkdirSync(tempDir, { recursive: true });
 
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
     let crcValidation: { format: string; checked: number; passed: number; skipped: number; note?: string } | null = null;
@@ -1544,7 +1539,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         }
       }
       opLog("EXTRACT: archive extraction started");
-      const extractResult = await safeExtractArchive(canonicalJobSourcePath, tempDir);
+      const extractResult = await safeExtractArchive(canonicalJobSourcePath, tempDir, nasPath);
       crcValidation = extractResult.crcValidation;
       archiveExtractionChecksums = extractResult.extractionChecksums ?? [];
       const { entriesExtracted } = extractResult;
@@ -2126,7 +2121,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       await setStage("extracting");
       send("status", { stage: "extracting", message: "Re-extracting archive to staging area…", progress: 5 });
       if (!fs.existsSync(job.sourcePath)) { send("error", { message: `Archive not found: ${job.sourcePath}` }); res.end(); return; }
-      const extractResult = await safeExtractArchive(job.sourcePath, tempDir);
+      const extractResult = await safeExtractArchive(job.sourcePath, tempDir, nasPath);
       const { entriesExtracted } = extractResult;
       send("status", { stage: "scanning", message: `Extracted ${entriesExtracted} entries, scanning…`, progress: 24 });
       sourceFiles = walkDir(tempDir).map(w => ({ fullPath: w.fullPath, relativePath: w.relativePath, fileType: w.fileType, sizeBytes: w.sizeBytes }));
