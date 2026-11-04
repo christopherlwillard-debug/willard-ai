@@ -42,6 +42,7 @@ import {
   validateRecoveryAttachment,
 } from "./library-recovery.mjs";
 import { createRecoveryExport, decryptRecoveryExport } from "./backup-credentials.mjs";
+import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
@@ -306,40 +307,7 @@ async function openDatabaseSnapshot(environment) {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  child.stdin.write("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();\n");
-  const snapshot = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error("Timed out while exporting the PostgreSQL backup snapshot."));
-    }, 10_000);
-    const inspect = () => {
-      const exported = stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find((line) => /^[0-9a-f]+-[0-9a-f]+-\d+$/i.test(line));
-      if (exported) {
-        clearTimeout(timeout);
-        resolve(exported);
-      }
-    };
-    child.stdout.on("data", inspect);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(new Error(`PostgreSQL snapshot holder could not start: ${error.message}`));
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`PostgreSQL snapshot holder exited early: ${stderr.trim() || `exit code ${code}`}`));
-    });
-  });
+  const snapshot = await waitForExportedSnapshot(child);
   return {
     snapshot,
     async release() {
