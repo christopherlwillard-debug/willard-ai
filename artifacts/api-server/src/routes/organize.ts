@@ -24,7 +24,7 @@ import {
   createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
-  isSevenZipLinkEntry,
+  getSevenZipEntryInfo,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -263,16 +263,17 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
   } else if (SEVENZIP_EXTS.has(ext)) {
     let validationError: Error | undefined;
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
+      const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
-          const isDir = typeof d.attributes === "string" && d.attributes[0] === "D";
-          if (isSevenZipLinkEntry(d.attributes)) {
+          const info = getSevenZipEntryInfo(d);
+          const isDir = info.isDirectory;
+          if (info.isLink) {
             validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`);
             return;
           }
           try {
-            const checked = validateArchiveEntry({ path: d.file, sizeBytes: d.size, isDirectory: isDir }, budget);
+            const checked = validateArchiveEntry({ path: d.file, sizeBytes: info.sizeBytes, isDirectory: isDir }, budget);
             entries.push({ path: d.file, sizeBytes: checked.sizeBytes, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
           } catch (error) {
             validationError = error instanceof Error ? error : new Error(String(error));
@@ -335,18 +336,19 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
     } else if (SEVENZIP_EXTS.has(ext)) {
       let validationError: Error | undefined;
       await new Promise<void>((resolve, reject) => {
-        const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
+        const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
-          if (isSevenZipLinkEntry(entry.attributes)) {
+          const info = getSevenZipEntryInfo(entry);
+          if (info.isLink) {
             validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`);
             return;
           }
           try {
             validateArchiveEntry({
               path: entry.file,
-              sizeBytes: entry.size,
-              isDirectory: typeof entry.attributes === "string" && entry.attributes[0] === "D",
+              sizeBytes: info.sizeBytes,
+              isDirectory: info.isDirectory,
             }, budget);
             count++;
           } catch (error) {
@@ -615,7 +617,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: path7za, $progress: false } as any);
+      const s = Seven.list(archivePath, { $bin: path7za, $progress: false, techInfo: true } as any);
       let failed = false;
       const fail = (error: unknown) => {
         if (failed) return;
@@ -624,18 +626,18 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       };
       s.on("data", (d: any) => {
         if (d.file === undefined || failed) return;
-        const isDir  = typeof d.attributes === "string" && d.attributes[0] === "D";
-        const isLink = isSevenZipLinkEntry(d.attributes);
-        if (isLink) { fail(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
+        const info = getSevenZipEntryInfo(d);
+        const isDir = info.isDirectory;
+        if (info.isLink) { fail(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
         try {
           const checked = validateArchiveEntry({
             path: d.file,
-            sizeBytes: d.size,
+            sizeBytes: info.sizeBytes,
             isDirectory: isDir,
           }, sevenZipBudget);
           if (!isDir) {
             filePaths.push(checked.normalizedPath);
-            if (typeof d.crc === "number" || typeof d.crc === "string") sevenZipCrcCount++;
+            if (info.crc !== undefined) sevenZipCrcCount++;
           }
         } catch (error) {
           fail(error);
