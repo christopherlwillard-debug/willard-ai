@@ -285,11 +285,11 @@ Remaining archive hardening:
 - The official 7-Zip staging script previously removed an existing destination recursively before copying verified binaries. It now requires an empty destination and checks each existing path component for Windows reparse points before writing. A regression smoke deliberately supplies a non-empty destination and verifies the existing marker file remains unchanged.
 - Updated release payload tests cover rejection of alternate staging paths and symlinked build roots. Fast Validation passed on commit `ce7ce8e7426f4938e7568ade5885bff87e047f21`, including Linux typecheck/contracts, release/storage checks, official 7-Zip Linux compatibility, targeted backend regressions, and the Windows updater/7-Zip smoke job.
 
-## Archive inspection link-warning gap (open finding, 2026-11-04)
+## Archive inspection link-warning gap (resolved in audit branch, 2026-11-04)
 
-- Confirmed that the destructive extraction path rejects ZIP symbolic links and TAR symbolic/hard links before writing extracted files. The 7-Zip inspection path also detects links.
-- The earlier ZIP/TAR inspection paths are inconsistent: `peekArchiveEntries` and `validateArchive` validate names and sizes but do not reject ZIP symlink metadata or TAR link entry types. A ZIP/TAR archive containing a link can therefore appear readable during preview/analysis and fail only when execution reaches the guarded extraction stage. This is a usability and preflight-correctness gap, not a bypass of the current extraction guard.
-- No code change was made in this pass. Highest-priority follow-up: share the format-specific link checks between preview, validation, and extraction, then add ZIP/TAR fixture tests proving unsafe link entries are reported before approval/execution.
+- The earlier preview and validation paths did not consistently reject ZIP symbolic links or TAR symbolic/hard links, even though extraction itself was guarded. This could make unsafe archives appear readable until execution.
+- Added shared TAR link-entry classification and applied ZIP/TAR link rejection to archive preview, validation, and extraction preflight. Regression tests now exercise link-entry rejection before extraction approval, in addition to existing extraction-time checks.
+- The implementation and tests are committed to the audit branch. Latest Fast Validation after the full set of 7-Zip resolver changes is pending; the individual ZIP/TAR test assertions are included in the targeted backend suite.
 
 
 ## Remove vulnerable legacy 7-Zip fallback (2026-11-04)
