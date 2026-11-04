@@ -632,25 +632,32 @@ function decryptDump(encrypted, manifest, secret) {
   }
 }
 
+async function overwriteFileWithZeroes(handle, size, chunkSize = 1024 * 1024) {
+  if (!Number.isSafeInteger(size) || size < 0 || !Number.isSafeInteger(chunkSize) || chunkSize < 1) {
+    throw new Error("Temporary backup cleanup received an invalid file size.");
+  }
+  const zeroes = Buffer.alloc(Math.min(chunkSize, size));
+  let position = 0;
+  while (position < size) {
+    const length = Math.min(zeroes.length, size - position);
+    let written = 0;
+    while (written < length) {
+      const result = await handle.write(zeroes, written, length - written, position + written);
+      if (result.bytesWritten <= 0) throw new Error("Temporary backup cleanup made no write progress.");
+      written += result.bytesWritten;
+    }
+    position += length;
+  }
+  await handle.sync();
+}
+
 async function secureRemove(filePath) {
   try {
     const info = await stat(filePath);
     if (info.isFile() && info.size > 0) {
       const handle = await openFile(filePath, "r+");
-      const zeroes = Buffer.alloc(Math.min(1024 * 1024, info.size));
       try {
-        let position = 0;
-        while (position < info.size) {
-          const length = Math.min(zeroes.length, info.size - position);
-          let written = 0;
-          while (written < length) {
-            const result = await handle.write(zeroes, written, length - written, position + written);
-            if (result.bytesWritten <= 0) throw new Error("Temporary backup cleanup made no write progress.");
-            written += result.bytesWritten;
-          }
-          position += length;
-        }
-        await handle.sync();
+        await overwriteFileWithZeroes(handle, info.size);
       } finally {
         await handle.close();
       }
@@ -1404,6 +1411,7 @@ export {
   encryptDump,
   findWindowsPostgresBinary,
   stableJson,
+  overwriteFileWithZeroes,
   secureRemove,
   validateManifest,
 };
