@@ -297,3 +297,9 @@ Remaining archive hardening:
 - The API previously preferred official 7-Zip from `WILLARD_7ZIP_PATH`, the packaged `vendor/7zip` directory, or PATH, but silently fell back to `7zip-bin@5.2.0` when none existed. On Linux this package supplies p7zip 16.02, leaving unprovisioned environments exposed to old archive-parser vulnerabilities.
 - Removed the direct `7zip-bin` dependency and its lockfile entries. The resolver now verifies the executable reports official 7-Zip 26.01 or newer before selecting it. Old, missing, or unrecognized executables are skipped. Archive routes resolve the executable lazily and return an actionable error when none is available, so the API itself still starts and non-archive functionality remains usable.
 - Replit uses the pinned official static 7-Zip 26.05 derivation; packaged Windows builds stage hash-verified official 7-Zip 26.05 into `api-runtime/vendor/7zip`. CI tests both platforms and `node-7z` compatibility. Resolver regression tests cover configured/system/packaged priority, version rejection, missing-binary behavior, and the actionable error. Latest Fast Validation for this resolver/dependency removal is pending.
+
+
+## Plaintext database backup temporary-file permissions (2026-11-04)
+
+- `createBackup` wrote the unencrypted `pg_dump` file into a randomly named directory under the OS temp root using recursive `mkdir` with default permissions. On POSIX systems with a permissive umask, that directory could be traversable by other local users while the plaintext dump existed, before encryption and secure cleanup.
+- Replaced the manually generated directory with `fs.mkdtemp`, which creates an owner-only work directory on POSIX. The raw dump remains inside that private directory until encryption completes; cleanup behavior is unchanged. Added a regression test that verifies the actual directory mode is `0700` on POSIX. Fast Validation for this change is pending.
