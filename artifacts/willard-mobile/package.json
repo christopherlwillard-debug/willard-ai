@@ -54,7 +54,7 @@
     "react-native-worklets": "0.5.1",
     "typescript": "~5.9.2",
     "zod": "catalog:",
-    "zod-validation-error": "^4.0.2"
+    "zod-validation-error": "^3.4.0"
   },
   "dependencies": {
     "expo-video": "^3.0.16",
