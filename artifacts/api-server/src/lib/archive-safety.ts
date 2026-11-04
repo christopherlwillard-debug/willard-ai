@@ -40,6 +40,16 @@ export interface ArchiveEntryMetadata {
   isDirectory?: boolean;
 }
 
+/**
+ * ZIP external attributes store Unix file type in the high 16 bits.
+ * Mask the file-type nibble: comparing the full mode to 0xA000 misses
+ * normal symlinks because permission bits are also present.
+ */
+export function isZipSymlinkEntry(externalAttributes: number | undefined): boolean {
+  return typeof externalAttributes === "number" &&
+    (((externalAttributes >>> 16) & 0xF000) === 0xA000);
+}
+
 export function createArchiveBudget(): ArchiveBudget {
   return { entryCount: 0, totalBytes: 0, paths: new Set<string>() };
 }
