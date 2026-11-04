@@ -2113,7 +2113,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
     const tempDir = getTempDir(nasPath, `org-resume-${id}`);
     tempDirs.push(tempDir);
-    fs.mkdirSync(tempDir, { recursive: true });
 
     let sourceFiles: Array<{fullPath: string; relativePath: string; fileType: string; sizeBytes: number}> = [];
 
