@@ -63,6 +63,9 @@ jobs:
           pnpm run check:router
           pnpm run check:api-contracts
 
+      - name: Validate desktop web server safety
+        run: node --test desktop/web-server-safety.test.mjs
+
       - name: Validate release and storage contracts
         run: |
           pnpm run test:database-backup
