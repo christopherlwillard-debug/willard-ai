@@ -77,6 +77,36 @@ test("trash manifest refuses a symlinked logs directory outside the library", ()
   }
 });
 
+test("trash manifest refuses a symlinked manifest file outside the library", (context) => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  try {
+    const filePath = manifestPath(nasPath);
+    const outsideFile = path.join(outside, "external.jsonl");
+    fs.writeFileSync(outsideFile, "preserve external data\n");
+    try {
+      fs.symlinkSync(outsideFile, filePath, "file");
+    } catch (error: any) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    assert.throws(() => manifestPath(nasPath), /regular file inside the configured library/);
+    assert.throws(() => appendTrashManifestEntry(nasPath, {
+      nasPath,
+      originalPath: path.join(nasPath, "original.jpg"),
+      trashPath: path.join(nasPath, "WillardAI", ".Trash", "external.jpg"),
+      sizeBytes: 1,
+    }), /regular file inside the configured library/);
+    assert.equal(fs.readFileSync(outsideFile, "utf8"), "preserve external data\n");
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("removing one manifest entry is idempotent and preserves unknown lines", () => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
