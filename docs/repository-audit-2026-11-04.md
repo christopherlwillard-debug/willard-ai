@@ -126,3 +126,11 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - Added a rollback-safe helper: if catalog persistence fails or the row is no longer active, it attempts to restore the original filesystem path. If rollback also fails, both errors are preserved for diagnosis rather than silently masking the recovery failure.
 - Added tests for database failure, stale/inactive catalog rows, successful rename, rollback failure, and a concurrent new file appearing at the original path. Rollback refuses to overwrite that new file; Fast Validation runs this suite.
 - This narrows the filesystem/database inconsistency window. It cannot make a filesystem rename and a database transaction truly atomic; a process or machine crash between the two operations still needs recovery/consistency checks.
+
+
+## Failed backup publication cleanup (2026-11-04)
+
+- Backup creation atomically renames its staging directory into the visible backup namespace, then performs a final read/decrypt/hash verification. If that post-publication verification failed, the function's cleanup removed the temporary dump and staging path but left the failed final directory behind.
+- A failed generation could therefore remain visible to backup discovery/retention as a manifest-bearing directory even though it had not passed the success gate.
+- The creator now removes the just-published directory if final verification does not complete. A verified backup is retained even if a later retention operation fails.
+- This is a source-level correction; fault-injected end-to-end backup publication testing remains desirable.
