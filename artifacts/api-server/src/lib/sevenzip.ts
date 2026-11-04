@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { path7za as bundledPath7za } from "7zip-bin";
+import { path7zzs as bundledPath7za } from "7zip-bin-full";
 
 export interface SevenZipResolutionOptions {
   platform?: NodeJS.Platform;
@@ -24,8 +24,8 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
 
   if (configuredPath && exists(configuredPath)) return configuredPath;
 
+  const delimiter = platform === "win32" ? ";" : ":";
   if (platform !== "win32") {
-    const delimiter = platform === "win32" ? ";" : ":";
     const directories = pathEnv.split(delimiter).filter(Boolean);
     for (const binary of ["7zzs", "7zz"]) {
       for (const directory of directories) {
