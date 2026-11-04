@@ -30,7 +30,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
   try {
     fs.writeFileSync(path.join(root, "payload.txt"), "verified archive payload\n");
     const archive = path.join(root, "regular.7z");
-    const create = spawnSync(path7z, ["a", archive, "payload.txt"], {
+    const create = spawnSync(path7zzs, ["a", archive, "payload.txt"], {
       cwd: root,
       encoding: "utf8",
       timeout: 30_000,
@@ -61,7 +61,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     if (process.platform !== "win32") {
       fs.symlinkSync("payload.txt", path.join(root, "linked.txt"));
       const linkArchive = path.join(root, "link.7z");
-      const linkCreate = spawnSync(path7z, ["a", "-snl", linkArchive, "linked.txt"], {
+      const linkCreate = spawnSync(path7zzs, ["a", "-snl", linkArchive, "linked.txt"], {
         cwd: root,
         encoding: "utf8",
         timeout: 30_000,
@@ -71,7 +71,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
       const linkEntries = await new Promise((resolve, reject) => {
         const entries = [];
         const stream = Seven.list(linkArchive, {
-          $bin: path7z,
+          $bin: path7zzs,
           $progress: false,
           techInfo: true,
         });
@@ -89,7 +89,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     const destination = path.join(root, "extracted");
     await new Promise((resolve, reject) => {
       const stream = Seven.extractFull(archive, destination, {
-        $bin: path7z,
+        $bin: path7zzs,
         $progress: false,
         overwrite: "qs",
       });
