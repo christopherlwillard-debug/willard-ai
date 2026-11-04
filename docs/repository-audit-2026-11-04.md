@@ -148,3 +148,10 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - Password recovery and authenticated password changes updated the credential first and deleted existing sessions in a separate database operation. If session deletion failed, old sessions could remain authenticated after a password reset.
 - Both flows now update the password and delete all existing sessions in one PostgreSQL transaction. A failed session deletion rolls back the credential change; concurrent credential changes are detected with a compare-and-swap condition.
 - Added targeted source regression assertions. Runtime fault-injection against PostgreSQL remains outstanding.
+
+
+## Face-crop privacy and stream failure handling (2026-11-04)
+
+- The authenticated face-crop endpoint used `private, max-age=86400`, allowing the browser to retain derived biometric imagery after logout. It now uses the shared `private, no-store` and `nosniff` policy.
+- The endpoint piped `createReadStream()` directly to the response without an error listener. If a crop disappeared between the existence check and file open, the asynchronous stream error could become unhandled. The route now logs the failure and returns 404 before headers are sent, or destroys the response if streaming already began.
+- Added regression coverage for the shared stream-error response behavior and route wiring. Fast Validation for this latest change is pending.
