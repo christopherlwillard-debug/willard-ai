@@ -43,11 +43,12 @@ const FILE_CATEGORIES = [
   { key: "other",    label: "Other Files",      icon: <File className="w-3.5 h-3.5 text-muted-foreground" />, summaryKey: "other" },
 ] as const;
 
-function statusBadge(status: string) {
+function getStatusBadgeInfo(status: string): { label: string; cls: string } {
   const map: Record<string, { label: string; cls: string }> = {
     pending:     { label: "Pending",     cls: "bg-secondary text-muted-foreground" },
     analyzing:   { label: "Analyzing",   cls: "bg-blue-500/20 text-blue-400" },
     planned:     { label: "Planned",     cls: "bg-blue-500/20 text-blue-400" },
+    preflight:   { label: "Preflight",   cls: "bg-blue-500/20 text-blue-400" },
     verified:    { label: "Verified",    cls: "bg-amber-500/20 text-amber-400" },
     executing:   { label: "Executing",   cls: "bg-primary/20 text-primary animate-pulse" },
     completed:   { label: "Completed",   cls: "bg-green-500/20 text-green-400" },
@@ -55,8 +56,12 @@ function statusBadge(status: string) {
     rolling_back: { label: "Rolling Back", cls: "bg-orange-500/20 text-orange-400 animate-pulse" },
     rolled_back: { label: "Rolled Back", cls: "bg-orange-500/20 text-orange-400" },
   };
-  const m = map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
-  return <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${m.cls}`}>{m.label}</span>;
+  return map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
+}
+
+function statusBadge(status: string) {
+  const info = getStatusBadgeInfo(status);
+  return <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${info.cls}`}>{info.label}</span>;
 }
 
 function StepIndicator({ current }: { current: Step }) {
@@ -1300,7 +1305,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
             const movesCount = Array.isArray(job.fileMoves) ? job.fileMoves.length : 0;
             const hasResumableData = !!job.planJson && !!job.preflightJson;
             const isPending = actionPending === job.id;
-            const statusInfo = statusBadge(job.status);
+            const statusInfo = getStatusBadgeInfo(job.status);
             const isRollingBack = job.status === "rolling_back";
 
             return (
