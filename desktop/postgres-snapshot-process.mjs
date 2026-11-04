@@ -75,9 +75,13 @@ export function waitForExportedSnapshot(child, {
     // EPIPE on stdin is handled rather than becoming an unhandled stream error.
     try {
       child.stdin.write(SNAPSHOT_QUERY, (error) => {
-        if (error) settle(reject, new Error(`PostgreSQL snapshot holder input failed: ${error.message}`));
+        if (error) {
+          stopChild();
+          settle(reject, new Error(`PostgreSQL snapshot holder input failed: ${error.message}`));
+        }
       });
     } catch (error) {
+      stopChild();
       settle(reject, new Error(
         `PostgreSQL snapshot holder input failed: ${error instanceof Error ? error.message : String(error)}`,
       ));
