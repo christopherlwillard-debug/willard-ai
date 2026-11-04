@@ -1459,6 +1459,23 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     try { canonicalJobSourcePath = resolveActiveArchivePath(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
+    // Claim the job atomically before capacity reservation or staging. Two
+    // requests can both read "verified"; only one may transition it to
+    // "executing" and own the deterministic per-job staging directory.
+    const [claimedJob] = await db.update(organizationJobsTable)
+      .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date() })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPath),
+        eq(organizationJobsTable.status, "verified"),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedJob) {
+      send("error", { message: "Job is already executing or is no longer verified." });
+      res.end();
+      return;
+    }
+
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
     const excludedPaths      = new Set<string>(plan.excludePaths ?? []);
@@ -1476,7 +1493,13 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     } catch (error) {
       const admission = error instanceof CapacityAdmissionError ? error.admission : null;
       const message = error instanceof Error ? error.message : "Organization capacity admission failed";
-      await db.update(organizationJobsTable).set({ error: message }).where(eq(organizationJobsTable.id, id));
+      await db.update(organizationJobsTable)
+        .set({ status: "verified", error: message })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.status, "executing"),
+        ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
       return;
     }
@@ -1502,7 +1525,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       operationLogger.warn({ err: error }, "Organization operation log could not be opened");
     }
 
-    await db.update(organizationJobsTable).set({ status: "executing" }).where(eq(organizationJobsTable.id, id));
+    // The job was claimed atomically before capacity admission; do not issue
+    // a second unconditional status update that could overwrite a concurrent recovery transition.
 
     // Stage checkpoint helper — fire-and-forget; persists lastStage + stageUpdatedAt for Recovery Center
     const setStage = async (stage: string): Promise<void> => {
