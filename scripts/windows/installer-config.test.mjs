@@ -1210,7 +1210,7 @@ test("developer setup creates identity shortcuts for the batch launcher", () => 
 test("Windows release stages only hash-verified official 7-Zip binaries", () => {
   assert.match(releaseStager, /prepare-official-7zip\.ps1/);
   assert.match(releaseStager, /vendor", "7zip"/);
-  assert.match(launcher, /api-runtime\\\\vendor\\\\7zip\\\\7z\.exe/);
+  assert.match(launcher, /api-runtime\\vendor\\7zip\\7z\.exe/);
   assert.match(launcher, /WILLARD_7ZIP_PATH/);
   assert.match(officialSevenZipBootstrap, /Get-FileHash .*SHA256/);
   assert.match(officialSevenZipBootstrap, /9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7/);
