@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
@@ -311,6 +312,12 @@ router.get("/settings/logo", async (_req, res) => {
       ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
       "application/octet-stream";
     res.setHeader("Content-Type", contentType);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // SVG is an active document format. Keep uploaded branding inert even if
+    // someone navigates directly to this same-origin endpoint.
+    if (ext === ".svg") {
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
     res.setHeader("Cache-Control", "no-cache");
     fs.createReadStream(settings.logoPath).pipe(res);
   } catch (err) {
@@ -340,19 +347,29 @@ router.post(
       const dir = getBrandingDir();
       fs.mkdirSync(dir, { recursive: true });
 
-      // Remove any previously stored logo (it may have a different extension)
-      if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
-        try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
+      // Publish to a unique path first. Never delete the current logo until
+      // the replacement is safely written and its database pointer is committed.
+      const destPath = path.join(dir, `logo-${randomUUID()}.${ext}`);
+      fs.writeFileSync(destPath, body, { flag: "wx" });
+
+      let updated: typeof settings;
+      try {
+        const [saved] = await db
+          .update(appSettingsTable)
+          .set({ logoPath: destPath })
+          .where(eq(appSettingsTable.id, settings.id))
+          .returning();
+        if (!saved) throw new Error("Branding settings row was not updated.");
+        updated = saved;
+      } catch (error) {
+        try { fs.unlinkSync(destPath); } catch { /* preserve original database pointer */ }
+        throw error;
       }
 
-      const destPath = path.join(dir, `logo.${ext}`);
-      fs.writeFileSync(destPath, body);
-
-      const [updated] = await db
-        .update(appSettingsTable)
-        .set({ logoPath: destPath })
-        .where(eq(appSettingsTable.id, settings.id))
-        .returning();
+      if (settings.logoPath && settings.logoPath !== destPath &&
+          isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
+        try { fs.unlinkSync(settings.logoPath); } catch { /* old logo is harmless orphan; cleanup can retry */ }
+      }
 
       logger.info({ destPath }, "Branding logo uploaded");
       res.json(sanitizeSettings(updated));
