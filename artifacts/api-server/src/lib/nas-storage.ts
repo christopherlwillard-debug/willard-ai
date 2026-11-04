@@ -129,6 +129,58 @@ export function assertWithinRoot(targetPath: string, root: string): void {
 }
 
 /**
+ * Create a directory tree only after resolving every existing symlink against
+ * the configured root. Unlike recursive mkdir, each component is checked
+ * before the next one is created, and the returned path is canonical.
+ */
+export function ensureDirectoryWithinRoot(
+  targetPath: string,
+  root: string,
+  mode = PRIVATE_DIR_MODE,
+): string {
+  const canonicalRoot = canonicalizePath(root);
+  const canonicalTarget = resolveWithinRoot(targetPath, canonicalRoot);
+  const relative = path.relative(canonicalRoot, canonicalTarget);
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    throw new Error("Path traversal rejected: directory is outside the allowed root");
+  }
+
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Storage root is not a regular directory");
+  }
+
+  let current = canonicalRoot;
+  for (const component of relative.split(path.sep)) {
+    if (!component || component === ".") continue;
+    current = path.join(current, component);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Storage directory contains a symlink: "${current}"`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Storage path component is not a directory: "${current}"`);
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      try {
+        fs.mkdirSync(current, { mode });
+      } catch (mkdirError: any) {
+        if (mkdirError?.code !== "EEXIST") throw mkdirError;
+      }
+      const createdStat = fs.lstatSync(current);
+      if (createdStat.isSymbolicLink() || !createdStat.isDirectory()) {
+        throw new Error(`Storage directory changed during creation: "${current}"`);
+      }
+    }
+  }
+
+  try { fs.chmodSync(current, mode); } catch { /* Windows ACLs may be managed by the host */ }
+  return current;
+}
+
+/**
  * Resolve a database-relative media path under the active library root.
  *
  * Database paths are untrusted input: a stale row, a manually edited row, or a
@@ -459,8 +511,7 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
   const suffix = (jobId ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
   const tempDir = path.join(getWillardAIDir(nasPath), "temp", suffix);
   try {
-    fs.mkdirSync(tempDir, { recursive: true });
-    return tempDir;
+    return ensureDirectoryWithinRoot(tempDir, nasPath, PRIVATE_DIR_MODE);
   } catch (err) {
     throw new StoragePolicyError(
       `NAS storage is required for temporary media work; the NAS temp directory could not be created: ${
