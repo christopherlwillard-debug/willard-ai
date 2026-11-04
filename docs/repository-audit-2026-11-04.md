@@ -303,3 +303,10 @@ Remaining archive hardening:
 
 - `createBackup` wrote the unencrypted `pg_dump` file into a randomly named directory under the OS temp root using recursive `mkdir` with default permissions. On POSIX systems with a permissive umask, that directory could be traversable by other local users while the plaintext dump existed, before encryption and secure cleanup.
 - Replaced the manually generated directory with `fs.mkdtemp`, which creates an owner-only work directory on POSIX. The raw dump remains inside that private directory until encryption completes; cleanup behavior is unchanged. Added a regression test that verifies the actual directory mode is `0700` on POSIX. Fast Validation for this change is pending.
+
+
+## Backup retention authenticates manifests before deleting (2026-11-04)
+
+- `pruneBackups` previously used `createdAt` from a structurally valid manifest to sort and delete old backup directories without checking the manifest's AES-GCM authentication tag. An altered creation date could make a valid backup appear expired and cause automatic retention to delete it.
+- Retention now reads, decrypts, and verifies each candidate backup using the configured backup secret before considering its authenticated creation date. Corrupt or tampered backup directories are excluded from retention deletion and preserved for manual inspection.
+- Extended the PostgreSQL-backed backup/restore integration test: a copied backup has only its `createdAt` changed to 2000, then retention runs with zero-day retention and `keep=1`. The test requires the tampered backup to remain while the authenticated older backup is pruned. Fast Validation is pending.
