@@ -625,7 +625,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
       s.on("data", (d: any) => {
         if (d.file === undefined || failed) return;
         const isDir  = typeof d.attributes === "string" && d.attributes[0] === "D";
-        const isLink = typeof d.attributes === "string" && (d.attributes.includes("L") || d.attributes.includes("l"));
+        const isLink = isSevenZipLinkEntry(d.attributes);
         if (isLink) { fail(new Error(`Archive traversal rejected: symlink entry "${d.file}" in 7z`)); return; }
         try {
           const checked = validateArchiveEntry({
