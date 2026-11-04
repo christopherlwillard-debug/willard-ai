@@ -188,7 +188,7 @@ export async function rollbackMoves(
         log(`ROLLBACK_SKIP: ${mv.to} not found (already removed?)`);
         continue;
       }
-      moveFile(mv.to, mv.from);
+      moveFileNoReplace(mv.to, mv.from);
       rolledBack++;
 
       // Verify the restored file matches the original source hash
