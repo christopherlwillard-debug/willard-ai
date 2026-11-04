@@ -52,6 +52,7 @@ function statusBadge(status: string) {
     executing:   { label: "Executing",   cls: "bg-primary/20 text-primary animate-pulse" },
     completed:   { label: "Completed",   cls: "bg-green-500/20 text-green-400" },
     failed:      { label: "Failed",      cls: "bg-destructive/20 text-destructive" },
+    rolling_back: { label: "Rolling Back", cls: "bg-orange-500/20 text-orange-400 animate-pulse" },
     rolled_back: { label: "Rolled Back", cls: "bg-orange-500/20 text-orange-400" },
   };
   const m = map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
@@ -1299,6 +1300,8 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
             const movesCount = Array.isArray(job.fileMoves) ? job.fileMoves.length : 0;
             const hasResumableData = !!job.planJson && !!job.preflightJson;
             const isPending = actionPending === job.id;
+            const statusInfo = statusBadge(job.status);
+            const isRollingBack = job.status === "rolling_back";
 
             return (
               <div key={job.id} className="border rounded-lg p-4 space-y-3 bg-amber-500/5 border-amber-500/20">
@@ -1336,8 +1339,8 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                       </p>
                     )}
                   </div>
-                  <span className="shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                    {job.status}
+                  <span className={`shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full border ${statusInfo.cls}`}>
+                    {statusInfo.label}
                   </span>
                 </div>
 
@@ -1361,7 +1364,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                 {/* Action buttons */}
                 {!isRunning && !rs?.done && (
                   <div className="flex gap-2">
-                    {movesCount > 0 ? (
+                    {movesCount > 0 || isRollingBack ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1385,7 +1388,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                         Reset to Verified
                       </Button>
                     )}
-                    {hasResumableData && movesCount > 0 && (
+                    {hasResumableData && movesCount > 0 && !isRollingBack && (
                       <Button
                         size="sm"
                         className="flex-1 font-mono text-xs"
@@ -1395,7 +1398,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                         <Play className="w-3.5 h-3.5 mr-1.5" /> Resume
                       </Button>
                     )}
-                    {hasResumableData && movesCount === 0 && (
+                    {hasResumableData && movesCount === 0 && !isRollingBack && (
                       <Button
                         size="sm"
                         className="flex-1 font-mono text-xs"
