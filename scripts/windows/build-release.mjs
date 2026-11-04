@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
 import { assertStorageConformance } from "./storage-conformance.mjs";
-import { pruneSevenZipPackage } from "../prune-7zip-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
@@ -69,7 +68,6 @@ async function copyDereferenced(source, destination) {
 }
 
 async function pruneWindowsPayload(payloadRoot) {
-  await pruneSevenZipPackage(path.join(payloadRoot, "node_modules", "7zip-bin-full"), "win32", "x64");
   const pnpmStore = path.join(payloadRoot, "node_modules", ".pnpm");
   try {
     const entries = await readdir(pnpmStore);
