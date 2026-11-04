@@ -70,14 +70,17 @@ The branding-path guard also used lexical path containment, which does not accou
 
 ## Follow-up archive hardening (2026-11-04)
 
-- Centralized 7-Zip symbolic-link/reparse-point detection and applied it consistently to archive catalog inspection, archive validation, and organize extraction preflight. This closes the gap where the catalog and preflight paths did not reject 7-Zip link entries consistently.
-- Added regression cases for Windows link attributes, POSIX symbolic-link permission strings, directories, and regular files.
-- Added a hard cap of 66 GiB on decompressed TAR stream bytes for bzip2, xz, and gzip inputs. The decompressor is stopped when the cap is exceeded; scratch TAR filenames are unique per operation, created exclusively with private permissions, and diagnostic stderr is bounded.
-- Added a stream-level regression test proving the expansion limiter stops output once the configured cap is exceeded.
-- The archive safety suite is now included in Fast Validation. Latest validation for these changes is pending; do not treat the code as CI-verified until the latest run completes.
+- Found that the previous 7-Zip link guard read the wrong node-7z field. Ordinary `Seven.list` events expose a compact DOS `attributes` value such as `....A`; POSIX mode details such as `A_ lrwxrwxrwx` are in `techInfo.get("Attributes")`, and node-7z only supplies that Map when `techInfo: true` is requested. The old calls did not request technical information, so the existing POSIX-mode unit test did not represent the real event shape.
+- All four 7-Zip listing/preflight call sites now request `techInfo: true`. A shared event reader extracts `Attributes`, `Folder`, `Size`, and `CRC` from the Map; link detection checks both ordinary and technical attributes. POSIX symbolic links and Windows reparse-point flags are now rejected before the external extraction pass. The catalog error path also preserves a detected safety error if the listing stream subsequently errors.
+- Added regressions matching the documented node-7z event shape: ordinary attributes `....A` plus a technical `A_ lrwxrwxrwx` mode, as well as directory, size, and CRC metadata.
+- Added a hard cap of 66 GiB on decompressed TAR stream bytes for bzip2, xz, and gzip inputs. The decompressor is stopped when the cap is exceeded; scratch TAR filenames are unique per operation, created exclusively with private permissions, and diagnostic stderr is bounded. Added a stream-level regression test for the expansion limiter.
+- Fast Validation passed on commit `197a32c507932429725bc792d7eda8605e960c0a` (run #211), including typecheck, desktop safety checks, release/storage contracts, and targeted backend regressions. The separate Windows updater smoke job also passed, including journal-write and rollback checks.
 
-Remaining hardening: 7-Zip extraction still relies on the external extractor writing only into the fresh staging directory before the resulting tree is inspected. Further runtime testing against supported 7-Zip binaries and representative link-bearing archives is still required.
+Remaining archive hardening:
 
+- 7-Zip extraction still uses an external process and inspects the extracted tree afterward. The preflight now detects the actual technical link metadata, but a Windows runtime test with representative link-bearing and malformed archives is still needed to verify the packaged extractor's behavior end-to-end.
+- The API server pins `7zip-bin@5.2.0`. Its upstream Linux x64 build script downloads p7zip 16.02, and upstream PR #28 remains open; its author explicitly says the current binaries contain vulnerabilities and proposes replacing them with official 24.09 binaries. See [the build script](https://github.com/develar/7zip-bin/blob/master/linux/x64/do-build.sh) and [the unmerged binary update PR](https://github.com/develar/7zip-bin/pull/28).
+- A maintained alternative, `7zip-bin-full@26.5.1`, bundles official 7-Zip 26.05 binaries and publishes npm provenance, but the package is about 76 MB and changes the binary API from `path7za` to `path7z`. I did not change the dependency in this pass: the bundle-size increase and third-party package/platform compatibility need a deliberate packaging review and Windows validation before adoption. See [the package and provenance details](https://www.npmjs.com/package/7zip-bin-full).
 ## Desktop web-server hardening (2026-11-04)
 
 - The installed desktop web server previously relied on lexical path containment for static files. A symlink inside the packaged web root could resolve outside that root. Static file resolution now canonicalizes the root and requested file and rejects targets outside the real root.
