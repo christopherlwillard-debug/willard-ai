@@ -224,7 +224,12 @@ router.post("/search/saved/:id/run", async (req, res) => {
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
     // Saved searches stay current: re-parse if no stored intent, else reuse it.
     const stored = sanitizeIntent(rows[0].intent_json);
-    const intent = stored ?? await parseIntent(rows[0].query, null);
+    const aiPrivacy = await getAiPrivacySettings();
+    const intent = stored ?? (
+      canSendToAiProvider(aiPrivacy)
+        ? await parseIntent(rows[0].query, null)
+        : localSearchIntent(rows[0].query, null)
+    );
     const results = await executeSearch(nasPath, intent);
     pool.query(`UPDATE saved_searches SET last_used_at = now() WHERE id = $1`, [id]).catch(() => {});
     return res.json({
