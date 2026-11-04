@@ -20,6 +20,7 @@ import {
   assertArchiveFileUnchanged,
   assertBufferedZipFile,
   createArchiveBudget,
+  createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
   isSevenZipLinkEntry,
@@ -108,7 +109,7 @@ async function withTarInput<T>(
     );
   }
   const workDir = scratchDir;
-  const tarPath = path.join(workDir, ".willard-input.tar");
+  const tarPath = path.join(workDir, ".willard-input-" + crypto.randomUUID() + ".tar");
   const decompressor = compression === "bzip2" ? "bzip2" : "xz";
 
   try {
@@ -117,7 +118,7 @@ async function withTarInput<T>(
     });
     let stderr = "";
     child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4096); });
 
     const exit = new Promise<void>((resolve, reject) => {
       child.once("error", reject);
@@ -129,12 +130,18 @@ async function withTarInput<T>(
       });
     });
     if (!child.stdout) throw new Error(`${decompressor} did not provide output`);
-    const results = await Promise.allSettled([
-      pipeline(child.stdout, fs.createWriteStream(tarPath, { flags: "wx" })),
-      exit,
-    ]);
-    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failure) throw failure.reason;
+    try {
+      await pipeline(
+        child.stdout,
+        createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes),
+        fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 }),
+      );
+      await exit;
+    } catch (error) {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await exit.catch(() => {});
+      throw error;
+    }
 
     return await callback(tarPath, {});
   } finally {
