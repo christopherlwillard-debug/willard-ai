@@ -62,6 +62,23 @@ test("keeps the new path when catalog persistence succeeds", withTempFiles(async
   assert.equal(fs.readFileSync(destination, "utf8"), "media-bytes");
 }));
 
+test("does not overwrite a new file created at the original path during rollback", withTempFiles(async (_dir, source, destination) => {
+  await assert.rejects(
+    renameFileWithPersistence(
+      source,
+      destination,
+      async () => {
+        fs.writeFileSync(source, "new-independent-file");
+        throw new Error("database unavailable");
+      },
+      (from, to) => fs.renameSync(from, to),
+    ),
+    (error: unknown) => error instanceof AggregateError,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "new-independent-file");
+  assert.equal(fs.readFileSync(destination, "utf8"), "media-bytes");
+});
+
 test("preserves both failures if filesystem rollback also fails", withTempFiles(async (_dir, source, destination) => {
   let renameCalls = 0;
   await assert.rejects(
