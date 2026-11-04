@@ -1,0 +1,47 @@
+# Willard AI — Repository Audit
+
+**Audit date:** 2026-11-04
+**Scope:** GitHub-tracked source, project configuration, CI workflows, backend security/privacy, storage boundaries, and Windows release process.
+
+## Executive summary
+
+The repository has a substantial automated validation suite and a documented storage/security architecture. The `Fast validation` workflow passed on the current default-branch commit during this audit. The `Windows release` workflow was still running when inspected; release health is therefore unverified.
+
+A pre-existing draft PR (#1) fixes a privacy-policy inconsistency in saved-search execution: when there is no stored intent, local-only/disabled AI settings now route through the local intent parser instead of the cloud provider. That PR's fast validation run passed. This audit branch is based on that PR branch so the existing fix remains included and `main` is untouched.
+
+## Verified observations
+
+### Positive controls
+- Root scripts enforce pnpm, TypeScript project-reference checks, generated API contract parity, router checks, release contracts, storage conformance, and database backup tests.
+- Fast Validation runs these checks plus targeted backend regression tests.
+- Windows Release provisions a disposable PostgreSQL database, runs the backend audit/integration suite, browser E2E tests, storage conformance, launcher/updater tests, and package/installer validation.
+- API startup requires PORT; production startup requires SESSION_SECRET.
+- Express session cookies are HTTP-only, use SameSite=Lax, and are marked Secure in production.
+- Write requests reject untrusted origins and Sec-Fetch-Site: cross-site.
+- Request logs omit query strings; structured log redaction tests cover sensitive paths, filenames, hashes, search queries, and report data.
+- NAS-relative paths are canonicalized and checked against symlink/path traversal escapes.
+- AI provider calls require explicit enablement and cloud mode; default settings disable provider use and keep AI local-only.
+- Generated runtime artifacts and local secrets/backups have .gitignore coverage.
+
+### Release/CI status at audit time
+- Fast validation for current main commit 694a055aeb10a41ee8e98f5b776faef89cbd449d: PASSED.
+- Windows release for that same commit: IN PROGRESS at inspection time; no completion claim is made.
+- Fast validation for pre-existing PR #1 head 7f6085be1812a2b06d1f68df5c459238c469e91a: PASSED.
+- PR #1 is still a draft and has not been merged.
+
+## Follow-up items requiring a runnable environment or deeper review
+
+1. Run the full backend audit locally and inspect every finding, especially database-backed flows and destructive file operations.
+2. Review the remainder of authentication/session management and all protected route mounting to verify consistent authentication coverage.
+3. Validate Windows ACL behavior and installer/updater operations on a clean standard-user Windows machine; source inspection cannot substitute for this.
+4. Review dependency advisories and license compatibility against the lockfile with network-enabled package tooling.
+5. Run full Playwright E2E against a clean disposable database and media fixture, including backup/restore, NAS offline/reconnect, and interrupted-job recovery.
+6. Review public exposure policy: verify whether the application is intended to be a public repository and ensure no real credentials, personal media, or operational data are present in tracked history.
+7. Confirm the intended default for AI local-only behavior and whether existing saved intents are allowed to execute locally (they currently do not require a provider call).
+
+## Change control
+
+- No changes were made to main.
+- This audit branch is based on the existing saved-search privacy audit branch.
+- No credentials, database records, media files, production settings, or release artifacts were touched.
+- Do not merge until the outstanding Windows workflow and any additional runtime tests complete successfully.
