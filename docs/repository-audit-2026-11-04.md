@@ -213,3 +213,10 @@ Remaining archive hardening:
 - Added regression tests for normal private directory creation and symlink escapes at `WillardAI`, `temp`, and the per-job directory. Added the suite to Fast Validation.
 - Validation status: the prior Fast Validation run passed typecheck, release/storage contracts, and the Windows updater smoke job, but was cancelled after the candidate 7-Zip compatibility step failed. The NAS-specific suite has not yet completed in CI.
 - Candidate 7-Zip compatibility test failure was traced to an invalid `node-7z` option (`overwrite: "qs"` emitted unsupported `-aoqs`). Corrected the test to use the wrapper's supported `$overwrite: "a"` option; production 7-Zip dependency remains unchanged pending a passing Linux/Windows compatibility run.
+
+
+## CI dependency-review prerequisite (2026-11-04)
+
+- The new dependency-review workflow was invoked for the audit PR but GitHub returned: `Dependency review is not supported on this repository. Please ensure that Dependency graph is enabled`. This is a repository security-setting prerequisite, not a code or dependency vulnerability finding.
+- The action cannot evaluate pull-request dependency changes until GitHub's Dependency graph feature is enabled for this repository. The scheduled `pnpm audit --prod --audit-level high` path remains separate and is not a substitute for PR diff review.
+- Remaining external configuration: enable Dependency graph under repository Settings → Code security and analysis, then rerun the dependency-review check. No repository settings or main-branch changes were made as part of this audit.
