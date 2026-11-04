@@ -37,20 +37,33 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.12.4 --activate
 
-      - name: Regenerate the lockfile from reviewed manifests
-        run: pnpm install --lockfile-only --no-frozen-lockfile
-
-      - name: Commit the generated lockfile to the audit branch
+      - name: Regenerate and publish the lockfile from the latest audit branch
         shell: bash
         run: |
-          if git diff --quiet -- pnpm-lock.yaml; then
-            echo "The lockfile is already current."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          published=0
+          for attempt in 1 2 3; do
+            git fetch origin audit/full-repository-review-2026-11
+            git reset --hard FETCH_HEAD
+            pnpm install --lockfile-only --no-frozen-lockfile
+            if git diff --quiet -- pnpm-lock.yaml; then
+              echo "The lockfile is already current."
+              published=1
+              break
+            fi
             git add pnpm-lock.yaml
             git commit -m "chore(deps): refresh audited dependency lockfile"
-            git push origin HEAD:refs/heads/audit/full-repository-review-2026-11
+            if git push origin HEAD:refs/heads/audit/full-repository-review-2026-11; then
+              published=1
+              break
+            fi
+            echo "Branch advanced during lockfile publication; retrying from latest branch (attempt $attempt)."
+          done
+          if [ "$published" -ne 1 ]; then
+            echo "Unable to publish a current lockfile after three attempts."
+            exit 1
           fi
 
       - name: Install the frozen, regenerated dependency graph
