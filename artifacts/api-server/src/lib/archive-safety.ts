@@ -50,6 +50,17 @@ export function isZipSymlinkEntry(externalAttributes: number | undefined): boole
     (((externalAttributes >>> 16) & 0xF000) === 0xA000);
 }
 
+/**
+ * 7-Zip exposes file attributes as a compact platform-specific string.
+ * Windows reparse-point flags use "L"; Unix listings may include a POSIX
+ * permission mode whose first character is "l" for a symbolic link.
+ */
+export function isSevenZipLinkEntry(attributes: string | undefined): boolean {
+  if (typeof attributes !== "string") return false;
+  return attributes.includes("L") ||
+    /(?:^|\\s)l[rwxstST-]{9}(?:\\s|$)/.test(attributes);
+}
+
 export function createArchiveBudget(): ArchiveBudget {
   return { entryCount: 0, totalBytes: 0, paths: new Set<string>() };
 }
