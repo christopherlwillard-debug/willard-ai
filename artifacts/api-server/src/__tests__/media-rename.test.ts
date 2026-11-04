@@ -77,7 +77,7 @@ test("does not overwrite a new file created at the original path during rollback
   );
   assert.equal(fs.readFileSync(source, "utf8"), "new-independent-file");
   assert.equal(fs.readFileSync(destination, "utf8"), "media-bytes");
-});
+}));
 
 test("preserves both failures if filesystem rollback also fails", withTempFiles(async (_dir, source, destination) => {
   let renameCalls = 0;
