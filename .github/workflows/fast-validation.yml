@@ -83,4 +83,6 @@ jobs:
             artifacts/api-server/src/__tests__/storage-migration.test.ts \
             artifacts/api-server/src/__tests__/thumbnail-engine.test.ts \
             artifacts/api-server/src/__tests__/private-media-response.test.ts \
-            artifacts/api-server/src/__tests__/media-rename.test.ts
+            artifacts/api-server/src/__tests__/media-rename.test.ts \
+            artifacts/api-server/src/__tests__/auth-session-guard.test.ts \
+            artifacts/api-server/src/__tests__/install-auth-reliability.test.ts
