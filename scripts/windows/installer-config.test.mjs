@@ -640,6 +640,10 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /web\/willard-loading\.mp4/);
   assert.match(releaseValidator, /payload-manifest\.json/);
   assert.match(releaseValidator, /onnxruntime-node/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/7z\.exe/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/7z\.dll/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/License\.txt/);
+  assert.match(releaseValidator, /Packaged Windows release must contain verified official 7-Zip 26\.05/);
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /desktop\/database-backup\.mjs/);
   assert.match(releaseStager, /desktop\/database-backup\.mjs/);
