@@ -229,6 +229,32 @@ exit $LASTEXITCODE
   Assert-ExternalState
   Stop-InstalledWillard
 
+  # Simulate power loss in the narrow window after the old install was moved
+  # but before the updater could advance the journal beyond "prepared".
+  Write-Host "Lifecycle: prepared-phase update recovery"
+  $preparedBackup = $InstallRoot + ".prepared-backup"
+  $preparedCandidate = $InstallRoot + ".prepared-candidate"
+  Copy-Item $InstallRoot $preparedCandidate -Recurse -Force
+  Set-Content (Join-Path $InstallRoot "prepared-backup-only.marker") "restore prepared backup" -Encoding UTF8
+  Move-Item -LiteralPath $InstallRoot -Destination $preparedBackup -ErrorAction Stop
+  @{
+    version = 1
+    phase = "prepared"
+    installRoot = $InstallRoot
+    candidate = $preparedCandidate
+    backup = $preparedBackup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+
+  $preparedRecovery = Invoke-InstalledLauncher "start" "prepared-phase-update-recovery"
+  Assert-True ($preparedRecovery.exitCode -eq 0) ("Installed launcher did not recover a prepared-phase interruption:`n" + $preparedRecovery.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\\s*:\\s*"ok"' }
+  Assert-True (Test-Path (Join-Path $InstallRoot "prepared-backup-only.marker")) "The prior installation was not restored from the prepared journal."
+  Assert-True (-not (Test-Path $preparedCandidate)) "The interrupted prepared candidate was not removed."
+  Assert-True (-not (Test-Path $journalPath)) "Prepared-phase update journal was not cleared."
+  Assert-ExternalState
+  Stop-InstalledWillard
+
   # A database failure must persist diagnostics and return control without a
   # modal dialog in this noninteractive test run.
   Write-Host "Lifecycle: database failure diagnostics"
