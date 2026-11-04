@@ -10,6 +10,7 @@ import {
   assertArchiveFileUnchanged,
   createArchiveBudget,
   inspectExtractedTree,
+  isZipSymlinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -166,4 +167,11 @@ test("source replacement between archive phases is detected", () => {
     () => assertArchiveFileUnchanged(archive, snapshot),
     /changed while it was being inspected/,
   );
+});
+
+test("detects Unix ZIP symlinks when permission bits are present", () => {
+  assert.equal(isZipSymlinkEntry(0xA1FF0000), true);
+  assert.equal(isZipSymlinkEntry(0xA0000000), true);
+  assert.equal(isZipSymlinkEntry(0x81A40000), false);
+  assert.equal(isZipSymlinkEntry(undefined), false);
 });
