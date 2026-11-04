@@ -67,14 +67,65 @@ export function isZipSymlinkEntry(externalAttributes: number | undefined): boole
 }
 
 /**
- * 7-Zip exposes file attributes as a compact platform-specific string.
- * Windows reparse-point flags use "L"; Unix listings may include a POSIX
- * permission mode whose first character is "l" for a symbolic link.
+ * node-7z's ordinary list event exposes only the compact DOS attribute
+ * column (for example "....A"). With its `techInfo` option enabled, the
+ * POSIX mode is available separately in techInfo.get("Attributes").
+ * Check both fields: a symlink mode such as "A_ lrwxrwxrwx" is not present
+ * in the ordinary attributes column.
  */
-export function isSevenZipLinkEntry(attributes: string | undefined): boolean {
+export function isSevenZipLinkEntry(
+  attributes: string | undefined,
+  technicalAttributes?: string | undefined,
+): boolean {
+  return [attributes, technicalAttributes].some(value =>
+    typeof value === "string" && (
+      value.includes("L") ||
+      /(?:^|\s)l[rwxstST-]{9}(?:\s|$)/.test(value)
+    ),
+  );
+}
+
+export function isSevenZipDirectoryEntry(
+  attributes: string | undefined,
+  folder?: string | undefined,
+): boolean {
+  if (folder === "+" || folder?.toLowerCase() === "true") return true;
   if (typeof attributes !== "string") return false;
-  return attributes.includes("L") ||
-    /(?:^|\s)l[rwxstST-]{9}(?:\s|$)/.test(attributes);
+  const trimmed = attributes.trimStart();
+  return trimmed.startsWith("D") ||
+    /(?:^|\s)d[rwxstST-]{9}(?:\s|$)/.test(trimmed);
+}
+
+export interface SevenZipEntryInfo {
+  isDirectory: boolean;
+  isLink: boolean;
+  sizeBytes?: number | string;
+  crc?: number | string;
+}
+
+/**
+ * Read the actual node-7z list event shape. In techInfo mode, size, CRC,
+ * Folder, and POSIX Attributes are carried in a Map rather than the ordinary
+ * event's size/attributes fields.
+ */
+export function getSevenZipEntryInfo(entry: {
+  attributes?: unknown;
+  size?: unknown;
+  crc?: unknown;
+  techInfo?: { get(key: string): unknown };
+}): SevenZipEntryInfo {
+  const technicalAttributes = entry.techInfo?.get("Attributes");
+  const folder = entry.techInfo?.get("Folder");
+  const rawSize = entry.size ?? entry.techInfo?.get("Size");
+  const rawCrc = entry.crc ?? entry.techInfo?.get("CRC");
+  const attributes = typeof entry.attributes === "string" ? entry.attributes : undefined;
+  const mode = typeof technicalAttributes === "string" ? technicalAttributes : undefined;
+  return {
+    isDirectory: isSevenZipDirectoryEntry(mode ?? attributes, typeof folder === "string" ? folder : undefined),
+    isLink: isSevenZipLinkEntry(attributes, mode),
+    sizeBytes: typeof rawSize === "number" || typeof rawSize === "string" ? rawSize : undefined,
+    crc: typeof rawCrc === "number" || typeof rawCrc === "string" ? rawCrc : undefined,
+  };
 }
 
 export function createArchiveBudget(): ArchiveBudget {
