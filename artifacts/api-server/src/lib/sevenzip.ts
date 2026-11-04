@@ -10,6 +10,7 @@ export interface SevenZipResolutionOptions {
   packagedPath?: string;
   fallbackPath?: string;
   exists?: (candidate: string) => boolean;
+  moduleUrl?: string;
 }
 
 /**
@@ -27,8 +28,9 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
   if (configuredPath && exists(configuredPath)) return configuredPath;
 
   const packagedName = platform === "win32" ? "7z.exe" : platform === "darwin" ? "7zz" : "7zzs";
+  const moduleUrl = options.moduleUrl ?? import.meta.url;
   const packagedPath = options.packagedPath ??
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../vendor/7zip", packagedName);
+    path.resolve(path.dirname(fileURLToPath(moduleUrl)), "../vendor/7zip", packagedName);
   if (exists(packagedPath)) return packagedPath;
 
   const delimiter = platform === "win32" ? ";" : ":";
