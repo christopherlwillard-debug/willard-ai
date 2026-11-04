@@ -277,7 +277,7 @@ function Restore-UpdateBackup {
 function Recover-InterruptedUpdateSwap {
   $journal = Read-UpdateJournal
   if (-not $journal) { return }
-  if ($journal.phase -in @("backup-created", "swapped")) {
+  if ($journal.phase -in @("prepared", "backup-created", "swapped") -and (Test-Path $journal.backup)) {
     $script:UpdateBackup = $journal.backup
     Restore-UpdateBackup | Out-Null
     if ($journal.candidate -and (Test-Path $journal.candidate)) {
