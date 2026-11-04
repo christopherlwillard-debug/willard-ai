@@ -29,6 +29,11 @@ A pre-existing draft PR (#1) fixes a privacy-policy inconsistency in saved-searc
 - Fast validation for pre-existing PR #1 head 7f6085be1812a2b06d1f68df5c459238c469e91a: PASSED.
 - PR #1 is still a draft and has not been merged.
 
+## Confirmed issue found and fixed on the audit branch
+
+### Storage migration cleanup could delete a changed original
+The cleanup phase verified the destination file against the preview hash but did not verify that the source file still matched that same hash. If the original changed after the copy/verification step but before cleanup confirmation, cleanup could delete the newer source contents. The cleanup path now hashes both source and destination immediately before deletion, preserves the original if its content changed, and revalidates canonical paths against their roots. A regression test covers the changed-source scenario. The storage-migration test suite is now included in fast validation.
+
 ## Follow-up items requiring a runnable environment or deeper review
 
 1. Run the full backend audit locally and inspect every finding, especially database-backed flows and destructive file operations.
