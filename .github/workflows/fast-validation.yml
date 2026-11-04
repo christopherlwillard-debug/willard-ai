@@ -87,3 +87,18 @@ jobs:
             artifacts/api-server/src/__tests__/media-rename.test.ts \
             artifacts/api-server/src/__tests__/auth-session-guard.test.ts \
             artifacts/api-server/src/__tests__/install-auth-reliability.test.ts
+
+  windows-updater-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify packaged updater journal writes
+        shell: pwsh
+        run: .\scripts\windows\update-journal-smoke.ps1
+
+      - name: Verify developer updater preservation and rollback
+        shell: pwsh
+        run: .\scripts\windows\update-smoke.ps1
