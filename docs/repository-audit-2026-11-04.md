@@ -134,3 +134,10 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - A failed generation could therefore remain visible to backup discovery/retention as a manifest-bearing directory even though it had not passed the success gate.
 - The creator now removes the just-published directory if final verification does not complete. A verified backup is retained even if a later retention operation fails.
 - This is a source-level correction; fault-injected end-to-end backup publication testing remains desirable.
+
+
+## Atomic updater journal publication (2026-11-04)
+
+- The updater rewrote its recovery journal in place with Set-Content. A power loss during that write could leave malformed JSON. Startup treated an unreadable journal as absent, potentially losing the recovery instructions while the previous installation was in its sibling backup directory.
+- Journal updates now write a unique temporary file in the same directory and atomically replace the existing journal (or move into place for the first write). A crash leaves the previous complete journal or the new complete journal rather than a partially written document.
+- The change is source-reviewed but still needs the Windows lifecycle workflow to execute against this branch. No release workflow was run and no release artifacts were published.
