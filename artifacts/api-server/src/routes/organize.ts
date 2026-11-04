@@ -24,6 +24,7 @@ import {
   createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
+  isTarLinkEntry,
   getSevenZipEntryInfo,
   snapshotArchiveFile,
   validateArchiveEntry,
@@ -260,6 +261,9 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
     assertBufferedZipFile(archivePath);
     const zip = new AdmZip(archivePath);
     for (const e of zip.getEntries()) {
+      if (isZipSymlinkEntry((e as any).attr)) {
+        throw new ArchiveSafetyError(`Archive traversal rejected: symlink entry "${e.entryName}" in ZIP`);
+      }
       const sizeBytes = (e.header as any)?.size ?? 0;
       const checked = validateArchiveEntry({ path: e.entryName, sizeBytes, isDirectory: e.isDirectory }, budget);
       entries.push({ path: e.entryName, sizeBytes: checked.sizeBytes, isDirectory: checked.isDirectory, fileType: getFileTypeFromName(e.entryName) });
@@ -275,6 +279,9 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
         filter: (_p: string, e: any) => {
           if (validationError) return false;
           try {
+            if (isTarLinkEntry(e.type)) {
+              throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${e.path}" (type: ${e.type}) in TAR`);
+            }
             validateArchiveEntry({ path: e.path, sizeBytes: e.size, isDirectory: e.type === "Directory" }, budget);
             return true;
           } catch (error) {
@@ -331,6 +338,9 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
       assertBufferedZipFile(archivePath);
       const zip = new AdmZip(archivePath);
       for (const entry of zip.getEntries()) {
+        if (isZipSymlinkEntry((entry as any).attr)) {
+          throw new ArchiveSafetyError(`Archive traversal rejected: symlink entry "${entry.entryName}" in ZIP`);
+        }
         validateArchiveEntry({
           path: entry.entryName,
           sizeBytes: (entry.header as any)?.size ?? 0,
@@ -349,6 +359,9 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
           filter: (_p: string, entry: any) => {
             if (validationError) return false;
             try {
+              if (isTarLinkEntry(entry.type)) {
+                throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" (type: ${entry.type}) in TAR`);
+              }
               validateArchiveEntry({
                 path: entry.path,
                 sizeBytes: entry.size,
