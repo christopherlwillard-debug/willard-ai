@@ -21,6 +21,7 @@ import {
   assertBufferedZipFile,
   createArchiveBudget,
   inspectExtractedTree,
+  isZipSymlinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -443,7 +444,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string): Prom
 
     // Pass 1: validate all entries before writing anything
     for (const e of entries) {
-      if ((e as any).attr && ((e as any).attr >>> 16) === 0xA000) // Unix symlink mode
+      if (isZipSymlinkEntry((e as any).attr)) // Unix symlink mode
         throw new Error(`Archive traversal rejected: symlink entry "${e.entryName}" in ZIP`);
       assertSafeEntryPath(e.entryName, (e.header as any)?.size ?? 0, e.isDirectory);
     }
