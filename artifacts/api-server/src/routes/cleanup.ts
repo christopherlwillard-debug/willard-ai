@@ -6,7 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
-import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
+import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
 import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
@@ -472,11 +472,10 @@ router.post("/cleanup/execute", async (req, res) => {
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
-          const trashDir = resolveWithinRoot(
+          const trashDir = ensureDirectoryWithinRoot(
             path.join(nasPath, "WillardAI", ".Trash", trashTimestamp),
             getWillardAIDir(nasPath),
           );
-          fs.mkdirSync(trashDir, { recursive: true });
           const safeBasename = `${fileId}_${path.basename(file.name)}`;
           trashPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
           await db.execute(sql`
@@ -484,7 +483,7 @@ router.post("/cleanup/execute", async (req, res) => {
             SET status = 'MOVING', trash_path = ${trashPath}, updated_at = NOW()
             WHERE operation_id = ${operationId}
           `);
-          fs.renameSync(filePath, trashPath);
+          moveFileNoReplace(filePath, trashPath);
           await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
           // Record in trash manifest so user can locate the file later
