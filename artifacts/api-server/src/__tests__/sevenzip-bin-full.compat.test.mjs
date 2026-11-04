@@ -12,11 +12,11 @@ const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
 test("official 7-Zip binary package works with node-7z and archive safety metadata", {
   skip: !packagePath ? "candidate binary package not installed" : false,
 }, async () => {
-  const { path7z } = createRequire(path.join(packagePath, "package.json"))(packagePath);
-  assert.equal(typeof path7z, "string");
-  assert.ok(fs.existsSync(path7z), `7-Zip binary is missing: ${path7z}`);
+  const { path7zzs } = createRequire(path.join(packagePath, "package.json"))(packagePath);
+  assert.equal(typeof path7zzs, "string");
+  assert.ok(fs.existsSync(path7zzs), `7-Zip binary is missing: ${path7zzs}`);
 
-  const versionResult = spawnSync(path7z, ["i"], { encoding: "utf8", timeout: 15_000 });
+  const versionResult = spawnSync(path7zzs, ["i"], { encoding: "utf8", timeout: 15_000 });
   assert.equal(versionResult.status, 0, versionResult.stderr || versionResult.error?.message);
   const versionText = `${versionResult.stdout}\n${versionResult.stderr}`;
   const version = versionText.match(/7-Zip \(z\) (\d+)\.(\d+)/);
@@ -40,7 +40,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     const listed = await new Promise((resolve, reject) => {
       const entries = [];
       const stream = Seven.list(archive, {
-        $bin: path7z,
+        $bin: path7zzs,
         $progress: false,
         techInfo: true,
       });
