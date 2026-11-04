@@ -356,3 +356,30 @@ test("organization resume and reset require a stale execution lease", () => {
   assert.match(resetRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
   assert.match(resetRoute, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
 });
+
+test("rollbackMoves: repeated recovery recognizes a file already restored", async () => {
+  const src = writeFile(path.join(mkTmp("rb-idempotent-src"), "repeat.txt"), "recover once");
+  const dest = path.join(mkTmp("rb-idempotent-dest"), "repeat.txt");
+  const record = await verifiedMove(src, dest);
+
+  assert.equal(await rollbackMoves([record]), 1);
+  const logs: string[] = [];
+  assert.equal(await rollbackMoves([record], message => logs.push(message)), 1);
+  assert.equal(fs.readFileSync(src, "utf8"), "recover once");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_ALREADY_RESTORED")));
+});
+
+test("rollbackMoves: completes an interrupted same-volume hard-link restore", async () => {
+  const src = writeFile(path.join(mkTmp("rb-hardlink-src"), "linked.txt"), "hardlink recovery");
+  const dest = path.join(mkTmp("rb-hardlink-dest"), "linked.txt");
+  const record = await verifiedMove(src, dest);
+
+  fs.linkSync(dest, src); // simulate a crash after link creation but before unlinking the destination
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 1);
+  assert.equal(fs.readFileSync(src, "utf8"), "hardlink recovery");
+  assert.equal(fs.existsSync(dest), false);
+  assert.ok(logs.some(message => message.includes("hard-link finalized")));
+});
