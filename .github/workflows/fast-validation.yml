@@ -76,4 +76,5 @@ jobs:
             artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
             artifacts/api-server/src/__tests__/organize-helpers.test.ts \
             artifacts/api-server/src/__tests__/storage-policy.test.ts \
+            artifacts/api-server/src/__tests__/storage-migration.test.ts \
             artifacts/api-server/src/__tests__/thumbnail-engine.test.ts
