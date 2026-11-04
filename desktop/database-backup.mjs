@@ -22,6 +22,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   mkdir,
+  open as openFile,
   readdir,
   readFile,
   rename,
@@ -635,7 +636,24 @@ async function secureRemove(filePath) {
   try {
     const info = await stat(filePath);
     if (info.isFile() && info.size > 0) {
-      await writeFile(filePath, Buffer.alloc(info.size), { mode: 0o600 });
+      const handle = await openFile(filePath, "r+");
+      const zeroes = Buffer.alloc(Math.min(1024 * 1024, info.size));
+      try {
+        let position = 0;
+        while (position < info.size) {
+          const length = Math.min(zeroes.length, info.size - position);
+          let written = 0;
+          while (written < length) {
+            const result = await handle.write(zeroes, written, length - written, position + written);
+            if (result.bytesWritten <= 0) throw new Error("Temporary backup cleanup made no write progress.");
+            written += result.bytesWritten;
+          }
+          position += length;
+        }
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
     }
   } catch {
     // Cleanup is best effort; the containing temporary directory is removed too.
@@ -1386,5 +1404,6 @@ export {
   encryptDump,
   findWindowsPostgresBinary,
   stableJson,
+  secureRemove,
   validateManifest,
 };
