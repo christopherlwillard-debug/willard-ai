@@ -249,3 +249,10 @@ Remaining archive hardening:
 - The backup snapshot holder wrote its SQL to child stdin before registering stdin error handling. If psql exited immediately, a broken-pipe error could be emitted by the writable stream without a listener. The 10-second timeout also sent only SIGTERM and did not guarantee termination if the child remained alive.
 - Extracted the process protocol into postgres-snapshot-process.mjs. It registers stdout, stderr, stdin, spawn-error, and close handlers before writing; bounds stdout to 64 KiB and stderr to a 4 KiB tail; handles write callback and stream errors; and escalates from SIGTERM to SIGKILL after a grace period. Termination is idempotent.
 - database-backup.mjs now uses the guarded helper. Added regression tests for successful snapshot token capture, stdin EPIPE, and timeout termination/escalation. The tests are included in the existing database-backup test suite; CI validation is pending.
+
+
+## Production dependency audit result (2026-11-04)
+
+- The regenerated dependency graph completed a frozen install and full workspace typecheck. `pnpm audit --prod --audit-level high` then passed with 17 advisories remaining: 1 low and 16 moderate; no high or critical production advisories remained.
+- The high Sharp findings were eliminated by forcing Sharp 0.35.5 across direct and transitive dependency paths. The high Zod memory-exhaustion advisory was eliminated by upgrading the shared Zod catalog to 4.6.7 and aligning `zod-validation-error` to 4.0.2. The full workspace typecheck passed with these versions.
+- The dependency refresh workflow completed successfully and regenerated the lockfile. A separate PR validation run is still in progress for the latest code changes, including the PostgreSQL snapshot process regression suite.
