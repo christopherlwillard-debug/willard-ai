@@ -5,8 +5,10 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
+import { readFileSync } from "node:fs";
 
 const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
 test("official 7-Zip binary package works with node-7z and archive safety metadata", {
@@ -25,6 +27,14 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     Number(version[1]) > 26 || (Number(version[1]) === 26 && Number(version[2]) >= 1),
     `7-Zip must be 26.01 or newer, found ${version[0]}`,
   );
+
+  const routePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../routes/organize.ts",
+  );
+  const routeSource = readFileSync(routePath, "utf8");
+  assert.match(routeSource, /overwrite:\s*"a"/);
+  assert.doesNotMatch(routeSource, /overwrite:\s*"qs"/);
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-7zip-full-"));
   try {
@@ -91,7 +101,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
       const stream = Seven.extractFull(archive, destination, {
         $bin: path7zzs,
         $progress: false,
-        overwrite: "qs",
+        overwrite: "a",
       });
       stream.once("error", reject);
       stream.once("end", resolve);
