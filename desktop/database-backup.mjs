@@ -22,6 +22,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   mkdir,
+  mkdtemp,
   open as openFile,
   readdir,
   readFile,
@@ -729,14 +730,20 @@ async function sourceLibrary(environment, snapshot = null) {
   };
 }
 
+export async function createPrivateBackupWorkDirectory(tempRoot = os.tmpdir()) {
+  // mkdtemp creates the directory with owner-only permissions on POSIX.
+  // The raw pg_dump is plaintext until encryption finishes, so its parent
+  // must not inherit a permissive shared-temp default mode.
+  return mkdtemp(path.join(tempRoot, "willard-db-backup-"));
+}
+
 async function createBackup(options) {
   const outputRoot = resolveBackupRoot(options);
   const retentionDays = integerOption(options, "retention-days", DEFAULT_RETENTION_DAYS);
   const keep = integerOption(options, "keep", DEFAULT_KEEP, 1);
   const environment = databaseConnection(options);
   const secret = await passphrase(true);
-  const actualWorkRoot = path.join(os.tmpdir(), `willard-db-backup-${randomBytes(8).toString("hex")}`);
-  await mkdir(actualWorkRoot, { recursive: true });
+  const actualWorkRoot = await createPrivateBackupWorkDirectory();
   const rawDump = path.join(actualWorkRoot, "database.dump");
   const staging = path.join(outputRoot, `.staging-${randomBytes(8).toString("hex")}`);
   let finalDir;
@@ -1380,6 +1387,7 @@ export {
   findWindowsPostgresBinary,
   stableJson,
   overwriteFileWithZeroes,
+  createPrivateBackupWorkDirectory,
   secureRemove,
   validateManifest,
 };
