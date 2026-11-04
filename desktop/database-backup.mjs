@@ -1213,7 +1213,8 @@ async function restoreBackup(options) {
     const currentFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, currentFacts);
   }
-  const temporaryDump = path.join(os.tmpdir(), `willard-db-restore-${randomBytes(8).toString("hex")}.dump`);
+  const restoreWorkRoot = await createPrivateBackupWorkDirectory();
+  const temporaryDump = path.join(restoreWorkRoot, "database.dump");
   try {
     if (targetEmpty) {
       if (manifest.library && targetLibrary) {
@@ -1222,7 +1223,7 @@ async function restoreBackup(options) {
           targetLibrary.root, manifest, secret, recoveryTargetIdentity, "RESTORING",
         );
       }
-      await writeFile(temporaryDump, dump, { mode: 0o600 });
+      await writeFile(temporaryDump, dump, { mode: 0o600, flag: "wx" });
       const targetDatabase = environment.PGDATABASE || "postgres";
       await runTool(
         resolveBinary("PGRESTORE_BIN", "pg_restore", "pg_restore.exe"),
@@ -1270,6 +1271,7 @@ async function restoreBackup(options) {
     console.log(`Database restored and verified: ${backupDir}`);
   } finally {
     await secureRemove(temporaryDump);
+    await rm(restoreWorkRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 
