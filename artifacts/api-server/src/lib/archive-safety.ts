@@ -66,6 +66,11 @@ export function isZipSymlinkEntry(externalAttributes: number | undefined): boole
     (((externalAttributes >>> 16) & 0xF000) === 0xA000);
 }
 
+/** TAR entry types that create filesystem links rather than regular files. */
+export function isTarLinkEntry(type: unknown): boolean {
+  return type === "SymbolicLink" || type === "Link" || type === "HardLink";
+}
+
 /**
  * node-7z's ordinary list event exposes only the compact DOS attribute
  * column (for example "....A"). With its `techInfo` option enabled, the
