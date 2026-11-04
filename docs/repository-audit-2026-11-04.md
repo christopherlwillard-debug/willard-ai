@@ -184,20 +184,20 @@ Remaining archive hardening:
 - Manual restore, restore rollback, and startup restore reconciliation now use the no-replace helper. Added tests for destination collision preservation, successful moves, and route/recovery wiring. Fast Validation passed on commit `983391cc4d6e618210f93ad37b27ce892d6d8002`.
 
 
-## Legacy 7-Zip binary dependency risk (2026-11-04)
+## Legacy 7-Zip binary dependency risk (resolved in audit branch, 2026-11-04)
 
-- Confirmed the Linux x64 binary shipped by `7zip-bin@5.2.0` is built from upstream p7zip 16.02. Its checked-in build script downloads `p7zip_16.02_src_all.tar.bz2` from SourceForge. This remains the package's legacy fallback. Replit provisions official static 7-Zip 26.05 through `replit.nix`, while Windows release builds stage official `7z.exe`/`7z.dll` under `api-runtime/vendor/7zip`; `resolveSevenZipPath` prefers those provisioned binaries. The old fallback remains reachable in unprovisioned Linux/macOS and local development environments when no official binary is found.
-- Current security advisories document multiple memory-corruption flaws in p7zip/old 7-Zip, including a heap buffer overflow in the NTFS handler fixed in official 7-Zip 26.01. This remains a high-priority exposure for environments that fall back to the legacy binary; packaged Replit and Windows deployments resolve official 7-Zip 26.05 first.
-- Candidate replacement: `7zip-bin-full@26.5.1`, which packages official upstream 7-Zip 26.05 binaries for Windows, Linux, and macOS and exposes a `path7z` executable path. This is a third-party repackaging project and is relatively new; the complete package includes multiple platforms and adds significant size, so it should not be adopted without testing runtime behavior and deployment footprint.
-- Added a compatibility smoke test that exercises the candidate's real static binary (`path7zzs`) through `node-7z`: version check (26.01+), archive creation, `techInfo` list metadata parsing, POSIX symlink metadata detection on Linux, and extraction. Fast Validation now installs the pinned candidate into a temporary CI-only directory on Linux and Windows and checks Windows create/extract behavior; this does not yet change the production dependency. The candidate compatibility run is pending.
-- References: `https://raw.githubusercontent.com/develar/7zip-bin/master/linux/x64/do-build.sh`; `https://github.com/develar/7zip-bin/pull/28`; `https://www.debian.org/lts/security/` (DLA-4681-1, 2026-07-13); `https://www.npmjs.com/package/7zip-bin-full`.
+- The former `7zip-bin@5.2.0` dependency supplied p7zip 16.02 on Linux. It has been removed from `artifacts/api-server/package.json` and the pnpm lockfile; there is no longer a bundled legacy fallback.
+- `resolveSevenZipPath` now accepts only executables reporting official 7-Zip 26.01 or newer. It checks configured, packaged, and PATH candidates; outdated or unrecognized binaries are skipped. `getSevenZipPath` resolves lazily when an archive operation is requested and returns an actionable error if no supported binary is installed, so the API can still start and non-archive features remain available.
+- Replit provisions official static 7-Zip 26.05 via `replit.nix`; Windows release builds stage hash-verified official `7z.exe` and `7z.dll` under `api-runtime/vendor/7zip`. The Linux and Windows real-binary compatibility checks passed with the existing `node-7z` wrapper, including listing metadata, CRC, symlink metadata, archive creation, and extraction.
+- Fast Validation passed on commit `a9a2a23b36c175cd558148cdc2c3e85c7f5961ac` with the fail-closed resolver, generated contracts, targeted backend regressions, and Windows smoke. Later validation also passed on `ce7ce8e7426f4938e7568ade5885bff87e047f21`.
+- Residual limitation: developers and deployments that perform archive operations must install official 7-Zip 26.01+ or configure `WILLARD_7ZIP_PATH`. The application deliberately refuses to use the old vulnerable fallback.
 
 
 ## Invalid 7-Zip overwrite switch (2026-11-04)
 
 - The organize extractor passed `overwrite: "qs"` to `node-7z`, which emits `-aoqs`. The documented 7-Zip switch accepts exactly one mode character (`a`, `s`, `t`, or `u`); the actual 26.05 candidate binary rejected `-aoqs` with `Command Line Error: Too long switch`, so valid 7z-family archive extraction could fail before writing any files.
 - Changed the extractor to `overwrite: "a"` (overwrite all) because the staging directory is deliberately cleared and recreated before extraction. This avoids prompts and uses a valid switch. The integration smoke now checks the real CLI path and asserts the application route no longer uses `qs`.
-- The first candidate smoke run failed on the invalid option, which confirmed the defect. The corrected candidate run is pending; the production dependency has not yet been upgraded.
+- The first real-binary smoke run failed on the invalid option, confirming the defect. The corrected official 7-Zip 26.05 compatibility test passed on commit `a9a2a23b36c175cd558148cdc2c3e85c7f5961ac`; the Windows binary smoke also passed.
 
 
 ## Dependency-review action fallback (2026-11-04)
