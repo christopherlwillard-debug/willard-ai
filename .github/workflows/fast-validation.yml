@@ -124,7 +124,7 @@ jobs:
         shell: pwsh
         run: |
           $destination = Join-Path $env:RUNNER_TEMP "official-7zip"
-          .\scripts\windows\prepare-official-7zip.ps1 -Destination $destination
+          .\scripts\windows\prepare-official-7zip.ps1 -Destination $destination -ExportPathToGitHubEnvironment
           $binary = Join-Path $destination "7z.exe"
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Official 7-Zip executable was not staged." }
           $version = (& $binary i 2>&1 | Out-String)
