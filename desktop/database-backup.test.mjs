@@ -696,6 +696,13 @@ test(
         /passphrase or authenticated backup metadata/,
       );
 
+      const tamperedRetentionBackup = path.join(backupRoot, "backup-tampered-retention-date");
+      await cp(backupDir, tamperedRetentionBackup, { recursive: true });
+      const tamperedRetentionManifestPath = path.join(tamperedRetentionBackup, "manifest.json");
+      const tamperedRetentionManifest = JSON.parse(await readFile(tamperedRetentionManifestPath, "utf8"));
+      tamperedRetentionManifest.createdAt = "2000-01-01T00:00:00.000Z";
+      await writeFile(tamperedRetentionManifestPath, `${JSON.stringify(tamperedRetentionManifest, null, 2)}\n`);
+
       await new Promise((resolve) => setTimeout(resolve, 20));
       await runCli(["backup", "--output-dir", backupRoot, "--retention-days", "0", "--keep", "1"], {
         DATABASE_URL: sourceUrl,
@@ -704,7 +711,17 @@ test(
       const retained = (await readdir(backupRoot, { withFileTypes: true })).filter(
         (entry) => entry.isDirectory() && entry.name.startsWith("backup-"),
       );
-      assert.equal(retained.length, 1);
+      assert.equal(retained.length, 2, "retention must preserve a backup with an unauthenticated manifest");
+      assert.equal(
+        retained.some((entry) => entry.name === "backup-tampered-retention-date"),
+        true,
+        "retention must not delete a backup based on a tampered creation date",
+      );
+      assert.equal(
+        retained.some((entry) => entry.name === path.basename(backupDir)),
+        false,
+        "the authenticated older backup should be pruned when keep=1 and retention-days=0",
+      );
     } finally {
       await stopPostgres(server);
       if (useInstalledService) {
