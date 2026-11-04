@@ -63,6 +63,9 @@ jobs:
           pnpm run check:router
           pnpm run check:api-contracts
 
+      - name: Smoke-test Expo CLI configuration after dependency overrides
+        run: pnpm --filter @workspace/willard-mobile exec expo config --json > /dev/null
+
       - name: Validate desktop web server safety
         run: node --test desktop/web-server-safety.test.mjs
 
