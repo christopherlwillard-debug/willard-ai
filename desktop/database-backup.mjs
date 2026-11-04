@@ -1457,7 +1457,6 @@ export {
   stableJson,
   overwriteFileWithZeroes,
   createPrivateBackupWorkDirectory,
-  runTool,
   secureRemove,
   validateManifest,
 };
