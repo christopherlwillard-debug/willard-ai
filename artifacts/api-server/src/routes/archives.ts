@@ -21,6 +21,7 @@ import {
   assertBufferedZipFile,
   createArchiveBudget,
   isZipSymlinkEntry,
+  isSevenZipLinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
@@ -139,9 +140,7 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     stream.on("data", (data: any) => {
       if (data.file !== undefined && !safetyError) {
         const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
-        const isLink = typeof data.attributes === "string" &&
-          (data.attributes.includes("L") || data.attributes.includes("l"));
-        if (isLink) {
+        if (isSevenZipLinkEntry(data.attributes)) {
           safetyError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`);
           return;
         }
