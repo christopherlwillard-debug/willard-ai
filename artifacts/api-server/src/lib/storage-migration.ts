@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { pool } from "@workspace/db";
+import { resolveWithinRoot } from "./nas-storage.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
 export const STORAGE_MIGRATION_NAMESPACES = [
@@ -426,14 +427,16 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     try {
       for (const entry of manifest.entries) {
         if (entry.state === "verified") continue;
-        if (!fs.existsSync(entry.sourcePath)) {
+        const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
+        const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+        if (!fs.existsSync(safeSourcePath)) {
           entry.state = "missing";
           entry.error = "Source is no longer available.";
           throw new Error(entry.error);
         }
-        if (fs.existsSync(entry.destinationPath)) {
+        if (fs.existsSync(safeDestinationPath)) {
           try {
-            const existingHash = await hashFile(entry.destinationPath);
+            const existingHash = await hashFile(safeDestinationPath);
             if (existingHash === entry.sourceHash) {
               entry.destinationHash = existingHash;
               entry.state = "verified";
@@ -446,10 +449,12 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           entry.error = "Destination changed after the dry run.";
           throw new Error(entry.error);
         }
-        const partialPath = `${entry.destinationPath}.${manifest.id}.partial`;
-        await fs.promises.mkdir(path.dirname(entry.destinationPath), { recursive: true });
+        const partialPath = `${safeDestinationPath}.${manifest.id}.partial`;
+        await fs.promises.mkdir(path.dirname(safeDestinationPath), { recursive: true });
+        resolveWithinRoot(partialPath, manifest.destinationRoot);
+        resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
         try {
-          await pipeline(createReadStream(entry.sourcePath), createWriteStream(partialPath, { flags: "w" }));
+          await pipeline(createReadStream(safeSourcePath), createWriteStream(partialPath, { flags: "wx" }));
           const copiedHash = await hashFile(partialPath);
           if (copiedHash !== entry.sourceHash) {
             await fs.promises.rm(partialPath, { force: true });
@@ -457,7 +462,9 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
             entry.error = "SHA-256 verification failed; partial destination removed.";
             throw new Error(entry.error);
           }
-          await fs.promises.rename(partialPath, entry.destinationPath);
+          resolveWithinRoot(partialPath, manifest.destinationRoot);
+          resolveWithinRoot(safeDestinationPath, manifest.destinationRoot);
+          await fs.promises.rename(partialPath, safeDestinationPath);
           entry.destinationHash = copiedHash;
         } catch (error) {
           await fs.promises.rm(partialPath, { force: true });
@@ -527,9 +534,19 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     for (const entry of manifest.entries) {
       if (entry.protected || entry.state !== "verified") continue;
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
-      const destinationHash = await hashFile(entry.destinationPath);
+      const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
+      const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+      // Cleanup is destructive: verify BOTH copies still match the preview hash.
+      const [currentSourceHash, destinationHash] = await Promise.all([
+        hashFile(safeSourcePath),
+        hashFile(safeDestinationPath),
+      ]);
+      if (currentSourceHash !== entry.sourceHash) {
+        throw new Error("Source changed after migration preview; original preserved: " + entry.relativePath);
+      }
       if (destinationHash !== entry.sourceHash) throw new Error(`Destination changed after verification: ${entry.relativePath}`);
-      await fs.promises.rm(entry.sourcePath, { force: false });
+      resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
+      await fs.promises.rm(safeSourcePath, { force: false });
     }
     manifest.state = "CLEANED";
     manifest.cleanupCompletedAt = new Date().toISOString();
