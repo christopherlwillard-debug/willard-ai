@@ -10,12 +10,13 @@ export function waitForExportedSnapshot(child, {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let childClosed = false;
     let timeout;
     let killTimer;
 
     const cleanupTimers = () => {
       clearTimeout(timeout);
-      clearTimeout(killTimer);
+      if (childClosed) clearTimeout(killTimer);
     };
     const settle = (callback, value) => {
       if (settled) return;
@@ -51,12 +52,15 @@ export function waitForExportedSnapshot(child, {
     });
 
     child.stdin.once("error", (error) => {
+      stopChild();
       settle(reject, new Error(`PostgreSQL snapshot holder input failed: ${error.message}`));
     });
     child.once("error", (error) => {
       settle(reject, new Error(`PostgreSQL snapshot holder could not start: ${error.message}`));
     });
     child.once("close", (code, signal) => {
+      childClosed = true;
+      cleanupTimers();
       settle(reject, new Error(
         `PostgreSQL snapshot holder exited early: ${stderr.trim() || (signal ? `signal ${signal}` : `exit code ${code}`)}`,
       ));
