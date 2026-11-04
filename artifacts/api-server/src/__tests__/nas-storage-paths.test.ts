@@ -29,7 +29,7 @@ test("getTempDir rejects a WillardAI directory symlink escaping the library", ()
   const outside = makeTempRoot("willard-nas-outside-");
   try {
     fs.symlinkSync(outside, path.join(root, "WillardAI"), process.platform === "win32" ? "junction" : "dir");
-    assert.throws(() => getTempDir(root, "org-123"), /outside the allowed root/);
+    assert.throws(() => getTempDir(root, "org-123"), /symlink/);
     assert.equal(fs.existsSync(path.join(outside, "temp", "org-123")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -43,7 +43,7 @@ test("getTempDir rejects a temp-directory symlink escaping the library", () => {
   try {
     fs.mkdirSync(path.join(root, "WillardAI"));
     fs.symlinkSync(outside, path.join(root, "WillardAI", "temp"), process.platform === "win32" ? "junction" : "dir");
-    assert.throws(() => getTempDir(root, "org-123"), /outside the allowed root/);
+    assert.throws(() => getTempDir(root, "org-123"), /symlink/);
     assert.equal(fs.existsSync(path.join(outside, "org-123")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -57,10 +57,25 @@ test("getTempDir rejects an existing job-directory symlink", () => {
   try {
     fs.mkdirSync(path.join(root, "WillardAI", "temp"), { recursive: true });
     fs.symlinkSync(outside, path.join(root, "WillardAI", "temp", "org-123"), process.platform === "win32" ? "junction" : "dir");
-    assert.throws(() => getTempDir(root, "org-123"), /outside the allowed root/);
+    assert.throws(() => getTempDir(root, "org-123"), /symlink/);
     assert.equal(fs.readdirSync(outside).length, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("getTempDir rejects an in-root job symlink without touching another job", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  try {
+    const tempRoot = path.join(root, "WillardAI", "temp");
+    const otherJob = path.join(tempRoot, "org-456");
+    fs.mkdirSync(otherJob, { recursive: true });
+    fs.writeFileSync(path.join(otherJob, "keep.txt"), "other job data");
+    fs.symlinkSync(otherJob, path.join(tempRoot, "org-123"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => getTempDir(root, "org-123"), /symlink/);
+    assert.equal(fs.readFileSync(path.join(otherJob, "keep.txt"), "utf8"), "other job data");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
