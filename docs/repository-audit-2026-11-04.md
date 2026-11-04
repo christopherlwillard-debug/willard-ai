@@ -256,3 +256,17 @@ Remaining archive hardening:
 - The regenerated dependency graph completed a frozen install and full workspace typecheck. `pnpm audit --prod --audit-level high` passed with only one low advisory remaining; no high, moderate, or critical production advisories remained.
 - The high Sharp findings were eliminated by forcing Sharp 0.35.5 across direct and transitive dependency paths. The high Zod memory-exhaustion advisory was eliminated by upgrading the shared Zod catalog to 4.6.7 and aligning `zod-validation-error` to 4.0.2. The full workspace typecheck passed with these versions.
 - The dependency refresh workflow completed successfully and regenerated the lockfile. The latest code validation is still running for the PostgreSQL snapshot process regression suite and official 7-Zip candidate compatibility checks.
+
+
+## NAS temporary-directory symlink containment (2026-11-04)
+
+- `getTempDir()` previously used recursive directory creation under `<library>/WillardAI/temp/<job>`. That followed existing symlinks and could place temporary archive/media staging outside the configured library.
+- Added `ensureDirectoryWithinRoot()` to validate the lexical path beneath the configured root, inspect each existing component with `lstat`, reject symlinks and non-directory components, create one component at a time, recheck after creation, and return the canonical path. The shared `temp` parent and each job directory are created with private mode `0700` on POSIX.
+- `getTempDir()` now validates the shared parent before creating a job directory. Tests cover symlink escapes at `WillardAI`, `temp`, and the job directory, in-root cross-job symlink substitution, and private permissions. The first CI run exposed an assertion expecting the wrong error wording; the assertion now matches the fail-closed symlink error. Final validation is pending.
+
+## Further production dependency patching (2026-11-04)
+
+- The first clean high-severity production audit still reported 16 moderate and 1 low advisories. The report inventory identified remaining vulnerable production paths through `qs`, `ip-address`, `postcss`, `brace-expansion`, `uuid`, `glob`, and `minimatch`.
+- Updated workspace overrides to patched versions: `qs` 6.16.1, `ip-address` 10.7.4, `postcss` 8.5.23, `brace-expansion` 1.1.21/2.1.7/5.0.12, `uuid` 11.1.1, `glob` 14.0.2, and `minimatch` 11.0.1. These include major-version overrides for transitive tooling packages; the workspace typecheck and app/runtime compatibility validation are required before treating them as safe.
+- The audit-branch lockfile refresh completed successfully and committed the regenerated lockfile. A frozen-install Fast Validation run against that refreshed commit is required; an earlier run on the pre-refresh commit failed as expected with an override/lockfile mismatch.
+- One moderate advisory remains without an available patched release in the current advisory data: `deepmerge` 4.3.1 (advisory reports no patched version). It is brought in by Expo configuration tooling; do not claim a fully clean advisory report until Expo upstream ships a safe dependency or the affected package is removed/replaced.
