@@ -8,7 +8,7 @@ import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
 import Seven from "node-7z";
-import { path7za } from "7zip-bin";
+import { path7zzs as path7za } from "7zip-bin-full";
 import {
   archiveByIdScope,
   archiveScope,
@@ -440,7 +440,7 @@ router.post("/archives/:id/peek", async (req, res) => {
       return;
     }
 
-    // ── RAR / 7Z / ISO / CAB — full listing via node-7z + 7zip-bin ──────────
+    // ── RAR / 7Z / ISO / CAB — full listing via node-7z + official 7-Zip binary ──────────
     if (BINARY_ONLY_EXTS.has(ext)) {
       const { entries, isPasswordProtected, format, error } = await peek7z(archivePath);
 
