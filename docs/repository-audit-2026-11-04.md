@@ -77,3 +77,12 @@ The branding-path guard also used lexical path containment, which does not accou
 - The archive safety suite is now included in Fast Validation. Latest validation for these changes is pending; do not treat the code as CI-verified until the latest run completes.
 
 Remaining hardening: 7-Zip extraction still relies on the external extractor writing only into the fresh staging directory before the resulting tree is inspected. Further runtime testing against supported 7-Zip binaries and representative link-bearing archives is still required.
+
+## Desktop web-server hardening (2026-11-04)
+
+- The installed desktop web server previously relied on lexical path containment for static files. A symlink inside the packaged web root could resolve outside that root. Static file resolution now canonicalizes the root and requested file and rejects targets outside the real root.
+- The local API proxy now accepts only origin-form `/api/` requests and verifies that the resolved target retains the configured API origin. Absolute and network-path request targets are rejected.
+- Malformed percent-encoded static paths return a client error instead of throwing through the request handler.
+- Interrupted proxy requests now close the upstream request, and upstream errors after response headers have been sent destroy the response rather than attempting to send a second response.
+- Added desktop web-server safety tests for API target confinement, traversal, and symlink escape. Fast Validation now runs those tests.
+- The desktop web-server changes are source-level and unit-testable; an installed Windows runtime/browser smoke test remains outstanding. The API proxy still depends on the API service binding only to loopback as configured by the desktop launcher.
