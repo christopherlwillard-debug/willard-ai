@@ -46,6 +46,14 @@ test("plaintext backup work directory is private before pg_dump writes", async (
   }
 });
 
+test("restore plaintext dump uses an exclusive file in a private operation workspace", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  assert.match(source, /const restoreWorkRoot = await createPrivateBackupWorkDirectory\(\)/);
+  assert.match(source, /const temporaryDump = path\.join\(restoreWorkRoot, "database\.dump"\)/);
+  assert.match(source, /writeFile\(temporaryDump, dump, \{ mode: 0o600, flag: "wx" \}\)/);
+  assert.match(source, /await rm\(restoreWorkRoot, \{ recursive: true, force: true \}\)/);
+});
+
 test("temporary database dump clearing uses bounded chunks and handles partial writes", async () => {
   const size = 2 * 1024 * 1024 + 37;
   const chunkSize = 64 * 1024;
