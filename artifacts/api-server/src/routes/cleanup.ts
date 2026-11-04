@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
-import { sha256File } from "../lib/organize-helpers.ts";
+import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { logger } from "../lib/logger.ts";
@@ -730,11 +730,11 @@ router.post("/cleanup/restore", async (req, res) => {
       }
     };
     await verifyFile(resolvedTrashPath);
-    fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
+    moveFileNoReplace(resolvedTrashPath, resolvedOriginalPath);
     try {
       await verifyFile(resolvedOriginalPath);
     } catch (error) {
-      try { fs.renameSync(resolvedOriginalPath, resolvedTrashPath); } catch { /* recovery will flag the conflict */ }
+      try { moveFileNoReplace(resolvedOriginalPath, resolvedTrashPath); } catch { /* recovery will flag the conflict */ }
       await db.execute(sql`
         UPDATE cleanup_operations SET status = 'NEEDS_REVIEW',
           error = ${error instanceof Error ? error.message : "Restored file verification failed"},
