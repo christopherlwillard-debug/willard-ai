@@ -8,7 +8,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
-import { readFileSync } from "node:fs";
 
 const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
 test("official 7-Zip binary package works with node-7z and archive safety metadata", {
@@ -32,7 +31,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     path.dirname(fileURLToPath(import.meta.url)),
     "../routes/organize.ts",
   );
-  const routeSource = readFileSync(routePath, "utf8");
+  const routeSource = fs.readFileSync(routePath, "utf8");
   assert.match(routeSource, /overwrite:\s*"a"/);
   assert.doesNotMatch(routeSource, /overwrite:\s*"qs"/);
 
