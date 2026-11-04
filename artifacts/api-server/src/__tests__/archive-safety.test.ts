@@ -11,6 +11,7 @@ import {
   createArchiveBudget,
   inspectExtractedTree,
   isZipSymlinkEntry,
+  isSevenZipLinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -174,4 +175,13 @@ test("detects Unix ZIP symlinks when permission bits are present", () => {
   assert.equal(isZipSymlinkEntry(0xA0000000), true);
   assert.equal(isZipSymlinkEntry(0x81A40000), false);
   assert.equal(isZipSymlinkEntry(undefined), false);
+});
+
+
+test("detects 7-Zip links from Windows and POSIX attribute strings", () => {
+  assert.equal(isSevenZipLinkEntry("L"), true);
+  assert.equal(isSevenZipLinkEntry("A  lrwxrwxrwx"), true);
+  assert.equal(isSevenZipLinkEntry("D  drwxr-xr-x"), false);
+  assert.equal(isSevenZipLinkEntry("A  -rw-r--r--"), false);
+  assert.equal(isSevenZipLinkEntry(undefined), false);
 });
