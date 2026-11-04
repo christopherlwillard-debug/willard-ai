@@ -8,7 +8,7 @@ import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
 import Seven from "node-7z";
-import { path7za } from "../lib/sevenzip.ts";
+import { getSevenZipPath } from "../lib/sevenzip.ts";
 import {
   archiveByIdScope,
   archiveScope,
@@ -132,7 +132,7 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
 
   return new Promise((resolve, reject) => {
     const stream = Seven.list(filePath, {
-      $bin: path7za,
+      $bin: getSevenZipPath(),
       $progress: false,
       techInfo: true,
     } as any);
