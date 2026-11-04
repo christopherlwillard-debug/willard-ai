@@ -93,13 +93,13 @@ test("trash manifest refuses a symlinked manifest file outside the library", (co
       }
       throw error;
     }
-    assert.throws(() => manifestPath(nasPath), /regular file inside the configured library/);
+    assert.throws(() => manifestPath(nasPath), /private, unlinked regular file inside the configured library/);
     assert.throws(() => appendTrashManifestEntry(nasPath, {
       nasPath,
       originalPath: path.join(nasPath, "original.jpg"),
       trashPath: path.join(nasPath, "WillardAI", ".Trash", "external.jpg"),
       sizeBytes: 1,
-    }), /regular file inside the configured library/);
+    }), /private, unlinked regular file inside the configured library/);
     assert.equal(fs.readFileSync(outsideFile, "utf8"), "preserve external data\n");
   } finally {
     fs.rmSync(nasPath, { recursive: true, force: true });
