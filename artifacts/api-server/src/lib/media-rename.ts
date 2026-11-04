@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 export class MediaRenameConflictError extends Error {
   constructor() {
     super("Media record changed before the rename could be committed");
@@ -22,6 +24,14 @@ export async function renameFileWithPersistence<T>(
     if (result === undefined) throw new MediaRenameConflictError();
     return result;
   } catch (error) {
+    // Never overwrite a new file that another process may have created at
+    // the original path while the catalog update was in flight.
+    if (existsSync(sourcePath)) {
+      throw new AggregateError(
+        [error, new Error("The original media path is occupied; rollback was not allowed to overwrite it.")],
+        "Media rename persistence failed and the original path is now occupied",
+      );
+    }
     try {
       renameFile(destinationPath, sourcePath);
     } catch (rollbackError) {
