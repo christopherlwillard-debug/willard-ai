@@ -58,3 +58,12 @@ The branding-path guard also used lexical path containment, which does not accou
 - This audit branch is based on the existing saved-search privacy audit branch.
 - No credentials, database records, media files, production settings, or release artifacts were touched.
 - Do not merge until the outstanding Windows workflow and any additional runtime tests complete successfully.
+
+
+## Archive extraction review (2026-11-04)
+
+- Confirmed and fixed a ZIP symlink-detection defect in the organize extraction path. It compared the complete Unix mode field to `0xA000`, which misses normal symlink modes when permission bits are set (for example `0xA1FF`). Both archive catalog inspection and organize extraction now use one shared file-type-mask helper.
+- Added regression coverage for symlink modes with and without permission bits, plus a regular-file control case.
+- Added the archive-safety regression suite to Fast Validation. It was present in the repository but was not previously executed by that workflow.
+- Remaining review item: 7z/RAR/CAB/ISO extraction uses an external extractor and validates the resulting tree afterward. I have not yet established that every supported 7-Zip build suppresses link creation before writing, so this remains a hardening item rather than a claimed exploit or verified fix.
+- Existing ZIP safeguards include bounded archive/entry sizes, path and duplicate checks, per-entry CRC/SHA-256 verification, atomic file publication, and final extracted-tree inspection. The configured ZIP buffer limits are intentionally high (1 GiB archive / 512 MiB per entry), so memory headroom should be verified against the intended desktop/server deployment.
