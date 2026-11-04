@@ -65,3 +65,17 @@ test("Windows continues to use its bundled executable unless explicitly configur
     "C:\\app\\7za.exe",
   );
 });
+
+test("packaged official Windows binary takes precedence over legacy fallback", () => {
+  const packaged = path.join("C:\\", "Willard", "api-runtime", "dist", "vendor", "7z.exe");
+  assert.equal(
+    resolveSevenZipPath({
+      platform: "win32",
+      pathEnv: "C:\\tools",
+      packagedPath: packaged,
+      fallbackPath: "C:\\app\\7za.exe",
+      exists: (candidate) => candidate === packaged,
+    }),
+    packaged,
+  );
+});
