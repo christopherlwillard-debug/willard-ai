@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
+import { isTrashEntryExpired } from "./cleanup-retention.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
 
 export type TrashManifestEntry = {
@@ -215,15 +216,6 @@ export type ExpiredTrashResult = {
   errors: string[];
 };
 
-/**
- * Fail closed on absent or malformed retention metadata. Invalid dates must
- * never be interpreted as an instruction to permanently delete user media.
- */
-export function isTrashEntryExpired(expiresAt: unknown, now = Date.now()): boolean {
-  if (typeof expiresAt !== "string" || !expiresAt.trim()) return false;
-  const expiresAtMs = Date.parse(expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs < now;
-}
 
 /**
  * Permanently remove expired local-trash files and their canonical rows.
