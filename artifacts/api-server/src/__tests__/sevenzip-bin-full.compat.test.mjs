@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,16 +8,12 @@ import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
 
-const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
 const configuredBinaryPath = process.env.WILLARD_7ZIP_PATH;
 
 test("official 7-Zip binary works with node-7z and archive safety metadata", {
-  skip: !packagePath && !configuredBinaryPath ? "official 7-Zip binary not configured" : false,
+  skip: !configuredBinaryPath ? "WILLARD_7ZIP_PATH must point to the verified official 7-Zip binary" : false,
 }, async () => {
-  const packageApi = packagePath ? createRequire(import.meta.url)(packagePath) : null;
-  const binaryPath = configuredBinaryPath ?? (
-    process.platform === "win32" ? packageApi?.path7z : packageApi?.path7zzs
-  );
+  const binaryPath = configuredBinaryPath;
   assert.equal(typeof binaryPath, "string");
   assert.ok(fs.existsSync(binaryPath), `7-Zip binary is missing: ${binaryPath}`);
 
