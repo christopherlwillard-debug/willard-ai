@@ -118,3 +118,11 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - Added a strict inline MIME allowlist for the viewer's supported JPEG/PNG/GIF/WebP/AVIF/BMP/TIFF/HEIC/HEIF images, audio, video, and PDF. Other formats—including SVG, HTML, XML, and unknown types—are delivered as `application/octet-stream` with `Content-Disposition: attachment`.
 - Added regression coverage for active document MIME types and the supported inline media types.
 - Browser-level verification of the download behavior remains outstanding; Fast Validation runs the helper-level policy tests.
+
+
+## Media rename rollback protection (2026-11-04)
+
+- The media rename route moved the library file first and then updated its catalog row. A database error or a concurrent state change could leave the file at the new path while the catalog continued pointing at the old path.
+- Added a rollback-safe helper: if catalog persistence fails or the row is no longer active, it attempts to restore the original filesystem path. If rollback also fails, both errors are preserved for diagnosis rather than silently masking the recovery failure.
+- Added tests for database failure, stale/inactive catalog rows, successful rename, and rollback failure; Fast Validation now runs this suite.
+- This narrows the filesystem/database inconsistency window. It cannot make a filesystem rename and a database transaction truly atomic; a process or machine crash between the two operations still needs recovery/consistency checks.
