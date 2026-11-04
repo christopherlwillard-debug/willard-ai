@@ -54,23 +54,26 @@ function trashRoot(nasPath: string): string {
   return resolveWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), path.join(nasPath, "WillardAI"));
 }
 
+function pathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function samePath(left: string, right: string): boolean {
-  const a = path.resolve(left);
-  const b = path.resolve(right);
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  return pathKey(left) === pathKey(right);
 }
 
 export function readTrashManifest(nasPath: string): { lines: string[]; entries: TrashManifestEntry[] } {
   const filePath = manifestPath(nasPath);
   if (!fs.existsSync(filePath)) return { lines: [], entries: [] };
   const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
-  const removedPaths: string[] = [];
+  const removedPaths = new Set<string>();
   const entries: TrashManifestEntry[] = [];
   for (const line of lines) {
     try {
       const record = JSON.parse(line) as Record<string, unknown>;
       if (record.recordType === "REMOVE" && typeof record.trashPath === "string") {
-        removedPaths.push(record.trashPath);
+        removedPaths.add(pathKey(record.trashPath));
         continue;
       }
       if (typeof record.originalPath === "string" && typeof record.trashPath === "string") {
@@ -83,14 +86,13 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
   return {
     lines,
     entries: entries.filter((entry) =>
-      !removedPaths.some((removedPath) => samePath(entry.trashPath, removedPath)),
+      !removedPaths.has(pathKey(entry.trashPath)),
     ),
   };
 }
 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
   const filePath = manifestPath(nasPath);
-  ensurePrivateDir(path.dirname(filePath));
   const fd = fs.openSync(filePath, "a", 0o600);
   try {
     fs.writeSync(fd, JSON.stringify(entry) + "\n");
