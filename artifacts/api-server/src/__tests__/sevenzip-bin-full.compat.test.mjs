@@ -9,15 +9,23 @@ import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
 
-test("official 7-Zip binary package works with node-7z and archive safety metadata", async () => {
-  const { path7zzs } = createRequire(import.meta.url)("7zip-bin-full");
-  assert.equal(typeof path7zzs, "string");
-  assert.ok(fs.existsSync(path7zzs), `7-Zip binary is missing: ${path7zzs}`);
+const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
+const configuredBinaryPath = process.env.WILLARD_7ZIP_PATH;
 
-  const versionResult = spawnSync(path7zzs, ["i"], { encoding: "utf8", timeout: 15_000 });
+test("official 7-Zip binary works with node-7z and archive safety metadata", {
+  skip: !packagePath && !configuredBinaryPath ? "official 7-Zip binary not configured" : false,
+}, async () => {
+  const packageApi = packagePath ? createRequire(import.meta.url)(packagePath) : null;
+  const binaryPath = configuredBinaryPath ?? (
+    process.platform === "win32" ? packageApi?.path7z : packageApi?.path7zzs
+  );
+  assert.equal(typeof binaryPath, "string");
+  assert.ok(fs.existsSync(binaryPath), `7-Zip binary is missing: ${binaryPath}`);
+
+  const versionResult = spawnSync(binaryPath, ["i"], { encoding: "utf8", timeout: 15_000 });
   assert.equal(versionResult.status, 0, versionResult.stderr || versionResult.error?.message);
   const versionText = `${versionResult.stdout}\n${versionResult.stderr}`;
-  const version = versionText.match(/7-Zip \(z\) (\d+)\.(\d+)/);
+  const version = versionText.match(/7-Zip(?: \\(z\\))? (\\d+)\\.(\\d+)/);
   assert.ok(version, `Unable to read 7-Zip version from: ${versionText.slice(0, 500)}`);
   assert.ok(
     Number(version[1]) > 26 || (Number(version[1]) === 26 && Number(version[2]) >= 1),
@@ -29,14 +37,14 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     "../routes/organize.ts",
   );
   const routeSource = fs.readFileSync(routePath, "utf8");
-  assert.match(routeSource, /overwrite:\s*"a"/);
-  assert.doesNotMatch(routeSource, /overwrite:\s*"qs"/);
+  assert.match(routeSource, /overwrite:\\s*"a"/);
+  assert.doesNotMatch(routeSource, /overwrite:\\s*"qs"/);
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-7zip-full-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-7zip-official-"));
   try {
     fs.writeFileSync(path.join(root, "payload.txt"), "verified archive payload\n");
     const archive = path.join(root, "regular.7z");
-    const create = spawnSync(path7zzs, ["a", archive, "payload.txt"], {
+    const create = spawnSync(binaryPath, ["a", archive, "payload.txt"], {
       cwd: root,
       encoding: "utf8",
       timeout: 30_000,
@@ -46,7 +54,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     const listed = await new Promise((resolve, reject) => {
       const entries = [];
       const stream = Seven.list(archive, {
-        $bin: path7zzs,
+        $bin: binaryPath,
         $progress: false,
         techInfo: true,
       });
@@ -67,7 +75,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     if (process.platform !== "win32") {
       fs.symlinkSync("payload.txt", path.join(root, "linked.txt"));
       const linkArchive = path.join(root, "link.7z");
-      const linkCreate = spawnSync(path7zzs, ["a", "-snl", linkArchive, "linked.txt"], {
+      const linkCreate = spawnSync(binaryPath, ["a", "-snl", linkArchive, "linked.txt"], {
         cwd: root,
         encoding: "utf8",
         timeout: 30_000,
@@ -77,7 +85,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
       const linkEntries = await new Promise((resolve, reject) => {
         const entries = [];
         const stream = Seven.list(linkArchive, {
-          $bin: path7zzs,
+          $bin: binaryPath,
           $progress: false,
           techInfo: true,
         });
@@ -95,7 +103,7 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     const destination = path.join(root, "extracted");
     await new Promise((resolve, reject) => {
       const stream = Seven.extractFull(archive, destination, {
-        $bin: path7zzs,
+        $bin: binaryPath,
         $progress: false,
         overwrite: "a",
       });
