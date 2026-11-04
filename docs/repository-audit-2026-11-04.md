@@ -191,3 +191,16 @@ Remaining archive hardening:
 - Candidate replacement: `7zip-bin-full@26.5.1`, which packages official upstream 7-Zip 26.05 binaries for Windows, Linux, and macOS and exposes a `path7z` executable path. This is a third-party repackaging project and is relatively new; the complete package includes multiple platforms and adds significant size, so it should not be adopted without testing runtime behavior and deployment footprint.
 - Added a compatibility smoke test that exercises the candidate's real static binary (`path7zzs`) through `node-7z`: version check (26.01+), archive creation, `techInfo` list metadata parsing, POSIX symlink metadata detection on Linux, and extraction. Fast Validation now installs the pinned candidate into a temporary CI-only directory on Linux and Windows and checks Windows create/extract behavior; this does not yet change the production dependency. The candidate compatibility run is pending.
 - References: `https://raw.githubusercontent.com/develar/7zip-bin/master/linux/x64/do-build.sh`; `https://github.com/develar/7zip-bin/pull/28`; `https://www.debian.org/lts/security/` (DLA-4681-1, 2026-07-13); `https://www.npmjs.com/package/7zip-bin-full`.
+
+
+## Temporary NAS staging directory symlink containment (2026-11-04)
+
+- `getTempDir` previously used recursive `mkdir` under `<library>/WillardAI/temp` without canonicalizing existing ancestors. A symlink at `WillardAI`, `temp`, or the per-job directory could redirect temporary archive/media work outside the configured library.
+- Added `ensureDirectoryWithinRoot`, which canonicalizes the root and target, rejects symlink escapes, creates directory components individually, verifies each component, and returns the canonical path. `getTempDir` now validates the shared `temp` directory and makes it private before creating per-job directories, then applies private permissions to each job directory.
+- Added regression tests for a normal private temp directory and symlink escapes at each of the three path levels. Included the tests in Fast Validation. Latest test result is pending.
+
+## Invalid 7-Zip overwrite switch (2026-11-04)
+
+- The organize extractor passed `overwrite: "qs"` to `node-7z`, which emits `-aoqs`. The documented 7-Zip switch accepts exactly one mode character (`a`, `s`, `t`, or `u`); the actual 26.05 candidate binary rejected `-aoqs` with `Command Line Error: Too long switch`, so valid 7z-family archive extraction could fail before writing any files.
+- Changed the extractor to `overwrite: "a"` (overwrite all) because the staging directory is deliberately cleared and recreated before extraction. This avoids prompts and uses a valid switch. The integration smoke now checks the real CLI path and asserts the application route no longer uses `qs`.
+- The first candidate smoke run failed on the invalid option, which confirmed the defect. The corrected candidate run is pending; the production dependency has not yet been upgraded.
