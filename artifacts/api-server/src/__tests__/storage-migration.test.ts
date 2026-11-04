@@ -176,6 +176,19 @@ test("cleanup requires a separate confirmation and never removes protected conve
   assert.equal(fs.existsSync(backup), true);
 });
 
+test("cleanup preserves an original that changed after the migration copy", async () => {
+  const paths = fixture();
+  const original = path.join(paths.source, "WillardAI/cache/thumbnails/changed-after-copy.webp");
+  fs.writeFileSync(original, "original bytes");
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({ sourceRoot: paths.source, destinationRoot: paths.destination, referenceRows: [] });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+  fs.writeFileSync(original, "new user data written after copy");
+  await assert.rejects(() => service.cleanup(manifest.id), /Source changed after migration preview; original preserved/);
+  assert.equal(fs.readFileSync(original, "utf8"), "new user data written after copy");
+  assert.equal(fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/changed-after-copy.webp"), "utf8"), "original bytes");
+});
 test("preview records missing database-referenced artifacts and refuses insufficient destinations", async () => {
   const paths = fixture();
   const missing = path.join(paths.source, "WillardAI/cache/thumbnails/no-longer-present.webp");
