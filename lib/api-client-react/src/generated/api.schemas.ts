@@ -1147,6 +1147,7 @@ export const OrganizationJobStatus = {
   preflight: 'preflight',
   verified: 'verified',
   executing: 'executing',
+  rolling_back: 'rolling_back',
   completed: 'completed',
   failed: 'failed',
   rolled_back: 'rolled_back',
