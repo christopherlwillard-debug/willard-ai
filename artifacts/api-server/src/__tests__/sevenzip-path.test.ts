@@ -4,84 +4,111 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveSevenZipPath } from "../lib/sevenzip.ts";
 
-test("configured 7-Zip path takes precedence when it exists", () => {
+const officialVersion = () => "26.05";
+
+test("configured official 7-Zip path takes precedence when its version is supported", () => {
   assert.equal(
     resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/usr/bin",
       configuredPath: "/opt/willard/7zz",
-      fallbackPath: "/legacy/7za",
       exists: (candidate) => candidate === "/opt/willard/7zz",
+      getVersion: officialVersion,
     }),
     "/opt/willard/7zz",
   );
 });
 
-test("Linux prefers the official static 7zzs binary over 7zz and legacy fallback", () => {
-  const available = new Set([path.join("/nix/store/7zip/bin", "7zzs"), path.join("/nix/store/7zip/bin", "7zz")]);
+test("outdated configured binaries are skipped in favor of a verified official system binary", () => {
+  const current = path.join("/nix/store/7zip/bin", "7zzs");
   assert.equal(
     resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/nix/store/7zip/bin",
-      fallbackPath: "/legacy/7za",
-      exists: (candidate) => available.has(candidate),
+      configuredPath: "/opt/legacy/7za",
+      exists: (candidate) => candidate === "/opt/legacy/7za" || candidate === current,
+      getVersion: (candidate) => candidate === current ? "26.05" : "16.02",
     }),
-    path.join("/nix/store/7zip/bin", "7zzs"),
+    current,
   );
 });
 
-test("Linux falls back to official dynamic 7zz when static 7zzs is absent", () => {
+test("Linux prefers verified official static 7zzs over dynamic 7zz", () => {
+  const staticBinary = path.join("/nix/store/7zip/bin", "7zzs");
+  const dynamicBinary = path.join("/nix/store/7zip/bin", "7zz");
+  assert.equal(
+    resolveSevenZipPath({
+      platform: "linux",
+      pathEnv: "/nix/store/7zip/bin",
+      exists: (candidate) => candidate === staticBinary || candidate === dynamicBinary,
+      getVersion: (candidate) => candidate === staticBinary ? "26.05" : "26.05",
+    }),
+    staticBinary,
+  );
+});
+
+test("Linux uses official dynamic 7zz when static 7zzs is absent", () => {
   const candidate = path.join("/usr/local/bin", "7zz");
   assert.equal(
     resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/usr/local/bin",
-      fallbackPath: "/legacy/7za",
       exists: (value) => value === candidate,
+      getVersion: officialVersion,
     }),
     candidate,
   );
 });
 
-test("missing system binaries preserve the bundled compatibility fallback", () => {
+test("missing or outdated binaries fail closed instead of using bundled p7zip", () => {
   assert.equal(
     resolveSevenZipPath({
       platform: "linux",
       pathEnv: "",
-      fallbackPath: "/legacy/7za",
       exists: () => false,
+      getVersion: () => undefined,
     }),
-    "/legacy/7za",
+    undefined,
+  );
+  assert.equal(
+    resolveSevenZipPath({
+      platform: "linux",
+      pathEnv: "/usr/bin",
+      exists: () => true,
+      getVersion: () => "16.02",
+    }),
+    undefined,
   );
 });
 
-test("Windows continues to use its bundled executable unless explicitly configured", () => {
+test("Windows resolves official system 7-Zip instead of a legacy bundled executable", () => {
+  const candidate = path.join("C:\\tools", "7z.exe");
   assert.equal(
     resolveSevenZipPath({
       platform: "win32",
       pathEnv: "C:\\tools",
-      fallbackPath: "C:\\app\\7za.exe",
-      exists: (candidate) => candidate === "C:\\app\\7za.exe",
+      exists: (value) => value === candidate,
+      getVersion: officialVersion,
     }),
-    "C:\\app\\7za.exe",
+    candidate,
   );
 });
 
-test("packaged official Windows binary takes precedence over legacy fallback", () => {
+test("packaged official Windows binary takes precedence over system PATH", () => {
   const packaged = path.join("C:\\", "Willard", "api-runtime", "dist", "vendor", "7z.exe");
   assert.equal(
     resolveSevenZipPath({
       platform: "win32",
       pathEnv: "C:\\tools",
       packagedPath: packaged,
-      fallbackPath: "C:\\app\\7za.exe",
-      exists: (candidate) => candidate === packaged,
+      exists: (candidate) => candidate === packaged || candidate.endsWith("7z.exe"),
+      getVersion: (candidate) => candidate === packaged ? "26.05" : "16.02",
     }),
     packaged,
   );
 });
 
-test("compiled API resolves the bundled 7-Zip folder beside api-runtime", () => {
+test("compiled API resolves the bundled official 7-Zip folder beside api-runtime", () => {
   const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
   const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7zzs");
   assert.equal(
@@ -89,8 +116,8 @@ test("compiled API resolves the bundled 7-Zip folder beside api-runtime", () => 
       platform: "linux",
       pathEnv: "",
       moduleUrl,
-      fallbackPath: "/legacy/7za",
       exists: (candidate) => candidate === packaged,
+      getVersion: officialVersion,
     }),
     packaged,
   );
