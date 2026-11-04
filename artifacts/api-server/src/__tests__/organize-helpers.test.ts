@@ -368,6 +368,13 @@ test("organization resume and reset require a stale execution lease", () => {
   const rollbackMovesSource = helperSource.slice(rollbackMovesStart);
   assert.match(rollbackMovesSource, /moveFileNoReplace\(mv\.to, mv\.from\)/);
   assert.doesNotMatch(rollbackMovesSource, /moveFile\(mv\.to, mv\.from\)/);
+
+  const recoveryStart = source.indexOf('router.get("/organize/recovery"');
+  const rollbackRouteStart = source.indexOf('router.post("/organize/jobs/:id/rollback"', recoveryStart);
+  const recoveryRoute = source.slice(recoveryStart, rollbackRouteStart);
+  assert.match(recoveryRoute, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
+  assert.match(recoveryRoute, /inArray\(organizationJobsTable\.status, \["executing", "rolling_back"\]\)/);
+  assert.match(recoveryRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
 });
 
 test("rollbackMoves: repeated recovery recognizes a file already restored", async () => {
