@@ -11,6 +11,7 @@ import { test } from "node:test";
 import {
   buildLibraryRemapSql,
   findWindowsPostgresBinary,
+  overwriteFileWithZeroes,
 } from "./database-backup.mjs";
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
@@ -27,6 +28,31 @@ import {
 } from "./backup-credentials.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("temporary database dump clearing uses bounded chunks and handles partial writes", async () => {
+  const size = 2 * 1024 * 1024 + 37;
+  const chunkSize = 64 * 1024;
+  const destination = Buffer.alloc(size, 0xff);
+  let largestWriteBuffer = 0;
+  let syncCalled = false;
+  const handle = {
+    async write(buffer, offset, length, position) {
+      largestWriteBuffer = Math.max(largestWriteBuffer, buffer.length);
+      const bytesWritten = Math.min(length, 4093);
+      buffer.copy(destination, position, offset, offset + bytesWritten);
+      return { bytesWritten };
+    },
+    async sync() {
+      syncCalled = true;
+    },
+  };
+
+  await overwriteFileWithZeroes(handle, size, chunkSize);
+  assert.equal(largestWriteBuffer, chunkSize);
+  assert.ok(destination.every((byte) => byte === 0));
+  assert.equal(syncCalled, true);
+  await assert.rejects(() => overwriteFileWithZeroes(handle, Number.MAX_SAFE_INTEGER + 1), /invalid file size/);
+});
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "desktop", "database-backup.mjs");
 const postgresBin = process.env.POSTGRES_BIN || "postgres";
