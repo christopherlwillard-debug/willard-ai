@@ -472,10 +472,11 @@ router.post("/cleanup/execute", async (req, res) => {
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
-          const trashDir = ensureDirectoryWithinRoot(
-            path.join(nasPath, "WillardAI", ".Trash", trashTimestamp),
+          const trashRoot = ensureDirectoryWithinRoot(
+            path.join(nasPath, "WillardAI", ".Trash"),
             nasPath,
           );
+          const trashDir = ensureDirectoryWithinRoot(path.join(trashRoot, trashTimestamp), nasPath);
           const safeBasename = `${fileId}_${path.basename(file.name)}`;
           trashPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
           await db.execute(sql`
