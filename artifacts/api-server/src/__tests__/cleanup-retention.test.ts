@@ -20,6 +20,7 @@ test("manual restore and startup recovery use no-replace moves", () => {
   const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
   assert.match(cleanupRoute, /moveFileNoReplace\(resolvedTrashPath, resolvedOriginalPath\)/);
   assert.match(cleanupRoute, /ensureDirectoryWithinRoot\(/);
+  assert.match(cleanupRoute, /path\.join\(nasPath, "WillardAI", "\.Trash", trashTimestamp\)[\s\S]{0,120}nasPath/);
   assert.match(cleanupRoute, /moveFileNoReplace\(filePath, trashPath\)/);
   assert.match(cleanupRoute, /moveFileNoReplace\(resolvedOriginalPath, resolvedTrashPath\)/);
   assert.match(recoverySource, /moveFileNoReplace\(sourceTrash, destination\)/);
