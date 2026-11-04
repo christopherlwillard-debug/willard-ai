@@ -276,7 +276,7 @@ Remaining archive hardening:
 
 - Downloaded the official static Linux x64 archive from the upstream 7-Zip release and verified its pinned SHA-256 before executing it. The compatibility test passed with the repository's existing `node-7z` wrapper: version check, archive creation, technical listing metadata, size/CRC parsing, POSIX symbolic-link metadata detection, and extraction.
 - The Windows runner independently downloaded and hash-verified official 7-Zip 26.05 assets, then passed create/extract content verification. This validates the official binary on both CI platforms without adopting the third-party `7zip-bin-full` package.
-- The official binary is already selected in the packaged Replit and Windows deployment paths. The remaining gap is the legacy `7zip-bin` fallback for unprovisioned developer or other Linux/macOS installations. I did not remove or replace that fallback because doing so would break those environments unless an official system binary is installed or configured.
+- The official binary is already selected in the packaged Replit and Windows deployment paths. The legacy `7zip-bin` fallback has now been removed entirely; archive operations require a verified official 7-Zip 26.01+ binary and fail with an actionable message when it is unavailable, while API startup and non-archive features remain available. The API package and lockfile no longer include `7zip-bin`.
 
 
 ## Release staging and official 7-Zip destination safety (2026-11-04)
