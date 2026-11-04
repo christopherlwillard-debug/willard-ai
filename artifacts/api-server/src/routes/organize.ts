@@ -68,7 +68,7 @@ const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
  * A resume request may reclaim an "executing" job only after this heartbeat
  * becomes stale, which distinguishes a crashed worker from a live one.
  */
-function startOrganizationJobHeartbeat(id: number, nasPath: string): () => void {
+function startOrganizationJobHeartbeat(id: number, nasPath: string, status: "executing" | "rolling_back" = "executing"): () => void {
   let inFlight = false;
   const timer = setInterval(async () => {
     if (inFlight) return;
@@ -79,10 +79,10 @@ function startOrganizationJobHeartbeat(id: number, nasPath: string): () => void 
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
-          eq(organizationJobsTable.status, "executing"),
+          eq(organizationJobsTable.status, status),
         ));
     } catch (error) {
-      logger.warn({ err: error, jobId: id }, "Organization execution heartbeat failed");
+      logger.warn({ err: error, jobId: id, status }, "Organization job heartbeat failed");
     } finally {
       inFlight = false;
     }
@@ -1997,13 +1997,41 @@ router.get("/organize/recovery", async (_req, res) => {
  */
 router.post("/organize/jobs/:id/rollback", async (req, res) => {
   const id = parseInt(req.params.id);
+  let stopHeartbeat: (() => void) | null = null;
+  let nasPath = "";
   try {
-    const nasPathForJob = await getNasPath();
-    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
+    nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (!["executing", "failed"].includes(job.status)) {
-      res.status(409).json({ error: `Job status is '${job.status}' — only executing or failed jobs can be rolled back here` }); return;
+    if (!["executing", "failed", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: `Job status is '${job.status}' — only interrupted or failed jobs can be rolled back here` }); return;
     }
+
+    // Rollback moves files and changes the recovery journal. Claim it only
+    // after the previous worker is failed or its heartbeat has expired.
+    const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    const [claimedRollback] = await db.update(organizationJobsTable)
+      .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date() })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPath),
+        or(
+          eq(organizationJobsTable.status, "failed"),
+          and(
+            inArray(organizationJobsTable.status, ["executing", "rolling_back"]),
+            or(
+              isNull(organizationJobsTable.stageUpdatedAt),
+              lt(organizationJobsTable.stageUpdatedAt, staleBefore),
+            ),
+          ),
+        ),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedRollback) {
+      res.status(409).json({ error: "This job is still running. Wait for its heartbeat to expire before rolling it back." });
+      return;
+    }
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, "rolling_back");
 
     const moves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     const logs: string[] = [];
@@ -2018,11 +2046,30 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
         ? `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`
         : `Partial rollback: only ${rolledBack}/${moves.length} move(s) reversed — manual intervention may be required.`,
       completedAt: isComplete ? new Date() : null,
-    }).where(eq(organizationJobsTable.id, id));
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.status, "rolling_back"),
+    ));
 
     res.json({ ok: isComplete, rolledBack, total: moves.length, partial: !isComplete, logs });
   } catch (e: any) {
+    if (nasPath) {
+      try {
+        await db.update(organizationJobsTable)
+          .set({ status: "failed", error: e.message ?? "Rollback failed", stageUpdatedAt: new Date() })
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.status, "rolling_back"),
+          ));
+      } catch (persistError) {
+        logger.error({ err: persistError, jobId: id }, "Could not persist organization rollback failure");
+      }
+    }
     res.status(500).json({ error: e.message ?? "Rollback failed" });
+  } finally {
+    stopHeartbeat?.();
   }
 });
 
