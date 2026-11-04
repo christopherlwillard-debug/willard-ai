@@ -44,7 +44,17 @@ function proxyApi(request, response) {
     response.writeHead(upstream.statusCode ?? 502, upstream.headers);
     upstream.pipe(response);
   });
-  proxy.on("error", () => sendError(response, 502, "The local library service is unavailable."));
+  proxy.on("error", () => {
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
+    sendError(response, 502, "The local library service is unavailable.");
+  });
+  request.once("aborted", () => proxy.destroy());
+  response.once("close", () => {
+    if (!response.writableEnded) proxy.destroy();
+  });
   request.pipe(proxy);
 }
 
