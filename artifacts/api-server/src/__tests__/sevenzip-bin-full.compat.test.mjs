@@ -25,7 +25,7 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
   const versionResult = spawnSync(binaryPath, ["i"], { encoding: "utf8", timeout: 15_000 });
   assert.equal(versionResult.status, 0, versionResult.stderr || versionResult.error?.message);
   const versionText = `${versionResult.stdout}\n${versionResult.stderr}`;
-  const version = versionText.match(/7-Zip(?: \\(z\\))? (\\d+)\\.(\\d+)/);
+  const version = versionText.match(/7-Zip(?: \(z\))? (\d+)\.(\d+)/);
   assert.ok(version, `Unable to read 7-Zip version from: ${versionText.slice(0, 500)}`);
   assert.ok(
     Number(version[1]) > 26 || (Number(version[1]) === 26 && Number(version[2]) >= 1),
@@ -37,8 +37,8 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
     "../routes/organize.ts",
   );
   const routeSource = fs.readFileSync(routePath, "utf8");
-  assert.match(routeSource, /overwrite:\\s*"a"/);
-  assert.doesNotMatch(routeSource, /overwrite:\\s*"qs"/);
+  assert.match(routeSource, /overwrite:\s*"a"/);
+  assert.doesNotMatch(routeSource, /overwrite:\s*"qs"/);
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-7zip-official-"));
   try {
