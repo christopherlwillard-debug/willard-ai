@@ -45,9 +45,17 @@ function affectedRows(result: unknown): number {
 }
 
 export function manifestPath(nasPath: string): string {
-  const logsDir = path.join(nasPath, "WillardAI", "logs");
-  ensureDirectoryWithinRoot(logsDir, nasPath);
-  return path.join(logsDir, "trash-manifest.jsonl");
+  const logsDir = ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", "logs"), nasPath);
+  const filePath = path.join(logsDir, "trash-manifest.jsonl");
+  try {
+    const info = fs.lstatSync(filePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error("Trash manifest must be a regular file inside the configured library.");
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return filePath;
 }
 
 function trashRoot(nasPath: string): string {
