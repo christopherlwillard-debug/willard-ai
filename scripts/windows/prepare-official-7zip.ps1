@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Destination
+  [string]$Destination,
+  [switch]$ExportPathToGitHubEnvironment
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,7 +104,7 @@ try {
   }
 
   Write-Host "Official 7-Zip 26.05 Windows binary verified and smoke-tested at $DestinationExe"
-  if ($env:GITHUB_ENV) {
+  if ($ExportPathToGitHubEnvironment -and $env:GITHUB_ENV) {
     "WILLARD_7ZIP_PATH=$DestinationExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
   }
 } finally {
