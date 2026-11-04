@@ -216,6 +216,16 @@ export type ExpiredTrashResult = {
 };
 
 /**
+ * Fail closed on absent or malformed retention metadata. Invalid dates must
+ * never be interpreted as an instruction to permanently delete user media.
+ */
+export function isTrashEntryExpired(expiresAt: unknown, now = Date.now()): boolean {
+  if (typeof expiresAt !== "string" || !expiresAt.trim()) return false;
+  const expiresAtMs = Date.parse(expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs < now;
+}
+
+/**
  * Permanently remove expired local-trash files and their canonical rows.
  * Windows' OS recycle bin is intentionally not guessed at: only manifest
  * entries with a validated WillardAI/.Trash path are eligible here.
@@ -225,7 +235,7 @@ export async function purgeExpiredTrashEntries(nasPath: string): Promise<Expired
   const { entries } = readTrashManifest(nasPath);
   const trash = trashRoot(nasPath);
   for (const entry of entries) {
-    if (!entry.expiresAt || new Date(entry.expiresAt).getTime() >= Date.now()) continue;
+    if (!isTrashEntryExpired(entry.expiresAt)) continue;
     result.expired++;
     let trashPath: string;
     try { trashPath = resolveWithinRoot(entry.trashPath, trash); }
