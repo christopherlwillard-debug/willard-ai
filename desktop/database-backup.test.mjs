@@ -13,6 +13,7 @@ import {
   createPrivateBackupWorkDirectory,
   findWindowsPostgresBinary,
   overwriteFileWithZeroes,
+  runTool,
 } from "./database-backup.mjs";
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
@@ -44,6 +45,36 @@ test("plaintext backup work directory is private before pg_dump writes", async (
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("PostgreSQL helper subprocess output is bounded and excessive output is terminated", async () => {
+  await assert.rejects(
+    runTool(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000)"],
+      process.env,
+      "bounded test process",
+      { maxOutputBytes: 128 },
+    ),
+    /exceeded its 128-byte output limit/,
+  );
+});
+
+test("PostgreSQL helper subprocess retains only a bounded stderr tail", async () => {
+  await assert.rejects(
+    runTool(
+      process.execPath,
+      ["-e", "process.stderr.write('x'.repeat(4096)); process.exit(1)"],
+      process.env,
+      "stderr tail test",
+      { maxStderrBytes: 64 },
+    ),
+    (error) => {
+      assert.ok(error.message.length < 200);
+      assert.ok(error.message.endsWith("x".repeat(64)));
+      return true;
+    },
+  );
 });
 
 test("restore plaintext dump uses an exclusive file in a private operation workspace", async () => {
