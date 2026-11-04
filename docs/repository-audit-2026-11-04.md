@@ -196,7 +196,7 @@ Remaining archive hardening:
 ## Temporary NAS staging directory symlink containment (2026-11-04)
 
 - `getTempDir` previously used recursive `mkdir` under `<library>/WillardAI/temp` without canonicalizing existing ancestors. A symlink at `WillardAI`, `temp`, or the per-job directory could redirect temporary archive/media work outside the configured library.
-- Added `ensureDirectoryWithinRoot`, which canonicalizes the root and target, rejects symlink escapes, creates directory components individually, verifies each component, and returns the canonical path. `getTempDir` now validates the shared `temp` directory and makes it private before creating per-job directories, then applies private permissions to each job directory.
+- Added `ensureDirectoryWithinRoot`, which canonicalizes the root, retains the target's lexical suffix so every descendant can be checked with `lstat`, rejects all descendant symlinks (including links to another path inside the library), creates directory components individually, and returns the canonical path. `getTempDir` now validates the shared `temp` directory and makes it private before creating per-job directories, then applies private permissions to each job directory. Archive extraction revalidates the staging chain immediately before resetting it, and redundant recursive `mkdir` calls were removed.
 - Added regression tests for a normal private temp directory and symlink escapes at each of the three path levels. Included the tests in Fast Validation. Latest test result is pending.
 
 ## Invalid 7-Zip overwrite switch (2026-11-04)
