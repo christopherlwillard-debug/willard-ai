@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 import {
   buildLibraryRemapSql,
+  createPrivateBackupWorkDirectory,
   findWindowsPostgresBinary,
   overwriteFileWithZeroes,
 } from "./database-backup.mjs";
@@ -29,6 +30,21 @@ import {
 import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("plaintext backup work directory is private before pg_dump writes", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "willard-backup-test-"));
+  let workDir;
+  try {
+    workDir = await createPrivateBackupWorkDirectory(tempRoot);
+    assert.equal(path.dirname(workDir), tempRoot);
+    assert.ok((await stat(workDir)).isDirectory());
+    if (process.platform !== "win32") {
+      assert.equal((await stat(workDir)).mode & 0o777, 0o700);
+    }
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("temporary database dump clearing uses bounded chunks and handles partial writes", async () => {
   const size = 2 * 1024 * 1024 + 37;
