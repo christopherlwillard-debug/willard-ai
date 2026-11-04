@@ -323,7 +323,7 @@ test("organization execution is claimed atomically before capacity reservation",
   assert.match(claimBlock, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
   assert.match(claimBlock, /eq\(organizationJobsTable\.status, "verified"\)/);
   assert.match(claimBlock, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
-  assert.match(source, /\.set\(\{ status: "verified", error: message \}\)/);
+  assert.match(source, /\.set\(\{ status: "verified", error: message, stageUpdatedAt: new Date\(\) \}\)/);
 });
 
 test("rollbackMoves: preserves a new file at the original path instead of overwriting it", async () => {
