@@ -7,6 +7,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawn, spawnSync } from "child_process";
 import { pipeline } from "stream/promises";
+import { createGunzip } from "node:zlib";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -99,51 +100,34 @@ async function withTarInput<T>(
   callback: (tarPath: string, options: Record<string, unknown>) => Promise<T>,
 ): Promise<T> {
   const compression = getTarCompression(filename);
-  if (compression === "none" || compression === "gzip") {
-    return callback(archivePath, compression === "gzip" ? { gzip: true } : {});
-  }
+  if (compression === "none") return callback(archivePath, {});
+  if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
 
-  if (!scratchDir) {
-    throw new StoragePolicyError(
-      "NAS storage is required for compressed archive decompression.",
-    );
-  }
-  const workDir = scratchDir;
-  const tarPath = path.join(workDir, ".willard-input-" + crypto.randomUUID() + ".tar");
-  const decompressor = compression === "bzip2" ? "bzip2" : "xz";
+  const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
+  const child = compression === "gzip" ? null : spawn(compression === "bzip2" ? "bzip2" : "xz", ["-dc", "--", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child?.stderr?.setEncoding("utf8");
+  child?.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4096); });
+  const exit = child ? new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error((compression === "bzip2" ? "bzip2" : "xz") + " failed" + (signal ? " (" + signal + ")" : "") + ": " + (stderr.trim() || "exit code " + code)));
+    });
+  }) : Promise.resolve();
 
   try {
-    const child = spawn(decompressor, ["-dc", "--", archivePath], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4096); });
-
-    const exit = new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
-        if (code === 0) resolve();
-        else reject(new Error(
-          `${decompressor} failed${signal ? ` (${signal})` : ""}: ${stderr.trim() || `exit code ${code}`}`,
-        ));
-      });
-    });
-    if (!child.stdout) throw new Error(`${decompressor} did not provide output`);
-    try {
-      await pipeline(
-        child.stdout,
-        createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes),
-        fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 }),
-      );
-      await exit;
-    } catch (error) {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      await exit.catch(() => {});
-      throw error;
-    }
-
+    const source = compression === "gzip"
+      ? fs.createReadStream(archivePath).pipe(createGunzip())
+      : child?.stdout;
+    if (!source) throw new Error("Archive decompressor did not provide output");
+    await pipeline(source, createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes), fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 }));
+    await exit;
     return await callback(tarPath, {});
+  } catch (error) {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exit.catch(() => {});
+    throw error;
   } finally {
     try { fs.rmSync(tarPath, { force: true }); } catch { /* best effort */ }
   }
