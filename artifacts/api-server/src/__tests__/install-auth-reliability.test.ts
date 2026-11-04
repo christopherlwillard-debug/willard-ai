@@ -47,6 +47,16 @@ test("successful recovery consumes the recovery key", () => {
   assert.match(authSource, /consumed\.rowCount !== 1/);
 });
 
+test("password changes and recovery revoke sessions in the same transaction", () => {
+  assert.match(authSource, /async function updatePasswordAndRevokeSessions/);
+  assert.match(authSource, /await client\.query\("BEGIN"\)/);
+  assert.match(authSource, /await client\.query\("DELETE FROM session"\)/);
+  assert.match(authSource, /await client\.query\("COMMIT"\)/);
+  assert.match(authSource, /await client\.query\("ROLLBACK"\)/);
+  assert.match(authSource, /updatePasswordAndRevokeSessions\(\s*settings\.id,[\s\S]*?settings\.recoveryKeyHash,[\s\S]*?true/);
+  assert.match(authSource, /updatePasswordAndRevokeSessions\(\s*settings\.id,[\s\S]*?settings\.passwordHash!/);
+});
+
 test("interrupted-job recovery is behind the schema startup gate and does not block listening", () => {
   const migration = indexSource.indexOf("const startupMigrations");
   const recovery = indexSource.indexOf("await recoverInterruptedJobs()");
