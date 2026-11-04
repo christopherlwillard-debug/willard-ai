@@ -237,22 +237,22 @@ Remaining archive hardening:
 
 ## Production dependency advisories and patch alignment (2026-11-04)
 
-- Added patched production dependency updates identified by pnpm audit --prod --audit-level high. The API server's direct Sharp update alone was insufficient: Transformers retained a vulnerable transitive Sharp 0.35.2. A workspace-wide sharp: 0.35.5 override now forces the patched release throughout the dependency graph.
-- The audit then identified a high-severity Zod memory-exhaustion advisory affecting versions below 4.6.6. The workspace Zod catalog is upgraded to 4.6.7 and the mobile zod-validation-error package is aligned to v4.0.2. The workspace typecheck passed on the earlier Zod v4 candidate; final frozen-lockfile install, full typecheck, and production audit are pending after lockfile regeneration.
-- Additional patch-level overrides cover adm-zip, body-parser, proxy-addr, multer, shell-quote, tar, @xmldom/xmldom, undici, postcss, nanoid, browserslist, node-forge, source-map-js, compression, decode-uri-component, brace-expansion, ip-address, and js-yaml. Major-version changes were avoided except the Zod v4 upgrade required by the high-severity advisory.
-- GitHub Dependency Graph is disabled for this repository, so the PR dependency gate uses pnpm audit instead of GitHub's dependency-review action. The lockfile refresh workflow regenerates the audit branch lockfile and verifies it with a frozen install and workspace typecheck. It is restricted to this audit branch; it does not publish releases or modify main.
-- Latest production audit before the final lockfile refresh reported one remaining high advisory (Zod below 4.6.6); the Sharp findings were eliminated by the global Sharp override. A final audit on the regenerated graph is still required.
+- The API server's direct Sharp update alone was insufficient: Transformers retained vulnerable Sharp 0.35.2. A workspace-wide Sharp 0.35.5 override now forces the patched release throughout the dependency graph.
+- A high-severity Zod memory-exhaustion advisory affected versions below 4.6.6. The workspace Zod catalog is upgraded to 4.6.7 and the mobile zod-validation-error package is aligned to v4.0.2. Full workspace typecheck passed with the Zod v4 change.
+- The next advisory inventory found 16 moderate issues. Updated workspace overrides for qs 6.16.1, ip-address 10.7.4, postcss 8.5.23, uuid 11.1.1, glob 14.0.2, minimatch 11.0.1, and the affected brace-expansion ranges removed those moderate advisories from the production dependency graph.
+- The regenerated lockfile completed a frozen install and full workspace typecheck. The latest production audit passed its high/critical gate and now reports only one low-severity advisory: deepmerge prototype poisoning in the Expo configuration dependency chain. The advisory currently lists no patched release, so it remains documented rather than forcing an unreviewed fork.
+- GitHub Dependency Graph is disabled for this repository, so the PR dependency gate uses pnpm audit instead of GitHub's dependency-review action. The lockfile refresh workflow is restricted to this audit branch; it does not publish releases or modify main.
 
 
 ## PostgreSQL snapshot process failure handling (2026-11-04)
 
 - The backup snapshot holder wrote its SQL to child stdin before registering stdin error handling. If psql exited immediately, a broken-pipe error could be emitted by the writable stream without a listener. The 10-second timeout also sent only SIGTERM and did not guarantee termination if the child remained alive.
 - Extracted the process protocol into postgres-snapshot-process.mjs. It registers stdout, stderr, stdin, spawn-error, and close handlers before writing; bounds stdout to 64 KiB and stderr to a 4 KiB tail; handles write callback and stream errors; and escalates from SIGTERM to SIGKILL after a grace period. Termination is idempotent.
-- database-backup.mjs now uses the guarded helper. Added regression tests for successful snapshot token capture, stdin EPIPE, and timeout termination/escalation. The tests are included in the existing database-backup test suite; CI validation is pending.
+- database-backup.mjs now uses the guarded helper. Added regression tests for successful snapshot token capture, stdin EPIPE, and timeout termination/escalation. The tests are included in the existing database-backup test suite. The first CI attempt exposed an escaped-newline error in the success-case fixture (the EPIPE and timeout tests passed); the fixture was corrected in commit 8f8e722. Validation of that corrected fixture is pending.
 
 
 ## Production dependency audit result (2026-11-04)
 
-- The regenerated dependency graph completed a frozen install and full workspace typecheck. `pnpm audit --prod --audit-level high` then passed with 17 advisories remaining: 1 low and 16 moderate; no high or critical production advisories remained.
+- The regenerated dependency graph completed a frozen install and full workspace typecheck. `pnpm audit --prod --audit-level high` passed with only one low advisory remaining; no high, moderate, or critical production advisories remained.
 - The high Sharp findings were eliminated by forcing Sharp 0.35.5 across direct and transitive dependency paths. The high Zod memory-exhaustion advisory was eliminated by upgrading the shared Zod catalog to 4.6.7 and aligning `zod-validation-error` to 4.0.2. The full workspace typecheck passed with these versions.
-- The dependency refresh workflow completed successfully and regenerated the lockfile. A separate PR validation run is still in progress for the latest code changes, including the PostgreSQL snapshot process regression suite.
+- The dependency refresh workflow completed successfully and regenerated the lockfile. The latest code validation is still running for the PostgreSQL snapshot process regression suite and official 7-Zip candidate compatibility checks.
