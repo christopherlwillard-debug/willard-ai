@@ -140,7 +140,7 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 
 - The updater rewrote its recovery journal in place with Set-Content. A power loss during that write could leave malformed JSON. Startup treated an unreadable journal as absent, potentially losing the recovery instructions while the previous installation was in its sibling backup directory.
 - Journal updates now write a unique temporary file in the same directory and atomically replace the existing journal (or move into place for the first write). A crash leaves the previous complete journal or the new complete journal rather than a partially written document.
-- The change is source-reviewed but still needs the Windows lifecycle workflow to execute against this branch. No release workflow was run and no release artifacts were published.
+- The first Windows journal smoke exposed a runtime compatibility issue: the runner's current .NET rejected a null backup-file argument to `File.Replace`. The writer now supplies a unique same-directory backup path and removes it after replacement. The journal smoke is included in the non-publishing Windows job in Fast Validation; the corrected run is pending. No release workflow was run and no release artifacts were published.
 
 
 ## Atomic password reset and session revocation (2026-11-04)
