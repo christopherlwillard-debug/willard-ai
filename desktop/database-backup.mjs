@@ -565,6 +565,18 @@ async function readBackup(backupDir) {
   return { manifest, encrypted, dumpPath };
 }
 
+async function verifyBackupDirectory(backupDir, secret) {
+  const backup = await readBackup(backupDir);
+  const dump = decryptDump(backup.encrypted, backup.manifest, secret);
+  if (
+    dump.length !== backup.manifest.dump.plaintextBytes ||
+    sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256
+  ) {
+    fail("Backup failed authenticated plaintext verification.");
+  }
+  return backup;
+}
+
 function encryptDump(dump, manifest, secret) {
   const salt = validateBase64(manifest.encryption.salt, 16, "encryption salt");
   const iv = validateBase64(manifest.encryption.iv, 12, "encryption IV");
@@ -816,7 +828,7 @@ async function createBackup(options) {
       fail("Completed backup failed post-write verification.");
     }
     finalBackupVerified = true;
-    const removed = await pruneBackups(outputRoot, retentionDays, keep);
+    const removed = await pruneBackups(outputRoot, retentionDays, keep, secret);
     console.log(`Encrypted database backup created: ${finalDir}`);
     if (removed.length) console.log(`Retention removed ${removed.length} older backup(s).`);
     return finalDir;
@@ -849,8 +861,20 @@ async function listBackupDirectories(outputRoot) {
   return backups.sort((left, right) => Date.parse(right.manifest.createdAt) - Date.parse(left.manifest.createdAt));
 }
 
-async function pruneBackups(outputRoot, retentionDays, keep) {
-  const backups = await listBackupDirectories(outputRoot);
+async function pruneBackups(outputRoot, retentionDays, keep, secret) {
+  // Retention is destructive: never trust a structurally valid but
+  // unauthenticated manifest to decide which backup should be deleted.
+  const candidates = await listBackupDirectories(outputRoot);
+  const backups = [];
+  for (const candidate of candidates) {
+    try {
+      const verified = await verifyBackupDirectory(candidate.path, secret);
+      backups.push({ path: candidate.path, manifest: verified.manifest });
+    } catch {
+      // Corrupt or tampered backups are preserved for manual inspection.
+    }
+  }
+  backups.sort((left, right) => Date.parse(right.manifest.createdAt) - Date.parse(left.manifest.createdAt));
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const removed = [];
   for (const [index, backup] of backups.entries()) {
