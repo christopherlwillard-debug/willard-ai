@@ -12,7 +12,6 @@
     "audit": "node audit.mjs"
   },
   "dependencies": {
-    "7zip-bin": "^5.2.0",
     "@huggingface/transformers": "^4.2.0",
     "@types/adm-zip": "^0.5.8",
     "@types/node-7z": "^2.1.11",
