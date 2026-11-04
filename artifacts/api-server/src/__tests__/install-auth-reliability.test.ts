@@ -41,10 +41,11 @@ test("first-run setup claims the password row atomically", () => {
   assert.match(setupSource, /CREATE UNIQUE INDEX IF NOT EXISTS app_settings_singleton_idx/);
 });
 
-test("successful recovery consumes the recovery key", () => {
+test("successful recovery consumes the recovery key transactionally", () => {
   assert.match(authSource, /recovery_key_hash = NULL/);
   assert.match(authSource, /WHERE id = \$2 AND recovery_key_hash = \$3/);
-  assert.match(authSource, /consumed\.rowCount !== 1/);
+  assert.match(authSource, /const consumed = await updatePasswordAndRevokeSessions/);
+  assert.match(authSource, /if \(!consumed\)/);
 });
 
 test("password changes and recovery revoke sessions in the same transaction", () => {
