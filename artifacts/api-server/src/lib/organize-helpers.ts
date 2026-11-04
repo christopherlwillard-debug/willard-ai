@@ -185,9 +185,49 @@ export async function rollbackMoves(
   for (const mv of [...moves].reverse()) {
     try {
       if (!fs.existsSync(mv.to)) {
-        log(`ROLLBACK_SKIP: ${mv.to} not found (already removed?)`);
+        // A previous rollback attempt may already have restored this file.
+        // Count it only when the source is a regular file with the expected
+        // original hash; a new or altered file is never treated as recovered.
+        if (fs.existsSync(mv.from)) {
+          try {
+            const sourceStat = fs.lstatSync(mv.from);
+            if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
+              const restoredHash = await sha256File(mv.from);
+              if (restoredHash === mv.sourceHash) {
+                rolledBack++;
+                log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
+                continue;
+              }
+            }
+          } catch { /* report the missing destination below */ }
+        }
+        log(`ROLLBACK_SKIP: ${mv.to} not found and original path is not verified`);
         continue;
       }
+
+      // A crash can occur after the no-replace hard-link step but before the
+      // original destination link is removed. If both names are the same
+      // regular-file inode and the content is correct, finish that move.
+      if (fs.existsSync(mv.from)) {
+        try {
+          const sourceStat = fs.lstatSync(mv.from);
+          const destinationStat = fs.lstatSync(mv.to);
+          if (
+            sourceStat.isFile() && destinationStat.isFile() &&
+            !sourceStat.isSymbolicLink() && !destinationStat.isSymbolicLink() &&
+            sourceStat.dev === destinationStat.dev && sourceStat.ino === destinationStat.ino
+          ) {
+            const restoredHash = await sha256File(mv.from);
+            if (restoredHash === mv.sourceHash) {
+              fs.unlinkSync(mv.to);
+              rolledBack++;
+              log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hard-link finalized`);
+              continue;
+            }
+          }
+        } catch { /* normal no-replace move below will preserve any conflict */ }
+      }
+
       moveFileNoReplace(mv.to, mv.from);
       rolledBack++;
 
