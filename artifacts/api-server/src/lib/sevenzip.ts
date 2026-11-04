@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { path7za as bundledPath7za } from "7zip-bin";
 
 export interface SevenZipResolutionOptions {
   platform?: NodeJS.Platform;
   pathEnv?: string;
   configuredPath?: string;
+  packagedPath?: string;
   fallbackPath?: string;
   exists?: (candidate: string) => boolean;
 }
@@ -23,6 +25,11 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
   const exists = options.exists ?? fs.existsSync;
 
   if (configuredPath && exists(configuredPath)) return configuredPath;
+
+  const packagedName = platform === "win32" ? "7z.exe" : platform === "darwin" ? "7zz" : "7zzs";
+  const packagedPath = options.packagedPath ??
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor", packagedName);
+  if (exists(packagedPath)) return packagedPath;
 
   const delimiter = platform === "win32" ? ";" : ":";
   const directories = pathEnv.split(delimiter).filter(Boolean);
