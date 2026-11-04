@@ -67,3 +67,13 @@ The branding-path guard also used lexical path containment, which does not accou
 - Added the archive-safety regression suite to Fast Validation. It was present in the repository but was not previously executed by that workflow.
 - Remaining review item: 7z/RAR/CAB/ISO extraction uses an external extractor and validates the resulting tree afterward. I have not yet established that every supported 7-Zip build suppresses link creation before writing, so this remains a hardening item rather than a claimed exploit or verified fix.
 - Existing ZIP safeguards include bounded archive/entry sizes, path and duplicate checks, per-entry CRC/SHA-256 verification, atomic file publication, and final extracted-tree inspection. The configured ZIP buffer limits are intentionally high (1 GiB archive / 512 MiB per entry), so memory headroom should be verified against the intended desktop/server deployment.
+
+## Follow-up archive hardening (2026-11-04)
+
+- Centralized 7-Zip symbolic-link/reparse-point detection and applied it consistently to archive catalog inspection, archive validation, and organize extraction preflight. This closes the gap where the catalog and preflight paths did not reject 7-Zip link entries consistently.
+- Added regression cases for Windows link attributes, POSIX symbolic-link permission strings, directories, and regular files.
+- Added a hard cap of 66 GiB on decompressed TAR stream bytes for bzip2, xz, and gzip inputs. The decompressor is stopped when the cap is exceeded; scratch TAR filenames are unique per operation, created exclusively with private permissions, and diagnostic stderr is bounded.
+- Added a stream-level regression test proving the expansion limiter stops output once the configured cap is exceeded.
+- The archive safety suite is now included in Fast Validation. Latest validation for these changes is pending; do not treat the code as CI-verified until the latest run completes.
+
+Remaining hardening: 7-Zip extraction still relies on the external extractor writing only into the fresh staging directory before the resulting tree is inspected. Further runtime testing against supported 7-Zip binaries and representative link-bearing archives is still required.
