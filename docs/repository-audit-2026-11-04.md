@@ -220,3 +220,9 @@ Remaining archive hardening:
 - The new dependency-review workflow was invoked for the audit PR but GitHub returned: `Dependency review is not supported on this repository. Please ensure that Dependency graph is enabled`. This is a repository security-setting prerequisite, not a code or dependency vulnerability finding.
 - The action cannot evaluate pull-request dependency changes until GitHub's Dependency graph feature is enabled for this repository. The scheduled `pnpm audit --prod --audit-level high` path remains separate and is not a substitute for PR diff review.
 - Remaining external configuration: enable Dependency graph under repository Settings → Code security and analysis, then rerun the dependency-review check. No repository settings or main-branch changes were made as part of this audit.
+
+
+## Dependency-review workflow compatibility (2026-11-04)
+
+- The GitHub `dependency-review-action` failed on this repository because GitHub's Dependency Graph feature is not enabled for the repository. This is a repository setting limitation, not a dependency finding.
+- Replaced the PR job's dependency-review action with `pnpm audit --prod --audit-level high`, which evaluates the locked production dependency graph without requiring GitHub Dependency Graph. The scheduled audit already uses this pnpm audit path. The updated PR audit run is pending.
