@@ -6,6 +6,43 @@ import path from "node:path";
 export const PAYLOAD_MANIFEST_FILE = "payload-manifest.json";
 export const CANONICAL_RELEASE_DIR_NAME = "build/windows";
 
+/**
+ * The maintained 7zip-bin-full package ships binaries for every supported
+ * OS and CPU. A Windows release needs only the Windows binary matching the
+ * release runner; prune the other copies from the deployed payload before
+ * compacting pnpm's virtual store.
+ */
+export async function pruneSevenZipBinaries(payloadRoot, platform = process.platform, arch = process.arch) {
+  const packagePlatform = platform === "win32" ? "win" : platform === "darwin" ? "mac" : platform;
+  const pnpmStore = path.join(payloadRoot, "node_modules", ".pnpm");
+  const entries = await readdir(pnpmStore).catch(() => []);
+  const packageEntries = entries.filter((entry) => entry.startsWith("7zip-bin-full@"));
+  if (packageEntries.length === 0) {
+    throw new Error("Windows release payload is missing the official 7zip-bin-full package.");
+  }
+
+  let pruned = false;
+  for (const entry of packageEntries) {
+    const packageRoot = path.join(pnpmStore, entry, "node_modules", "7zip-bin-full");
+    for (const folder of ["linux", "mac", "win"]) {
+      if (folder !== packagePlatform) {
+        await rm(path.join(packageRoot, folder), { recursive: true, force: true });
+      }
+    }
+    const selectedRoot = path.join(packageRoot, packagePlatform);
+    const architectures = await readdir(selectedRoot).catch(() => []);
+    for (const candidateArch of architectures) {
+      if (candidateArch !== arch) {
+        await rm(path.join(selectedRoot, candidateArch), { recursive: true, force: true });
+      }
+    }
+    const executable = platform === "win32" ? "7z.exe" : platform === "darwin" ? "7zz" : "7zzs";
+    await access(path.join(selectedRoot, arch, executable));
+    pruned = true;
+  }
+  return pruned;
+}
+
 function normalizeRelativePath(value) {
   return value.split(path.sep).join("/");
 }
