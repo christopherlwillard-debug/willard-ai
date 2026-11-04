@@ -25,13 +25,12 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
   if (configuredPath && exists(configuredPath)) return configuredPath;
 
   const delimiter = platform === "win32" ? ";" : ":";
-  if (platform !== "win32") {
-    const directories = pathEnv.split(delimiter).filter(Boolean);
-    for (const binary of ["7zzs", "7zz"]) {
-      for (const directory of directories) {
-        const candidate = path.join(directory, binary);
-        if (exists(candidate)) return candidate;
-      }
+  const directories = pathEnv.split(delimiter).filter(Boolean);
+  const binaries = platform === "win32" ? ["7z.exe"] : ["7zzs", "7zz"];
+  for (const binary of binaries) {
+    for (const directory of directories) {
+      const candidate = path.join(directory, binary);
+      if (exists(candidate)) return candidate;
     }
   }
 
