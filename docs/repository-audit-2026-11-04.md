@@ -110,3 +110,11 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - Changed thumbnail and original-file stream responses to `Cache-Control: private, no-store` and added `X-Content-Type-Options: nosniff`.
 - Centralized the headers and added a focused regression test; Fast Validation now runs it.
 - This protects intermediary caches. It does not replace authorization checks, and browser/runtime behavior should still be exercised in the packaged application.
+
+
+## Active-content protection for original media (2026-11-04)
+
+- The authenticated original-file stream used the catalog MIME type for inline delivery. The media viewer also exposes an "Open original" link. HTML and SVG can execute active content when navigated as same-origin documents; `X-Content-Type-Options: nosniff` does not neutralize a correctly declared active MIME type.
+- Added a strict inline MIME allowlist for the viewer's supported JPEG/PNG/GIF/WebP/AVIF/BMP/TIFF/HEIC/HEIF images, audio, video, and PDF. Other formats—including SVG, HTML, XML, and unknown types—are delivered as `application/octet-stream` with `Content-Disposition: attachment`.
+- Added regression coverage for active document MIME types and the supported inline media types.
+- Browser-level verification of the download behavior remains outstanding; Fast Validation runs the helper-level policy tests.
