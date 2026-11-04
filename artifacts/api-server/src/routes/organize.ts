@@ -1973,18 +1973,28 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
  */
 router.get("/organize/recovery", async (_req, res) => {
   try {
+    const nasPath = await getNasPath();
+    if (!nasPath) { res.json({ interrupted: [] }); return; }
+    const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
     const jobs = await db
       .select()
       .from(organizationJobsTable)
-      .where(
+      .where(and(
+        eq(organizationJobsTable.nasPath, nasPath),
         or(
-          eq(organizationJobsTable.status, "executing"),
           and(
             eq(organizationJobsTable.status, "failed"),
             isNotNull(organizationJobsTable.lastStage),
-          )
-        )
-      )
+          ),
+          and(
+            inArray(organizationJobsTable.status, ["executing", "rolling_back"]),
+            or(
+              isNull(organizationJobsTable.stageUpdatedAt),
+              lt(organizationJobsTable.stageUpdatedAt, staleBefore),
+            ),
+          ),
+        ),
+      ))
       .orderBy(desc(organizationJobsTable.createdAt))
       .limit(50);
     res.json({ interrupted: jobs });
