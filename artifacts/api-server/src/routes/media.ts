@@ -13,6 +13,7 @@ import { parseBoundedInteger, RequestValidationError } from "../lib/request-vali
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { setPrivateMediaResponseHeaders } from "../lib/private-media-response.ts";
 
 const router = Router();
 
@@ -485,10 +486,7 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
 
 function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
   res.setHeader("Content-Type", "image/webp");
-  // Media is private library content. Never allow a shared proxy/CDN cache to
-  // retain authenticated thumbnails or originals after access is revoked.
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
+  setPrivateMediaResponseHeaders(res);
   const stream = fs.createReadStream(thumbPath);
   stream.on("error", () => {
     _thumbCache.delete(id);
@@ -668,8 +666,7 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
   }
 
   res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
+  setPrivateMediaResponseHeaders(res);
   res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
   if (range) {
     const chunkSize = range.end - range.start + 1;
