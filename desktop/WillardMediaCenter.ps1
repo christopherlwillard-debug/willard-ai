@@ -228,15 +228,29 @@ function Save-Services($apiPid, $webPid) {
     ConvertTo-Json | Set-Content $PidFile
 }
 function Write-UpdateJournal($phase, $candidate, $backup) {
-  New-Item -ItemType Directory -Force (Split-Path $UpdateJournal) | Out-Null
-  @{
+  $journalDirectory = Split-Path $UpdateJournal
+  New-Item -ItemType Directory -Force $journalDirectory | Out-Null
+  $temporary = "$UpdateJournal.$([guid]::NewGuid().ToString('N')).tmp"
+  $contents = @{
     version = 1
     phase = $phase
     installRoot = $InstallRoot
     candidate = $candidate
     backup = $backup
     updatedAt = (Get-Date).ToString("o")
-  } | ConvertTo-Json | Set-Content $UpdateJournal -Encoding UTF8
+  } | ConvertTo-Json
+  try {
+    [IO.File]::WriteAllText($temporary, $contents + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    if (Test-Path -LiteralPath $UpdateJournal -PathType Leaf) {
+      # Replace is atomic on the same volume: a crash leaves either the old
+      # complete journal or the new complete journal, never a truncated file.
+      [IO.File]::Replace($temporary, $UpdateJournal, $null)
+    } else {
+      [IO.File]::Move($temporary, $UpdateJournal)
+    }
+  } finally {
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+  }
 }
 function Read-UpdateJournal {
   if (-not (Test-Path $UpdateJournal)) { return $null }
