@@ -5,7 +5,7 @@ router = "application"
 deploymentTarget = "autoscale"
 
 [deployment.postBuild]
-args = ["pnpm", "store", "prune"]
+args = ["node", "scripts/replit-post-build.mjs"]
 env = { "CI" = "true" }
 
 [workflows]
