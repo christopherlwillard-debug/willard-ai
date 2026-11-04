@@ -14,6 +14,7 @@ import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandl
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders } from "../lib/private-media-response.ts";
+import { renameFileWithPersistence } from "../lib/media-rename.ts";
 
 const router = Router();
 
@@ -368,12 +369,19 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
   if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
 
-  fs.renameSync(oldAbs, newAbs);
-  const [updated] = await db
-    .update(mediaFilesTable)
-    .set({ name: newName, relativePath: newRelPath })
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-    .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+  const updated = await renameFileWithPersistence(
+    oldAbs,
+    newAbs,
+    async () => {
+      const [row] = await db
+        .update(mediaFilesTable)
+        .set({ name: newName, relativePath: newRelPath })
+        .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+        .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+      return row;
+    },
+    (from, to) => fs.renameSync(from, to),
+  );
 
   res.json(updated);
 });
