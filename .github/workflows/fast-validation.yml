@@ -101,6 +101,7 @@ jobs:
             artifacts/api-server/src/__tests__/storage-policy.test.ts \
             artifacts/api-server/src/__tests__/nas-storage-paths.test.ts \
             artifacts/api-server/src/__tests__/storage-migration.test.ts \
+            artifacts/api-server/src/__tests__/sevenzip-path.test.ts \
             artifacts/api-server/src/__tests__/thumbnail-engine.test.ts \
             artifacts/api-server/src/__tests__/private-media-response.test.ts \
             artifacts/api-server/src/__tests__/media-rename.test.ts \
