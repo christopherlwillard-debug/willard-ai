@@ -589,13 +589,17 @@ async function readBackup(backupDir) {
 async function verifyBackupDirectory(backupDir, secret) {
   const backup = await readBackup(backupDir);
   const dump = decryptDump(backup.encrypted, backup.manifest, secret);
-  if (
-    dump.length !== backup.manifest.dump.plaintextBytes ||
-    sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256
-  ) {
-    fail("Backup failed authenticated plaintext verification.");
+  try {
+    if (
+      dump.length !== backup.manifest.dump.plaintextBytes ||
+      sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256
+    ) {
+      fail("Backup failed authenticated plaintext verification.");
+    }
+    return backup;
+  } finally {
+    dump.fill(0);
   }
-  return backup;
 }
 
 function encryptDump(dump, manifest, secret) {
@@ -825,7 +829,12 @@ async function createBackup(options) {
         authTag: "",
       },
     };
-    const encrypted = encryptDump(dump, manifest, secret);
+    let encrypted;
+    try {
+      encrypted = encryptDump(dump, manifest, secret);
+    } finally {
+      dump.fill(0);
+    }
     manifest.integrity.encryptedBytes = encrypted.length;
     manifest.integrity.encryptedSha256 = sha256Bytes(encrypted);
     validateManifest(manifest);
@@ -842,11 +851,15 @@ async function createBackup(options) {
     // decrypted from its final NAS location.
     const completed = await readBackup(finalDir);
     const verifiedDump = decryptDump(completed.encrypted, completed.manifest, secret);
-    if (
-      verifiedDump.length !== completed.manifest.dump.plaintextBytes ||
-      sha256Bytes(verifiedDump) !== completed.manifest.dump.plaintextSha256
-    ) {
-      fail("Completed backup failed post-write verification.");
+    try {
+      if (
+        verifiedDump.length !== completed.manifest.dump.plaintextBytes ||
+        sha256Bytes(verifiedDump) !== completed.manifest.dump.plaintextSha256
+      ) {
+        fail("Completed backup failed post-write verification.");
+      }
+    } finally {
+      verifiedDump.fill(0);
     }
     finalBackupVerified = true;
     const removed = await pruneBackups(outputRoot, retentionDays, keep, secret);
@@ -1291,6 +1304,7 @@ async function restoreBackup(options) {
     }
     console.log(`Database restored and verified: ${backupDir}`);
   } finally {
+    dump.fill(0);
     await secureRemove(temporaryDump);
     await rm(restoreWorkRoot, { recursive: true, force: true }).catch(() => {});
   }
@@ -1300,10 +1314,14 @@ async function verifyBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
   const dump = decryptDump(encrypted, manifest, await passphrase(false, options));
-  if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
-    fail("Decrypted database dump failed its SHA-256 integrity check.");
+  try {
+    if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
+      fail("Decrypted database dump failed its SHA-256 integrity check.");
+    }
+    console.log(`Backup integrity verified: ${backupDir}`);
+  } finally {
+    dump.fill(0);
   }
-  console.log(`Backup integrity verified: ${backupDir}`);
 }
 
 async function exportRecovery(options) {
