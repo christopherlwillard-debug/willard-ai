@@ -166,15 +166,9 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 
 ## Authentication session creation race (2026-11-04)
 
-- Confirmed a race between credential verification and session creation. A login can read and verify the old password hash, then a concurrent password reset can commit the new hash and delete all existing sessions, after which the in-flight login can regenerate and save a fresh authenticated session based on the now-revoked password.
-- Added a shared session-finalization guard. Successful setup, login, recovery, and password-change flows now persist the new session first and then re-read the current password hash. If the credential changed, the just-created session is destroyed and the response is rejected. If a reset commits after the recheck, its transactional session deletion sees the already-persisted session.
-- Session persistence or credential-check failures fail closed; stale-session cleanup retries the exact session-row deletion if the session-store callback fails.
-- Added unit coverage for save/read/destroy ordering, stale credentials, current credentials, persistence failures, and cleanup failures. Added route-level regression assertions and included both auth suites in Fast Validation.
-- Validation status: pending the latest Fast Validation run on this branch. The previous head's Fast Validation passed, but that result does not validate these new changes.
-
-
-## Restore operations refuse destination replacement (2026-11-04)
-
-- Manual trash restore checked that the original destination did not exist, then used `renameSync`. On POSIX filesystems a concurrent file creation between those steps could be overwritten. Startup recovery used the same overwrite-capable move helper.
-- Added `moveFileNoReplace`: it first attempts an atomic same-volume hard link and falls back to an exclusive copy on filesystems without link support. It never replaces an existing destination. Source-removal failure rolls back only the destination created by this operation; if that rollback fails, both errors are preserved.
-- Manual restore, restore rollback, and startup restore reconciliation now use the no-replace helper. Added tests for destination collision preservation, successful moves, and route/recovery wiring. Fast Validation remains pending for the latest commit.
+- Confirmed a race between credential verification and session creation. A login could verify the old password, then overlap a password reset that updates the credential and deletes sessions, and finally create a session based on the revoked password.
+- A first attempted fix re-read the password hash after saving the session. Further PostgreSQL concurrency analysis found that this recheck alone was not sufficient: under READ COMMITTED, a reset's `DELETE FROM session` statement may take its snapshot before a concurrent login inserts its session, while the login's recheck can still see the old credential before the reset commits.
+- Replaced that incomplete approach with a shared row lock. Setup, login, recovery, and password-change flows now start a transaction and select the credential row `FOR SHARE`, verify the expected hash, regenerate and persist the session while the lock is held, and then commit. Password changes update the same credential row before deleting sessions. If login locks first, the password change waits and deletes the saved session afterward; if password change locks first, login waits and sees the new hash before creating a session.
+- If session persistence or lock commit fails, the lock is rolled back and the new session is destroyed; stale-session cleanup retries the exact session-row deletion if the session-store callback fails.
+- Added unit coverage for lock/save/commit ordering, stale credentials, save failures, commit failures, and cleanup failures. Added route-level assertions and included both auth suites in Fast Validation.
+- Validation status: pending the latest Fast Validation run on this branch. Earlier Fast Validation runs do not validate this final row-lock implementation.
