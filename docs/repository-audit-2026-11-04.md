@@ -141,3 +141,10 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - The updater rewrote its recovery journal in place with Set-Content. A power loss during that write could leave malformed JSON. Startup treated an unreadable journal as absent, potentially losing the recovery instructions while the previous installation was in its sibling backup directory.
 - Journal updates now write a unique temporary file in the same directory and atomically replace the existing journal (or move into place for the first write). A crash leaves the previous complete journal or the new complete journal rather than a partially written document.
 - The change is source-reviewed but still needs the Windows lifecycle workflow to execute against this branch. No release workflow was run and no release artifacts were published.
+
+
+## Atomic password reset and session revocation (2026-11-04)
+
+- Password recovery and authenticated password changes updated the credential first and deleted existing sessions in a separate database operation. If session deletion failed, old sessions could remain authenticated after a password reset.
+- Both flows now update the password and delete all existing sessions in one PostgreSQL transaction. A failed session deletion rolls back the credential change; concurrent credential changes are detected with a compare-and-swap condition.
+- Added targeted source regression assertions. Runtime fault-injection against PostgreSQL remains outstanding.
