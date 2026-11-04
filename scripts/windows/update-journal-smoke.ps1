@@ -44,7 +44,9 @@ try {
   Assert-True ($second.candidate -eq $candidate -and $second.backup -eq $backup) "Updated journal paths are incorrect."
 
   $temporaryFiles = @(Get-ChildItem -LiteralPath (Split-Path -Parent $UpdateJournal) -Filter "swap-journal.json.*.tmp" -File -ErrorAction SilentlyContinue)
+  $backupFiles = @(Get-ChildItem -LiteralPath (Split-Path -Parent $UpdateJournal) -Filter "swap-journal.json.*.bak" -File -ErrorAction SilentlyContinue)
   Assert-True ($temporaryFiles.Count -eq 0) "Journal writer left temporary files behind."
+  Assert-True ($backupFiles.Count -eq 0) "Journal writer left replacement backups behind."
   Write-Host "Packaged updater journal smoke passed: initial write, atomic replacement, valid JSON, and temp cleanup."
 } finally {
   Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
