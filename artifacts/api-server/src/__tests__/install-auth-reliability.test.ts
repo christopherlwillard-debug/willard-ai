@@ -66,3 +66,9 @@ test("interrupted-job recovery is behind the schema startup gate and does not bl
   assert.ok(recovery > migration);
   assert.ok(recovery > listen);
 });
+test("authentication sessions are saved and rechecked against the current password", () => {
+  assert.match(authSource, /async function establishSessionForPassword/);
+  assert.match(authSource, /req\.session\.save/);
+  assert.match(authSource, /persistSessionIfCredentialUnchanged/);
+  assert.equal(authSource.split("await establishSessionForPassword(req,").length - 1, 4);
+});
