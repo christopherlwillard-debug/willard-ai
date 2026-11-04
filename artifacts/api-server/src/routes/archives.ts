@@ -20,6 +20,7 @@ import {
   assertArchiveFileUnchanged,
   assertBufferedZipFile,
   createArchiveBudget,
+  isZipSymlinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
@@ -322,7 +323,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         const zipEntries = zip.getEntries();
         const budget = createArchiveBudget();
         for (const entry of zipEntries) {
-          if ((entry as any).attr && (((entry as any).attr >>> 16) & 0xF000) === 0xA000) {
+          if (isZipSymlinkEntry((entry as any).attr)) {
             throw new ArchiveSafetyError(`Archive traversal rejected: symlink entry "${entry.entryName}" in ZIP`);
           }
           const fileType = getFileTypeFromName(entry.entryName);
