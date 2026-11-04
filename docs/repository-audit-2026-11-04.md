@@ -233,3 +233,12 @@ Remaining archive hardening:
 - Replaced the single full-size allocation with a bounded 1 MiB zero buffer and positional writes that correctly handle partial writes, then syncs and closes the file before removal. The cleanup remains best-effort and does not claim guaranteed secure erasure on SSDs, copy-on-write filesystems, or network storage.
 - Added a regression test over a file larger than 2 MiB with deliberately partial writes, asserting memory buffer size remains capped, all bytes are overwritten, and the file handle is synced.
 - Fast Validation has not yet run against this commit; test is included in the existing database-backup test command.
+
+
+## Production dependency advisories and patch alignment (2026-11-04)
+
+- Added patched production dependency updates identified by pnpm audit --prod --audit-level high. The API server's direct Sharp update alone was insufficient: Transformers retained a vulnerable transitive Sharp 0.35.2. A workspace-wide sharp: 0.35.5 override now forces the patched release throughout the dependency graph.
+- The audit then identified a high-severity Zod memory-exhaustion advisory affecting versions below 4.6.6. The workspace Zod catalog is upgraded to 4.6.7 and the mobile zod-validation-error package is aligned to v4.0.2. The workspace typecheck passed on the earlier Zod v4 candidate; final frozen-lockfile install, full typecheck, and production audit are pending after lockfile regeneration.
+- Additional patch-level overrides cover adm-zip, body-parser, proxy-addr, multer, shell-quote, tar, @xmldom/xmldom, undici, postcss, nanoid, browserslist, node-forge, source-map-js, compression, decode-uri-component, brace-expansion, ip-address, and js-yaml. Major-version changes were avoided except the Zod v4 upgrade required by the high-severity advisory.
+- GitHub Dependency Graph is disabled for this repository, so the PR dependency gate uses pnpm audit instead of GitHub's dependency-review action. The lockfile refresh workflow regenerates the audit branch lockfile and verifies it with a frozen install and workspace typecheck. It is restricted to this audit branch; it does not publish releases or modify main.
+- Latest production audit before the final lockfile refresh reported one remaining high advisory (Zod below 4.6.6); the Sharp findings were eliminated by the global Sharp override. A final audit on the regenerated graph is still required.
