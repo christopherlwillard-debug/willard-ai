@@ -155,3 +155,10 @@ Remaining hardening: 7-Zip extraction still relies on the external extractor wri
 - The authenticated face-crop endpoint used `private, max-age=86400`, allowing the browser to retain derived biometric imagery after logout. It now uses the shared `private, no-store` and `nosniff` policy.
 - The endpoint piped `createReadStream()` directly to the response without an error listener. If a crop disappeared between the existence check and file open, the asynchronous stream error could become unhandled. The route now logs the failure and returns 404 before headers are sent, or destroys the response if streaming already began.
 - Added regression coverage for the shared stream-error response behavior and route wiring. Fast Validation for this latest change is pending.
+
+
+## Trash retention rejects invalid expiration dates (2026-11-04)
+
+- `purgeExpiredTrashEntries` previously treated an invalid `expiresAt` date as expired because `NaN >= Date.now()` is false. A malformed or edited manifest record could therefore authorize immediate permanent deletion.
+- Added `isTrashEntryExpired`, which returns true only for a non-empty, parseable timestamp strictly earlier than the current time. Missing, malformed, and future dates now fail closed and remain in trash.
+- Added deterministic regression cases for missing, blank, malformed, future, and elapsed dates. The helper test is database-independent; full retention/deletion integration remains to be exercised against the disposable test database.
