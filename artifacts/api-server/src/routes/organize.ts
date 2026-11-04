@@ -117,11 +117,14 @@ async function withTarInput<T>(
   }) : Promise.resolve();
 
   try {
-    const source = compression === "gzip"
-      ? fs.createReadStream(archivePath).pipe(createGunzip())
-      : child?.stdout;
-    if (!source) throw new Error("Archive decompressor did not provide output");
-    await pipeline(source, createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes), fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 }));
+    const limiter = createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes);
+    const output = fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 });
+    if (compression === "gzip") {
+      await pipeline(fs.createReadStream(archivePath), createGunzip(), limiter, output);
+    } else {
+      if (!child?.stdout) throw new Error("Archive decompressor did not provide output");
+      await pipeline(child.stdout, limiter, output);
+    }
     await exit;
     return await callback(tarPath, {});
   } catch (error) {
