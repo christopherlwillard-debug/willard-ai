@@ -248,7 +248,7 @@ exit $LASTEXITCODE
 
   $preparedRecovery = Invoke-InstalledLauncher "start" "prepared-phase-update-recovery"
   Assert-True ($preparedRecovery.exitCode -eq 0) ("Installed launcher did not recover a prepared-phase interruption:`n" + $preparedRecovery.output)
-  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\\s*:\\s*"ok"' }
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Assert-True (Test-Path (Join-Path $InstallRoot "prepared-backup-only.marker")) "The prior installation was not restored from the prepared journal."
   Assert-True (-not (Test-Path $preparedCandidate)) "The interrupted prepared candidate was not removed."
   Assert-True (-not (Test-Path $journalPath)) "Prepared-phase update journal was not cleared."
