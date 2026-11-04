@@ -474,7 +474,7 @@ router.post("/cleanup/execute", async (req, res) => {
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
           const trashDir = ensureDirectoryWithinRoot(
             path.join(nasPath, "WillardAI", ".Trash", trashTimestamp),
-            getWillardAIDir(nasPath),
+            nasPath,
           );
           const safeBasename = `${fileId}_${path.basename(file.name)}`;
           trashPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
