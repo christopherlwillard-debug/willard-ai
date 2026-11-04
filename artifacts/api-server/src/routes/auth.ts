@@ -73,6 +73,44 @@ function isAuthenticated(req: Request): boolean {
   return sess?.authenticated === true;
 }
 
+/**
+ * Change the credential and revoke every existing session as one database
+ * transaction. If session deletion fails, the password change must roll back
+ * too; otherwise old authenticated sessions could survive a credential reset.
+ */
+async function updatePasswordAndRevokeSessions(
+  settingsId: number,
+  expectedHash: string,
+  newHash: string,
+  consumeRecoveryKey = false,
+): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const update = consumeRecoveryKey
+      ? await client.query(
+          "UPDATE app_settings SET password_hash = $1, recovery_key_hash = NULL WHERE id = $2 AND recovery_key_hash = $3 RETURNING id",
+          [newHash, settingsId, expectedHash],
+        )
+      : await client.query(
+          "UPDATE app_settings SET password_hash = $1 WHERE id = $2 AND password_hash = $3 RETURNING id",
+          [newHash, settingsId, expectedHash],
+        );
+    if (update.rowCount !== 1) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query("DELETE FROM session");
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function getOrCreateSettings() {
   // app_settings is logically a singleton, but older installs can contain
   // duplicate rows after concurrent first-run requests. Prefer the row that
@@ -224,19 +262,17 @@ router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Respo
       return;
     }
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    const consumed = await pool.query(
-      `UPDATE app_settings
-       SET password_hash = $1, recovery_key_hash = NULL
-       WHERE id = $2 AND recovery_key_hash = $3
-       RETURNING id`,
-      [newHash, settings.id, settings.recoveryKeyHash],
+    const consumed = await updatePasswordAndRevokeSessions(
+      settings.id,
+      settings.recoveryKeyHash,
+      newHash,
+      true,
     );
-    if (consumed.rowCount !== 1) {
+    if (!consumed) {
       res.status(401).json({ error: "Recovery key has already been used." });
       return;
     }
 
-    await pool.query("DELETE FROM session");
     await establishSession(req);
 
     res.json({ ok: true });
@@ -321,10 +357,15 @@ router.post("/auth/change-password", async (req: Request, res: Response) => {
       return;
     }
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    await db.update(appSettingsTable)
-      .set({ passwordHash: newHash })
-      .where(eq(appSettingsTable.id, settings.id));
-    await pool.query("DELETE FROM session");
+    const changed = await updatePasswordAndRevokeSessions(
+      settings.id,
+      settings.passwordHash!,
+      newHash,
+    );
+    if (!changed) {
+      res.status(409).json({ error: "Password changed in another session. Please log in again." });
+      return;
+    }
     await establishSession(req);
     res.json({ ok: true });
   } catch {
