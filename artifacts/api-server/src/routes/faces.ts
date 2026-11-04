@@ -5,6 +5,7 @@ import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
 import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
 import { isVectorAvailable } from "../lib/vector-capability";
+import { handlePrivateMediaStreamError, setPrivateMediaResponseHeaders } from "../lib/private-media-response.ts";
 
 const router: IRouter = Router();
 
@@ -263,8 +264,13 @@ router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
     catch { return res.status(404).json({ error: "Crop not found" }); }
     if (!cropPath || !fs.existsSync(safeCropPath)) return res.status(404).json({ error: "Crop not found" });
     res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "private, max-age=86400");
-    return fs.createReadStream(safeCropPath).pipe(res);
+    setPrivateMediaResponseHeaders(res);
+    const stream = fs.createReadStream(safeCropPath);
+    stream.on("error", (streamError) => {
+      logger.warn({ err: streamError, faceId }, "face crop stream failed");
+      handlePrivateMediaStreamError(res, streamError);
+    });
+    return stream.pipe(res);
   } catch (err) {
     logger.error({ err }, "face crop failed");
     return res.status(500).json({ error: "Failed to load face crop" });
