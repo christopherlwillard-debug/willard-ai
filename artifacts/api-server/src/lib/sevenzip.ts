@@ -28,7 +28,7 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
 
   const packagedName = platform === "win32" ? "7z.exe" : platform === "darwin" ? "7zz" : "7zzs";
   const packagedPath = options.packagedPath ??
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "vendor", packagedName);
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../vendor/7zip", packagedName);
   if (exists(packagedPath)) return packagedPath;
 
   const delimiter = platform === "win32" ? ";" : ":";
