@@ -13,7 +13,7 @@ import { parseBoundedInteger, RequestValidationError } from "../lib/request-vali
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
-import { setPrivateMediaResponseHeaders } from "../lib/private-media-response.ts";
+import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders } from "../lib/private-media-response.ts";
 
 const router = Router();
 
@@ -667,7 +667,7 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
 
   res.setHeader("Accept-Ranges", "bytes");
   setPrivateMediaResponseHeaders(res);
-  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  setMediaStreamContentHeaders(res, file.mimeType);
   if (range) {
     const chunkSize = range.end - range.start + 1;
     res.status(206);
