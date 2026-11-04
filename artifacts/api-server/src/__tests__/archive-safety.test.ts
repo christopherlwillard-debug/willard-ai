@@ -14,6 +14,7 @@ import {
   createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
+  isTarLinkEntry,
   getSevenZipEntryInfo,
   isSevenZipDirectoryEntry,
   isSevenZipLinkEntry,
@@ -180,6 +181,23 @@ test("detects Unix ZIP symlinks when permission bits are present", () => {
   assert.equal(isZipSymlinkEntry(0xA0000000), true);
   assert.equal(isZipSymlinkEntry(0x81A40000), false);
   assert.equal(isZipSymlinkEntry(undefined), false);
+});
+
+test("detects TAR symbolic and hard link entry types", () => {
+  assert.equal(isTarLinkEntry("SymbolicLink"), true);
+  assert.equal(isTarLinkEntry("Link"), true);
+  assert.equal(isTarLinkEntry("HardLink"), true);
+  assert.equal(isTarLinkEntry("File"), false);
+  assert.equal(isTarLinkEntry("Directory"), false);
+  assert.equal(isTarLinkEntry(undefined), false);
+});
+
+test("archive preview and validation reject ZIP and TAR link entries before extraction", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  assert.match(routeSource, /isZipSymlinkEntry\(\(e as any\)\.attr\)/);
+  assert.match(routeSource, /isZipSymlinkEntry\(\(entry as any\)\.attr\)/);
+  assert.match(routeSource, /isTarLinkEntry\(e\.type\)/);
+  assert.match(routeSource, /isTarLinkEntry\(entry\.type\)/);
 });
 
 
