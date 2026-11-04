@@ -340,3 +340,19 @@ test("rollbackMoves: preserves a new file at the original path instead of overwr
   assert.equal(fs.readFileSync(destinationPath, "utf8"), "original moved content");
   assert.ok(logs.some(message => message.includes("ROLLBACK_FAIL") && message.includes("EEXIST")));
 });
+
+test("organization resume and reset require a stale execution lease", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.match(source, /ORGANIZATION_EXECUTION_LEASE_MS = 5 \* 60 \* 1000/);
+  assert.match(source, /ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 \* 1000/);
+  assert.match(source, /startOrganizationJobHeartbeat\(id, nasPath\)/);
+  assert.match(source, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+
+  const resetStart = source.indexOf('router.post("/organize/jobs/:id/reset"');
+  const resetEnd = source.indexOf('router.post("/organize/jobs/:id/resume-token"', resetStart);
+  const resetRoute = source.slice(resetStart, resetEnd);
+  assert.match(resetRoute, /eq\(organizationJobsTable\.status, "failed"\)/);
+  assert.match(resetRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+  assert.match(resetRoute, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+});
