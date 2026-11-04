@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 process.env.DATABASE_URL ??= "postgres://cleanup-recovery-test.invalid/willard";
@@ -18,7 +19,7 @@ const {
 const { pool } = await import("@workspace/db");
 
 test("manual restore and startup recovery use no-replace moves", () => {
-  const sourceDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
   const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
   assert.match(cleanupRoute, /moveFileNoReplace\(resolvedTrashPath, resolvedOriginalPath\)/);
