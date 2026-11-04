@@ -33,6 +33,18 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
 
+; Remove only packaged application payload directories before copying the new
+; version. User data, .env, logs, backup credentials, and updates live under
+; LOCALAPPDATA and are deliberately outside {app}.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\desktop"
+Type: filesandordirs; Name: "{app}\web"
+Type: filesandordirs; Name: "{app}\api-runtime"
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\icons"
+Type: files; Name: "{app}\version.json"
+Type: files; Name: "{app}\payload-manifest.json"
+
 [Files]
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
