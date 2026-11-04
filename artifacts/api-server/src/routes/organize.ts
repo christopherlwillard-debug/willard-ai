@@ -831,7 +831,8 @@ router.get("/organize/jobs/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const nasPath = await getNasPath();
-    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
+    const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
   } catch { res.status(500).json({ error: "Failed to get organize job" }); }
@@ -2010,8 +2011,10 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
   let stopHeartbeat: (() => void) | null = null;
   let nasPath = "";
   try {
-    nasPath = await getNasPath();
-    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    const configuredNasPath = await getNasPath();
+    if (!configuredNasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
+    nasPath = configuredNasPath;
+    const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!["executing", "failed", "rolling_back"].includes(job.status)) {
       res.status(409).json({ error: `Job status is '${job.status}' — only interrupted or failed jobs can be rolled back here` }); return;
