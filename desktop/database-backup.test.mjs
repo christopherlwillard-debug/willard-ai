@@ -726,7 +726,7 @@ function createSnapshotChild(writeError = null) {
 test("PostgreSQL snapshot process resolves only after receiving a valid snapshot token", async () => {
   const child = createSnapshotChild();
   const pending = waitForExportedSnapshot(child);
-  child.stdout.write("BEGIN\\n00000003-0000001A-1\\n");
+  child.stdout.write("BEGIN\n00000003-0000001A-1\n");
   assert.equal(await pending, "00000003-0000001A-1");
 });
 
