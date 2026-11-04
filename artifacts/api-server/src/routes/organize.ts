@@ -2033,20 +2033,44 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
 router.post("/organize/jobs/:id/reset", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
-    const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!["executing", "failed"].includes(job.status)) {
-      res.status(409).json({ error: `Job status is '${job.status}' — only executing or failed jobs can be reset` }); return;
+      res.status(409).json({ error: `Job status is '${job.status}' — only interrupted or failed jobs can be reset` }); return;
     }
     if (!job.planJson || !job.preflightJson) {
       res.status(409).json({ error: "Job is missing plan or preflight data — delete and recreate it" }); return;
     }
 
-    await db.update(organizationJobsTable).set({
+    // Reset is destructive to the recovery journal. Only allow it after a
+    // failed job or an executing job whose heartbeat has gone stale.
+    const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    const [resetJob] = await db.update(organizationJobsTable).set({
       status: "verified",
       error: null,
       fileMoves: null,
-    }).where(eq(organizationJobsTable.id, id));
+      lastStage: "reset",
+      stageUpdatedAt: new Date(),
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      or(
+        eq(organizationJobsTable.status, "failed"),
+        and(
+          eq(organizationJobsTable.status, "executing"),
+          or(
+            isNull(organizationJobsTable.stageUpdatedAt),
+            lt(organizationJobsTable.stageUpdatedAt, staleBefore),
+          ),
+        ),
+      ),
+    )).returning({ id: organizationJobsTable.id });
+
+    if (!resetJob) {
+      res.status(409).json({ error: "This job is still executing. Wait for its heartbeat to expire before resetting it." });
+      return;
+    }
 
     res.json({ ok: true, status: "verified" });
   } catch (e: any) {
