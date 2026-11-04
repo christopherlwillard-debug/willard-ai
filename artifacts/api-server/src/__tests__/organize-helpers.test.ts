@@ -29,6 +29,7 @@ import {
   sha256File,
   sha256Buffer,
   moveFile,
+  moveFileNoReplace,
   verifiedMove,
   rollbackMoves,
   type FileMoveRecord,
@@ -117,6 +118,22 @@ test("moveFile: creates deep intermediate directories", () => {
   const dest = path.join(tmpRoot, "mv-mkd-dst", "a", "b", "c", "f.txt");
   moveFile(src, dest);
   assert.ok(fs.existsSync(dest));
+});
+
+test("moveFileNoReplace: refuses to overwrite a destination created concurrently", () => {
+  const src = writeFile(path.join(mkTmp("mv-noreplace-src"), "photo.jpg"), "original media");
+  const dest = writeFile(path.join(mkTmp("mv-noreplace-dst"), "photo.jpg"), "new independent file");
+  assert.throws(() => moveFileNoReplace(src, dest), /EEXIST/);
+  assert.equal(fs.readFileSync(src, "utf8"), "original media");
+  assert.equal(fs.readFileSync(dest, "utf8"), "new independent file");
+});
+
+test("moveFileNoReplace: moves when destination is absent", () => {
+  const src = writeFile(path.join(mkTmp("mv-noreplace-ok-src"), "photo.jpg"), "restored media");
+  const dest = path.join(mkTmp("mv-noreplace-ok-dst"), "photo.jpg");
+  moveFileNoReplace(src, dest);
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "restored media");
 });
 
 // ── 4. verifiedMove — happy path ──────────────────────────────────────────────
