@@ -1,71 +1,108 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { persistSessionIfCredentialUnchanged } from "../lib/auth-session-guard.ts";
+import {
+  persistSessionUnderCredentialLock,
+  type CredentialLock,
+} from "../lib/auth-session-guard.ts";
 
-test("persists the session before checking the current credential and destroys a stale login", async () => {
-  let currentHash = "old-password-hash";
+function makeLock(
+  passwordHash: string | null,
+  events: string[],
+  options: { commitError?: Error; rollbackError?: Error } = {},
+): CredentialLock {
+  return {
+    passwordHash,
+    async commit() {
+      events.push("commit");
+      if (options.commitError) throw options.commitError;
+    },
+    async rollback() {
+      events.push("rollback");
+      if (options.rollbackError) throw options.rollbackError;
+    },
+  };
+}
+
+test("saves the session while the credential lock is held, then commits the lock", async () => {
   const events: string[] = [];
-  const accepted = await persistSessionIfCredentialUnchanged(
-    "old-password-hash",
-    async () => {
-      events.push("save");
-      // A password reset can commit before this session is saved.
-      currentHash = "new-password-hash";
-    },
-    async () => {
-      events.push("read");
-      return currentHash;
-    },
-    async () => {
-      events.push("destroy");
-    },
-  );
-
-  assert.equal(accepted, false);
-  assert.deepEqual(events, ["save", "read", "destroy"]);
-});
-
-test("keeps a session when its credential is still current", async () => {
-  const events: string[] = [];
-  const accepted = await persistSessionIfCredentialUnchanged(
+  const accepted = await persistSessionUnderCredentialLock(
     "current-hash",
-    async () => { events.push("save"); },
     async () => {
-      events.push("read");
-      return "current-hash";
+      events.push("lock");
+      return makeLock("current-hash", events);
     },
+    async () => { events.push("save"); },
     async () => { events.push("destroy"); },
   );
 
   assert.equal(accepted, true);
-  assert.deepEqual(events, ["save", "read"]);
+  assert.deepEqual(events, ["lock", "save", "commit"]);
 });
 
-test("does not read the credential or report success when session persistence fails", async () => {
-  let credentialRead = false;
+test("rejects a stale credential before creating a session", async () => {
+  const events: string[] = [];
+  const accepted = await persistSessionUnderCredentialLock(
+    "old-hash",
+    async () => {
+      events.push("lock");
+      return makeLock("new-hash", events);
+    },
+    async () => { events.push("save"); },
+    async () => { events.push("destroy"); },
+  );
+
+  assert.equal(accepted, false);
+  assert.deepEqual(events, ["lock", "rollback"]);
+});
+
+test("rolls back the credential lock and removes a partially saved session on failure", async () => {
+  const events: string[] = [];
   await assert.rejects(
-    persistSessionIfCredentialUnchanged(
+    persistSessionUnderCredentialLock(
       "current-hash",
-      async () => { throw new Error("session store unavailable"); },
+      async () => makeLock("current-hash", events),
       async () => {
-        credentialRead = true;
-        return "current-hash";
+        events.push("save");
+        throw new Error("session store unavailable");
       },
-      async () => {},
+      async () => { events.push("destroy"); },
     ),
     /session store unavailable/,
   );
-  assert.equal(credentialRead, false);
+  assert.deepEqual(events, ["save", "rollback", "destroy"]);
 });
 
-test("does not report a stale session as rejected if session destruction fails", async () => {
+test("removes a saved session if committing the credential lock fails", async () => {
+  const events: string[] = [];
   await assert.rejects(
-    persistSessionIfCredentialUnchanged(
-      "old-hash",
-      async () => {},
-      async () => "new-hash",
-      async () => { throw new Error("session delete failed"); },
+    persistSessionUnderCredentialLock(
+      "current-hash",
+      async () => makeLock("current-hash", events, { commitError: new Error("commit failed") }),
+      async () => { events.push("save"); },
+      async () => { events.push("destroy"); },
     ),
-    /session delete failed/,
+    /commit failed/,
+  );
+  assert.deepEqual(events, ["save", "commit", "rollback", "destroy"]);
+});
+
+test("preserves cleanup failure when a stale session cannot be destroyed", async () => {
+  const events: string[] = [];
+  await assert.rejects(
+    persistSessionUnderCredentialLock(
+      "current-hash",
+      async () => makeLock("current-hash", events, { commitError: new Error("commit failed") }),
+      async () => { events.push("save"); },
+      async () => {
+        events.push("destroy");
+        throw new Error("session delete failed");
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length, 2);
+      assert.match(String(error.errors[1]), /session delete failed/);
+      return true;
+    },
   );
 });
