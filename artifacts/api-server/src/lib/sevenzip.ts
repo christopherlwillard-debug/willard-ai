@@ -74,8 +74,8 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
   return undefined;
 }
 
-export function getSevenZipPath(): string {
-  const resolved = resolveSevenZipPath();
+export function getSevenZipPath(options: SevenZipResolutionOptions = {}): string {
+  const resolved = resolveSevenZipPath(options);
   if (resolved) return resolved;
   throw new Error(
     "Archive operations require official 7-Zip 26.01 or newer. Install it on PATH or set WILLARD_7ZIP_PATH; the bundled legacy p7zip fallback is intentionally disabled.",
