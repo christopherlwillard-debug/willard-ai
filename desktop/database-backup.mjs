@@ -747,6 +747,7 @@ async function createBackup(options) {
   const rawDump = path.join(actualWorkRoot, "database.dump");
   const staging = path.join(outputRoot, `.staging-${randomBytes(8).toString("hex")}`);
   let finalDir;
+  let finalBackupVerified = false;
   let snapshotHolder;
   try {
     await mkdir(outputRoot, { recursive: true });
@@ -814,6 +815,7 @@ async function createBackup(options) {
     ) {
       fail("Completed backup failed post-write verification.");
     }
+    finalBackupVerified = true;
     const removed = await pruneBackups(outputRoot, retentionDays, keep);
     console.log(`Encrypted database backup created: ${finalDir}`);
     if (removed.length) console.log(`Retention removed ${removed.length} older backup(s).`);
@@ -823,6 +825,9 @@ async function createBackup(options) {
     await secureRemove(rawDump);
     await rm(actualWorkRoot, { recursive: true, force: true }).catch(() => {});
     await rm(staging, { recursive: true, force: true }).catch(() => {});
+    if (finalDir && !finalBackupVerified) {
+      await rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
