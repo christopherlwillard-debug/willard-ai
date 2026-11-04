@@ -21,7 +21,7 @@ import {
   assertBufferedZipFile,
   createArchiveBudget,
   isZipSymlinkEntry,
-  isSevenZipLinkEntry,
+  getSevenZipEntryInfo,
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
@@ -134,20 +134,22 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     const stream = Seven.list(filePath, {
       $bin: path7za,
       $progress: false,
+      techInfo: true,
     } as any);
     let safetyError: Error | undefined;
 
     stream.on("data", (data: any) => {
       if (data.file !== undefined && !safetyError) {
-        const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
-        if (isSevenZipLinkEntry(data.attributes)) {
+        const info = getSevenZipEntryInfo(data);
+        const isDir = info.isDirectory;
+        if (info.isLink) {
           safetyError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`);
           return;
         }
         try {
           const checked = validateArchiveEntry({
             path: data.file,
-            sizeBytes: data.size,
+            sizeBytes: info.sizeBytes,
             isDirectory: isDir,
           }, budget);
           const fileType = isDir ? "directory" : getFileTypeFromName(data.file);
@@ -180,6 +182,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     });
 
     stream.on("error", (err: Error) => {
+      if (safetyError) {
+        reject(safetyError);
+        return;
+      }
       const msg = err?.message ?? "";
       if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg)) {
         isPasswordProtected = true;
