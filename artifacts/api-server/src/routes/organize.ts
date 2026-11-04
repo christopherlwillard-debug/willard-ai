@@ -2094,7 +2094,8 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
   const id = parseInt(req.params.id);
   try {
     const nasPath = await getNasPath();
-    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
+    const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!["executing", "failed"].includes(job.status)) {
       res.status(409).json({ error: `Job status is '${job.status}' — only interrupted or failed jobs can be reset` }); return;
