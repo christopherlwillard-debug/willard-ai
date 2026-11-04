@@ -204,3 +204,12 @@ Remaining archive hardening:
 - The organize extractor passed `overwrite: "qs"` to `node-7z`, which emits `-aoqs`. The documented 7-Zip switch accepts exactly one mode character (`a`, `s`, `t`, or `u`); the actual 26.05 candidate binary rejected `-aoqs` with `Command Line Error: Too long switch`, so valid 7z-family archive extraction could fail before writing any files.
 - Changed the extractor to `overwrite: "a"` (overwrite all) because the staging directory is deliberately cleared and recreated before extraction. This avoids prompts and uses a valid switch. The integration smoke now checks the real CLI path and asserts the application route no longer uses `qs`.
 - The first candidate smoke run failed on the invalid option, which confirmed the defect. The corrected candidate run is pending; the production dependency has not yet been upgraded.
+
+
+## NAS temporary directory symlink containment (2026-11-04)
+
+- Confirmed `getTempDir()` used recursive `mkdir` under `<LIBRARY>/WillardAI/temp/<job>`, without checking whether `WillardAI` or `temp` had been replaced by a symlink. A local filesystem/NAS user able to alter those directories could redirect temporary archive extraction and media staging outside the configured library.
+- Added `ensureDirectoryWithinRoot()` to canonicalize and check the target against the configured NAS root, then create and verify each directory component without following symlinks. `getTempDir()` now secures the shared `temp` parent and per-job directory with private permissions before returning the canonical path.
+- Added regression tests for normal private directory creation and symlink escapes at `WillardAI`, `temp`, and the per-job directory. Added the suite to Fast Validation.
+- Validation status: the prior Fast Validation run passed typecheck, release/storage contracts, and the Windows updater smoke job, but was cancelled after the candidate 7-Zip compatibility step failed. The NAS-specific suite has not yet completed in CI.
+- Candidate 7-Zip compatibility test failure was traced to an invalid `node-7z` option (`overwrite: "qs"` emitted unsupported `-aoqs`). Corrected the test to use the wrapper's supported `$overwrite: "a"` option; production 7-Zip dependency remains unchanged pending a passing Linux/Windows compatibility run.
