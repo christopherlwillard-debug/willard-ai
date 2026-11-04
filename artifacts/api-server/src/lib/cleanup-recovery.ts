@@ -5,7 +5,7 @@ import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
-import { moveFile, sha256File } from "./organize-helpers.ts";
+import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
 
 export type TrashManifestEntry = {
@@ -344,7 +344,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
     if (sourceExists) {
       await verifyFile(sourceTrash);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      moveFile(sourceTrash, destination);
+      moveFileNoReplace(sourceTrash, destination);
     }
     await verifyFile(destination);
   } catch (error) {
