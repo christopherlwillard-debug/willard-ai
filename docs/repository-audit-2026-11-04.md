@@ -225,3 +225,11 @@ Remaining archive hardening:
 
 - The GitHub `dependency-review-action` failed on this repository because GitHub's Dependency Graph feature is not enabled for the repository. This is a repository setting limitation, not a dependency finding.
 - Replaced the PR job's dependency-review action with `pnpm audit --prod --audit-level high`, which evaluates the locked production dependency graph without requiring GitHub Dependency Graph. The scheduled audit already uses this pnpm audit path. The updated PR audit run is pending.
+
+
+## Bounded-memory cleanup of temporary database dumps (2026-11-04)
+
+- Confirmed `secureRemove()` allocated `Buffer.alloc(info.size)` to overwrite temporary PostgreSQL dumps before deletion. For large databases this duplicated the entire dump size in RAM during cleanup and could cause memory exhaustion precisely after backup or restore work.
+- Replaced the single full-size allocation with a bounded 1 MiB zero buffer and positional writes that correctly handle partial writes, then syncs and closes the file before removal. The cleanup remains best-effort and does not claim guaranteed secure erasure on SSDs, copy-on-write filesystems, or network storage.
+- Added a regression test over a file larger than 2 MiB with deliberately partial writes, asserting memory buffer size remains capped, all bytes are overwritten, and the file handle is synced.
+- Fast Validation has not yet run against this commit; test is included in the existing database-backup test command.
