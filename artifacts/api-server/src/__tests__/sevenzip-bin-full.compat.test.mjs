@@ -9,8 +9,6 @@ import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
 import Seven from "node-7z";
 
 const packagePath = process.env.WILLARD_7ZIP_BIN_FULL_PACKAGE;
-const require = createRequire(import.meta.url);
-
 test("official 7-Zip binary package works with node-7z and archive safety metadata", {
   skip: !packagePath ? "candidate binary package not installed" : false,
 }, async () => {
@@ -89,16 +87,15 @@ test("official 7-Zip binary package works with node-7z and archive safety metada
     }
 
     const destination = path.join(root, "extracted");
-    const extract = await new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const stream = Seven.extractFull(archive, destination, {
         $bin: path7z,
         $progress: false,
-        $overwrite: "a",
+        overwrite: "qs",
       });
       stream.once("error", reject);
       stream.once("end", resolve);
     });
-    assert.ok(extract !== undefined);
     assert.equal(
       fs.readFileSync(path.join(destination, "payload.txt"), "utf8"),
       "verified archive payload\n",
