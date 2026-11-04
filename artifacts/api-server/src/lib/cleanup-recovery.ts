@@ -49,9 +49,10 @@ export function manifestPath(nasPath: string): string {
   const filePath = path.join(logsDir, "trash-manifest.jsonl");
   try {
     const info = fs.lstatSync(filePath);
-    if (info.isSymbolicLink() || !info.isFile()) {
-      throw new Error("Trash manifest must be a regular file inside the configured library.");
+    if (info.isSymbolicLink() || !info.isFile() || info.nlink > 1) {
+      throw new Error("Trash manifest must be a private, unlinked regular file inside the configured library.");
     }
+    try { fs.chmodSync(filePath, 0o600); } catch { /* best effort on filesystems with ACL-managed permissions */ }
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw error;
   }
