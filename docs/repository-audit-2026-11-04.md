@@ -40,6 +40,8 @@ The logo upload route deleted the currently referenced logo before writing and c
 ### SVG branding responses needed an active-content boundary
 Uploaded SVG files are served from the same-origin API. SVG is an active document format, so direct navigation to a crafted uploaded SVG could expose script-capable content. SVG responses now receive a restrictive sandbox Content-Security-Policy, and logo responses include `X-Content-Type-Options: nosniff`. Runtime/browser verification of this response policy remains pending.
 
+The branding-path guard also used lexical path containment, which does not account for a symlink inside the branding directory pointing outside it. The guard now resolves both the branding root and target through the filesystem before allowing reads or deletes, failing closed if resolution fails.
+
 ## Follow-up items requiring a runnable environment or deeper review
 
 1. Run the full backend audit locally and inspect every finding, especially database-backed flows and destructive file operations.
