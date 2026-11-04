@@ -11,7 +11,7 @@ import { createGunzip } from "node:zlib";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
-import { path7zzs as path7za } from "7zip-bin-full";
+import { path7za } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
