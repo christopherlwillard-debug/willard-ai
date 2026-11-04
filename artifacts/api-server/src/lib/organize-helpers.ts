@@ -60,6 +60,43 @@ export function moveFile(from: string, to: string): void {
   }
 }
 
+/**
+ * Move without ever replacing an existing destination. Prefer an atomic
+ * same-volume hard link; filesystems that do not support links fall back to an
+ * exclusive copy. If source removal fails, remove only the destination we
+ * created; if that cleanup also fails, preserve both errors and both files.
+ */
+export function moveFileNoReplace(from: string, to: string): void {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  let destinationCreated = false;
+  try {
+    try {
+      fs.linkSync(from, to);
+      destinationCreated = true;
+    } catch (error: any) {
+      if (error?.code === "EEXIST") throw error;
+      if (!["EPERM", "EACCES", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(error?.code)) {
+        throw error;
+      }
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      destinationCreated = true;
+    }
+    fs.unlinkSync(from);
+  } catch (error) {
+    if (destinationCreated) {
+      try {
+        fs.unlinkSync(to);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "No-replace move failed and its newly-created destination could not be rolled back",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
 // ── Verified move ─────────────────────────────────────────────────────────────
 
 /**
