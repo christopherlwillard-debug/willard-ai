@@ -14,6 +14,8 @@ import {
   createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
+  getSevenZipEntryInfo,
+  isSevenZipDirectoryEntry,
   isSevenZipLinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
@@ -181,12 +183,44 @@ test("detects Unix ZIP symlinks when permission bits are present", () => {
 });
 
 
-test("detects 7-Zip links from Windows and POSIX attribute strings", () => {
+test("detects 7-Zip links in both ordinary and technical attribute fields", () => {
   assert.equal(isSevenZipLinkEntry("L"), true);
-  assert.equal(isSevenZipLinkEntry("A  lrwxrwxrwx"), true);
-  assert.equal(isSevenZipLinkEntry("D  drwxr-xr-x"), false);
-  assert.equal(isSevenZipLinkEntry("A  -rw-r--r--"), false);
+  assert.equal(isSevenZipLinkEntry(undefined, "A_ lrwxrwxrwx"), true);
+  assert.equal(isSevenZipLinkEntry("....A", "A_ lrwxrwxrwx"), true);
+  assert.equal(isSevenZipLinkEntry("D", "D_ drwxr-xr-x"), false);
+  assert.equal(isSevenZipLinkEntry("....A", "A_ -rw-r--r--"), false);
   assert.equal(isSevenZipLinkEntry(undefined), false);
+});
+
+test("reads POSIX symlink metadata from the node-7z techInfo Map", () => {
+  const info = getSevenZipEntryInfo({
+    attributes: "....A",
+    techInfo: new Map([
+      ["Attributes", "A_ lrwxrwxrwx"],
+      ["Folder", "-"],
+      ["Size", "12"],
+    ]),
+  });
+  assert.equal(info.isLink, true);
+  assert.equal(info.isDirectory, false);
+  assert.equal(info.sizeBytes, "12");
+});
+
+test("reads 7-Zip directory, size, and CRC metadata from techInfo", () => {
+  const info = getSevenZipEntryInfo({
+    techInfo: new Map([
+      ["Attributes", "D_ drwxr-xr-x"],
+      ["Folder", "+"],
+      ["Size", "0"],
+      ["CRC", "ABCD1234"],
+    ]),
+  });
+  assert.equal(info.isLink, false);
+  assert.equal(info.isDirectory, true);
+  assert.equal(info.sizeBytes, "0");
+  assert.equal(info.crc, "ABCD1234");
+  assert.equal(isSevenZipDirectoryEntry("A_ drwxr-xr-x"), true);
+  assert.equal(isSevenZipDirectoryEntry("....A", "-"), false);
 });
 
 test("stops decompression when the expanded TAR byte budget is exceeded", async () => {
