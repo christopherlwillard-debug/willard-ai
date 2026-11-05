@@ -1,6 +1,5 @@
 import * as fs from "fs";
-import { sql } from "drizzle-orm";
-import { db, pool } from "@workspace/db";
+import { pool } from "@workspace/db";
 import { getActiveAppSettings, getActiveNasPath } from "./active-library.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
