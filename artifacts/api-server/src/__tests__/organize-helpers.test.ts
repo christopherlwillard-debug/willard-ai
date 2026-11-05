@@ -517,3 +517,13 @@ test("organization resume retains its journal when rollback is incomplete", () =
   assert.ok(source.includes("Resume file-move recovery checkpoint failed:"));
   assert.ok(source.includes("the full move journal was retained for manual recovery"));
 });
+
+
+test("organization completion re-hashes destination files in execute and resume", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const hashReads = source.match(/const actualHash = await sha256File\(mv\.to\)/g) ?? [];
+  assert.equal(hashReads.length, 2, "both execute and resume completion paths must hash destinations");
+  assert.equal((source.match(/actualHash !== mv\.sourceHash/g) ?? []).length, 2);
+  assert.ok(source.includes("missing or checksum-mismatched at destination"));
+});
