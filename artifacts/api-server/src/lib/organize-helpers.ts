@@ -115,52 +115,57 @@ export interface FileMoveRecord {
 }
 
 /**
- * Move a file and verify its SHA-256 integrity at the destination.
- *
- * Steps:
- *   1. Compute SHA-256 of the source.
- *   2. Move the file.
- *   3. Compute SHA-256 of the destination.
- *   4. If hashes differ, or if either hash is empty (I/O failure), throw.
- *
- * Any thrown error propagates to the caller so the outer try/catch can
- * trigger rollback immediately.
- *
- * @param from          Absolute source path (must exist).
- * @param to            Absolute destination path (parents created automatically).
- * @param afterMoveHook Optional callback invoked between step 2 and step 3 —
- *                      used ONLY in tests to inject corruption or latency.
- * @param sourceRelPath Optional relative path of the source (stored in record for
- *                      resume idempotency — rename-safe alternative to dest-path matching).
- * @returns             FileMoveRecord with source/dest hashes and verified=true.
+ * Move a file without replacing an existing destination, then verify its
+ * SHA-256 integrity. If verification fails after the move, restore the file
+ * to its source path with a no-replace operation before propagating the error.
+ * This keeps an unverified partial result out of the final destination and
+ * prevents a retry from silently treating it as a completed move.
  */
 export async function verifiedMove(
   from: string,
   to:   string,
   opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string },
 ): Promise<FileMoveRecord> {
-  // Step 1: hash source (throws on I/O error)
+  // Hash before moving; an unreadable source must never be moved.
   const sourceHash = await sha256File(from);
+  let destinationCreated = false;
 
-  // Step 2: move file
-  moveFile(from, to);
+  try {
+    // A concurrent job may have created the destination after its conflict
+    // check. Never let rename semantics overwrite that independent file.
+    moveFileNoReplace(from, to);
+    destinationCreated = true;
 
-  // Optional hook (test-only) — e.g. corrupt destination before re-hashing
-  if (opts?.afterMoveHook) await opts.afterMoveHook(to);
+    // Optional hook (test-only) — e.g. corrupt destination before re-hashing.
+    if (opts?.afterMoveHook) await opts.afterMoveHook(to);
 
-  // Step 3: hash destination (throws on I/O error)
-  const destHash = await sha256File(to);
+    const destHash = await sha256File(to);
+    if (sourceHash !== destHash) {
+      throw new Error(
+        `SHA-256 mismatch after moving ${path.basename(from)}: ` +
+        `source=${sourceHash} dest=${destHash}. File may be corrupted.`,
+      );
+    }
 
-  // Step 4: compare — throw on mismatch so the caller can roll back
-  if (sourceHash !== destHash) {
-    throw new Error(
-      `SHA-256 mismatch after moving ${path.basename(from)}: ` +
-      `source=${sourceHash} dest=${destHash}. ` +
-      `File may be corrupted — rolling back.`
-    );
+    return { from, to, sourceHash, destHash, verified: true, sourceRelPath: opts?.sourceRelPath };
+  } catch (error) {
+    // verifiedMove has not yet returned a FileMoveRecord, so the caller cannot
+    // include this file in its normal batch rollback. Restore it here. The
+    // no-replace helper refuses to overwrite a source path recreated by
+    // another actor; if restoration fails, preserve both errors and the
+    // destination rather than deleting the only remaining copy.
+    if (destinationCreated && !fs.existsSync(from) && fs.existsSync(to)) {
+      try {
+        moveFileNoReplace(to, from);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `Verified move failed and the file could not be restored to its source path; it remains at ${to}`,
+        );
+      }
+    }
+    throw error;
   }
-
-  return { from, to, sourceHash, destHash, verified: true, sourceRelPath: opts?.sourceRelPath };
 }
 
 // ── Rollback ─────────────────────────────────────────────────────────────────
