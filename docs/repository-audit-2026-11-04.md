@@ -837,3 +837,12 @@ Remaining archive hardening:
 - Added the missing named import. No runtime behavior changed.
 - Commit: `e548582021ad29edb5a97162935229ed4e41a342`.
 - Validation: the failure is confirmed by Fast Validation #637. The correction itself is not yet validated; a new Fast Validation run is required before proceeding to the regression suite.
+
+## Backup manifest canonical-row correction and integration fixture repair (2026-11-05)
+
+- Fast Validation #639 passed TypeScript typecheck, generated contracts, Expo configuration, and the desktop web-server safety suite (4/4). Its release/storage step then failed in the PostgreSQL recovery drill: `sourceLibrary` returned null and the test dereferenced `manifest.library.root`.
+- Inspection found the first canonical-row query still filtered out settings rows with a null/blank `nas_path` before ordering. If the canonical authenticated settings row had no configured library but a stale duplicate row had an old path, the query could select that stale path. The query now selects the canonical row first using `ORDER BY (password_hash IS NOT NULL) DESC, id ASC`, then lets the existing empty-root check return no library identity when the canonical row has no active path.
+- The recovery-drill fixture's simplified `app_settings` table omitted the production `password_hash` column. Added that column and an explicit NULL value so the fixture models the production selection query.
+- Commits: canonical query `b557f0c61a928da9931b6354dac61d1c700f6e9a`; fixture schema `7dac6e05422b7c95a37fb0425470bb8581ab0e47`; corrected query assertion `cca95e5bec4c4f66c217afbcaf7f14d1ba6dc792`.
+- Validation: #639's 18 other database-backup tests passed; the recovery drill failed as described. The corrected fixture/query have not yet passed a rerun. No other Fast Validation stages (7-Zip, targeted backend regressions, Windows) ran because the release/storage step failed.
+- Remaining limitation: the single-library backup manifest still does not describe multiple distinct NAS roots stored in one database; that requires a multi-library manifest and restore/remapping design. This change only ensures the one root it records is the canonical active settings row.
