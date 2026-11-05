@@ -135,7 +135,7 @@ test("PNG conversion rechecks metadata immediately before encoding and fails clo
 });
 
 test("PNG cache is invalidated and the UI does not describe JPEG conversion as lossless", () => {
-  assert.match(source, /const CACHE_VERSION\s*=\s*7/);
+  assert.match(source, /const CACHE_VERSION\s*=\s*8/);
   const explainerStart = source.indexOf('if (ext === "png") {', source.indexOf("function buildExplainerText"));
   const explainerEnd = source.indexOf("\n  }", explainerStart);
   const explainer = source.slice(explainerStart, explainerEnd);
