@@ -173,6 +173,26 @@ jobs:
         with:
           node-version: "24.13.1"
 
+      - name: Parse Windows launcher PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @()
+          foreach ($directory in @("scripts/launcher", "scripts/windows", "desktop")) {
+            if (Test-Path -LiteralPath $directory) {
+              $files += Get-ChildItem -LiteralPath $directory -Filter "*.ps1" -File -Recurse
+            }
+          }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $details = $errors | ForEach-Object { "{0}:{1}: {2}" -f $file.Name, $_.Extent.StartLineNumber, $_.Message }
+              throw ($details -join [Environment]::NewLine)
+            }
+          }
+          Write-Host "PowerShell syntax validation passed for $($files.Count) launcher and installer scripts."
+
       - name: Enable pnpm for Windows archive compatibility tests
         run: |
           corepack enable
