@@ -71,6 +71,8 @@ interface ScanResult {
   groups:            FormatGroup[];
   fromCache?:        boolean;
   libraryKey?:       string;
+  scanLimitReached?: boolean;
+  scanLimit?:        number;
 }
 
 function timeAgo(isoDate: string): string {
@@ -1455,6 +1457,7 @@ export default function Optimize() {
       `Generated: ${new Date().toLocaleString()}`,
       `Scanned:   ${scanResult.nasPath}`,
       `Total files: ${scanResult.totalFiles.toLocaleString()}`,
+      `Scan limit reached: ${scanResult.scanLimitReached ? `yes (${scanResult.scanLimit ?? 500_000} files; summary may be incomplete)` : "no"}`,
       `Total size:  ${formatBytes(scanResult.totalBytes)}`,
       `Est. savings: ${formatBytes(scanResult.totalSavingsBytes)}`,
       "",
@@ -1592,6 +1595,21 @@ export default function Optimize() {
       {/* Results */}
       {scanResult && !scanMutation.isPending && (
         <>
+          {scanResult.scanLimitReached && (
+            <Card className="border-amber-500/30 bg-amber-500/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base font-mono">
+                  <AlertTriangle className="w-4 h-4 text-amber-400" /> Scan limit reached
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div role="alert" className="space-y-1 text-sm font-mono text-muted-foreground">
+                  <p>Willard included at most {scanResult.scanLimit?.toLocaleString() ?? "500,000"} files. Counts, storage totals, and savings estimates cover only the files included in this scan; additional files may be missing from this summary.</p>
+                  <p>Per-file video analysis is limited to the scanned files. Videos outside the scan window are safely skipped during conversion.</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           {/* AI Summary */}
           <Card className="border-primary/20 bg-primary/5">
             <CardHeader className="pb-3">
