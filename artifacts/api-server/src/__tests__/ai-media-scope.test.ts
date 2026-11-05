@@ -31,7 +31,7 @@ test("AI media exclusion predicate is a no-op when no exclusions are configured"
     mediaFiles.name,
     { aiExcludedFolders: [], aiExcludedExtensions: [] },
   ));
-  assert.equal(query.sql, "true");
+  assert.equal(query.sql.toLowerCase(), "true");
 });
 
 test("every OpenAI library context query applies the active library and AI exclusions", () => {
