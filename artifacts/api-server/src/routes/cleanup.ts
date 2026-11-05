@@ -15,6 +15,7 @@ import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { getDuplicateSummary } from "../lib/duplicate-summary.ts";
+import { findEmptyDirectories } from "../lib/empty-folder-scan.ts";
 
 const router: IRouter = Router();
 
@@ -285,35 +286,8 @@ router.get("/cleanup/empty-folders", async (_req, res) => {
       return;
     }
 
-    const emptyFolders: { path: string; sizeBytes: number }[] = [];
-
-    function findEmptyDirs(dir: string) {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-
-      for (const e of entries) {
-        if (e.isDirectory()) findEmptyDirs(path.join(dir, e.name));
-      }
-
-      const hasFiles = entries.some(e => e.isFile());
-      const hasNonEmptySubdirs = entries.some(e => {
-        if (!e.isDirectory()) return false;
-        try {
-          const sub = fs.readdirSync(path.join(dir, e.name));
-          return sub.length > 0;
-        } catch { return false; }
-      });
-
-      if (!hasFiles && !hasNonEmptySubdirs && dir !== nasPath) {
-        emptyFolders.push({ path: dir, sizeBytes: 0 });
-      }
-    }
-
-    findEmptyDirs(nasPath);
+    const emptyFolders = findEmptyDirectories(nasPath)
+      .map((folderPath) => ({ path: folderPath, sizeBytes: 0 }));
     res.json(emptyFolders.slice(0, 200));
   } catch {
     res.status(500).json({ error: "Failed to find empty folders" });
