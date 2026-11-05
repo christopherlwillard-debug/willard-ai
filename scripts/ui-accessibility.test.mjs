@@ -6,6 +6,10 @@ const searchPage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/search.tsx", import.meta.url),
   "utf8",
 );
+const archivePage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/archives.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -37,4 +41,18 @@ test("saved-search controls expose context-specific accessible names", () => {
 
   const deleteButton = openingTagForTestId('data-testid={`button-delete-saved-${s.id}`}');
   assert.match(deleteButton, /aria-label=\{`Delete saved search \$\{s\.name\}`\}/);
+});
+
+
+test("archive filter controls expose accessible names", () => {
+  for (const label of [
+    "Archive status",
+    "Archive category",
+    "Modified on or after",
+    "Modified on or before",
+    "Minimum archive size in megabytes",
+    "Maximum archive size in megabytes",
+  ]) {
+    assert.ok(archivePage.includes(`aria-label="${label}"`), label);
+  }
 });
