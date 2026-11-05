@@ -420,3 +420,10 @@ Remaining archive hardening:
 
 - Archive path validation normalized empty, `.` and `./` names to the extraction root. A non-directory entry with no usable filename should never be passed to an extractor because it does not identify a file destination.
 - Empty raw names are now rejected, and normalized root-only entries are accepted only when explicitly marked as directories (a common harmless TAR root marker). Added regression coverage for empty/dot file entries and the root-directory case. Fast Validation is pending.
+
+
+## NAS temporary storage parent permissions (2026-11-05)
+
+- `getTempDir` secured the per-job directory and shared `WillardAI/temp` parent, but an existing `WillardAI` directory with permissive POSIX mode bits could still allow another NAS user to rename or replace the temp parent itself.
+- Temporary-directory creation now validates and applies private permissions to the app-managed `WillardAI` root before securing `temp` and the per-job child. Regression coverage checks all three directory levels. On Windows, POSIX mode changes remain best-effort and the configured NAS share's ACL must provide equivalent user-only access; this is still a deployment configuration requirement.
+- Fast Validation is pending.
