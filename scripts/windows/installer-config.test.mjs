@@ -1435,11 +1435,14 @@ test("packaged updater enforces its signed minimum Windows requirement before do
 test("uninstaller stops the application after confirmation and aborts if shutdown fails", () => {
   const uninstallStart = config.indexOf("procedure CurUninstallStepChanged");
   const uninstall = config.slice(uninstallStart);
+  const stopHelperStart = config.indexOf("function StopWillardServices");
+  const stopHelperEnd = config.indexOf("\nfunction PrepareToInstall", stopHelperStart);
+  const stopHelper = config.slice(stopHelperStart, stopHelperEnd);
   assert.match(uninstall, /CurUninstallStep = usUninstall/);
   assert.match(uninstall, /StopWillardServices/);
   assert.match(uninstall, /SuppressibleMsgBox/);
   assert.match(uninstall, /Abort/);
-  assert.match(uninstall, /could not start its shutdown helper/);
+  assert.match(stopHelper, /could not start its shutdown helper/);
 });
 
 test("packaged process-state and WMI failures fail closed instead of hiding running services", () => {
@@ -1466,4 +1469,21 @@ test("installed lifecycle smoke uninstalls while both packaged services are runn
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 8080/);
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 5000/);
   assert.match(installedLifecycleSmoke, /services\.json/);
+});
+
+test("launcher retains the previous release if service shutdown cannot be verified", () => {
+  const startupCatchStart = launcher.lastIndexOf("} catch {");
+  const startupCatch = launcher.slice(startupCatchStart);
+  const stop = startupCatch.indexOf("Stop-Services");
+  const gate = startupCatch.indexOf("if ($servicesStopped)");
+  const restore = startupCatch.indexOf("Restore-UpdateBackup");
+  assert.ok(stop >= 0 && gate > stop && restore > gate, "Rollback must be gated after the service-stop attempt.");
+  assert.match(startupCatch, /Stop-StartedProcess \$webProc/);
+  assert.match(startupCatch, /Stop-StartedProcess \$apiProc/);
+  assert.match(startupCatch, /prior release backup was retained/);
+  const directStopStart = launcher.indexOf("function Stop-StartedProcess");
+  const directStopEnd = launcher.indexOf("\nfunction Save-Services", directStopStart);
+  const directStop = launcher.slice(directStopStart, directStopEnd);
+  assert.match(directStop, /\.Kill\(\)/);
+  assert.match(directStop, /WaitForExit\(10000\)/);
 });

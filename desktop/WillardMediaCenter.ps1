@@ -273,6 +273,20 @@ function Stop-Services {
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
+function Stop-StartedProcess($process) {
+  if (-not $process) { return }
+  try {
+    $process.Refresh()
+    if (-not $process.HasExited) {
+      $process.Kill()
+      if (-not $process.WaitForExit(10000)) {
+        throw "Process $($process.Id) did not exit after a direct stop request."
+      }
+    }
+  } catch {
+    Warn ("Willard could not stop a process started by this launcher: " + $_.Exception.Message)
+  }
+}
 function Save-Services($apiPid, $webPid) {
   $api = Get-ProcessIdentity $apiPid
   $web = Get-ProcessIdentity $webPid
@@ -803,12 +817,20 @@ try {
   $script:LauncherMutex = $null
 } catch {
   $startupError = $_
+  $servicesStopped = $true
   try {
     Stop-Services
   } catch {
+    $servicesStopped = $false
     Warn ("The running services could not be stopped safely: " + $_.Exception.Message)
+    Stop-StartedProcess $webProc
+    Stop-StartedProcess $apiProc
   }
-  try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  if ($servicesStopped) {
+    try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  } elseif ($script:UpdateBackup) {
+    Warn "The prior release backup was retained because service shutdown could not be verified."
+  }
   Close-LoadingScreen
   Report-StartupFailure $startupError.Exception.Message
   Exit-WillardLauncherMutex $script:LauncherMutex

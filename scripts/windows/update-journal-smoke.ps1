@@ -65,7 +65,7 @@ try {
     runToken = "process-state-smoke"
     api = @{
       pid = 12345
-      path = "C:\\Willard\\runtime\\node.exe"
+      path = "C:\Willard\runtime\node.exe"
       commandLine = "node.exe --smoke-api"
       creationDate = "2026-11-05T00:00:00Z"
     }

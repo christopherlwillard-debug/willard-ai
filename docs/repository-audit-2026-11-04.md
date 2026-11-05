@@ -1955,3 +1955,13 @@ Expanded `scripts/ui-accessibility.test.mjs` with source-contract checks for Sea
 | High | Corrupt or unreadable packaged service process journal treated as no services | fixed / target-tested pending CI | this batch | Windows smoke and real stop/uninstall integration pending; stale PID reuse is still intentionally handled by refusing to kill a process whose identity does not match |
 
 **Validation classification:** source inspection and focused regression-test changes complete. The Windows updater smoke is expected to exercise the process-state parser; the actual Inno uninstall-while-running lifecycle is covered by the updated lifecycle script but is not part of ordinary Fast Validation. No new test or CI pass is claimed until the matching branch-head run completes.
+
+### Follow-up correction — rollback must not move the installation after an unverified stop
+
+Source review of the new fail-closed process handling found an additional consequence: the launcher startup failure handler attempted to restore the previous release even if `Stop-Services` itself failed. That could rename the active installation while a service process was still using it. The handler now gates rollback on a successful service-stop result, retains the previous release backup if shutdown cannot be verified, and uses the original `Process` handles to stop only API/web processes started by the current launcher attempt. It does not kill processes discovered only by an untrusted or corrupt PID journal.
+
+Fast Validation #860 exposed one test-only assertion error: the uninstall source test searched for the shutdown-helper error text inside the event-procedure slice even though the text correctly lives in the shared helper. The assertion now inspects the helper separately. This was a source-contract test failure, not an Inno compile or Windows runtime result. The corrected assertion and the new rollback-gating regression are included in the next validation batch.
+
+The installed lifecycle smoke also now treats an incomplete TCP connection probe as inconclusive and retries rather than reporting the port closed prematurely. Its process-path fixture was normalized to a single Windows path separator.
+
+**Current validation status:** the preceding Fast Validation #860 failed at the source-contract assertion described above; Dependency Review #623 passed. The corrected tests and rollback-gating change are committed in the following batch. The actual Inno Setup uninstall-while-running lifecycle remains unexecuted on this PR branch and must not be described as integration-tested.

@@ -58,10 +58,12 @@ function Wait-PortClosed($port, $timeoutSeconds = 30) {
   while ((Get-Date) -lt $until) {
     $client = New-Object System.Net.Sockets.TcpClient
     $connected = $false
+    $probeCompleted = $false
     $pending = $null
     try {
       $pending = $client.BeginConnect("127.0.0.1", $port, $null, $null)
       if ($pending.AsyncWaitHandle.WaitOne(500)) {
+        $probeCompleted = $true
         try {
           $client.EndConnect($pending)
           $connected = $client.Connected
@@ -71,7 +73,7 @@ function Wait-PortClosed($port, $timeoutSeconds = 30) {
       if ($pending -and $pending.AsyncWaitHandle) { $pending.AsyncWaitHandle.Close() }
       $client.Close()
     }
-    if (-not $connected) { return }
+    if ($probeCompleted -and -not $connected) { return }
     Start-Sleep -Seconds 1
   }
   throw "Willard still accepts connections on port $port after uninstall."
