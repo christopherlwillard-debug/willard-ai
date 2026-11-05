@@ -2121,7 +2121,6 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     }
     stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, "rolling_back");
 
-    const moves: FileMoveRecord[] = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     const logs: string[] = [];
     const rolledBack = await rollbackMoves(moves, line => logs.push(line));
     const isComplete = rolledBack === moves.length;
@@ -2370,7 +2369,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     };
 
     // Existing partial moves from the interrupted run
-    existingMoves = Array.isArray(job.fileMoves) ? (job.fileMoves as FileMoveRecord[]) : [];
     // Primary idempotency: by sourceRelPath (rename-safe — stored since last execute).
     // Fallback: by destination path for legacy records that predate sourceRelPath.
     const alreadyMovedRelPaths = new Set<string>(
