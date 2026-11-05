@@ -61,6 +61,46 @@ async function getScopedOrganizationJob(id: number, nasPath: string) {
   return job;
 }
 
+/**
+ * Treat persisted move journals as untrusted recovery input. Every recorded
+ * path must remain inside the active NAS and every move must carry a verified
+ * matching SHA-256 pair before a recovery route can touch the filesystem.
+ */
+function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMoveRecord[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Recovery journal is not a valid move list");
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Recovery journal entry ${index + 1} is invalid`);
+    }
+    const move = entry as Record<string, unknown>;
+    if (
+      typeof move.from !== "string" || !path.isAbsolute(move.from) ||
+      typeof move.to !== "string" || !path.isAbsolute(move.to) ||
+      typeof move.sourceHash !== "string" || !/^[a-f0-9]{64}$/i.test(move.sourceHash) ||
+      typeof move.destHash !== "string" || move.destHash !== move.sourceHash ||
+      move.verified !== true ||
+      (move.sourceRelPath !== undefined && typeof move.sourceRelPath !== "string")
+    ) {
+      throw new Error(`Recovery journal entry ${index + 1} is incomplete or unverified`);
+    }
+    try {
+      resolveWithinRoot(move.from, nasPath);
+      resolveWithinRoot(move.to, nasPath);
+    } catch {
+      throw new Error(`Recovery journal entry ${index + 1} references a path outside the configured library`);
+    }
+    return {
+      from: move.from,
+      to: move.to,
+      sourceHash: move.sourceHash,
+      destHash: move.destHash,
+      verified: true,
+      sourceRelPath: move.sourceRelPath as string | undefined,
+    };
+  });
+}
+
 const ORGANIZATION_EXECUTION_LEASE_MS = 5 * 60 * 1000;
 const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
 
@@ -2047,6 +2087,13 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     if (!["executing", "failed", "rolling_back"].includes(job.status)) {
       res.status(409).json({ error: `Job status is '${job.status}' — only interrupted or failed jobs can be rolled back here` }); return;
     }
+    let moves: FileMoveRecord[];
+    try {
+      moves = parseOrganizationMoveJournal(job.fileMoves, nasPath);
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "Recovery journal is invalid" });
+      return;
+    }
 
     // Rollback moves files and changes the recovery journal. Claim it only
     // after the previous worker is failed or its heartbeat has expired.
@@ -2244,6 +2291,13 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     cleanupNasPath = nasPath;
     try { resolveWithinRoot(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
+    try {
+      existingMoves = parseOrganizationMoveJournal(job.fileMoves, nasPath);
+    } catch (error) {
+      send("error", { message: error instanceof Error ? error.message : "Recovery journal is invalid" });
+      res.end();
+      return;
+    }
 
     // Resume only a failed job or an executing job whose heartbeat has gone
     // stale. The conditional update is the cross-process compare-and-swap:
