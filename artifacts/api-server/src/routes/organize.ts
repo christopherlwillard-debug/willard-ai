@@ -35,7 +35,7 @@ import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMove
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
-import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
+import { parseAllowedString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
 import {
@@ -837,14 +837,19 @@ router.post("/organize/jobs", async (req, res) => {
       res.status(403).json({ error: "sourcePath must be an existing path inside the configured library" });
       return;
     }
-    if (sourceType === "archive" && archiveId !== undefined && archiveId !== null) {
-      const parsedArchiveId = Number(archiveId);
-      const [archive] = Number.isInteger(parsedArchiveId)
-        ? await db.select({ path: archivesTable.path })
-          .from(archivesTable)
-          .where(archiveByIdScope(parsedArchiveId, nasPath))
-          .limit(1)
-        : [];
+    const hasArchiveId = archiveId !== undefined && archiveId !== null;
+    const parsedArchiveId = hasArchiveId ? parsePositiveIntegerValue(archiveId) : null;
+    if (hasArchiveId && parsedArchiveId === null) {
+      res.status(400).json({ error: "archiveId must be a positive safe integer" }); return;
+    }
+    if (sourceType === "folder" && parsedArchiveId !== null) {
+      res.status(400).json({ error: "archiveId is only valid for archive sources" }); return;
+    }
+    if (sourceType === "archive" && parsedArchiveId !== null) {
+      const [archive] = await db.select({ path: archivesTable.path })
+        .from(archivesTable)
+        .where(archiveByIdScope(parsedArchiveId, nasPath))
+        .limit(1);
       if (!archive) { res.status(404).json({ error: "Archive not found in the active library" }); return; }
       let archivePath: string;
       try { archivePath = resolveActiveArchivePath(archive.path, nasPath); }
@@ -853,14 +858,20 @@ router.post("/organize/jobs", async (req, res) => {
         res.status(400).json({ error: "archiveId does not match sourcePath" }); return;
       }
     }
-    const resolvedDisposition = sourceType === "archive" ? (archiveDisposition ?? "keep") : "keep";
-    if (sourceType === "folder" && archiveDisposition && archiveDisposition !== "keep") {
+    const requestedDisposition = parseAllowedString(archiveDisposition, ["waiting", "keep", "move_to_processed", "delete"], "keep");
+    if (!requestedDisposition) {
+      res.status(400).json({ error: "Invalid archiveDisposition" }); return;
+    }
+    if (sourceType === "folder" && requestedDisposition !== "keep") {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
     }
-    const validPolicies = ["keep_existing", "replace", "rename", "skip"];
-    const resolvedPolicy = validPolicies.includes(conflictPolicy) ? conflictPolicy : "keep_existing";
+    const resolvedDisposition = sourceType === "archive" ? requestedDisposition : "keep";
+    const resolvedPolicy = parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing");
+    if (!resolvedPolicy) {
+      res.status(400).json({ error: "Invalid conflictPolicy" }); return;
+    }
     const [job] = await db.insert(organizationJobsTable)
-      .values({ sourceType, sourcePath: canonicalSourcePath, archiveId: archiveId ?? null, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy, nasPath })
+      .values({ sourceType, sourcePath: canonicalSourcePath, archiveId: parsedArchiveId, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy, nasPath })
       .returning();
     res.status(201).json(job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }

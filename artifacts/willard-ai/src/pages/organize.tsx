@@ -181,7 +181,7 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
         className="w-full font-mono font-bold"
         onClick={() => {
           if (!form.sourcePath.trim()) { toast({ title: "Source path is required", variant: "destructive" }); return; }
-          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.archiveId ? parseInt(form.archiveId) : null, archiveDisposition: form.archiveDisposition as any, conflictPolicy: form.conflictPolicy as any } });
+          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.sourceType === "archive" && form.archiveId ? Number(form.archiveId) : null, archiveDisposition: form.sourceType === "archive" ? form.archiveDisposition as any : "keep", conflictPolicy: form.conflictPolicy as any } });
         }}
         disabled={createMutation.isPending || !form.sourcePath.trim()}
       >

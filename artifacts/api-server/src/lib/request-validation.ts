@@ -43,6 +43,16 @@ export function parsePositiveIntegerValue(value: unknown): number | null {
   return parsePositiveIntegerParam(value);
 }
 
+/** Parse an exact string from an allowed set; absent/null values use the supplied default. */
+export function parseAllowedString(
+  value: unknown,
+  allowedValues: readonly string[],
+  defaultValue?: string,
+): string | null {
+  const candidate = value === undefined || value === null ? defaultValue : value;
+  return typeof candidate === "string" && allowedValues.includes(candidate) ? candidate : null;
+}
+
 export function parseOptionalDate(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);

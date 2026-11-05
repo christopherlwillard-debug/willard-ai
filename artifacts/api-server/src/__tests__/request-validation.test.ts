@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
+import { parseAllowedString, parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 
 test("parsePositiveIntegerParam accepts canonical positive safe integer identifiers", () => {
   assert.equal(parsePositiveIntegerParam("1"), 1);
@@ -115,4 +115,28 @@ test("archive route validates filters and treats the selected end date as inclus
   assert.ok(page.includes("const params: ListArchivesParams ="));
   assert.ok(page.includes("minSizeMb !== \"\""));
   assert.ok(page.includes("maxSizeMb !== \"\""));
+});
+
+test("parseAllowedString accepts exact enum values and rejects coercions", () => {
+  const dispositions = ["waiting", "keep", "move_to_processed", "delete"] as const;
+  assert.equal(parseAllowedString(undefined, dispositions, "keep"), "keep");
+  assert.equal(parseAllowedString(null, dispositions, "keep"), "keep");
+  assert.equal(parseAllowedString("waiting", dispositions, "keep"), "waiting");
+  for (const value of ["Waiting", "wait", "waiting ", 1, true, ["keep"], {}]) {
+    assert.equal(parseAllowedString(value, dispositions, "keep"), null);
+  }
+  assert.equal(parseAllowedString(undefined, dispositions), null);
+});
+
+test("organize job creation validates archive IDs and source-compatible options", () => {
+  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  assert.ok(route.includes("parsePositiveIntegerValue(archiveId)"));
+  assert.ok(route.includes('parseAllowedString(archiveDisposition, ["waiting", "keep", "move_to_processed", "delete"], "keep")'));
+  assert.ok(route.includes('parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing")'));
+  assert.ok(route.includes("archiveId: parsedArchiveId"));
+  assert.ok(route.includes('sourceType === "folder" && requestedDisposition !== "keep"'));
+  assert.doesNotMatch(route, /Number\(archiveId\)/);
+
+  const page = readFileSync("artifacts/willard-ai/src/pages/organize.tsx", "utf8");
+  assert.match(page, /archiveDisposition:\s*form\.sourceType === "archive"\s*\?\s*form\.archiveDisposition(?:\s+as any)?\s*:\s*"keep"/);
 });
