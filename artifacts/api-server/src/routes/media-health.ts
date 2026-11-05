@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
+import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
