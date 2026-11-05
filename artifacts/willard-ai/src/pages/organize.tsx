@@ -1556,7 +1556,7 @@ function OrganizeJobRow({
   const deleteBlocked = ["analyzing", "executing", "rolling_back"].includes(currentJob.status) || hasUnresolvedJournal;
   const total = typeof plan?.totalFiles === "number" ? plan.totalFiles : 0;
   const progress = total > 0 ? Math.min(100, (moved / total) * 100) : 0;
-  const sourceName = currentJob.sourcePath.split("/").pop() || currentJob.sourcePath;
+  const sourceName = currentJob.sourcePath.replaceAll("\\", "/").split("/").pop() || currentJob.sourcePath;
 
   return (
     <TableRow className="hover:bg-secondary/30">
