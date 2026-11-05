@@ -197,6 +197,7 @@ export const GetAuthStatusResponse = zod.object({
 export const setupAuthBodySetupTokenMax = 256;
 
 
+
 export const SetupAuthBody = zod.object({
   "password": zod.string(),
   "setupToken": zod.string().max(setupAuthBodySetupTokenMax).optional().describe('Required for first-run setup from non-loopback clients when WILLARD_SETUP_TOKEN is configured.')
