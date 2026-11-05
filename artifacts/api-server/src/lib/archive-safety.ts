@@ -199,7 +199,7 @@ export function validateArchiveEntry(
   }
 
   const components = normalizedPath.split("/");
-  assertPortableArchivePathComponents(rawPath, components);
+  assertPortableArchivePathComponents(rawPath, components.filter(component => component !== "" && component !== "." && component !== ".."));
   if (components.some(component => component === "..")) {
     throw new ArchiveSafetyError(
       `Archive traversal rejected: ".." traversal component in entry "${rawPath}"`,
