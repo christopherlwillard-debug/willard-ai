@@ -93,6 +93,9 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       const linkEntry = linkEntries.find((entry) => entry.file === "linked.txt");
       assert.ok(linkEntry, "node-7z did not report the symlink archive entry");
       assert.equal(getSevenZipEntryInfo(linkEntry).isLink, true);
+      if (process.env.WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT) {
+        fs.copyFileSync(linkArchive, process.env.WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT);
+      }
     }
 
     const destination = path.join(root, "extracted");
@@ -109,6 +112,34 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       fs.readFileSync(path.join(destination, "payload.txt"), "utf8"),
       "verified archive payload\n",
     );
+
+    // A Linux-created symlink archive is also consumed by the Windows job.
+    // This exercises the actual Windows 7-Zip + node-7z technical metadata
+    // path without requiring the Windows runner to have symlink privileges.
+    if (process.env.WILLARD_7ZIP_LINK_ARCHIVE) {
+      const linkArchivePath = process.env.WILLARD_7ZIP_LINK_ARCHIVE;
+      assert.ok(fs.statSync(linkArchivePath).isFile(), "cross-platform symlink archive fixture is missing");
+      const linkEntries = await new Promise((resolve, reject) => {
+        const entries = [];
+        const stream = Seven.list(linkArchivePath, {
+          $bin: binaryPath,
+          $progress: false,
+          techInfo: true,
+        });
+        stream.on("data", (entry) => {
+          if (entry.file !== undefined) entries.push(entry);
+        });
+        stream.once("error", reject);
+        stream.once("end", () => resolve(entries));
+      });
+      const linkEntry = linkEntries.find((entry) => entry.file === "linked.txt");
+      assert.ok(linkEntry, "Windows node-7z did not report the symlink archive entry");
+      assert.equal(
+        getSevenZipEntryInfo(linkEntry).isLink,
+        true,
+        "Windows node-7z did not preserve the symlink type in technical metadata",
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
