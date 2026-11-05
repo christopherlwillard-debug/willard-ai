@@ -64,7 +64,7 @@ export function parseOptionalQueryString(value: unknown, name: string): string |
 /** Parse a strict YYYY-MM-DD calendar date at UTC midnight. */
 export function parseOptionalDateOnly(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
-  if (typeof value !== "string" || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new RequestValidationError(`Invalid ${name}`);
   }
   const parsed = new Date(`${value}T00:00:00.000Z`);
