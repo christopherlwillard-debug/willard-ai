@@ -87,16 +87,23 @@ test("archive date-only ranges validate calendar dates and include the entire en
 
 test("archive route validates filters and treats the selected end date as inclusive", () => {
   const route = readFileSync("artifacts/api-server/src/routes/archives.ts", "utf8");
-  assert.ok(route.includes("parseOptionalQueryString(req.query.category, \"category\")"));
+  assert.ok(route.includes('parseOptionalQueryString(req.query.category, "category")'));
   assert.ok(route.includes("parseBoundedInteger(req.query.minSize"));
   assert.ok(route.includes("parseBoundedInteger(req.query.maxSize"));
   assert.ok(route.includes("parseOptionalDateOnlyRange(req.query.dateFrom, req.query.dateTo)"));
   assert.ok(route.includes("lt(archivesTable.modifiedAt, dateToExclusive)"));
-  assert.doesNotMatch(route, /parseInt\\((?:minSize|maxSize)/);
+  assert.ok(!route.includes("parseInt(minSize") && !route.includes("parseInt(maxSize"));
 
   const spec = readFileSync("lib/api-spec/openapi.yaml", "utf8");
-  assert.match(spec, /name: dateFrom[\\s\\S]{0,120}format: date/);
-  assert.match(spec, /name: dateTo[\\s\\S]{0,120}format: date/);
+  const dateFromIndex = spec.indexOf("name: dateFrom");
+  const dateToIndex = spec.indexOf("name: dateTo");
+  assert.ok(dateFromIndex >= 0 && dateToIndex > dateFromIndex);
+  assert.ok(spec.slice(dateFromIndex, dateToIndex).includes("format: date"));
+  assert.ok(spec.slice(dateToIndex, dateToIndex + 140).includes("format: date"));
+
+  const generatedParams = readFileSync("lib/api-zod/src/generated/types/listArchivesParams.ts", "utf8");
+  assert.ok(generatedParams.includes("dateFrom?: string;"));
+  assert.ok(generatedParams.includes("dateTo?: string;"));
 
   const page = readFileSync("artifacts/willard-ai/src/pages/archives.tsx", "utf8");
   assert.ok(page.includes("const params: ListArchivesParams ="));
