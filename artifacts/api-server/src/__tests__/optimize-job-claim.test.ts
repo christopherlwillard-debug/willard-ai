@@ -189,3 +189,16 @@ test("conversion finalization delegates to verified no-overwrite moves and prese
   assert.match(finalizerSource, /output already exists/);
   assert.match(finalizerSource, /Original backup destination already exists/);
 });
+
+
+test("conversion finalization checkpoints pre-move intents and reconciles them before retry", () => {
+  assert.match(finalizeSource, /onMoveIntent: \(move\) => checkpointFinalizationMove\(move, false\)/);
+  assert.match(finalizeSource, /onMoveComplete: \(move\) => checkpointFinalizationMove\(move, true\)/);
+  assert.match(finalizeSource, /finalizationJournal: \[\.\.\.finalizationJournal\]/);
+  assert.match(finalizeSource, /recoverConversionFinalizationMoves\(resultData\.finalizationJournal, nasPath\)/);
+  assert.match(finalizeSource, /finalizationJournal: \[\]/);
+  assert.match(recoverySource, /pendingFinalizations/);
+  assert.match(recoverySource, /eq\(conversionJobsTable\.status, "awaiting_action"\)/);
+  assert.match(recoverySource, /recoverConversionFinalizationMoves\(/);
+  assert.match(recoverySource, /finalizationRecoveryMoves: recovery\.unresolvedMoves/);
+});
