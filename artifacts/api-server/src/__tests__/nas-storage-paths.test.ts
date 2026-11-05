@@ -18,6 +18,7 @@ test("getTempDir creates a private canonical directory inside the configured lib
     if (process.platform !== "win32") {
       assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
       assert.equal(fs.statSync(path.dirname(tempDir)).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(path.dirname(path.dirname(tempDir))).mode & 0o777, 0o700);
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
