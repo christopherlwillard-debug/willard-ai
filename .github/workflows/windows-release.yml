@@ -10,6 +10,11 @@ on:
         description: "Optional semantic version (defaults to 0.1.<run number>)"
         required: false
         type: string
+      validate_only:
+        description: "Build, sign, and test the Windows installer without publishing a GitHub release."
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -383,13 +388,13 @@ jobs:
           $setup = Join-Path $env:GITHUB_WORKSPACE "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
           $signature = Get-AuthenticodeSignature -FilePath $setup
           if ($signature.Status -ne "Valid") {
-            throw "Published installer signature status was $($signature.Status), not Valid."
+            throw "Packaged installer signature status was $($signature.Status), not Valid."
           }
           if (-not $signature.SignerCertificate) {
-            throw "Published installer has no signer certificate."
+            throw "Packaged installer has no signer certificate."
           }
           if (-not $signature.TimeStamperCertificate) {
-            throw "Published installer has no trusted timestamp certificate."
+            throw "Packaged installer has no trusted timestamp certificate."
           }
           $signer = $signature.SignerCertificate.GetNameInfo(
             [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
@@ -405,7 +410,7 @@ jobs:
           @"
           ## Windows installer trust metadata
           - Release/version: $env:GITHUB_REPOSITORY / v$env:WILLARD_VERSION
-          - Release URL: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/v$env:WILLARD_VERSION/WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe
+          - Potential release URL (only if published): $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/v$env:WILLARD_VERSION/WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe
           - Build: $env:WILLARD_VERSION
           - SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
           - Authenticode status: $($signature.Status)
@@ -440,6 +445,7 @@ jobs:
         run: .\scripts\windows\installer-lifecycle-smoke.ps1
 
       - name: Publish installer, update ZIP, and manifest
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           tag_name: ${{ steps.version.outputs.tag }}

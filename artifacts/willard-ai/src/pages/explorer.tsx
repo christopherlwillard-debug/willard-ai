@@ -26,14 +26,16 @@ function SortableHead({ label, sortKey, current, dir, onClick }: {
 }) {
   const active = current === sortKey;
   return (
-    <TableHead
-      className="cursor-pointer select-none hover:text-foreground transition-colors"
-      onClick={() => onClick(sortKey)}
-    >
-      <span className="inline-flex items-center gap-1">
+    <TableHead aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : undefined}>
+      <button
+        type="button"
+        aria-label={active ? `Sort by ${label}, currently sorted ${dir}` : `Sort by ${label}`}
+        className="inline-flex items-center gap-1 rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onClick={() => onClick(sortKey)}
+      >
         {label}
         {active ? (dir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : null}
-      </span>
+      </button>
     </TableHead>
   );
 }
@@ -84,7 +86,7 @@ export default function Explorer() {
 
       {/* Breadcrumb */}
       <div className="flex items-center flex-wrap gap-1 bg-secondary/50 p-2.5 rounded-md font-mono text-sm">
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => navigateTo("")}>
+        <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Go to library root" title="Go to library root" onClick={() => navigateTo("")}>
           <HardDrive className="h-4 w-4" />
         </Button>
         {breadcrumbs.map((crumb, index) => {
@@ -114,9 +116,11 @@ export default function Explorer() {
           </TableHeader>
           <TableBody>
             {currentPath !== "" && (
-              <TableRow className="cursor-pointer hover:bg-secondary/50" onClick={navigateUp}>
+              <TableRow className="hover:bg-secondary/50">
                 <TableCell><CornerLeftUp className="h-4 w-4 text-muted-foreground" /></TableCell>
-                <TableCell className="font-medium text-muted-foreground" colSpan={4}>..</TableCell>
+                <TableCell className="font-medium text-muted-foreground" colSpan={4}>
+                  <button type="button" aria-label="Go up one folder" className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" onClick={navigateUp}>..</button>
+                </TableCell>
               </TableRow>
             )}
             {isLoading ? (
@@ -127,7 +131,7 @@ export default function Explorer() {
               </TableRow>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground font-mono text-sm">
+                <TableCell colSpan={5} role="alert" className="h-24 text-center text-muted-foreground font-mono text-sm">
                   {currentPath === "" ? "NAS drive is offline or not configured — check Settings" : "Cannot read folder (drive may be offline)"}
                 </TableCell>
               </TableRow>
@@ -139,14 +143,7 @@ export default function Explorer() {
               </TableRow>
             ) : (
               sorted.map((entry) => (
-                <TableRow
-                  key={entry.path}
-                  className="cursor-pointer hover:bg-secondary/50"
-                  onClick={() => {
-                    if (entry.isDirectory) navigateTo(entry.path);
-                    else setSelectedFile(entry as FolderEntry);
-                  }}
-                >
+                <TableRow key={entry.path} className="hover:bg-secondary/50">
                   <TableCell>
                     {entry.isDirectory ? (
                       <Folder className="h-4 w-4 text-blue-400 fill-blue-400/20" />
@@ -157,10 +154,20 @@ export default function Explorer() {
                     )}
                   </TableCell>
                   <TableCell className="font-medium">
-                    <span className="truncate">{entry.name}</span>
-                    {entry.isArchive && (
-                      <span className="ml-2 text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-mono">Archive</span>
-                    )}
+                    <button
+                      type="button"
+                      aria-label={entry.isDirectory ? `Open folder ${entry.name}` : `View details for ${entry.name}`}
+                      className="inline-flex max-w-full items-center gap-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      onClick={() => {
+                        if (entry.isDirectory) navigateTo(entry.path);
+                        else setSelectedFile(entry as FolderEntry);
+                      }}
+                    >
+                      <span className="truncate">{entry.name}</span>
+                      {entry.isArchive && (
+                        <span className="ml-2 text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded font-mono">Archive</span>
+                      )}
+                    </button>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-xs font-mono">
                     {entry.isDirectory

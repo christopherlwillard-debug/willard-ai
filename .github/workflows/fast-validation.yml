@@ -115,6 +115,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Verify media LIKE filters against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-query-validation.test.ts
+
       - name: Verify PostgreSQL conversion advisory locks across connections
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard

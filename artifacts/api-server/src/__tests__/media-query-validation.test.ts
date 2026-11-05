@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { Pool } from "pg";
 import { parseOptionalQueryString, RequestValidationError } from "../lib/request-validation.ts";
 import { escapeLikePattern } from "../lib/sql-like.ts";
 
@@ -41,4 +42,35 @@ test("Explorer rejects repeated path parameters before resolving filesystem path
   assert.ok(route.includes("instanceof RequestValidationError"));
   assert.ok(route.indexOf("parseOptionalQueryString(req.query.path") < route.indexOf("safeResolve(nasPath, relativePath)"));
   assert.doesNotMatch(route, /req\.query\.path\s+as\s+string/);
+});
+
+
+const databaseUrl = process.env.DATABASE_URL;
+
+test("PostgreSQL LIKE filters match wildcard characters literally", { skip: !databaseUrl }, async () => {
+  if (!databaseUrl) return;
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const searchPattern = "%" + escapeLikePattern("family_100%\\photos") + "%";
+    const folderPattern = escapeLikePattern("albums_100%\\family/") + "%";
+    const result = await pool.query(
+      "SELECT $1::text LIKE $2::text ESCAPE E'\\\\' AS search_matches, " +
+        "$3::text LIKE $4::text ESCAPE E'\\\\' AS folder_matches, " +
+        "$5::text LIKE $2::text ESCAPE E'\\\\' AS wildcard_non_match",
+      [
+        "family_100%\\photos_2026.jpg",
+        searchPattern,
+        "albums_100%\\family/child/photo.jpg",
+        folderPattern,
+        "familyX100Yphotos_2026.jpg",
+      ],
+    );
+    assert.deepEqual(result.rows[0], {
+      search_matches: true,
+      folder_matches: true,
+      wildcard_non_match: false,
+    });
+  } finally {
+    await pool.end();
+  }
 });

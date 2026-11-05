@@ -659,6 +659,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
   assert.match(installedLifecycleSmoke, /startup-failure\.log/);
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
+  assert.match(installedLifecycleSmoke, /Upgrade removed or duplicated the Start Menu shortcut/);
+  assert.match(installedLifecycleSmoke, /Uninstall left the Start Menu shortcut behind/);
   assert.match(installedLifecycleSmoke, /willard_lifecycle_marker/);
   assert.match(installedLifecycleSmoke, /Dropdb/);
   assert.match(launcher, /WILLARD_SUPPRESS_STARTUP_DIALOG/);
@@ -1356,4 +1358,13 @@ test("Windows release stages only hash-verified official 7-Zip binaries", () => 
   assert.match(officialSevenZipBootstrap, /9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7/);
   assert.match(officialSevenZipBootstrap, /f27a8f103c84785026edcba1f67faf1357225df9d19ddb0b7760d55947141bc7/);
   assert.match(officialSevenZipBootstrap, /fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0/);
+});
+
+
+test("manual Windows installer validation can skip release publication", () => {
+  assert.match(workflow, /validate_only:[\s\S]*?type: boolean[\s\S]*?default: true/);
+  assert.match(
+    workflow,
+    /if: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true \}\}/,
+  );
 });

@@ -195,6 +195,11 @@ exit $LASTEXITCODE
   $upgradeResult = Invoke-AsLifecycleUser $upgradeInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
   Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
   Assert-True (-not (Test-Path $obsoletePayloadFile)) "An obsolete packaged file survived the in-place installer upgrade."
+  $upgradeStartMenuShortcuts = @()
+  if (Test-Path -LiteralPath $startMenuRoot) {
+    $upgradeStartMenuShortcuts = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter "Willard Media Center.lnk" -File -Recurse -ErrorAction SilentlyContinue)
+  }
+  Assert-True ($upgradeStartMenuShortcuts.Count -eq 1) "Upgrade removed or duplicated the Start Menu shortcut."
   Assert-ExternalState
 
   Write-Host "Lifecycle: interrupted update recovery"
@@ -282,6 +287,11 @@ exit $LASTEXITCODE
   Assert-True ($uninstallResult.exitCode -eq 0) ("Setup.exe uninstall failed:`n" + $uninstallResult.output)
   Assert-True (-not (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"))) "Uninstall left packaged launcher files behind."
   Assert-True (-not (Test-Path $desktopShortcut)) "Uninstall left the desktop shortcut behind."
+  $remainingStartMenuShortcuts = @()
+  if (Test-Path -LiteralPath $startMenuRoot) {
+    $remainingStartMenuShortcuts = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter "Willard Media Center.lnk" -File -Recurse -ErrorAction SilentlyContinue)
+  }
+  Assert-True ($remainingStartMenuShortcuts.Count -eq 0) "Uninstall left the Start Menu shortcut behind."
   Assert-ExternalState
   $script:LifecyclePassed = $true
   Write-Host "Installed lifecycle smoke passed: standard user, install, start, upgrade, rollback, diagnostics, and uninstall."

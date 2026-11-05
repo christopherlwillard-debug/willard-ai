@@ -10,6 +10,10 @@ const archivePage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/archives.tsx", import.meta.url),
   "utf8",
 );
+const explorerPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/explorer.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -69,4 +73,28 @@ test("archive index reports request failures and provides a retry action", () =>
   assert.ok(archivePage.includes('role="alert"'));
   assert.ok(archivePage.includes("onClick={() => refetch()}"));
   assert.equal(archivePage.includes("{data?.total ?? 0} archives indexed"), false);
+});
+
+
+test("Explorer sorting, navigation, and errors are accessible", () => {
+  assert.ok(explorerPage.includes('aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : undefined}'));
+  assert.ok(explorerPage.includes("currently sorted"));
+  assert.ok(explorerPage.includes("Sort by"));
+  assert.ok(explorerPage.includes('aria-label="Go to library root"'));
+  assert.ok(explorerPage.includes('aria-label="Go up one folder"'));
+  assert.ok(explorerPage.includes("aria-label={entry.isDirectory ?"));
+  assert.ok(explorerPage.includes("Open folder"));
+  assert.ok(explorerPage.includes("View details for"));
+  assert.ok(explorerPage.includes('role="alert"'));
+
+  const sortableHeadStart = explorerPage.indexOf("function SortableHead");
+  const sortableHeadEnd = explorerPage.indexOf("// ── Main page", sortableHeadStart);
+  const sortableHead = explorerPage.slice(sortableHeadStart, sortableHeadEnd);
+  assert.match(sortableHead, /<button/);
+  assert.doesNotMatch(sortableHead, /<TableHead[^>]*onClick=/);
+
+  const entryRowStart = explorerPage.indexOf('<TableRow key={entry.path}');
+  const entryRowTagEnd = explorerPage.indexOf(">", entryRowStart);
+  assert.ok(entryRowStart >= 0 && entryRowTagEnd > entryRowStart);
+  assert.doesNotMatch(explorerPage.slice(entryRowStart, entryRowTagEnd), /onClick=/);
 });
