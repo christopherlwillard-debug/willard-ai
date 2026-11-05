@@ -1677,7 +1677,7 @@ These are Fast Validation and Dependency Review results, not full CI or release 
 
 ### Branch and PR preservation
 
-The remote `audit/full-repository-review-2026-11` branch is still the exact head of PR #2 at `83b9cf1f1ac002c87e31af21b187049c18654e35`. It is 840 commits ahead of `main` and 1 behind; GitHub currently reports the PR as mergeable. No rebase, force-push, merge, or main-branch update was performed. The separate Replit workspace previously reported on `main` was not modified by this GitHub-side work; if it still shows `main`, it must fetch and check out the existing audit branch before local Replit work resumes.
+The remote `audit/full-repository-review-2026-11` branch is still the exact head of PR #2 at `1ef0e77c28006e05622a4847320ea639c3a8e342`. It is 841 commits ahead of `main` and 1 behind; GitHub currently reports the PR as mergeable. No rebase, force-push, merge, or main-branch update was performed. The separate Replit workspace previously reported on `main` was not modified by this GitHub-side work; if it still shows `main`, it must fetch and check out the existing audit branch before local Replit work resumes.
 
 No production data, credentials, or published releases were changed.
 
