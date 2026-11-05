@@ -266,6 +266,17 @@ export async function rollbackMoves(
 
   for (const mv of [...moves].reverse()) {
     try {
+      // A malformed or stale journal must never be allowed to unlink a file
+      // when both sides resolve to the same path. On Windows, compare paths
+      // case-insensitively because differently-cased paths can name one file.
+      const resolvedFrom = path.resolve(mv.from);
+      const resolvedTo = path.resolve(mv.to);
+      const normalizedFrom = process.platform === "win32" ? resolvedFrom.toLowerCase() : resolvedFrom;
+      const normalizedTo = process.platform === "win32" ? resolvedTo.toLowerCase() : resolvedTo;
+      if (normalizedFrom === normalizedTo) {
+        log(`ROLLBACK_SKIP: source and destination resolve to the same path; refusing destructive rollback: ${resolvedFrom}`);
+        continue;
+      }
       if (!fs.existsSync(mv.to)) {
         // A previous rollback attempt may already have restored this file.
         // Count it only when the source is a regular file with the expected
