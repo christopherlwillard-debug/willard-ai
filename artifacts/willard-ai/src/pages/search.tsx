@@ -141,56 +141,68 @@ function ResultCard({ item, onOpen, onSimilar }: {
   const showThumb = isVisualMediaType(item.mediaType) && !thumbError;
   return (
     <div
-      className="group rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors cursor-pointer"
-      onClick={() => onOpen(item)}
-      data-testid={`card-result-${item.id}`}
+      className="group rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors"
+      data-testid={"card-result-" + item.id}
     >
-      <div className="relative aspect-video bg-secondary/40 flex items-center justify-center">
-        {showThumb ? (
-          <img
-            src={`${API}/media/thumbnail/${item.id}`}
-            alt={item.name}
-            loading="lazy"
-            className="h-full w-full object-cover"
-            onError={() => setThumbError(true)}
-          />
-        ) : (
-          <div className="scale-[2]">{mediaIcon(item.mediaType)}</div>
-        )}
-        <Badge variant="outline" className={`absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur ${conf.className}`}>
-          {conf.label}
-        </Badge>
-        {item.favorite && <Star className="absolute top-2 right-2 h-4 w-4 fill-yellow-400 text-yellow-400" />}
+      <button
+        type="button"
+        className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+        aria-label={"Open " + item.name + " details"}
+        onClick={() => onOpen(item)}
+        data-testid={"button-open-result-" + item.id}
+      >
+        <div className="relative aspect-video bg-secondary/40 flex items-center justify-center">
+          {showThumb ? (
+            <img
+              src={API + "/media/thumbnail/" + item.id}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              className="h-full w-full object-cover"
+              onError={() => setThumbError(true)}
+            />
+          ) : (
+            <div className="scale-[2]" aria-hidden="true">{mediaIcon(item.mediaType)}</div>
+          )}
+          <Badge variant="outline" className={"absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur " + conf.className}>
+            {conf.label}
+          </Badge>
+          {item.favorite && <Star aria-hidden="true" className="absolute top-2 right-2 h-4 w-4 fill-yellow-400 text-yellow-400" />}
+        </div>
+        <div className="p-3 space-y-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {mediaIcon(item.mediaType)}
+            <p className="text-sm font-medium truncate">{item.name}</p>
+          </div>
+          {item.reasons.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {item.reasons.slice(0, 3).map((r) => (
+                <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{r}</span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {formatBytes(item.sizeBytes)}{item.dateTaken ? " · " + formatDate(item.dateTaken) : ""}
+          </p>
+        </div>
+      </button>
+      <div className="flex justify-end px-3 pb-2">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              type="button"
               size="sm"
               variant="secondary"
-              className="absolute bottom-2 right-2 h-7 px-2 opacity-0 group-hover:opacity-100 transition-opacity"
-              onClick={(e) => { e.stopPropagation(); onSimilar(item); }}
-              data-testid={`button-similar-${item.id}`}
+              className="h-7 px-2 text-xs sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity"
+              aria-label={"Find similar files to " + item.name}
+              onClick={() => onSimilar(item)}
+              data-testid={"button-similar-" + item.id}
             >
               <ScanSearch className="h-3.5 w-3.5 mr-1" /> Similar
             </Button>
           </TooltipTrigger>
           <TooltipContent>Find visually / semantically similar files</TooltipContent>
         </Tooltip>
-      </div>
-      <div className="p-3 space-y-1.5">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {mediaIcon(item.mediaType)}
-          <p className="text-sm font-medium truncate">{item.name}</p>
-        </div>
-        {item.reasons.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {item.reasons.slice(0, 3).map((r) => (
-              <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{r}</span>
-            ))}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground">
-          {formatBytes(item.sizeBytes)}{item.dateTaken ? ` · ${formatDate(item.dateTaken)}` : ""}
-        </p>
       </div>
     </div>
   );
