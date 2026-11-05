@@ -49,6 +49,7 @@ export const replaceMediaFileTagsBodyTagsItemMax = 64;
 export const replaceMediaFileTagsBodyTagsMax = 50;
 
 
+
 export const ReplaceMediaFileTagsBody = zod.object({
   "tags": zod.array(zod.string().max(replaceMediaFileTagsBodyTagsItemMax)).max(replaceMediaFileTagsBodyTagsMax)
 })
@@ -336,6 +337,7 @@ export const updateSettingsBodyAiExcludedExtensionsItemMax = 16;
 export const updateSettingsBodyAiExcludedExtensionsMax = 200;
 
 
+
 export const UpdateSettingsBody = zod.object({
   "nasPath": zod.string().optional(),
   "photosDestination": zod.string().optional(),
@@ -458,6 +460,7 @@ export const GetLibraryBackupStatusResponse = zod.object({
  * @summary Update backup schedule and enablement
  */
 export const updateLibraryBackupSettingsBodyScheduleHoursMax = 168;
+
 
 
 export const UpdateLibraryBackupSettingsBody = zod.object({
@@ -596,6 +599,7 @@ export const searchFilesQueryOffsetMin = 0;
 export const searchFilesQueryOffsetMax = 10000000;
 
 
+
 export const SearchFilesQueryParams = zod.object({
   "q": zod.coerce.string().optional(),
   "fileType": zod.coerce.string().optional(),
@@ -658,6 +662,7 @@ export const listArchivesQueryMinSizeMax = 9007199254740991;
 
 export const listArchivesQueryMaxSizeMin = 0;
 export const listArchivesQueryMaxSizeMax = 9007199254740991;
+
 
 
 export const ListArchivesQueryParams = zod.object({
@@ -2650,3 +2655,5 @@ export const GetSettingsScannerResponse = zod.union([zod.record(zod.string(), zo
 export const UpdateSettingsScannerBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
 
 export const UpdateSettingsScannerResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
