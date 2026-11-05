@@ -136,6 +136,7 @@ test("trash root refuses a symlink outside the configured library during manifes
 test("trash tombstones match entries through a configured NAS mount alias", (context) => {
   const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-real-root-"));
   const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-alias-parent-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
   const aliasRoot = path.join(aliasParent, "library");
   const trashPath = path.join(aliasRoot, "WillardAI", ".Trash", "session", "photo.jpg");
   try {
@@ -158,9 +159,22 @@ test("trash tombstones match entries through a configured NAS mount alias", (con
     const canonicalTrashPath = resolveLibraryTrashPath(trashPath, aliasRoot);
     assert.equal(removeTrashManifestEntry(aliasRoot, canonicalTrashPath, "restore-alias"), true);
     assert.equal(readTrashManifest(aliasRoot).entries.length, 0);
+
+    const externalAlias = path.join(outside, "outside-link.jpg");
+    try {
+      fs.symlinkSync(trashPath, externalAlias, "file");
+      assert.throws(
+        () => resolveLibraryTrashPath(externalAlias, aliasRoot),
+        /outside the configured trash root/,
+      );
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+      context.skip("file symlink creation is not permitted on this runner");
+    }
   } finally {
     fs.rmSync(aliasParent, { recursive: true, force: true });
     fs.rmSync(realRoot, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 
