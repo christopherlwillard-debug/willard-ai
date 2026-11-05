@@ -48,6 +48,11 @@ export interface ArchiveBudget {
   entryCount: number;
   totalBytes: number;
   paths: Set<string>;
+  /** File paths and explicit or implicit directory paths are tracked separately
+   * so a file cannot occupy a path required as a parent directory (or vice versa).
+   */
+  filePaths: Set<string>;
+  directoryPaths: Set<string>;
 }
 
 export interface ArchiveEntryMetadata {
@@ -138,7 +143,13 @@ export function getSevenZipEntryInfo(entry: {
 }
 
 export function createArchiveBudget(): ArchiveBudget {
-  return { entryCount: 0, totalBytes: 0, paths: new Set<string>() };
+  return {
+    entryCount: 0,
+    totalBytes: 0,
+    paths: new Set<string>(),
+    filePaths: new Set<string>(),
+    directoryPaths: new Set<string>(),
+  };
 }
 
 function entrySize(sizeBytes: ArchiveEntryMetadata["sizeBytes"]): number {
@@ -223,7 +234,29 @@ export function validateArchiveEntry(
   if (budget.paths.has(collisionKey)) {
     throw new ArchiveSafetyError(`Archive contains duplicate entry path "${rawPath}"`);
   }
+
+  const collisionComponents = collisionKey.split("/");
+  const parentKeys = collisionComponents.slice(0, -1).map((_component, index) =>
+    collisionComponents.slice(0, index + 1).join("/"),
+  );
+  if (parentKeys.some(parent => budget.filePaths.has(parent))) {
+    throw new ArchiveSafetyError(
+      `Archive entry "${rawPath}" conflicts with an existing file used as a parent directory`,
+    );
+  }
+  if (!isDirectory && budget.directoryPaths.has(collisionKey)) {
+    throw new ArchiveSafetyError(
+      `Archive file "${rawPath}" conflicts with an existing directory or child entry`,
+    );
+  }
+
   budget.paths.add(collisionKey);
+  if (isDirectory) {
+    budget.directoryPaths.add(collisionKey);
+  } else {
+    budget.filePaths.add(collisionKey);
+  }
+  for (const parent of parentKeys) budget.directoryPaths.add(parent);
   budget.entryCount++;
   if (budget.entryCount > ARCHIVE_LIMITS.maxEntries) {
     throw new ArchiveSafetyError(
