@@ -14,6 +14,10 @@ const indexSource = fs.readFileSync(
   path.join(repoRoot, "artifacts/api-server/src/index.ts"),
   "utf8",
 );
+const appSource = fs.readFileSync(
+  path.join(repoRoot, "artifacts/api-server/src/app.ts"),
+  "utf8",
+);
 
 test("standalone setup keeps vector columns optional", () => {
   const requiredSql = setupSource
@@ -67,6 +71,18 @@ test("interrupted-job recovery is behind the schema startup gate and does not bl
   assert.ok(recovery > migration);
   assert.ok(recovery > listen);
 });
+test("conversion recovery runs only after schema bootstrap and listener readiness", () => {
+  const migration = indexSource.indexOf("const startupMigrations");
+  const recovery = indexSource.indexOf("recoverInterruptedConversionJobs()");
+  const listen = indexSource.indexOf("app.listen");
+
+  assert.ok(migration >= 0);
+  assert.ok(listen > migration);
+  assert.ok(recovery > listen, "conversion recovery must not query tables before startup migrations finish");
+  assert.doesNotMatch(appSource, /recoverInterruptedConversionJobs\(/);
+  assert.match(indexSource, /Conversion recovery did not complete/);
+});
+
 test("authentication sessions are created under a lock on the current credential", () => {
   assert.match(authSource, /async function establishSessionForPassword/);
   assert.match(authSource, /req\.session\.save/);
