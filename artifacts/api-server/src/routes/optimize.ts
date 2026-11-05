@@ -451,7 +451,7 @@ async function analyzeJpegFile(filePath: string): Promise<string[]> {
     // Issue 2: Non-optimized Huffman tables — detectable via significant entropy gap.
     // A well-optimized JPEG has chromaSubsampling set and effective entropy coding.
     // We compare EXIF overhead vs image size: large EXIF relative to total size suggests duplication.
-    const totalBytes = (() => { try { return fs.statSync(filePath).size; } catch { return 0; } })();
+    const totalBytes = fs.statSync(filePath).size;
     const exifBytes  = meta.exif?.length ?? 0;
     if (totalBytes > 0 && exifBytes / totalBytes > 0.05) {
       issues.push("excessive metadata overhead (EXIF > 5% of file size)");
@@ -465,8 +465,9 @@ async function analyzeJpegFile(filePath: string): Promise<string[]> {
     // An already-optimal JPEG: progressive + reasonable metadata + standard chroma = no issues
     // Do NOT add a catch-all — empty array means "already optimal, skip conversion"
     return issues;
-  } catch {
-    return [];
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to analyze JPEG "${filePath}": ${reason}`);
   }
 }
 
@@ -1688,7 +1689,17 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       // run on-demand per-file analysis at execute time — true per-file decision.
       // This mirrors the codec-sensitive-container pattern: never convert without analysis.
       if ((ext === "jpg" || ext === "jpeg") && !perFileDecision) {
-        const jpegIssues = await analyzeJpegFile(fullPath);
+        let jpegIssues: string[];
+        try {
+          jpegIssues = await analyzeJpegFile(fullPath);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          failed++;
+          results.push({ filePath: fullPath, status: "failed", error: message });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "failed", error: message.slice(0, 300), processed: i + 1, total: totalFiles });
+          continue;
+        }
         if (jpegIssues.length === 0) {
           skipped++;
           const skipReason = "Per-file analysis: already optimal";
