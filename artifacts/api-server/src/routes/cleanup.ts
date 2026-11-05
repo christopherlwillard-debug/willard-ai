@@ -286,7 +286,7 @@ router.get("/cleanup/empty-folders", async (_req, res) => {
       return;
     }
 
-    const emptyFolders = findEmptyDirectories(nasPath)
+    const emptyFolders = (await findEmptyDirectories(nasPath))
       .map((folderPath) => ({ path: folderPath, sizeBytes: 0 }));
     res.json(emptyFolders.slice(0, 200));
   } catch {
@@ -333,7 +333,7 @@ router.get("/cleanup/summary", async (_req, res) => {
     // folders with no indexed files have no row from which to discover them.
     // Use the same fail-closed filesystem scan as the Empty Folders feature.
     const emptyFolderCount = fs.existsSync(nasPath)
-      ? findEmptyDirectories(nasPath).length
+      ? (await findEmptyDirectories(nasPath)).length
       : 0;
 
     res.json({
