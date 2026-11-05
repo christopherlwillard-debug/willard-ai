@@ -478,9 +478,17 @@ test("rollbackMoves: completes an interrupted same-volume hard-link restore", as
 
 test("processed archive dispositions never overwrite an existing archive", () => {
   const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
-  const noReplaceMoves = routeSource.match(/moveFileNoReplace\(job\.sourcePath,\s*dest\)/g) ?? [];
-  assert.equal(noReplaceMoves.length, 2, "both automatic and manual dispositions must use no-replace moves");
-  assert.doesNotMatch(routeSource, /moveFile\(job\.sourcePath,\s*dest\)/);
+  const automaticStart = routeSource.indexOf('let dispositionApplied = "kept";');
+  const automaticEnd = routeSource.indexOf("// ── Report", automaticStart);
+  const manualStart = routeSource.indexOf('router.post("/organize/jobs/:id/apply-disposition"');
+  const manualEnd = routeSource.indexOf("// ── Recovery Center", manualStart);
+  assert.ok(automaticStart >= 0 && automaticEnd > automaticStart);
+  assert.ok(manualStart >= 0 && manualEnd > manualStart);
+  const automaticDisposition = routeSource.slice(automaticStart, automaticEnd);
+  const manualDisposition = routeSource.slice(manualStart, manualEnd);
+  assert.match(automaticDisposition, /moveFileNoReplace\(job\.sourcePath,\s*dest\)/);
+  assert.match(manualDisposition, /moveFileNoReplace\(sourcePath,\s*dest\)/);
+  assert.doesNotMatch(routeSource, /moveFile\((?:job\.sourcePath|sourcePath),\s*dest\)/);
 });
 
 
