@@ -112,7 +112,7 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       });
       assert.equal(
         fs.readFileSync(path.join(linkDestination, "payload.txt"), "utf8"),
-        "verified archive payload\\n",
+        "verified archive payload\n",
       );
       let extractedLinkIsSymlink = false;
       try {
