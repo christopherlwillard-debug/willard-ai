@@ -576,3 +576,13 @@ Remaining archive hardening:
 - No code change was made. A safe fix needs a durable per-attempt lease/fencing token (or equivalent database-backed ownership generation), conditional heartbeat/stage/journal updates, and checks that prevent a superseded worker from beginning additional filesystem mutations. The design must cover initial execute, resume, rollback, capacity-admission failure, and crash recovery. An in-memory mutex or status-only predicate is insufficient across processes.
 - Validation: source inspection only; no regression test or runtime concurrency test was run because the ownership mechanism is not implemented. Do not treat this as fixed or validated.
 - Priority: high. Until fencing is implemented, a worker paused beyond the five-minute lease can potentially overlap a recovery worker. Avoid manually resuming or rolling back a job while its original worker may still be alive.
+
+
+## Rollback success now requires checksum verification (2026-11-05)
+
+- Found that `rollbackMoves` incremented its success count immediately after moving a file back to its source, then merely logged a checksum mismatch. The rollback endpoint uses that count to decide whether to mark the whole job `rolled_back`; a corrupted or externally modified file could therefore be reported as successfully recovered.
+- Changed rollback to hash the destination against the journaled original SHA-256 before moving it. A mismatch is left at the destination and is not counted as restored.
+- After moving, rollback hashes the restored source again and increments the success count only on an exact match. If bytes change between the preflight hash and the move, it attempts to return the unverified file to its destination and leaves the move incomplete. If that preservation move fails, it logs the failure and still does not claim success.
+- Added a regression that tampers with the destination after the forward move and verifies rollback preserves that only remaining copy, returns zero successful restores, and records a verification failure.
+- Implementation commit: `b2a8ad536c3eb9e533608d8d2b08bf0074bdc72a`; regression commit: `c27feace4476472d34b7282416ccea68b9b234bf`.
+- Validation: pending Fast Validation and Dependency Review on the updated branch. This closes the false-success accounting defect; it does not resolve the separate `conflictPolicy=replace` backup/rollback risk or the stale-worker fencing issue.
