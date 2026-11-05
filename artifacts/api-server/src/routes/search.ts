@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, pool, appSettingsTable } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
   buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, type SearchIntent,
@@ -8,6 +8,7 @@ import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import {
   SAVED_SEARCH_LIMIT,
   SEARCH_HISTORY_RETENTION,
@@ -17,9 +18,7 @@ import {
 const router: IRouter = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const p = row?.nasPath?.trim();
-  return p ? p : null;
+  return getActiveNasPath();
 }
 
 function sanitizeIntent(raw: unknown): SearchIntent | null {
