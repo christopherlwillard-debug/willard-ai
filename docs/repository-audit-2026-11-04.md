@@ -364,5 +364,5 @@ Remaining archive hardening:
 ## Trash restore paths through symlinked NAS mount aliases (2026-11-05)
 
 - The symlink-safe trash resolver returns a canonical path. When the configured NAS root is itself a symlink alias, the manual restore route passes that canonical path back to tombstone removal; a purely lexical root comparison would reject it and leave a stale active manifest record.
-- The resolver now accepts either the configured lexical path or its canonical equivalent only when the configured root itself is a symlink alias. It still rejects outside paths and checks every descendant component for symlinks. The mount-alias regression now exercises the canonical path returned by the same resolver used by the route.
+- The resolver now accepts either the configured lexical path or its canonical equivalent only when the configured root itself is a symlink alias. Canonical fallback uses lexical normalization rather than realpath on the requested target, so an outside symlink pointing into the library is still rejected. It checks every descendant component for symlinks. The mount-alias regression exercises both the canonical path returned by the route resolver and an outside symlink attempt.
 - Fast Validation is pending.
