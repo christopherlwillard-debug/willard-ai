@@ -1175,7 +1175,16 @@ test("installer coordinates upgrades and repair reports failures", async () => {
 });
 
 test("developer updater journal replacement is atomic without backup artifacts", () => {
+  assert.match(launcherCommon, /\$replacementBackup = "\$journalPath\.\$writeId\.bak"/);
   assert.match(
+    launcherCommon,
+    /\[System\.IO\.File\]::Replace\(\$temporary, \$journalPath, \$replacementBackup\)/,
+  );
+  assert.match(
+    launcherCommon,
+    /Remove-Item -LiteralPath \$replacementBackup -Force -ErrorAction SilentlyContinue/,
+  );
+  assert.doesNotMatch(
     launcherCommon,
     /\[System\.IO\.File\]::Replace\(\$temporary, \$journalPath, \$null\)/,
   );
