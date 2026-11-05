@@ -88,6 +88,9 @@ jobs:
           pnpm run test:release-contracts
           pnpm run test:storage-conformance
 
+      - name: Verify official Windows 7-Zip download retry policy
+        run: node --test scripts/windows/prepare-official-7zip-retry.test.mjs
+
       - name: Download and verify official static 7-Zip 26.05
         run: |
           mkdir -p "$RUNNER_TEMP/official-7zip"

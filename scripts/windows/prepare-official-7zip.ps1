@@ -23,7 +23,35 @@ $ArchivePath = Join-Path $TempRoot $ArchiveName
 $InstallerPath = Join-Path $TempRoot $InstallerName
 
 function Download-And-Verify([string]$Name, [string]$ExpectedHash, [string]$Path) {
-  Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/$Name" -OutFile $Path
+  $MaxAttempts = 4
+  $Downloaded = $false
+  $LastDownloadError = $null
+
+  for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+    try {
+      if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Force
+      }
+      Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/$Name" -OutFile $Path
+      $Downloaded = $true
+      break
+    } catch {
+      $LastDownloadError = $_
+      Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+      if ($Attempt -lt $MaxAttempts) {
+        $DelaySeconds = [int][Math]::Min(2 * [Math]::Pow(2, $Attempt - 1), 16)
+        Write-Warning "Download of $Name failed on attempt $Attempt/$MaxAttempts; retrying in $DelaySeconds seconds. $($_.Exception.Message)"
+        Start-Sleep -Seconds $DelaySeconds
+      }
+    }
+  }
+
+  if (-not $Downloaded) {
+    throw "Unable to download $Name after $MaxAttempts attempts: $($LastDownloadError.Exception.Message)"
+  }
+
+  # A checksum mismatch is an integrity failure, not a transient transport
+  # failure. Do not retry or accept a different asset after this point.
   $ActualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($ActualHash -ne $ExpectedHash) {
     throw "SHA-256 verification failed for $Name. Expected $ExpectedHash; received $ActualHash."
