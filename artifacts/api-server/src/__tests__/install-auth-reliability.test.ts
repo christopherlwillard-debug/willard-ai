@@ -117,6 +117,6 @@ test("developer desktop launcher and local Vite servers bind only to loopback", 
   const apiStart = developerLauncherSource.indexOf("$apiProc = Start-Process", startup);
 
   assert.ok(startup >= 0 && host > startup && apiStart > host, "developer API host must be set before the process starts");
-  assert.match(viteConfigSource, /const serverHost = isReplit \? "0\\.0\\.0\\.0" : "127\\.0\\.0\\.1"/);
+  assert.match(viteConfigSource, /const serverHost = isReplit \? "0\.0\.0\.0" : "127\.0\.0\.1"/);
   assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
 });
