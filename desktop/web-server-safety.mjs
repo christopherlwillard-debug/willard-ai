@@ -23,3 +23,21 @@ export function resolveStaticFile(root, pathname) {
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return fs.statSync(real).isFile() ? real : fs.realpathSync(path.join(rootReal, "index.html"));
 }
+
+export function parseDesktopRequestUrl(requestUrl) {
+  if (typeof requestUrl !== "string" || requestUrl.length === 0) {
+    throw new Error("Missing request URL.");
+  }
+  const parsed = new URL(requestUrl, "http://localhost");
+  let pathname;
+  try {
+    pathname = decodeURIComponent(parsed.pathname);
+  } catch {
+    throw new Error("Invalid request path encoding.");
+  }
+  return { parsed, pathname };
+}
+
+export function staticFileReadErrorStatus(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 404 : 500;
+}
