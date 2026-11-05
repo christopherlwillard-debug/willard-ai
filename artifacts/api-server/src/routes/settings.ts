@@ -13,6 +13,7 @@ import { handlePrivateMediaStreamError } from "../lib/private-media-response.ts"
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
+import { invalidateNasPathCache } from "./media";
 import {
   getLibraryBackupStatus,
   requestLibraryBackup,
@@ -182,6 +183,10 @@ router.put("/settings", async (req, res) => {
       .set({ ...rest, ...extra })
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
+
+    if (normalizedNasPath && normalizedNasPath !== existing.nasPath) {
+      invalidateNasPathCache();
+    }
 
     if (normalizedNasPath && normalizedNasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
       const cancelledJobs = cancelJobsForLibrary(existing.nasPath);
