@@ -42,3 +42,11 @@ test("every OpenAI library context query applies the active library and AI exclu
   assert.ok((source.match(/buildAiMediaExclusionCondition\(/g) ?? []).length >= 5);
   assert.match(source, /: sql`FALSE`/);
 });
+
+test("AI enrichment folder exclusions normalize Windows separators and use literal path boundaries", () => {
+  const enrichmentPath = fileURLToPath(new URL("../lib/ai-enrichment.ts", import.meta.url));
+  const source = readFileSync(enrichmentPath, "utf8");
+  assert.match(source, /lower\(replace\(f\.relative_path, chr\(92\), '\/'\)\)/);
+  assert.match(source, /left\(lower\(replace\(f\.relative_path, chr\(92\), '\/'\)\), length\(excluded\.folder\) \+ 1\) = excluded\.folder \|\| '\/'/);
+  assert.doesNotMatch(source, /lower\(f\.relative_path\) LIKE excluded\.folder/);
+});
