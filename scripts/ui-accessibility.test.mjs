@@ -14,6 +14,14 @@ const explorerPage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/explorer.tsx", import.meta.url),
   "utf8",
 );
+const mediaViewer = await readFile(
+  new URL("../artifacts/willard-ai/src/components/media/MediaViewer.tsx", import.meta.url),
+  "utf8",
+);
+const mediaPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/media.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -97,4 +105,29 @@ test("Explorer sorting, navigation, and errors are accessible", () => {
   const entryRowTagEnd = explorerPage.indexOf(">", entryRowStart);
   assert.ok(entryRowStart >= 0 && entryRowTagEnd > entryRowStart);
   assert.doesNotMatch(explorerPage.slice(entryRowStart, entryRowTagEnd), /onClick=/);
+});
+
+
+test("media rename dialog is labelled, announces errors, and traps keyboard focus", () => {
+  assert.ok(mediaViewer.includes('role="dialog"'));
+  assert.ok(mediaViewer.includes('aria-modal="true"'));
+  assert.ok(mediaViewer.includes('aria-labelledby="media-rename-title"'));
+  assert.ok(mediaViewer.includes('htmlFor="media-rename-input"'));
+  assert.ok(mediaViewer.includes('aria-invalid={Boolean(err)}'));
+  assert.ok(mediaViewer.includes('aria-describedby={err ? "media-rename-error" : undefined}'));
+  assert.ok(mediaViewer.includes('role="alert" aria-live="assertive"'));
+  assert.ok(mediaViewer.includes('event.key !== "Tab"'));
+  assert.ok(mediaViewer.includes("last.focus()"));
+  assert.ok(mediaViewer.includes("first.focus()"));
+  assert.ok(mediaViewer.includes("inp.current?.focus()"));
+  assert.ok(mediaViewer.includes("requestAnimationFrame(() => renameTriggerRef.current?.focus())"));
+  assert.ok(mediaViewer.includes('aria-label={"Rename " + file.name}'));
+});
+
+test("media rename refreshes both the viewer path and the media-list cache", () => {
+  assert.ok(mediaViewer.includes("Promise<{ id: number; name: string; relativePath: string }>"));
+  assert.ok(mediaViewer.includes("onRenameChange(updated.id, updated.name, updated.relativePath)"));
+  assert.ok(mediaPage.includes("onRenameChange={(id, name, relativePath) =>"));
+  assert.ok(mediaPage.includes("{ ...item, name, relativePath }"));
+  assert.ok(mediaPage.includes('queryClient.invalidateQueries({ queryKey: ["media-files"] })'));
 });

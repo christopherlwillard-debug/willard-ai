@@ -104,14 +104,20 @@ test("preserves both failures if filesystem rollback also fails", withTempFiles(
 }));
 
 
-test("media rename refuses to overwrite a destination created after the route preflight", withTempFiles(async (_dir, source, destination) => {
-  fs.writeFileSync(destination, "independent destination");
+test("media rename refuses to overwrite a destination created between preflight and move", withTempFiles(async (_dir, source, destination) => {
+  let destinationCreated = false;
   await assert.rejects(
     renameFileWithPersistence(
       source,
       destination,
       async () => ({ id: 7 }),
-      moveFileNoReplace,
+      (from, to) => {
+        if (!destinationCreated) {
+          fs.writeFileSync(to, "independent destination");
+          destinationCreated = true;
+        }
+        moveFileNoReplace(from, to);
+      },
     ),
     /EEXIST/,
   );

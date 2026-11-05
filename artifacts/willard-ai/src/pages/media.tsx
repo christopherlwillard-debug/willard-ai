@@ -1942,6 +1942,12 @@ export default function Media() {
              queryClient.invalidateQueries({ queryKey: ["media-tags"] });
              queryClient.invalidateQueries({ queryKey: ["media-files"] });
            }}
+          onRenameChange={(id, name, relativePath) => {
+            queryClient.setQueriesData<MediaFilesResponse>({ queryKey: ["media-files"] }, (data) => data
+              ? { ...data, files: data.files.map((item) => item.id === id ? { ...item, name, relativePath } : item) }
+              : data);
+            queryClient.invalidateQueries({ queryKey: ["media-files"] });
+          }}
           onDelete={() => {
             queryClient.invalidateQueries({ queryKey: ["media-files"] });
             setViewerIndex(null);

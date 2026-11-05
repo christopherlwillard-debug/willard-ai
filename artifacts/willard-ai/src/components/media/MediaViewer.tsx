@@ -55,13 +55,13 @@ async function softDelete(id: number) {
   if (!r.ok) throw new Error("Delete failed");
   return readJsonOrEmpty(r);
 }
-async function rename(id: number, name: string) {
+async function rename(id: number, name: string): Promise<{ id: number; name: string; relativePath: string }> {
   const r = await fetch(`${API}/media/files/${id}/rename`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Rename failed"); }
-  return readJsonOrEmpty(r);
+  return await r.json() as { id: number; name: string; relativePath: string };
 }
 async function updateTags(id: number, tags: string[]) {
   const r = await fetch(`${API}/media/files/${id}/tags`, {
@@ -663,23 +663,27 @@ function Filmstrip({ files, currentIndex, onSelect }: {
 
 function RenameDialog({ file, onDone, onCancel }: {
   file: MediaFile;
-  onDone: (newName: string) => void;
+  onDone: (updated: { id: number; name: string; relativePath: string }) => void;
   onCancel: () => void;
 }) {
   const [val, setVal] = useState(file.name);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const inp = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useLayoutEffect(() => { inp.current?.select(); }, []);
+  useLayoutEffect(() => {
+    inp.current?.focus();
+    inp.current?.select();
+  }, []);
 
   const submit = async () => {
     const name = val.trim();
     if (!name) { setErr("Name cannot be empty"); return; }
     setBusy(true);
     try {
-      await rename(file.id, name);
-      onDone(name);
+      const updated = await rename(file.id, name);
+      onDone(updated);
     } catch (e: any) {
       setErr(e.message ?? "Rename failed");
     } finally {
@@ -689,17 +693,47 @@ function RenameDialog({ file, onDone, onCancel }: {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className="bg-card border border-border rounded-lg shadow-xl p-5 w-80 space-y-3" onClick={(e) => e.stopPropagation()}>
-        <p className="text-sm font-semibold">Rename file</p>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="media-rename-title"
+        className="bg-card border border-border rounded-lg shadow-xl p-5 w-80 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled])');
+          if (!focusable?.length) return;
+          const first = focusable[0]!;
+          const last = focusable[focusable.length - 1]!;
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
+      >
+        <h2 id="media-rename-title" className="text-sm font-semibold">Rename file</h2>
+        <label htmlFor="media-rename-input" className="sr-only">New file name</label>
         <input
+          id="media-rename-input"
           ref={inp}
           value={val}
+          aria-invalid={Boolean(err)}
+          aria-describedby={err ? "media-rename-error" : undefined}
           onChange={(e) => { setVal(e.target.value); setErr(""); }}
-          onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           className="w-full rounded border border-border bg-background px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
-        {err && <p className="text-xs text-destructive">{err}</p>}
+        {err && <p id="media-rename-error" role="alert" aria-live="assertive" className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={onCancel} className="px-3 py-1.5 rounded text-sm text-muted-foreground hover:bg-muted" disabled={busy}>Cancel</button>
           <button onClick={submit} disabled={busy || !val.trim()} className="px-3 py-1.5 rounded text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1">
@@ -752,6 +786,7 @@ export interface MediaViewerProps {
   onFavoriteChange?: (id: number, fav: boolean) => void;
   onDelete?: (id: number) => void;
   onTagsChange?: (id: number, tags: string[]) => void;
+  onRenameChange?: (id: number, name: string, relativePath: string) => void;
 }
 
 function TagEditor({ file, onDone, onCancel }: {
@@ -794,7 +829,7 @@ function TagEditor({ file, onDone, onCancel }: {
   );
 }
 
-export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete, onTagsChange }: MediaViewerProps) {
+export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete, onTagsChange, onRenameChange }: MediaViewerProps) {
   const [idx,          setIdx]          = useState(() => clamp(initialIndex, 0, files.length - 1));
   const [showInfo,     setShowInfo]     = useState(false);
   const [showFilm,     setShowFilm]     = useState(files.length > 1);
@@ -811,6 +846,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
   const hideTimer     = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const containerRef  = useRef<HTMLDivElement>(null);
   const mapRef        = useRef<HTMLDivElement>(null);
+  const renameTriggerRef = useRef<HTMLButtonElement>(null);
 
   const file    = files[idx];
   const hasPrev = idx > 0;
@@ -923,9 +959,19 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
     if (hasNext) goNext(); else goPrev();
   };
 
-  const handleRenameDone = (newName: string) => {
+  const closeRename = () => {
     setShowRename(false);
-    (file as any).name = newName;
+    requestAnimationFrame(() => renameTriggerRef.current?.focus());
+  };
+
+  const handleRenameDone = (updated: { id: number; name: string; relativePath: string }) => {
+    closeRename();
+    if (onRenameChange) {
+      onRenameChange(updated.id, updated.name, updated.relativePath);
+    } else {
+      (file as any).name = updated.name;
+      (file as any).relativePath = updated.relativePath;
+    }
   };
 
   if (!file) return null;
@@ -1009,8 +1055,10 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             </a>
             {/* Rename */}
             <button
+              ref={renameTriggerRef}
               onClick={() => setShowRename(true)}
               title="Rename"
+              aria-label={"Rename " + file.name}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
             >
               <PencilLine className="w-4 h-4" />
@@ -1152,7 +1200,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
       </div>
 
       {/* Rename/Delete overlays */}
-      {showRename && <RenameDialog file={file} onDone={handleRenameDone} onCancel={() => setShowRename(false)} />}
+      {showRename && <RenameDialog file={file} onDone={handleRenameDone} onCancel={closeRename} />}
       {showDelete && <DeleteConfirm file={file} onConfirm={handleDeleteDone} onCancel={() => setShowDelete(false)} />}
       {showTags && <TagEditor file={file} onDone={(tags) => { (file as any).tags = tags; onTagsChange?.(file.id, tags); setShowTags(false); }} onCancel={() => setShowTags(false)} />}
     </>,

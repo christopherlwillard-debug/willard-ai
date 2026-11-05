@@ -1783,14 +1783,14 @@ The current organize execute and resume paths still unlink an existing destinati
 
 **Severity:** Medium (data integrity and cross-platform correctness).
 **Affected workflow:** Media Explorer → rename file.
-**Source inspection:** \`artifacts/api-server/src/routes/media.ts\`, \`artifacts/api-server/src/lib/media-rename.ts\`, and existing \`moveFileNoReplace\` in \`organize-helpers.ts\`.
+**Source inspection:** `artifacts/api-server/src/routes/media.ts`, `artifacts/api-server/src/lib/media-rename.ts`, and existing `moveFileNoReplace` in `organize-helpers.ts`.
 
-The rename route called \`.trim()\` on \`req.body.name\` before checking its JSON type, so an array/number/object could throw rather than return HTTP 400. It also performed an \`existsSync(newAbs)\` preflight and then used \`fs.renameSync\`; another process could create the destination between those operations, and POSIX rename semantics can replace that file. The route also accepted Windows-reserved device basenames and Windows-invalid trailing dots/characters, making names non-portable when a library is moved between supported operating systems.
+The rename route called `.trim()` on `req.body.name` before checking its JSON type, so an array/number/object could throw rather than return HTTP 400. It also performed an `existsSync(newAbs)` preflight and then used `fs.renameSync`; another process could create the destination between those operations, and POSIX rename semantics can replace that file. The route also accepted Windows-reserved device basenames and Windows-invalid trailing dots/characters, making names non-portable when a library is moved between supported operating systems.
 
 **Fix in this batch:**
-- Added \`isPortableMediaFileName\` to validate a single portable filename component, including reserved device names with extensions, COM/LPT superscript variants, control characters, invalid Windows characters, trailing dots/spaces, dot components, and the 255-character component limit.
+- Added `isPortableMediaFileName` to validate a single portable filename component, including reserved device names with extensions, COM/LPT superscript variants, control characters, invalid Windows characters, trailing dots/spaces, dot components, and the 255-character component limit.
 - Non-string JSON values now produce the existing HTTP 400 validation response.
-- Reused the existing \`moveFileNoReplace\` helper for both the forward rename and rollback so a destination created after preflight is not overwritten.
+- Reused the existing `moveFileNoReplace` helper for both the forward rename and rollback so a destination created after preflight is not overwritten.
 - Renaming a file to its existing relative path is now a successful no-op rather than a false destination-conflict response.
 - Added focused regression tests for the filename matrix, malformed JSON value types, no-replace destination races, and route wiring.
 
@@ -1800,16 +1800,35 @@ The rename route called \`.trim()\` on \`req.body.name\` before checking its JSO
 
 ### Validation baseline
 
-Fast Validation #826 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121215284)) is validating the preceding documentation-only commit \`b842925b355d108d8a703d030536ef0ee19cf744\`; it does not include these media rename changes. A new run is required for this batch.
+Fast Validation #826 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121215284)) is validating the preceding documentation-only commit `b842925b355d108d8a703d030536ef0ee19cf744`; it does not include these media rename changes. A new run is required for this batch.
 
 
 ## 2026-11-05 follow-up — media rename race response and Windows test coverage
 
-Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed on commit \`5c8afebe4d969bacc519bae563a278709bddcfbb\`: Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job all completed successfully. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed. The Windows job did not yet execute the new media-rename test file.
+Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed on commit `5c8afebe4d969bacc519bae563a278709bddcfbb`: Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job all completed successfully. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed. The Windows job did not yet execute the new media-rename test file.
 
-A source-order review of the new no-op branch found that it returned success before checking whether the source file still existed. This batch moves the no-op response after the source existence check. It also maps an \`EEXIST\` from the no-replace filesystem operation to HTTP 409 rather than allowing the global handler to report a generic HTTP 500.
+A source-order review of the new no-op branch found that it returned success before checking whether the source file still existed. This batch moves the no-op response after the source existence check. It also maps an `EEXIST` from the no-replace filesystem operation to HTTP 409 rather than allowing the global handler to report a generic HTTP 500.
 
-The Windows Fast Validation job now runs \`media-rename.test.ts\` after installing the API test dependency graph, so the hard-link/exclusive-copy no-overwrite behavior and portable filename rules are exercised on both Linux and Windows.
+The Windows Fast Validation job now runs `media-rename.test.ts` after installing the API test dependency graph, so the hard-link/exclusive-copy no-overwrite behavior and portable filename rules are exercised on both Linux and Windows.
 
 **Status:** code and regression/workflow changes committed; Fast Validation #829 pending.
 **Remaining risk:** The route still has a filesystem-to-database crash window because the rename helper only rolls back in-process persistence errors. A durable rename journal/reconciliation mechanism is not part of this batch. Case-only rename behavior on case-insensitive filesystems also remains a separate UX edge case.
+
+
+## 2026-11-05 follow-up — media rename UI state and accessibility
+
+**Source finding:** The MediaViewer rename dialog updated only the in-memory `file.name` after a successful API rename. It left `file.relativePath` stale and did not notify the parent page, so the viewer path and React Query media-list cache could continue showing the old path. The dialog also lacked a programmatic name/label, did not announce validation errors, and had no keyboard focus loop or explicit focus restoration.
+
+**Fix in this batch:**
+- The rename request now returns the server's authoritative `id`, `name`, and `relativePath`.
+- MediaViewer exposes an `onRenameChange` callback; the parent updates matching cached media rows and invalidates the media query.
+- The viewer uses the returned relative path rather than reconstructing it from stale state.
+- The dialog now has `role=dialog`, `aria-modal`, and a labelled title; the filename input has a real label, invalid state, and described error.
+- Error messages use an assertive alert.
+- Focus moves into the input on open, Tab/Shift+Tab are kept within the dialog, Escape closes it, and focus returns to the Rename trigger.
+- The race test now creates a competing destination inside the move callback, after the simulated route preflight, and verifies both files remain intact.
+
+**Validation:** Fast Validation #829 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122492014)) passed Linux typecheck/generated contracts, release/storage/UI contracts, PostgreSQL media wildcard and conversion integration, and targeted backend regressions. Its Windows job passed PowerShell parsing, launcher mutex, environment encoding, the new media-rename no-overwrite/portable-filename test, storage migration, NAS path cleanup, conversion rollback, official 7-Zip/symlink metadata, and packaged/developer updater recovery. Dependency Review #592 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122491867)) passed.
+
+**Status:** this UI batch is implemented and focused UI contract tests are added; Fast Validation #830 is required before marking it target-tested.
+**Remaining risk:** Browser-based keyboard/screen-reader verification is still outstanding. The rename filesystem-to-database crash window remains separate and needs a durable reconciliation design; this UI batch does not solve it.
