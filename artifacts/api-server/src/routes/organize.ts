@@ -1460,6 +1460,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   };
 
   const tempDirs: string[] = [];
+  let cleanupNasPath = "";
   const fileMoves: FileMoveRecord[] = [];
   let logStream: fs.WriteStream | null = null;
   let logPath = "";
@@ -1494,6 +1495,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
     }
+    cleanupNasPath = nasPath;
     let canonicalJobSourcePath: string;
     try { canonicalJobSourcePath = resolveActiveArchivePath(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
@@ -1927,7 +1929,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   } finally {
     stopHeartbeat?.();
     if (capacityReservation) releaseCapacity(capacityReservation.id);
-    for (const td of tempDirs) cleanTempDir(td, nasPath);
+    for (const td of tempDirs) cleanTempDir(td, cleanupNasPath);
     res.end();
   }
 });
@@ -2208,6 +2210,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   };
 
   const tempDirs: string[] = [];
+  let cleanupNasPath = "";
   const newMoves: FileMoveRecord[] = [];
   // Declared outside try so catch can restore DB fileMoves to pre-resume baseline on failure
   let existingMoves: FileMoveRecord[] = [];
@@ -2227,6 +2230,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured" }); res.end(); return;
     }
+    cleanupNasPath = nasPath;
     try { resolveWithinRoot(job.sourcePath, nasPath); }
     catch { send("error", { message: "Job source is outside the configured library" }); res.end(); return; }
 
@@ -2503,7 +2507,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   } finally {
     stopHeartbeat?.();
     if (capacityReservation) releaseCapacity(capacityReservation.id);
-    for (const td of tempDirs) cleanTempDir(td);
+    for (const td of tempDirs) cleanTempDir(td, cleanupNasPath);
     res.end();
   }
 });
