@@ -653,4 +653,26 @@ Remaining archive hardening:
 
 - A follow-up review found that organize operation logs/reports and the library startup-history cache still used `ensurePrivateDir`, which performs recursive mkdir/chmod without validating the directory chain against the configured NAS root. A symlink in one of those paths could redirect writes or permission changes outside the intended library.
 - These NAS-owned directories now use `ensureDirectoryWithinRoot`, which checks every component and rejects symlinks before creation. Added tests for symlinked logs and cache paths, plus route wiring assertions for logs, reports, and startup cache.
-- Validation is pending on the latest audit branch commit. This change does not replace the need for appropriate NAS/Windows ACLs against other users with write access to parent directories.
+- Fast Validation #561 passed on audit head `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`, including Linux typecheck/backend regressions and the Windows archive/updater smoke job. Dependency Review #325 passed on the same head. This change does not replace the need for appropriate NAS/Windows ACLs against other users with write access to parent directories.
+
+## Preserve organize recovery journals during job deletion (2026-11-04)
+
+- Confirmed a data-loss/recovery defect in `DELETE /organize/jobs/:id`: the route rejected only `executing` jobs. It still allowed deletion while a job was `rolling_back`, and allowed a `failed` job with non-empty `fileMoves` to be deleted. That could remove the database recovery journal while rollback was active or discard the only record of files that still needed recovery. The UI also disabled deletion only for `executing`.
+- Added `canDeleteOrganizationJob`: active analysis/execution/rollback states cannot be deleted; nonterminal jobs can be deleted only with an empty recovery journal; completed and fully rolled-back jobs remain deletable. The DELETE statement repeats the status and JSONB-journal predicates so a concurrent execute/resume/rollback cannot win between the initial read and deletion.
+- The organize job UI now disables deletion for active jobs and nonterminal jobs with recovery records, with an explanatory tooltip.
+- Added helper-policy and route-wiring regressions. Fast Validation #561 passed on head `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`; the Linux targeted backend suite reported 155 passed, 0 failed, and 2 skipped.
+- Remaining limitation: deletion policy is covered by helper and route-source regressions rather than a full HTTP/PostgreSQL race integration test. The conditional DELETE predicate provides the database-side race protection.
+
+## Reject symlink and special-file destinations during organize rollback (2026-11-04)
+
+- Confirmed a rollback integrity/security defect: `rollbackMoves` hashed the destination through a read stream before checking its file type. A symlink whose target happened to contain the expected bytes could therefore be moved into the staging source path and counted as a successful regular-file restore. FIFO/device entries could also be opened as if they were ordinary files.
+- Rollback now uses `lstat` before hashing and accepts only regular non-symlink files. It checks the restored path again after the no-replace move and attempts to return an unexpected non-regular entry to its destination instead of counting it as restored.
+- Added a regression that replaces a moved destination with a symlink to an external file containing the same bytes; rollback must leave the symlink at the destination, leave the source absent, and report zero restored moves.
+- Fast Validation #561 passed on head `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`; the symlink regression passed in the Linux targeted backend suite (155 passed, 0 failed, 2 skipped).
+- Remaining limitation: the regression covers a final-component symlink. It does not eliminate every parent-directory replacement race on a hostile writable NAS; the route's canonical-root checks and NAS ACLs remain important.
+
+## Latest integrated validation snapshot (2026-11-05)
+
+- Fast Validation [#561](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41956510026) passed on audit head `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`. Linux typecheck/generated contracts, targeted backend regressions, desktop/release/storage checks, and archive safety passed. The Linux targeted backend suite reported 155 passed, 0 failed, and 2 skipped.
+- The Windows archive/updater job in the same run passed, including the newly added storage-migration concurrency/no-overwrite test, NAS temporary-path safety, official 7-Zip 26.05 link-metadata compatibility, updater journal writes, and updater preservation/rollback.
+- Dependency Review [#325](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41956510064) passed. No main-branch, production-data, credential, or release changes were made.
