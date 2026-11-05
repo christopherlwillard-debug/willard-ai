@@ -18,6 +18,10 @@ const appSource = fs.readFileSync(
   path.join(repoRoot, "artifacts/api-server/src/app.ts"),
   "utf8",
 );
+const desktopLauncherSource = fs.readFileSync(
+  path.join(repoRoot, "desktop/WillardMediaCenter.ps1"),
+  "utf8",
+);
 
 test("standalone setup keeps vector columns optional", () => {
   const requiredSql = setupSource
@@ -89,4 +93,11 @@ test("authentication sessions are created under a lock on the current credential
   assert.match(authSource, /persistSessionUnderCredentialLock/);
   assert.match(authSource, /FOR SHARE/);
   assert.equal(authSource.split("await establishSessionForPassword(req,").length - 1, 4);
+});
+
+
+test("desktop API binds only to loopback behind the localhost web proxy", () => {
+  assert.match(indexSource, /const host = process\.env\["HOST"\]\?\.trim\(\)/);
+  assert.match(indexSource, /app\.listen\(\{ port, \.\.\.\(host \? \{ host \} : \{\}\) \}/);
+  assert.match(desktopLauncherSource, /\$env:HOST = "127\.0\.0\.1"/);
 });
