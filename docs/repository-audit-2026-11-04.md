@@ -1593,3 +1593,12 @@ Fast Validation #810 (run 42088350368) completed successfully on implementation/
 | Medium | Windows installer → accidental publication during manual validation | **guard added; target test pending** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; `validate_only` defaults true and gates the publish action | Static test pending; actual workflow_dispatch behavior has not been executed. |
 | Medium | Media browser → literal SQL LIKE wildcard semantics | **integration test added; pending** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; PostgreSQL test step | Latest PostgreSQL integration run pending; HTTP route integration remains outstanding. |
 
+
+
+### Validation correction — PostgreSQL integration test dependency
+
+Fast Validation #811 (run 42089569389) failed during workspace TypeScript validation because the new test imported `pg` directly, but `pg` is not a direct API-server workspace dependency. No test execution or Windows validation occurred in that run; downstream steps were skipped.
+
+**Correction (commit 8a7f00ef6d6ec2cd240e336562b732f4dde96ea8):** The test now lazily imports the repository's existing `@workspace/db` shared pool only when `DATABASE_URL` is present. This reuses the existing database dependency and avoids adding a package or opening a connection during the ordinary targeted test invocation without a database URL.
+
+Fast Validation #811 is recorded as **failed**, not passed. The correction is awaiting its matching latest-head Fast Validation run. No database schema, production data, credentials, or dependencies were changed.
