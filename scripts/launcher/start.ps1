@@ -48,6 +48,11 @@ if ($tracked) {
     Stop-TrackedProcesses | Out-Null
     Start-Sleep -Seconds 1
 }
+if ($pendingDeveloperUpdate -and $pendingDeveloperUpdate.phase -eq "swapped") {
+    # Persist that this startup is now validating the new version. If this
+    # process crashes before health checks finish, the next launch rolls back.
+    Write-DeveloperUpdateJournal "starting" $pendingDeveloperUpdate.candidate $pendingDeveloperUpdate.backup
+}
 
 # -- Required helpers -----------------------------------------------------------
 if (-not (Test-Command "node")) {

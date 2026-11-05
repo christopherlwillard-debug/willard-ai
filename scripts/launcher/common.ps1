@@ -477,10 +477,60 @@ function Get-DeveloperUpdateJournalPath {
     return (Join-Path $parent ("." + $leaf + ".willard-update.json"))
 }
 
+function Assert-DeveloperUpdateJournalPaths($journal) {
+    if (-not $journal -or $journal.version -ne 1 -or
+        $journal.phase -notin @("prepared", "backup-created", "swapped", "starting", "committed")) {
+        throw "The developer update journal has an unsupported version or phase."
+    }
+
+    try {
+        $rootPath = [System.IO.Path]::GetFullPath($Root)
+        $livePath = [System.IO.Path]::GetFullPath([string]$journal.live)
+        $candidatePath = [System.IO.Path]::GetFullPath([string]$journal.candidate)
+        $backupPath = [System.IO.Path]::GetFullPath([string]$journal.backup)
+    } catch {
+        throw "The developer update journal contains an invalid path."
+    }
+
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    if (-not [string]::Equals($livePath, $rootPath, $comparison)) {
+        throw "The developer update journal does not belong to this installation."
+    }
+
+    $parent = [System.IO.Path]::GetDirectoryName($rootPath)
+    $leaf = [System.IO.Path]::GetFileName($rootPath)
+    $candidateParent = [System.IO.Path]::GetDirectoryName($candidatePath)
+    $candidateName = [System.IO.Path]::GetFileName($candidatePath)
+    $candidatePrefix = "." + $leaf + ".candidate-"
+    if (-not [string]::Equals($candidateParent, $parent, $comparison) -or
+        -not $candidateName.StartsWith($candidatePrefix, $comparison)) {
+        throw "The developer update journal candidate is outside the expected sibling workspace."
+    }
+    $candidateId = [guid]::Empty
+    $candidateSuffix = $candidateName.Substring($candidatePrefix.Length)
+    if (-not [guid]::TryParse($candidateSuffix, [ref]$candidateId)) {
+        throw "The developer update journal candidate identifier is invalid."
+    }
+
+    $backupPrefix = $rootPath + ".previous-"
+    if (-not $backupPath.StartsWith($backupPrefix, $comparison) -or
+        $backupPath.Substring($backupPrefix.Length) -notmatch '^\d{14}$') {
+        throw "The developer update journal backup is outside the expected sibling path."
+    }
+    return $true
+}
+
 function Read-DeveloperUpdateJournal {
     $journalPath = Get-DeveloperUpdateJournalPath
-    if (-not (Test-Path $journalPath)) { return $null }
-    try { return Get-Content $journalPath -Raw | ConvertFrom-Json } catch { return $null }
+    if (-not (Test-Path -LiteralPath $journalPath)) { return $null }
+    try {
+        $journal = Get-Content -LiteralPath $journalPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        Assert-DeveloperUpdateJournalPaths $journal | Out-Null
+        return $journal
+    } catch {
+        throw ("The developer update recovery journal is invalid or unreadable at " +
+            $journalPath + ": " + $_.Exception.Message)
+    }
 }
 
 function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
@@ -492,11 +542,11 @@ function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
         candidate = $candidate
         backup = $backup
         updatedAt = (Get-Date).ToString("o")
-    } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+    } | ConvertTo-Json | Set-Content -LiteralPath $journalPath -Encoding UTF8 -ErrorAction Stop
 }
 
 function Remove-DeveloperUpdateJournal {
-    Remove-Item (Get-DeveloperUpdateJournalPath) -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Get-DeveloperUpdateJournalPath) -Force -ErrorAction SilentlyContinue
 }
 
 function Invoke-DeveloperVersionSwap($candidate, $backup) {
@@ -531,8 +581,20 @@ function Invoke-DeveloperVersionSwap($candidate, $backup) {
 
 function Restore-PendingDeveloperUpdate {
     $journal = Read-DeveloperUpdateJournal
-    if (-not $journal -or $journal.phase -notin @("backup-created", "swapped") -or
-        -not $journal.backup -or -not (Test-Path $journal.backup)) {
+    if (-not $journal) { return $false }
+
+    $liveExists = Test-Path -LiteralPath $Root
+    $backupExists = Test-Path -LiteralPath $journal.backup
+    if ($journal.phase -eq "prepared") {
+        if ($liveExists -and -not $backupExists) { return $false }
+        if ($liveExists -or -not $backupExists) {
+            throw "The prepared developer update has an ambiguous live/backup state. Both paths were preserved."
+        }
+    } elseif ($journal.phase -in @("backup-created", "swapped", "starting")) {
+        if (-not $backupExists) {
+            throw "The previous developer installation backup is missing. The current folder was preserved for manual recovery."
+        }
+    } else {
         return $false
     }
 
@@ -540,13 +602,18 @@ function Restore-PendingDeveloperUpdate {
     $parent = Split-Path -Parent $Root
     Push-Location $parent
     try {
-        if (Test-Path $Root) { Move-Item -LiteralPath $Root -Destination $failed -ErrorAction Stop }
+        if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+            Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+        }
+        if (Test-Path -LiteralPath $Root) {
+            Move-Item -LiteralPath $Root -Destination $failed -ErrorAction Stop
+        }
         Move-Item -LiteralPath $journal.backup -Destination $Root -ErrorAction Stop
-        Remove-Item $failed -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
         Remove-DeveloperUpdateJournal
         return $true
     } catch {
-        if (-not (Test-Path $Root) -and (Test-Path $failed)) {
+        if (-not (Test-Path -LiteralPath $Root) -and (Test-Path -LiteralPath $failed)) {
             Move-Item -LiteralPath $failed -Destination $Root -ErrorAction SilentlyContinue
         }
         throw
@@ -558,23 +625,78 @@ function Restore-PendingDeveloperUpdate {
 function Recover-InterruptedDeveloperUpdate {
     $journal = Read-DeveloperUpdateJournal
     if (-not $journal) { return }
-    if ($journal.phase -in @("backup-created", "swapped")) {
-        if (Restore-PendingDeveloperUpdate) {
-            Write-Warn "An interrupted update was found; the previous runnable version was restored."
+
+    switch ([string]$journal.phase) {
+        "prepared" {
+            $liveExists = Test-Path -LiteralPath $Root
+            $backupExists = Test-Path -LiteralPath $journal.backup
+            if ($liveExists -and -not $backupExists) {
+                if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+                    Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+                }
+                Remove-DeveloperUpdateJournal
+                return
+            }
+            if (-not $liveExists -and $backupExists) {
+                if (Restore-PendingDeveloperUpdate) {
+                    Write-Warn "An interrupted update was found before the backup phase was recorded; the previous runnable version was restored."
+                }
+                return
+            }
+            throw "The prepared developer update has an ambiguous live/backup state. Both paths were preserved."
         }
-        return
+        "backup-created" {
+            if (Restore-PendingDeveloperUpdate) {
+                Write-Warn "An interrupted update was found; the previous runnable version was restored."
+            }
+            return
+        }
+        "swapped" {
+            if (-not (Test-Path -LiteralPath $journal.backup)) {
+                throw "The pending developer update has no rollback copy. The installed folder was preserved for manual recovery."
+            }
+            # The candidate is installed but has not passed startup health checks.
+            # start.ps1 changes this to "starting" immediately before launching it.
+            return
+        }
+        "starting" {
+            if (Restore-PendingDeveloperUpdate) {
+                Write-Warn "A previous startup did not verify the updated version; the prior runnable version was restored."
+            }
+            return
+        }
+        "committed" {
+            if (Test-Path -LiteralPath $journal.backup) {
+                Remove-Item -LiteralPath $journal.backup -Recurse -Force -ErrorAction Stop
+            }
+            if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+                Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+            }
+            Remove-DeveloperUpdateJournal
+            return
+        }
+        default {
+            throw "The developer update journal contains an unsupported recovery phase."
+        }
     }
-    if ($journal.candidate -and (Test-Path $journal.candidate)) {
-        Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    Remove-DeveloperUpdateJournal
 }
 
 function Confirm-DeveloperUpdateHealth {
     $journal = Read-DeveloperUpdateJournal
-    if (-not $journal -or $journal.phase -ne "swapped") { return }
-    if ($journal.backup -and (Test-Path $journal.backup)) {
-        Remove-Item $journal.backup -Recurse -Force -ErrorAction Stop
+    if (-not $journal -or $journal.phase -notin @("swapped", "starting")) { return }
+    if (-not (Test-Path -LiteralPath $journal.backup)) {
+        throw "The updated version cannot be committed because its rollback copy is missing."
+    }
+
+    # Commit the healthy version before deleting the rollback directory. If
+    # cleanup is interrupted, startup removes the leftover backup but never
+    # mistakes a partially deleted backup for a runnable prior version.
+    Write-DeveloperUpdateJournal "committed" $journal.candidate $journal.backup
+    if (Test-Path -LiteralPath $journal.backup) {
+        Remove-Item -LiteralPath $journal.backup -Recurse -Force -ErrorAction Stop
+    }
+    if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+        Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
     }
     Remove-DeveloperUpdateJournal
 }

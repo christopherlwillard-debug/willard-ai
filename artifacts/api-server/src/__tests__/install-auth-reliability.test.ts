@@ -129,7 +129,7 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
   assert.match(authSource, /configuredToken: process\.env\["WILLARD_SETUP_TOKEN"\]/);
   assert.match(authSource, /router\.post\("\/auth\/setup", setupRateLimiter/);
   assert.match(authSource, /remoteAddress: req\.socket\.remoteAddress/);
-  assert.match(authSource, /allowLoopbackSetup:[\s\S]*?WILLARD_LOCAL_SETUP.*?REPL_ID.*?HOST/);
+  assert.match(authSource, /allowLoopbackSetup:[\s\S]*?WILLARD_LOCAL_SETUP[\s\S]*?REPL_ID[\s\S]*?HOST/);
   assert.match(desktopLauncherSource, /\$env:WILLARD_LOCAL_SETUP = "true"/);
   assert.match(developerLauncherSource, /\$env:WILLARD_LOCAL_SETUP = "true"/);
   assert.match(authSource, /authorization === "token_misconfigured"/);
