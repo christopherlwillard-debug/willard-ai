@@ -789,6 +789,6 @@ test("backup manifest uses the canonical authenticated active-library settings r
   const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
   assert.match(
     source,
-    /SELECT nas_path FROM app_settings WHERE nas_path IS NOT NULL AND btrim\(nas_path\) <> '' ORDER BY \(password_hash IS NOT NULL\) DESC, id ASC LIMIT 1/,
+    /SELECT nas_path FROM app_settings ORDER BY \(password_hash IS NOT NULL\) DESC, id ASC LIMIT 1/,
   );
 });
