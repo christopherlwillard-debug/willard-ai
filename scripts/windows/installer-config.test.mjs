@@ -881,10 +881,13 @@ test("Windows launchers generate cryptographic session secrets for new installs"
   const ensureEnvStart = launcherCommon.indexOf("function Ensure-EnvFile {");
   const ensureEnvEnd = launcherCommon.indexOf("\nfunction New-WillardShortcut", ensureEnvStart);
   const ensureEnv = launcherCommon.slice(ensureEnvStart, ensureEnvEnd);
+  assert.match(launcherCommon, /\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+  assert.match(launcherCommon, /\[System\.IO\.File\]::WriteAllLines\(\$envPath, \[string\[\]\]\$updatedEnv, \$utf8NoBom\)/);
   assert.ok(
-    ensureEnv.includes("(Get-Content $envPath) -replace '^SESSION_SECRET=.*$', \"SESSION_SECRET=$secret\" | Set-Content $envPath"),
-    "Ensure-EnvFile must persist the generated secret inside its own function body",
+    ensureEnv.includes("[System.IO.File]::WriteAllLines($envPath, [string[]]$updatedEnv, $utf8NoBom)"),
+    "Ensure-EnvFile must persist the generated secret as UTF-8 without a BOM",
   );
+  assert.doesNotMatch(ensureEnv, /Set-Content/);
   assert.match(launcher, /RandomNumberGenerator\]::Create\(\)/);
   assert.match(launcher, /\$sessionSecretBytes = New-Object byte\[\] 32/);
   assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
