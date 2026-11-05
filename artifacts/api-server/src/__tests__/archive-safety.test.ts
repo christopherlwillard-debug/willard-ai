@@ -346,3 +346,13 @@ test("stops decompression when the expanded TAR byte budget is exceeded", async 
   );
   assert.equal(received, 4);
 });
+
+
+test("7-Zip organize extraction explicitly disables symbolic-link materialization", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const extractionStart = routeSource.indexOf("Seven.extractFull(archivePath, stagingDir");
+  assert.notEqual(extractionStart, -1, "7-Zip extraction call exists");
+  const extractionOptions = routeSource.slice(extractionStart, extractionStart + 700);
+  assert.match(extractionOptions, /\$raw:\s*\["-snl-"\]/);
+  assert.match(extractionOptions, /on\("error"/);
+});
