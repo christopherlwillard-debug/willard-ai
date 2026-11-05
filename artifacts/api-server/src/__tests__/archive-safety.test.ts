@@ -90,6 +90,14 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
   );
 });
 
+test("normalizes harmless current-directory archive prefixes", () => {
+  const result = validateArchiveEntry(
+    { path: "./folder/file.txt", sizeBytes: 1 },
+    createArchiveBudget(),
+  );
+  assert.equal(result.normalizedPath, "folder/file.txt");
+});
+
 test("bounds entry count, per-file expansion, total expansion, and duplicate paths", () => {
   const countBudget = createArchiveBudget();
   for (let i = 0; i < ARCHIVE_LIMITS.maxEntries; i++) {
