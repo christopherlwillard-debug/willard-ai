@@ -1512,6 +1512,10 @@ function OrganizeJobRow({
   const plan = currentJob.planJson as any;
   const isExecuting = currentJob.status === "executing";
   const moved = Array.isArray(currentJob.fileMoves) ? currentJob.fileMoves.length : 0;
+  const terminalJob = currentJob.status === "completed" || currentJob.status === "rolled_back";
+  const hasUnresolvedJournal = !terminalJob && currentJob.fileMoves != null &&
+    (!Array.isArray(currentJob.fileMoves) || currentJob.fileMoves.length > 0);
+  const deleteBlocked = ["analyzing", "executing", "rolling_back"].includes(currentJob.status) || hasUnresolvedJournal;
   const total = typeof plan?.totalFiles === "number" ? plan.totalFiles : 0;
   const progress = total > 0 ? Math.min(100, (moved / total) * 100) : 0;
 
@@ -1558,7 +1562,8 @@ function OrganizeJobRow({
           )}
           <Button
             variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-            disabled={currentJob.status === "executing" || deletePending}
+            disabled={deleteBlocked || deletePending}
+            title={hasUnresolvedJournal ? "Resume this job or complete rollback before deleting its recovery journal" : undefined}
             onClick={onDelete}
           >
             <Trash2 className="w-3.5 h-3.5" />
