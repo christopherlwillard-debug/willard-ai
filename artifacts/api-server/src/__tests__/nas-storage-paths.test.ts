@@ -51,6 +51,23 @@ test("getTempDir rejects a temp-directory symlink escaping the library", () => {
   }
 });
 
+test("getTempDir keeps empty and dot-segment job IDs inside unique temp children", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  try {
+    const tempParent = path.join(root, "WillardAI", "temp");
+    const invalidIds = ["", ".", ".."];
+    const paths = invalidIds.map((jobId) => getTempDir(root, jobId));
+    for (const tempDir of paths) {
+      assert.equal(path.dirname(tempDir), tempParent);
+      assert.ok(fs.statSync(tempDir).isDirectory());
+    }
+    assert.equal(new Set(paths).size, invalidIds.length);
+    assert.equal(fs.existsSync(path.join(root, "WillardAI", "default")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("getTempDir rejects an existing job-directory symlink", () => {
   const root = makeTempRoot("willard-nas-root-");
   const outside = makeTempRoot("willard-nas-outside-");
