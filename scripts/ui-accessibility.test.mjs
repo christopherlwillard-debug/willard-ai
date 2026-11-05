@@ -222,7 +222,7 @@ test("organize job rows expose keyboard-accessible open and delete actions", () 
   const end = organizePage.indexOf("// ── Page", start);
   assert.ok(start >= 0 && end > start, "OrganizeJobRow component should exist");
   const row = organizePage.slice(start, end);
-  assert.ok(row.includes('<TableRow className="hover:bg-secondary/30">'));
+  assert.ok(row.includes('className="cursor-pointer hover:bg-secondary/30"'));
   assert.match(row, /aria-label=\\{\\"Open organization job \\" \\+ sourceName\\}/);
   assert.match(row, /aria-label=\\{\\"Delete organization job \\" \\+ sourceName\\}/);
   assert.match(row, /aria-label=\\{\\"View report for organization job \\" \\+ sourceName\\}/);
