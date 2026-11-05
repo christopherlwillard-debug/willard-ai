@@ -6,11 +6,11 @@ type AiExclusions = {
 };
 
 function normalizeFolder(value: string): string {
-  return value.trim().replaceAll("\\", "/").replace(/^\\/+|\\/+$/g, "").toLowerCase();
+  return value.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase();
 }
 
 function normalizeExtension(value: string): string {
-  return value.trim().replace(/^\\./, "").toLowerCase();
+  return value.trim().replace(/^\./, "").toLowerCase();
 }
 
 /**
