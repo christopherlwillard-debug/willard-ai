@@ -42,8 +42,7 @@ function walkDirectories(root: string, skip: string): { empty: string[]; files: 
   const empty: string[] = [];
   const files: string[] = [];
   const visit = (dir: string) => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    const entries: fs.Dirent[] = fs.readdirSync(dir, { withFileTypes: true });
     const visible = entries.filter(e => e.name !== ".DS_Store");
     if (visible.length === 0) empty.push(dir);
     for (const entry of visible) {
