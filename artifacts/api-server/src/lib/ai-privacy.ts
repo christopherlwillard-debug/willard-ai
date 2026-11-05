@@ -1,4 +1,4 @@
-import { db, appSettingsTable } from "@workspace/db";
+import { getActiveAppSettings } from "./active-library.ts";
 
 export const AI_CONSENT_VERSION = "2026-08-26.v1";
 export const AI_PROVIDER_NAME = "OpenAI via the configured Replit AI Integration";
@@ -66,15 +66,7 @@ export function aiProviderBlockedReason(settings: Pick<AiPrivacySettings, "aiEnr
 }
 
 export async function getAiPrivacySettings(): Promise<AiPrivacySettings> {
-  const [row] = await db.select({
-    aiEnrichmentEnabled: appSettingsTable.aiEnrichmentEnabled,
-    aiLocalOnly: appSettingsTable.aiLocalOnly,
-    aiExcludedFolders: appSettingsTable.aiExcludedFolders,
-    aiExcludedExtensions: appSettingsTable.aiExcludedExtensions,
-    aiConsentAt: appSettingsTable.aiConsentAt,
-    aiConsentProvider: appSettingsTable.aiConsentProvider,
-    aiConsentVersion: appSettingsTable.aiConsentVersion,
-  }).from(appSettingsTable).limit(1);
+  const row = await getActiveAppSettings();
 
   return {
     ...DEFAULTS,
