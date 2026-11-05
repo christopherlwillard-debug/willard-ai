@@ -516,7 +516,7 @@ Remaining archive hardening:
 - Added the explicit -snl- switch through the documented node-7z $raw option on the organize extraction call. This is defense in depth alongside preflight metadata rejection and the post-extraction lstat tree inspection.
 - Added a regression assertion that the real organize route's 7-Zip extraction call passes -snl- and retains an extraction error listener.
 - Commits: e811b13b145f73fbea79e1e82678a8940155a141 (implementation) and cf7f16242075d71576f48798671f3a2829504e9f (regression test).
-- Validation is pending for the latest branch head. This narrows the risk but does not replace a full Windows organize-route test with a crafted malicious archive; that remains an explicit validation item.
+- Fast Validation #515 passed on commit `de8fd173a86bb1dbcadaac0f624ce0ce37792c76`. The Linux organize-route regression, official 7-Zip compatibility check, Windows symlink-metadata parser check, and Windows updater smoke all passed. This still does not replace a full Windows organize-route test with a crafted malicious archive; that remains an explicit validation item.
 
 
 ## Processed archive disposition avoids silent overwrite (2026-11-05)
@@ -536,7 +536,7 @@ Remaining archive hardening:
 - If post-move verification fails after this helper has created the destination, it now attempts a no-replace restoration to the staged source path before rethrowing. If restoration itself fails, an `AggregateError` preserves both errors and leaves the remaining destination in place rather than deleting the only available copy.
 - Added focused regressions for a destination appearing between conflict checking and move, and for restoring a hash-mismatch move to staging without leaving an unverified final destination.
 - Implementation commit: `2545e195cbfe89d8d2856cc733bfcc67e02f5911`; regression-test commit: `2a728ec97eb02d8ea2be510de48b5ccb21e1d02d`.
-- Validation is pending for the latest branch head. The prior processed-archive disposition change passed Fast Validation #508 and Dependency Review #272, but those runs predate this latest helper change.
+- Fast Validation #515 passed on commit `de8fd173a86bb1dbcadaac0f624ce0ce37792c76`: workspace typecheck/contracts, release/storage checks, official Linux 7-Zip compatibility, all targeted backend regressions, and the Windows archive/updater smoke job passed. The targeted backend suite reported 138 passed, 0 failed, and 2 skipped. Dependency Review #279 also passed. Earlier run #511 completed the Linux targeted regression step successfully but was canceled by the subsequent branch update before its Windows job; #515 is the complete validation for this change.
 - Remaining limitation: the existing `conflictPolicy === "replace"` path still deletes the previous destination before a replacement has been safely journaled. Its durable backup/rollback design remains intentionally unmodified and is documented above.
 
 
@@ -547,4 +547,13 @@ Remaining archive hardening:
 - The route still uses the same file-type mapping and plan structure; only incomplete/ambiguous source scans now fail rather than producing a partial plan.
 - Added regressions for nested regular-file enumeration, missing/non-directory roots, symlink rejection, and an unreadable nested directory (the permission test skips only where the runner cannot enforce POSIX mode bits).
 - Commits: `fb986e594602a94aa5865f8f4e242b6280dcbbd9` (strict walker), `c748570859b38f1e99f2f203631fc202e62df9c6` (route integration), and `59aaddf790e6b3f0b154ade6507712ed717c0a92` (tests).
-- Validation is pending on the next Fast Validation run. Fast Validation #511 predates this change and must not be used to claim it passed.
+- Fast Validation #515 passed on commit `de8fd173a86bb1dbcadaac0f624ce0ce37792c76`. The new nested-file, missing-root, symlink, and unreadable-directory regressions all passed in the targeted backend suite; the complete Linux and Windows workflow jobs also succeeded. The suite total was 138 passed, 0 failed, and 2 skipped.
+
+
+## Full validation of latest organize reliability fixes (2026-11-05)
+
+- Fast Validation [#515](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41948339444) passed on commit `de8fd173a86bb1dbcadaac0f624ce0ce37792c76`. Workspace typecheck/generated contracts, Expo configuration, desktop safety, release/storage contracts, official Linux 7-Zip 26.05 compatibility, and targeted backend regressions all passed.
+- The targeted backend test runner reported 138 passed, 0 failed, and 2 skipped. The new regressions specifically passed for concurrent destination no-overwrite, hash-mismatch restoration, nested directory enumeration, missing/non-directory roots, symlink rejection, and unreadable nested directories.
+- The Windows archive/updater job passed: official Windows 7-Zip 26.05 hash-verified staging, cross-platform symlink metadata parsing, updater journal writes, and updater preservation/rollback.
+- Dependency Review [#279](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41948339439) passed on the same commit.
+- This validates the new helper and route changes on the CI platforms. It does not close the separate conflictPolicy=replace backup/rollback issue, the full malicious Windows organize-route integration test, the browser/runtime SVG CSP check, NAS share ACL confirmation, or clean-machine installer lifecycle testing.
