@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getTempDir } from "../lib/nas-storage.ts";
+import { cleanTempDir, getTempDir } from "../lib/nas-storage.ts";
 
 function makeTempRoot(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -122,5 +122,58 @@ test("getTempDir keeps long job IDs with identical prefixes separate", () => {
     assert.equal(path.dirname(first), path.dirname(second));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanTempDir removes only a direct child of the configured NAS temp root", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  try {
+    const tempDir = getTempDir(root, "org-123");
+    fs.writeFileSync(path.join(tempDir, "scratch.bin"), "temporary data");
+    cleanTempDir(tempDir, root);
+    assert.equal(fs.existsSync(tempDir), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanTempDir refuses a replaced temp-parent symlink without deleting outside data", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  const outside = makeTempRoot("willard-nas-outside-");
+  try {
+    const tempDir = getTempDir(root, "org-123");
+    const originalTempRoot = path.dirname(tempDir);
+    const heldTempRoot = path.join(root, "held-temp");
+    fs.writeFileSync(path.join(tempDir, "scratch.bin"), "private temp");
+    fs.writeFileSync(path.join(outside, "keep.txt"), "outside data");
+    fs.renameSync(originalTempRoot, heldTempRoot);
+    fs.symlinkSync(outside, originalTempRoot, process.platform === "win32" ? "junction" : "dir");
+
+    cleanTempDir(tempDir, root);
+
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "outside data");
+    assert.equal(fs.existsSync(path.join(heldTempRoot, "org-123", "scratch.bin")), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("cleanTempDir refuses a job-directory symlink instead of following it", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  const outside = makeTempRoot("willard-nas-outside-");
+  try {
+    const tempDir = getTempDir(root, "org-123");
+    fs.writeFileSync(path.join(outside, "keep.txt"), "outside data");
+    fs.rmSync(tempDir, { recursive: true });
+    fs.symlinkSync(outside, tempDir, process.platform === "win32" ? "junction" : "dir");
+
+    cleanTempDir(tempDir, root);
+
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "outside data");
+    assert.equal(fs.lstatSync(tempDir).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
