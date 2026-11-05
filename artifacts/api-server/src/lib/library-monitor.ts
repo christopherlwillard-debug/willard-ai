@@ -1,4 +1,4 @@
-import { db, appSettingsTable } from "@workspace/db";
+import { getActiveAppSettings } from "./active-library.ts";
 import { checkNasReachableAsync } from "./nas-storage.ts";
 import { getActiveJobId, getActiveJobType, requestPause, requestCancel, startJob } from "./library-engine/index.ts";
 import { recordActivity } from "./library-activity.ts";
@@ -74,11 +74,7 @@ export async function runLibraryCheck(): Promise<LibraryHealthSnapshot> {
     let indexingPaused = false;
     let lastScanAt: Date | null = null;
     try {
-      const [row] = await db.select({
-        nasPath: appSettingsTable.nasPath,
-        indexingPaused: appSettingsTable.indexingPaused,
-        lastScanAt: appSettingsTable.lastScanAt,
-      }).from(appSettingsTable).limit(1);
+      const row = await getActiveAppSettings();
       nasPath = row?.nasPath ?? null;
       indexingPaused = row?.indexingPaused ?? false;
       lastScanAt = row?.lastScanAt ?? null;
