@@ -80,3 +80,26 @@ test("JPEG analysis failures are recorded as failed, never as already optimal", 
   assert.match(analysisBlock, /failedFiles: failed/);
   assert.match(analysisBlock, /continue;/);
 });
+
+
+const executeSourceStart = source.indexOf('router.get("/optimize/jobs/:id/execute"');
+const executeSourceEnd = source.indexOf("\nrouter.", executeSourceStart + 1);
+const executeSource = source.slice(executeSourceStart, executeSourceEnd < 0 ? source.length : executeSourceEnd);
+const finalizeStart = source.indexOf("async function finalizeHandlerImpl(");
+const finalizeEnd = source.indexOf("\n}", finalizeStart);
+const finalizeSource = source.slice(finalizeStart, finalizeEnd < 0 ? source.length : finalizeEnd);
+
+test("conversion staging and finalization paths stay inside the active NAS root", () => {
+  assert.match(executeSource, /ensureDirectoryWithinRoot\(\s*path\.join\(getWillardAIDir\(nasPath\), "conversions", String\(id\)\),\s*nasPath/);
+  assert.match(executeSource, /ensureDirectoryWithinRoot\(stagedDir, nasPath\)/);
+  assert.doesNotMatch(executeSource, /fs\.mkdirSync\(stagingDir/);
+  assert.doesNotMatch(executeSource, /fs\.mkdirSync\(stagedDir/);
+
+  assert.match(finalizeSource, /assertWithinRoot\(resultData\.stagingDir, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(originalPath, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(stagedPath, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(convertedPath, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(trashPath, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(keepBothPath, nasPath\)/);
+  assert.match(finalizeSource, /assertWithinRoot\(archivePath, nasPath\)/);
+});
