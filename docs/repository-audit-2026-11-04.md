@@ -1381,8 +1381,8 @@ Statuses use the strongest evidence currently available: found, fixed, target-te
 | Critical | Organize → replace existing destination | **blocked** | Source inspection: `organize.ts` unlinks the old destination before persisting the incoming move intent. | A failed checkpoint or process exit can lose the old file. Needs a durable replacement journal, verified recovery copy, crash-recovery states, tests, and a retention decision. No partial workaround applied. |
 | Critical | Optimize → conversion worker ownership | **blocked** | `conversion-job-lock.ts` uses a PostgreSQL session advisory lock; filesystem work uses separate pooled DB calls. | If the lock connection is lost while the worker process remains alive, another worker can acquire the lock while the old process may still write. Needs a process-lifetime filesystem mutation gate proven on Windows, local disks, SMB, and NAS. |
 | High | Windows installer lifecycle | **blocked** | The lifecycle smoke exists but is invoked from the Windows release workflow. No release workflow was run. | Clean-machine standard-user install, upgrade, rollback, and uninstall are not validated. A non-publishing test path is still needed. |
-| Medium | Archives → filter correctness and accessibility | **fixed**; latest tests pending | Parser/route/UI/API contract commits: `61f942c98c7dffe70f1805dfd5928e9b2a9da1dd`, `e2708f4ec721cb65402490961df192dc5129a578`, `084096106c7fe8786d7045f1e4e5c958a27e43a6`, `6817c81390eabec14caecd8670b68230faea3440`, `3fcfc8541582651c456bd15da04e04861ad221cb`, `8ba10192d60a4837ab345ae09a4d92d907d7f8e9`. Dependency Review #543 passed; Fast Validation #779 pending. | Focused tests were added but not yet confirmed on the latest head. Actual HTTP/database integration and browser/screen-reader checks remain outstanding. |
-| Medium | Windows updater journal | **integration-tested** | Commit `69091d09cad7deea5fa66306b8b416e6f2c51858`; Fast Validation #754 passed Windows updater preservation/rollback smoke. | Does not prove full installer lifecycle readiness. |
+| Medium | Archives → filter correctness and accessibility | **target-tested** | Fast Validation #799 on a6e724946097aff92acc59e7af5c738195f68d98 passed Linux validation and Windows smoke; Dependency Review #562 passed. | Actual HTTP/database integration and browser/screen-reader checks remain outstanding. |
+| Medium | Windows updater journal | **integration-tested** | Commit a6e724946097aff92acc59e7af5c738195f68d98; Fast Validation #799 passed PowerShell parsing, packaged journal writes, and developer updater preservation/rollback on Windows. | Does not prove full installer lifecycle readiness. |
 | Medium | Search accessibility | **target-tested** | Commit `e0d69e50d0033e90984e4aa52b700d3070e24921`; Fast Validation #755 passed focused tests 2/2 and release-contract tests 61/61. | Browser and assistive-technology validation remains outstanding. |
 
 ### Archive filter batch
@@ -1449,3 +1449,35 @@ One uninstall assertion is missing: the smoke verifies that the desktop shortcut
 | Medium | Windows installer → Start Menu shortcut cleanup on uninstall | found | `installer-lifecycle-smoke.ps1` checks the Start Menu shortcut after first install, but the uninstall phase only asserts removal of the desktop shortcut and packaged launcher. | The Start Menu shortcut may be left behind; no product defect is claimed. Add a post-uninstall Start Menu assertion and run the smoke on a disposable Windows runner. |
 
 The lifecycle smoke was not run. The only existing invocation is inside `.github/workflows/windows-release.yml`, which also publishes the installer and release assets. That workflow was not invoked. A safe non-publishing validation path is still required before installer lifecycle status can advance beyond blocked.
+
+## 2026-11-05 audit batch — Windows updater smoke false-positive correction
+
+**Finding:** Fast Validation #796 failed in the Windows developer-updater smoke at the temporary/backup-artifact assertion. The only reported name was the live journal, .recovery-atomic.willard-update.json; no .tmp or .bak sidecar was reported. The PowerShell Get-ChildItem -Filter wildcard matched the extensionless/dot-prefixed journal itself on Windows, so the assertion was broader than its intent. This was a test false positive, not evidence that the writer left a backup artifact.
+
+**Correction:** The smoke now enumerates files and matches only the exact generated sidecar form: a 32-character hexadecimal write ID followed by .tmp or .bak. It also explicitly asserts that the live journal remains present until the test removes it. An intermediate edit caused a PowerShell parse failure in Fast Validation #798; the smoke was restored from the pre-edit version and corrected in commit a6e724946097aff92acc59e7af5c738195f68d98.
+
+**Validation:** Fast Validation #799 (run 42070432819) passed both the Linux validation job and the Windows archive/updater smoke job. The Windows job passed PowerShell parsing, storage migration/no-overwrite checks, NAS temp-path safety, conversion finalization rollback, official 7-Zip symlink-metadata validation, packaged updater journal writes, and developer updater preservation/rollback. Dependency Review #562 (run 42070432915) passed. This is Windows integration coverage for the updater path, not full installer lifecycle validation.
+
+## 2026-11-05 audit batch — organize job creation correctness
+
+**Confirmed user-facing failure:** The organize form defaults archiveDisposition to waiting. When a user switches the source type from archive to folder, the archive-only disposition control disappears but the state remained waiting; the form still submitted that value. The API correctly rejects non-keep dispositions for folder jobs, so the default folder workflow returned HTTP 400 unless the user first changed the archive disposition to keep and only then switched source type.
+
+**Related API correctness findings:** The create route coerced archiveId with Number(), accepted malformed string representations such as exponent notation, silently replaced unsupported conflict policies with keep_existing, and allowed unsupported archive dispositions to fall through as a no-op.
+
+**Correction (commit c36ef16ad0cfe951be7a34f83c17a916625e3b45):**
+- Folder-source submissions now send archiveDisposition: "keep"; archive-source selections retain their chosen disposition.
+- Archive IDs use the existing strict positive-safe-integer parser. Invalid IDs receive HTTP 400, and folder jobs cannot carry an archive ID.
+- Archive disposition and conflict policy are checked against their supported values. Invalid values now receive HTTP 400 rather than silently changing the requested behavior.
+- Added focused tests for the allowed-value parser and source/UI contract. No database schema, stored data, or dependencies changed.
+
+**Validation boundary:** Source inspection confirms the default folder-form/API mismatch and the route coercion/fallback paths. The targeted tests are committed but have not yet run on commit c36ef16; the next Fast Validation run must confirm them. No live HTTP/database integration or browser workflow test is claimed.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Organize → folder-source job creation and job-option validation | **fixed; target test pending** | c36ef16ad0cfe951be7a34f83c17a916625e3b45; focused cases added to request-validation.test.ts. | Latest-head Fast Validation is pending; actual HTTP/database route integration and browser workflow validation remain outstanding. |
+
+### Current repository state
+
+PR #2 remains open and draft. The current audit branch head is c36ef16ad0cfe951be7a34f83c17a916625e3b45. The Windows updater correction is integration-tested by Fast Validation #799; the organize creation batch is awaiting its first matching validation run. The two critical data-integrity findings remain blocked: destructive organize replace can lose the previous destination, and conversion-worker filesystem writes are not fenced against a lost advisory-lock connection. The standard-user installer lifecycle is also not validated because its only existing invocation is inside the release-publishing workflow.
+
+No merge, PR close, main-branch change, production-data change, credential change, or release publication was performed.
