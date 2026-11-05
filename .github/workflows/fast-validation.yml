@@ -72,9 +72,9 @@ jobs:
       - name: Typecheck and validate generated contracts
         run: |
           pnpm run check:artifacts
-          pnpm run typecheck
           pnpm run check:router
           pnpm run check:api-contracts
+          pnpm run typecheck
 
       - name: Smoke-test Expo CLI configuration after dependency overrides
         run: pnpm --filter @workspace/willard-mobile exec expo config --json > /dev/null
