@@ -1,17 +1,16 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, pool, appSettingsTable } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { findSimilar } from "../lib/ai-search.ts";
 import { recomputeEmbedding } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { isVectorAvailable } from "../lib/vector-capability.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router: IRouter = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const p = row?.nasPath?.trim();
-  return p ? p : null;
+  return getActiveNasPath();
 }
 
 function strArr(v: unknown): string[] {
