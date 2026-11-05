@@ -1436,3 +1436,16 @@ Source inspection is complete for this batch. Focused parser, route-wiring, API-
 At the latest repository check, PR #2 remained **open and draft**, with 802 commits and 133 changed files; GitHub reported it mergeable. The branch comparison reports 802 commits ahead and 1 behind `main`. No merge, close, main-branch update, production-data change, credential change, or release publication was performed.
 
 No workflow run or combined status was visible for the latest head `f8174e8c8177fc6f5809702525212b2f2893ea1b` when checked. Therefore the generated-export test, codegen parity, TypeScript checks, archive UI regression, integration tests, and Windows tests are all **pending** on this head. Fast Validation run `42057014248` is a pre-fix failure and is not counted as a pass; it exposed the duplicate generated exports before the codegen step could run. The successful Dependency Review run `42057014279` is also from the pre-fix head and does not validate these changes.
+
+
+## Windows installer lifecycle — additional source review
+
+The installed lifecycle smoke is comprehensive in several areas: it uses a disposable standard Windows user, a unique PostgreSQL database, a separate media directory, verifies first install/start and in-place upgrade, exercises interrupted-update recovery, checks startup diagnostics, and confirms that uninstall preserves external media, settings, and database state.
+
+One uninstall assertion is missing: the smoke verifies that the desktop shortcut is removed, but it only verifies Start Menu shortcut creation after install. It does not check that the Start Menu shortcut is gone after uninstall. This is a **test-coverage finding**, not a confirmed installer defect. The product behavior remains unknown until the isolated Windows lifecycle test runs.
+
+| Priority | Workflow / finding | Status | Evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installer → Start Menu shortcut cleanup on uninstall | found | `installer-lifecycle-smoke.ps1` checks the Start Menu shortcut after first install, but the uninstall phase only asserts removal of the desktop shortcut and packaged launcher. | The Start Menu shortcut may be left behind; no product defect is claimed. Add a post-uninstall Start Menu assertion and run the smoke on a disposable Windows runner. |
+
+The lifecycle smoke was not run. The only existing invocation is inside `.github/workflows/windows-release.yml`, which also publishes the installer and release assets. That workflow was not invoked. A safe non-publishing validation path is still required before installer lifecycle status can advance beyond blocked.
