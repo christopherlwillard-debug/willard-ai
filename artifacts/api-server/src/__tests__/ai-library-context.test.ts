@@ -7,10 +7,10 @@ const routePath = fileURLToPath(new URL("../routes/openai/index.ts", import.meta
 const source = readFileSync(routePath, "utf8");
 
 test("AI storage and large-file context are restricted to the active library", () => {
-  assert.match(source, /async function getStorageContext\(nasPath: string \| null\)/);
-  assert.match(source, /async function getLargeFilesContext\(nasPath: string \| null\)/);
-  assert.match(source, /getStorageContext\(settings\?\.nasPath \?\? null\)/);
-  assert.match(source, /getLargeFilesContext\(settings\?\.nasPath \?\? null\)/);
+  assert.match(source, /async function getStorageContext\(settings: any\)/);
+  assert.match(source, /async function getLargeFilesContext\(settings: any\)/);
+  assert.match(source, /getStorageContext\(settings\)/);
+  assert.match(source, /getLargeFilesContext\(settings\)/);
   assert.ok((source.match(/eq\(mediaFilesTable\.nasPath, nasPath\)/g) ?? []).length >= 2);
 });
 
