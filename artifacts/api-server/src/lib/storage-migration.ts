@@ -2,8 +2,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { resolveWithinRoot } from "./nas-storage.ts";
+import { moveFileNoReplace } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
 export const STORAGE_MIGRATION_NAMESPACES = [
@@ -90,7 +91,7 @@ export interface MigrationServiceOptions {
   query?: (text: string, values?: unknown[]) => Promise<{ rows: any[] }>;
   connect?: () => Promise<{
     query: (text: string, values?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
-    release: () => void;
+    release: (error?: Error) => void;
   }>;
   hashFile?: (filePath: string) => Promise<string>;
   freeBytesAt?: (target: string) => Promise<number | null>;
@@ -183,7 +184,7 @@ function manifestPath(manifestDir: string, id: string): string {
 async function saveManifest(manifestDir: string, manifest: StorageMigrationManifest): Promise<void> {
   await fs.promises.mkdir(manifestDir, { recursive: true });
   const target = manifestPath(manifestDir, manifest.id);
-  const temporary = `${target}.${process.pid}.partial`;
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.partial`;
   await fs.promises.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.promises.rename(temporary, target);
 }
@@ -273,6 +274,62 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     const { pool } = await import("@workspace/db");
     return pool.connect() as any;
   });
+
+  /**
+   * Serialize copy/confirmation/cleanup across API processes. A PostgreSQL
+   * session advisory lock is released automatically if the owning process or
+   * connection dies, so a crash cannot leave a permanent filesystem lockfile.
+   */
+  async function withMigrationLock<T>(
+    id: string,
+    operation: (client: Awaited<ReturnType<typeof connect>>) => Promise<T>,
+  ): Promise<T> {
+    const client = await connect();
+    const lockKey = `willard-storage-migration:${id}`;
+    let acquired = false;
+    let operationError: unknown;
+    let result: T | undefined;
+    try {
+      const lock = await client.query(
+        "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+        [lockKey],
+      );
+      if (lock.rows?.[0]?.locked !== true) {
+        throw new Error("Another operation is already running for this storage migration.");
+      }
+      acquired = true;
+      result = await operation(client);
+    } catch (error) {
+      operationError = error;
+    }
+
+    let unlockError: unknown;
+    if (acquired) {
+      try {
+        const unlocked = await client.query(
+          "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+          [lockKey],
+        );
+        if (unlocked.rows?.[0]?.unlocked !== true) {
+          throw new Error("The storage migration lock could not be released.");
+        }
+      } catch (error) {
+        unlockError = error;
+      }
+    }
+    try {
+      client.release(unlockError instanceof Error ? unlockError : undefined);
+    } catch (error) {
+      unlockError = unlockError ?? error;
+    }
+
+    if (operationError && unlockError) {
+      throw new AggregateError([operationError, unlockError], "Storage migration operation failed and its database lock could not be released.");
+    }
+    if (operationError) throw operationError;
+    if (unlockError) throw unlockError;
+    return result as T;
+  }
 
   async function preview(input: Omit<MigrationPreviewOptions, "manifestDir">): Promise<StorageMigrationManifest> {
     const sourceRoot = safeRoot(input.sourceRoot);
@@ -398,6 +455,8 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   }
 
   async function copy(id: string): Promise<StorageMigrationManifest> {
+    return withMigrationLock(id, async (client) => {
+
     const manifest = await get(id);
     if (manifest.cleanupConfirmed || manifest.state === "CLEANED") throw new Error("This migration is in cleanup state and cannot be copied.");
     if (manifest.conflicts || manifest.unsafeFiles || manifest.missingFiles) throw new Error("Resolve conflicts, unsafe files, and missing sources before copying.");
@@ -451,25 +510,54 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           entry.error = "Destination changed after the dry run.";
           throw new Error(entry.error);
         }
-        const partialPath = `${safeDestinationPath}.${manifest.id}.partial`;
+        const partialPath = `${safeDestinationPath}.${manifest.id}.${crypto.randomUUID()}.partial`;
         await fs.promises.mkdir(path.dirname(safeDestinationPath), { recursive: true });
         resolveWithinRoot(partialPath, manifest.destinationRoot);
         resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
+        let partialCreated = false;
+        let publishing = false;
         try {
-          await pipeline(createReadStream(safeSourcePath), createWriteStream(partialPath, { flags: "wx" }));
+          // Open exclusively so this operation owns the temporary file. A
+          // failed open must never clean up another worker's partial file.
+          const partialHandle = await fs.promises.open(partialPath, "wx", 0o600);
+          partialCreated = true;
+          await pipeline(createReadStream(safeSourcePath), partialHandle.createWriteStream());
           const copiedHash = await hashFile(partialPath);
           if (copiedHash !== entry.sourceHash) {
-            await fs.promises.rm(partialPath, { force: true });
             entry.state = "error";
             entry.error = "SHA-256 verification failed; partial destination removed.";
             throw new Error(entry.error);
           }
           resolveWithinRoot(partialPath, manifest.destinationRoot);
           resolveWithinRoot(safeDestinationPath, manifest.destinationRoot);
-          await fs.promises.rename(partialPath, safeDestinationPath);
-          entry.destinationHash = copiedHash;
+          try {
+            // Publish without POSIX rename-overwrite semantics. A destination
+            // created after the earlier conflict check is never replaced.
+            publishing = true;
+            moveFileNoReplace(partialPath, safeDestinationPath);
+            partialCreated = false;
+            entry.destinationHash = copiedHash;
+          } catch (publishError) {
+            if ((publishError as NodeJS.ErrnoException).code === "EEXIST") {
+              const concurrentHash = await hashFile(safeDestinationPath).catch(() => null);
+              await fs.promises.rm(partialPath, { force: true });
+              partialCreated = false;
+              if (concurrentHash === copiedHash) {
+                entry.destinationHash = concurrentHash;
+              } else {
+                throw new Error(`Destination appeared during migration and contains different data: ${entry.relativePath}`, { cause: publishError });
+              }
+            } else {
+              // An ambiguous publication failure may have created a destination
+              // before failing to remove the temporary name. Preserve the
+              // verified partial until the destination can be inspected.
+              throw publishError;
+            }
+          }
         } catch (error) {
-          await fs.promises.rm(partialPath, { force: true });
+          if (partialCreated && !publishing) {
+            await fs.promises.rm(partialPath, { force: true });
+          }
           throw error;
         }
         entry.state = "verified";
@@ -479,7 +567,6 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       }
       const allReferences = manifest.entries.flatMap((entry) => entry.references);
       if (allReferences.length > 0) {
-        const client = await connect();
         try {
           await client.query("BEGIN");
           const updated = new Set<string>();
@@ -503,8 +590,6 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         } catch (error) {
           await client.query("ROLLBACK").catch(() => {});
           throw error;
-        } finally {
-          client.release();
         }
       }
       Object.assign(manifest, blankCounts(manifest.entries), { state: "VERIFIED", updatedAt: new Date().toISOString() });
@@ -517,9 +602,12 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       await saveManifest(options.manifestDir, manifest);
       throw error;
     }
+    });
   }
 
   async function confirmCleanup(id: string): Promise<StorageMigrationManifest> {
+    return withMigrationLock(id, async (_client) => {
+
     const manifest = await get(id);
     if (manifest.state !== "VERIFIED") throw new Error("Cleanup is available only after the migration and database references are verified.");
     if (manifest.entries.some((entry) => entry.state !== "verified")) throw new Error("Every selected artifact must be verified before cleanup.");
@@ -528,9 +616,12 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     manifest.updatedAt = new Date().toISOString();
     await saveManifest(options.manifestDir, manifest);
     return manifest;
+    });
   }
 
   async function cleanup(id: string): Promise<StorageMigrationManifest> {
+    return withMigrationLock(id, async (_client) => {
+
     const manifest = await get(id);
     if (!manifest.cleanupConfirmed) throw new Error("Cleanup requires a separate explicit confirmation.");
     for (const entry of manifest.entries) {
@@ -565,6 +656,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     manifest.updatedAt = new Date().toISOString();
     await saveManifest(options.manifestDir, manifest);
     return manifest;
+    });
   }
 
   return { preview, get, list, copy, confirmCleanup, cleanup };
