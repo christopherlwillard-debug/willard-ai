@@ -268,7 +268,7 @@ export async function finalizeConversionFiles(
       // still required; never discard the staging directory on this path.
     }
     const recoveryMoves = await findUnrestoredMoves(moves);
-    const rollbackComplete = recoveryMoves.length === 0 && rollbackCount <= moves.length;
+    const rollbackComplete = recoveryMoves.length === 0 && rollbackCount === moves.length;
     throw new ConversionFinalizationError(
       `${errorMessage(error)}${rollbackComplete ? " All completed file moves were restored; staged conversions are preserved." : " Automatic rollback was incomplete; preserve all remaining files for manual recovery."}`,
       rollbackComplete,

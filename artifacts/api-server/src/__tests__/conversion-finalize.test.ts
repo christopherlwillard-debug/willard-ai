@@ -145,10 +145,10 @@ test("a mid-finalization destination race rolls every completed move back and pr
   const f = fixture();
   try {
     const original1 = write(path.join(f.root, "photos", "one.jpg"), "original one");
-    const original2 = write(path.join(f.root, "photos", "two.jpg"), "original two");
+    const original2 = write(path.join(f.root, "photos", "two.avi"), "original two");
     const staged1 = write(path.join(f.stagingDir, "photos", "one.jpg"), "converted one");
-    const staged2 = write(path.join(f.stagingDir, "photos", "two.jpg"), "converted two");
-    const competing = path.join(f.root, "photos", "two.jpg");
+    const staged2 = write(path.join(f.stagingDir, "photos", "two.mp4"), "converted two");
+    const competing = path.join(f.root, "photos", "two.mp4");
     let created = false;
 
     await assert.rejects(
@@ -170,7 +170,7 @@ test("a mid-finalization destination race rolls every completed move back and pr
     assert.equal(fs.readFileSync(staged2, "utf8"), "converted two");
     assert.equal(fs.readFileSync(competing, "utf8"), "concurrent winner");
     assert.equal(fs.existsSync(path.join(f.archiveBase, "photos", "one.jpg")), false);
-    assert.equal(fs.existsSync(path.join(f.archiveBase, "photos", "two.jpg")), false);
+    assert.equal(fs.existsSync(path.join(f.archiveBase, "photos", "two.avi")), false);
   } finally {
     f.cleanup();
   }
