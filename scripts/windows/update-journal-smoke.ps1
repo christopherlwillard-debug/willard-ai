@@ -86,6 +86,16 @@ try {
   Assert-True (Test-Path -LiteralPath (Join-Path $candidate "candidate.marker") -PathType Leaf) "Corrupt-journal recovery deleted the candidate."
   Assert-True (Test-Path -LiteralPath (Join-Path $backup "backup.marker") -PathType Leaf) "Corrupt-journal recovery deleted the previous version."
 
+  # If this same process already recorded the displaced directory in memory,
+  # it can safely roll back even when the journal becomes unreadable afterward.
+  $script:UpdateBackup = $backup
+  $restoredFromMemory = Restore-UpdateBackup
+  Assert-True $restoredFromMemory "A corrupt journal prevented same-process rollback from its known backup path."
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallRoot "backup.marker") -PathType Leaf) "Same-process rollback did not restore the known previous version."
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "install.marker"))) "Same-process rollback retained the incomplete installation."
+  Assert-True (-not (Test-Path -LiteralPath $UpdateJournal)) "Successful in-memory rollback left a corrupt journal."
+  Assert-True (Test-Path -LiteralPath (Join-Path $candidate "candidate.marker") -PathType Leaf) "Same-process rollback unexpectedly deleted the candidate."
+
   # A parseable journal must still be rejected if it points outside the
   # installation's expected sibling candidate/backup paths.
   $outsideBackup = Join-Path (Split-Path -Parent $TempRoot) ".install.previous-1.2.0-20261105123456"
