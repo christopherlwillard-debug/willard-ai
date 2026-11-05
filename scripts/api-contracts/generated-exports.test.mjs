@@ -11,8 +11,8 @@ const GENERATED_API_FILES = [
 
 function exportedDeclarations(source) {
   const declarations = [];
-  for (const [index, line] of source.split(/\\r?\\n/).entries()) {
-    const match = line.match(/^export\\s+(?:declare\\s+)?(?:const|let|var|function|class|type|interface|enum)\\s+([A-Za-z_$][\\w$]*)\\b/);
+  for (const [index, line] of source.split(/\r?\n/).entries()) {
+    const match = line.match(/^export\s+(?:declare\s+)?(?:const|let|var|function|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)\b/);
     if (match) declarations.push({ name: match[1], line: index + 1 });
   }
   return declarations;
@@ -21,8 +21,11 @@ function exportedDeclarations(source) {
 test("generated API modules do not redeclare exported symbols", async () => {
   for (const relativePath of GENERATED_API_FILES) {
     const source = await readFile(path.join(ROOT, relativePath), "utf8");
+    const declarations = exportedDeclarations(source);
+    assert.ok(declarations.length > 0, \`\${relativePath} contains no exported declarations\`);
+
     const byName = new Map();
-    for (const declaration of exportedDeclarations(source)) {
+    for (const declaration of declarations) {
       const locations = byName.get(declaration.name) ?? [];
       locations.push(declaration.line);
       byName.set(declaration.name, locations);
@@ -35,7 +38,7 @@ test("generated API modules do not redeclare exported symbols", async () => {
     assert.deepEqual(
       duplicates,
       [],
-      `${relativePath} contains duplicate generated exports`,
+      \`\${relativePath} contains duplicate generated exports\`,
     );
   }
 });
