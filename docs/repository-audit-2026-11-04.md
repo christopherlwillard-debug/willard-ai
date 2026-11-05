@@ -1787,48 +1787,72 @@ The current organize execute and resume paths still unlink an existing destinati
 
 The rename route called `.trim()` on `req.body.name` before checking its JSON type, so an array/number/object could throw rather than return HTTP 400. It also performed an `existsSync(newAbs)` preflight and then used `fs.renameSync`; another process could create the destination between those operations, and POSIX rename semantics can replace that file. The route also accepted Windows-reserved device basenames and Windows-invalid trailing dots/characters, making names non-portable when a library is moved between supported operating systems.
 
-**Fix in this batch:**
+**Fixes:**
 - Added `isPortableMediaFileName` to validate a single portable filename component, including reserved device names with extensions, COM/LPT superscript variants, control characters, invalid Windows characters, trailing dots/spaces, dot components, and the 255-character component limit.
-- Non-string JSON values now produce the existing HTTP 400 validation response.
-- Reused the existing `moveFileNoReplace` helper for both the forward rename and rollback so a destination created after preflight is not overwritten.
-- Renaming a file to its existing relative path is now a successful no-op rather than a false destination-conflict response.
-- Added focused regression tests for the filename matrix, malformed JSON value types, no-replace destination races, and route wiring.
+- Non-string JSON values now produce HTTP 400 rather than throwing.
+- Reused the existing `moveFileNoReplace` helper for forward rename and rollback so a destination created after preflight is not overwritten.
+- Renaming a file to its existing relative path is a no-op, but only after confirming the source still exists.
+- A racing `EEXIST` is returned as HTTP 409 rather than a generic HTTP 500.
+- Added focused regression tests for the filename matrix, malformed JSON values, a destination created between preflight and move, no-op ordering, and route wiring.
 
-**Status:** fixed; focused regression tests added; pending the matching Fast Validation run.
-**Commit:** recorded by the current audit batch commit.
-**Remaining risk:** The no-replace helper's cross-device fallback uses an exclusive copy; this batch does not claim to preserve all platform-specific extended metadata on every NAS implementation. A full live HTTP/filesystem test on Windows and SMB remains part of the next integration milestone.
+**Commits:**
+- `e9507fce5739b46f303695a7847917588b77d0f6` — portable filename validation and no-replace rename.
+- `5c8afebe4d969bacc519bae563a278709bddcfbb` — corrected regression assertions.
+- `225f2d33e60bb15b6b3823323ec470f9689f4c60` — source-check ordering, HTTP 409 mapping, and Windows test step.
 
-### Validation baseline
-
-Fast Validation #826 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121215284)) is validating the preceding documentation-only commit `b842925b355d108d8a703d030536ef0ee19cf744`; it does not include these media rename changes. A new run is required for this batch.
-
+**Status:** target-tested.
+**Validation:** Fast Validation #828 passed Linux targeted tests on the implementation/test head. Fast Validation #829 passed Linux and Windows, including the new Windows media-rename test ([#829](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122492014)); Dependency Review #592 passed ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122491867)).
+**Remaining risk:** The no-replace helper's cross-device fallback uses an exclusive copy; preservation of all platform-specific extended metadata on every NAS implementation is not proven. The filesystem-to-database crash window is not journaled, and case-only rename on case-insensitive filesystems remains a separate UX edge case.
 
 ## 2026-11-05 follow-up — media rename race response and Windows test coverage
 
-Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed on commit `5c8afebe4d969bacc519bae563a278709bddcfbb`: Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job all completed successfully. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed. The Windows job did not yet execute the new media-rename test file.
+Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job. Its Windows job did not yet execute the media-rename test file. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed.
 
-A source-order review of the new no-op branch found that it returned success before checking whether the source file still existed. This batch moves the no-op response after the source existence check. It also maps an `EEXIST` from the no-replace filesystem operation to HTTP 409 rather than allowing the global handler to report a generic HTTP 500.
+A source-order review found that the initial no-op branch could return success before confirming the source still existed. The branch was moved after the source existence check. The route also maps a racing `EEXIST` from the no-replace operation to HTTP 409. The Windows Fast Validation job now executes `media-rename.test.ts`, exercising the no-overwrite and portable filename behavior on Windows.
 
-The Windows Fast Validation job now runs `media-rename.test.ts` after installing the API test dependency graph, so the hard-link/exclusive-copy no-overwrite behavior and portable filename rules are exercised on both Linux and Windows.
-
-**Status:** code and regression/workflow changes committed; Fast Validation #829 pending.
-**Remaining risk:** The route still has a filesystem-to-database crash window because the rename helper only rolls back in-process persistence errors. A durable rename journal/reconciliation mechanism is not part of this batch. Case-only rename behavior on case-insensitive filesystems also remains a separate UX edge case.
-
+**Status:** target-tested by Fast Validation #829 on both Linux and Windows. See the finding above for exact commits and remaining risk.
 
 ## 2026-11-05 follow-up — media rename UI state and accessibility
 
 **Source finding:** The MediaViewer rename dialog updated only the in-memory `file.name` after a successful API rename. It left `file.relativePath` stale and did not notify the parent page, so the viewer path and React Query media-list cache could continue showing the old path. The dialog also lacked a programmatic name/label, did not announce validation errors, and had no keyboard focus loop or explicit focus restoration.
 
-**Fix in this batch:**
+**Fixes:**
 - The rename request now returns the server's authoritative `id`, `name`, and `relativePath`.
 - MediaViewer exposes an `onRenameChange` callback; the parent updates matching cached media rows and invalidates the media query.
 - The viewer uses the returned relative path rather than reconstructing it from stale state.
 - The dialog now has `role=dialog`, `aria-modal`, and a labelled title; the filename input has a real label, invalid state, and described error.
 - Error messages use an assertive alert.
 - Focus moves into the input on open, Tab/Shift+Tab are kept within the dialog, Escape closes it, and focus returns to the Rename trigger.
-- The race test now creates a competing destination inside the move callback, after the simulated route preflight, and verifies both files remain intact.
 
-**Validation:** Fast Validation #829 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122492014)) passed Linux typecheck/generated contracts, release/storage/UI contracts, PostgreSQL media wildcard and conversion integration, and targeted backend regressions. Its Windows job passed PowerShell parsing, launcher mutex, environment encoding, the new media-rename no-overwrite/portable-filename test, storage migration, NAS path cleanup, conversion rollback, official 7-Zip/symlink metadata, and packaged/developer updater recovery. Dependency Review #592 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122491867)) passed.
+**Commit:** `8075d59e25aa9419f59b4d24fcfec5cbc38292ca`.
 
-**Status:** this UI batch is implemented and focused UI contract tests are added; Fast Validation #830 is required before marking it target-tested.
-**Remaining risk:** Browser-based keyboard/screen-reader verification is still outstanding. The rename filesystem-to-database crash window remains separate and needs a durable reconciliation design; this UI batch does not solve it.
+**Status:** target-tested by Fast Validation #830 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42123498776)). Linux typecheck/generated contracts, release/storage/UI contracts (including the new media rename accessibility and cache-state assertions), PostgreSQL media wildcard and conversion integration, and targeted backend regressions passed. The Windows job also passed, including the media-rename no-overwrite/portable-filename test and the packaged/developer updater recovery tests. Dependency Review #593 passed ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42123498763)).
+
+**Remaining risk:** Browser-based keyboard and screen-reader verification is still outstanding. The rename filesystem-to-database crash window remains separate and needs a durable reconciliation design; this UI batch does not solve it.
+
+### Prioritized findings ledger addendum — 2026-11-05
+
+| Severity | Affected workflow | Status | Commit / validation | Remaining risk |
+|---|---|---|---|---|
+| Critical | Organize → replace existing destination | blocked | Existing audit findings; source reconfirmed | Displaced original still lacks a durable, verified replacement journal. |
+| Critical | Organize execute/resume/rollback ownership | blocked | Source inspection in current audit | Timestamp heartbeat is not filesystem fencing; stale workers may outlive database ownership. |
+| Critical | Conversion worker ownership | blocked | Existing PostgreSQL lock/recovery tests pass, but do not prove filesystem fencing | A stale worker may still write after losing its advisory-lock connection. |
+| High | Windows updater recovery bootstrap | found | Source inspection of installer shortcuts and directory swap | Launcher is inside the directory moved during update; stable bootstrapper/versioned directory design needed. |
+| High | Updater journal terminal cleanup | found | Source inspection and packaged updater tests | Terminal phase ordering and backup cleanup need crash-safe reconciliation. |
+| High | Minimum Windows version enforcement | found | Signed release metadata is generated but not enforced by installer/updater | Unsupported Windows systems may attempt an update; enforce signed minimum before download/install. |
+| High | Validation-only release workflow permissions/secrets | found | Workflow source inspection | Separate read-only validation and protected publishing/signing identities. |
+| Medium | Media rename input, portable names, and no-overwrite race | target-tested | `e9507fc`, `5c8afeb`, `225f2d3`; Fast Validation #829 | No durable rename journal; cross-device metadata and case-only rename need further verification. |
+| Medium | MediaViewer rename state and dialog accessibility | target-tested | `8075d59`; Fast Validation #830 | Browser/screen-reader verification remains outstanding. |
+| High | Complete standard-user installer lifecycle | found | Fast Validation smoke tests are not a full installed-product lifecycle | Clean install, real upgrade, interruption, rollback, and uninstall still need isolated end-to-end execution. |
+
+### Current PR snapshot
+
+- PR #2 remains open, draft, unmerged, and reported mergeable.
+- Branch: `audit/full-repository-review-2026-11`.
+- Head: `8075d59e25aa9419f59b4d24fcfec5cbc38292ca`.
+- GitHub reports 848 commits and 143 changed files.
+- Comparison with `main`: 848 ahead, 1 behind; merge base `bd206ed99f06fb08fa792bbc94b03312fe01a0f0`.
+- No review threads were returned.
+- No merge, close, force-push, rebase, main-branch change, production-data change, credential change, or release publication was performed.
+
+**Validation classification:** Fast Validation #829 and #830 plus Dependency Review #592/#593 passed. These are targeted, integration, and Windows smoke validations. They are not full CI, a complete installed-product lifecycle, or browser-based accessibility validation.
