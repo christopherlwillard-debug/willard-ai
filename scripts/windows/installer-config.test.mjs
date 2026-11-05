@@ -70,6 +70,10 @@ const workflow = await readFile(
   new URL("../../.github/workflows/windows-release.yml", import.meta.url),
   "utf8",
 );
+const fastValidationWorkflow = await readFile(
+  new URL("../../.github/workflows/fast-validation.yml", import.meta.url),
+  "utf8",
+);
 const backendAudit = await readFile(
   new URL("../../artifacts/api-server/audit.mjs", import.meta.url),
   "utf8",
@@ -1214,6 +1218,15 @@ test("updater smoke can create its temporary branch from a detached source check
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test("Fast Validation updater smoke checks out complete Git history for its local remote", () => {
+  const jobStart = fastValidationWorkflow.indexOf("windows-archive-and-updater-smoke:");
+  assert.ok(jobStart >= 0, "Fast Validation must contain the Windows updater smoke job");
+  const checkoutStart = fastValidationWorkflow.indexOf("uses: actions/checkout@", jobStart);
+  const checkoutEnd = fastValidationWorkflow.indexOf("\\n\\n", checkoutStart);
+  assert.ok(checkoutStart > jobStart && checkoutEnd > checkoutStart);
+  assert.match(fastValidationWorkflow.slice(checkoutStart, checkoutEnd), /fetch-depth:\\s*0/);
 });
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
