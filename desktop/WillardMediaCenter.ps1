@@ -472,16 +472,6 @@ function Try-Update {
     Assert-TrustedDownloadResponse $manifestResponse
     $remote = $manifestResponse.Content | ConvertFrom-Json
     $local = Read-Version
-    $remoteVersion = [version]($remote.version -replace "-.*$", "")
-    if ($remoteVersion -le [version]($local -replace "-.*$", "")) {
-      Good "Willard Media Center $local is current."
-      Set-Content $UpdateCheckFile (Get-Date).ToString("o")
-      return
-    }
-    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
-      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
-      throw "The release description is incomplete or unsafe."
-    }
     $remoteManifestFile = Join-Path $DataRoot "updates\release-manifest.json"
     New-Item -ItemType Directory -Force (Split-Path $remoteManifestFile) | Out-Null
     $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
@@ -489,8 +479,26 @@ function Try-Update {
       $script:UpdateStage = "manifest signature verification"
       & $Node $ReleaseContract "--verify" $remoteManifestFile
       if ($LASTEXITCODE -ne 0) { throw "The release description failed signature verification." }
+
+      $script:UpdateStage = "version comparison"
+      $comparisonOutput = & $Node $ReleaseContract "--compare" $remote.version $local
+      if ($LASTEXITCODE -ne 0) { throw "The release version could not be compared safely." }
+      try {
+        $comparison = [int]([string]$comparisonOutput).Trim()
+      } catch {
+        throw "The release version comparison returned an invalid result."
+      }
+      if ($comparison -le 0) {
+        Good "Willard Media Center $local is current."
+        Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+        return
+      }
     } finally {
       Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
+      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
+      throw "The release description is incomplete or unsafe."
     }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"

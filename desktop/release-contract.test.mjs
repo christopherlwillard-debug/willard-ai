@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   compareVersions,
   getUpdateDecision,
@@ -28,11 +30,39 @@ const unsignedRelease = {
   minimumWindowsVersion: "10",
 };
 const release = { ...unsignedRelease, signature: signReleaseManifest(unsignedRelease, privateKey) };
+const releaseContractPath = fileURLToPath(new URL("./release-contract.mjs", import.meta.url));
 
-test("compares stable releases and prereleases safely", () => {
+test("compares stable releases and SemVer prerelease identifiers safely", () => {
   assert.equal(compareVersions("1.2.0", "1.1.9"), 1);
   assert.equal(compareVersions("1.2.0-beta.1", "1.2.0"), -1);
+  assert.equal(compareVersions("1.2.0-beta.10", "1.2.0-beta.2"), 1);
+  assert.equal(compareVersions("1.2.0-beta.2", "1.2.0-beta.10"), -1);
+  assert.equal(compareVersions("1.2.0-beta.1", "1.2.0-beta.alpha"), -1);
+  assert.equal(compareVersions("1.2.0-beta.alpha", "1.2.0-beta.1"), 1);
+  assert.equal(compareVersions("1.2.0-beta.1", "1.2.0-beta.1.1"), -1);
   assert.equal(compareVersions("1.2.0", "1.2.0"), 0);
+
+  for (const invalid of [
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2.3-beta.",
+    "1.2.3-beta..1",
+    "1.2.3-beta.01",
+  ]) {
+    assert.throws(() => compareVersions(invalid, "1.2.3"), /Release versions/);
+  }
+});
+
+test("release-contract CLI compares semantic versions for the Windows launcher", () => {
+  const compare = (left, right) => Number(execFileSync(
+    process.execPath,
+    [releaseContractPath, "--compare", left, right],
+    { encoding: "utf8" },
+  ).trim());
+  assert.equal(compare("1.2.0", "1.2.0-beta.1"), 1);
+  assert.equal(compare("1.2.0-beta.10", "1.2.0-beta.2"), 1);
+  assert.equal(compare("1.2.0-beta.2", "1.2.0-beta.10"), -1);
 });
 
 test("rejects incomplete or unsafe release descriptions", () => {
@@ -46,6 +76,7 @@ test("rejects incomplete or unsafe release descriptions", () => {
 test("only offers a newer verified release", () => {
   assert.equal(getUpdateDecision("1.1.0", release, { publicKey }).available, true);
   assert.equal(getUpdateDecision("1.2.0", release, { publicKey }).available, false);
+  assert.equal(getUpdateDecision("1.2.0-beta.1", release, { publicKey }).available, true);
 });
 
 test("rejects altered artifact bytes before installation", async () => {

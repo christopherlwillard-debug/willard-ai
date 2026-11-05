@@ -590,6 +590,15 @@ test("installed launcher serializes fresh starts and skips updates for an existi
   assert.match(fastValidationWorkflow, /Verify installed launcher serializes concurrent startup/);
 });
 
+test("installed updater verifies signed metadata before SemVer comparison", () => {
+  const verifyIndex = launcher.indexOf('"--verify" $remoteManifestFile');
+  const compareIndex = launcher.indexOf('"--compare" $remote.version $local');
+  assert.ok(verifyIndex >= 0 && compareIndex > verifyIndex,
+    "the signed release manifest must be verified before its version is used");
+  assert.match(launcher, /version comparison/);
+  assert.doesNotMatch(launcher, /\[version\]\(\$remote\.version -replace/);
+});
+
 test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
   assert.match(launcher, /function Start-LoadingScreen/);
   assert.match(launcher, /Start-Process -FilePath \$LoadingScreen -PassThru/);
