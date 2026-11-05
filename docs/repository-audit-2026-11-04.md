@@ -692,3 +692,20 @@ Remaining archive hardening:
 - Commits: safety helper `26af1682c5c628df5b141552bde13aded154d5f6`; regression tests `f58e792410528d2025174953af0f47adee798f2c`; server integration `0e2c301abcb6540cd573f2038ef12a20603a77ad`.
 - Validation: pending. The narrow command is `node --test desktop/web-server-safety.test.mjs`; the Fast Validation workflow also runs this exact test file. Do not treat the change as validated until the test and workflow result are observed.
 - Scope: desktop static request handling only. This does not claim to validate the packaged Windows installer or the full desktop service lifecycle.
+
+## Desktop web server malformed-request and static asset error handling (2026-11-05)
+
+- Feature review found that malformed request URLs were parsed outside the HTTP handler's error boundary, allowing a synchronous URL-construction exception to escape instead of returning a controlled client error. Static asset read failures were also all mapped to 404, including EACCES and disk I/O errors; synchronous static-root resolution errors were not handled at the request boundary.
+- Added safe request URL/path parsing, controlled 400 responses for malformed URL or percent encoding, a guarded static-root resolution path, and filesystem error classification that maps only ENOENT/ENOTDIR to 404 and permission/I/O failures to 500.
+- Added focused tests for malformed authority, invalid percent encoding, valid API path parsing, and missing-versus-unreadable file error classification.
+- Commits: helper `26af1682c5c628df5b141552bde13aded154d5f6`; tests `f58e792410528d2025174953af0f47adee798f2c`; server integration `0e2c301abcb6540cd573f2038ef12a20603a77ad`.
+- Validation: local Node test run against a staged copy of the branch helper and regression cases passed **4/4**. GitHub Fast Validation has not yet been observed for this commit; packaged desktop runtime/installer integration remains outstanding.
+
+## Empty-folder cleanup scan fails closed and respects filesystem entries (2026-11-05)
+
+- Feature review found that `GET /cleanup/empty-folders` swallowed directory enumeration failures and could report a partial scan as complete. It also ignored symlinks and special filesystem entries when deciding whether a directory was empty, potentially presenting a directory containing such an entry as empty.
+- Extracted the scan into `findEmptyDirectories`. It uses `lstat`, never traverses symlinks, treats symlinks and special entries as contents, reports empty descendant directories and parents that become empty after their empty children are removed, and propagates read/stat errors so the route returns 500 rather than a misleading partial list.
+- Fixed a related summary correctness defect: `emptyFolderCount` was inferred only from distinct parent folders in `media_files`. Truly empty folders have no media rows, so they could never be discovered by that query. The summary now uses the same filesystem scan as the Empty Folders feature.
+- Added tests for nested empty directories, symlink containment, and missing/unreadable scan roots. Added the test file to the Fast Validation targeted backend suite.
+- Commits: scanner `1fc2c8e95a897da858ef504c2cac2e062b6fb56f`; tests `3b32beec08317d56d1dafc4d05060653ffef4c7e`; route integration `8d6a1fcb56ede3e4150e1338d0563e1e6e52d9a0`; workflow test inclusion `32c40eae697e2cb9bf07d48e7890664e36024c67`; summary correction `d542e41780384333069f93d7fc4ad7358dadd723`.
+- Validation: local Node test run against a staged copy of the branch helper and regression cases passed **3/3**. The new Fast Validation command was inspected and its line continuation corrected before finalizing; GitHub CI has not yet been observed for the latest commit. Permission-denied traversal was not separately exercised under a non-privileged account; the missing-root case verifies fail-closed error propagation.
