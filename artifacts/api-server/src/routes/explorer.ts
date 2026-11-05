@@ -2,8 +2,9 @@ import { Router, type IRouter } from "express";
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { appSettingsTable, archivesTable, mediaFilesTable } from "@workspace/db";
-import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
+import { archivesTable, mediaFilesTable } from "@workspace/db";
+import { archiveScope } from "../lib/archive-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { and, eq, sql } from "drizzle-orm";
 import { resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
@@ -32,8 +33,7 @@ function safeResolve(nasRoot: string, userPath: string): string | null {
 
 router.get("/explorer", async (req, res) => {
   try {
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = settingsRows[0]?.nasPath ?? "";
+    const nasPath = (await getActiveNasPath()) ?? "";
 
     if (!nasPath) {
       res.status(404).json({ error: "NAS path not configured" });
