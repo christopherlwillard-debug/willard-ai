@@ -933,24 +933,78 @@ function Get-PortOwnerPid($port) {
     return $null
 }
 
+function Stop-LauncherStartedProcessHandle($process) {
+    if (-not $process) { return }
+    try {
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            $process.Kill()
+            if (-not $process.WaitForExit(10000)) {
+                throw "Process $($process.Id) did not exit after a direct stop request."
+            }
+        }
+    } catch {
+        Write-Warn ("Willard could not stop a process started by this launcher: " + $_.Exception.Message)
+    }
+}
+
 function Read-TrackedPids {
-    if (-not (Test-Path $PidFile)) { return $null }
-    try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
+    if (-not (Test-Path -LiteralPath $PidFile)) { return $null }
+    try {
+        if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
+            throw "The services state path is not a file."
+        }
+        $state = Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($state -isnot [System.Management.Automation.PSCustomObject] -or $state.version -notin @(1, 2)) {
+            throw "The services state has an unsupported structure or version."
+        }
+        foreach ($name in @("api", "web")) {
+            if ($null -eq $state.PSObject.Properties[$name]) {
+                throw "The services state is missing the '$name' process record."
+            }
+        }
+        if ($state.version -eq 2 -and
+            ($state.runToken -isnot [string] -or [string]::IsNullOrWhiteSpace($state.runToken))) {
+            throw "The services state is missing its run token."
+        }
+        foreach ($process in @($state.api, $state.web)) {
+            if ($null -eq $process) { continue }
+            if ($process -isnot [System.Management.Automation.PSCustomObject]) {
+                throw "A services process record has an invalid structure."
+            }
+            $recordedPid = 0
+            if (-not [int]::TryParse([string]$process.pid, [ref]$recordedPid) -or $recordedPid -le 0) {
+                throw "A services process record has an invalid process ID."
+            }
+            if ($process.path -isnot [string] -or [string]::IsNullOrWhiteSpace($process.path) -or
+                $process.commandLine -isnot [string] -or [string]::IsNullOrWhiteSpace($process.commandLine)) {
+                throw "A services process record is missing executable identity information."
+            }
+        }
+        return $state
+    } catch {
+        throw "The developer services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard services remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
+    }
 }
 
 function Get-ProcessIdentity($processId) {
     if (-not $processId) { return $null }
     try {
-        $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
-        if (-not $process) { return $null }
-        return @{
-            pid = [int]$process.ProcessId
-            path = [string]$process.ExecutablePath
-            commandLine = [string]$process.CommandLine
-            creationDate = [string]$process.CreationDate
-        }
+        $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
     } catch {
-        return $null
+        throw "Windows could not verify the identity of Willard process $processId: $($_.Exception.Message)"
+    }
+    if (-not $process) { return $null }
+    $executablePath = [string]$process.ExecutablePath
+    $commandLine = [string]$process.CommandLine
+    if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
+        throw "Windows did not return enough identity information to safely manage Willard process $processId."
+    }
+    return @{
+        pid = [int]$process.ProcessId
+        path = $executablePath
+        commandLine = $commandLine
+        creationDate = [string]$process.CreationDate
     }
 }
 

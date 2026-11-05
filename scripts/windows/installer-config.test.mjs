@@ -1473,7 +1473,8 @@ test("installed lifecycle smoke uninstalls while both packaged services are runn
 });
 
 test("launcher retains the previous release if service shutdown cannot be verified", () => {
-  const startupCatchStart = launcher.lastIndexOf("} catch {");
+  const startupCatchStart = launcher.indexOf("\n} catch {\n  $startupError = $_");
+  assert.ok(startupCatchStart >= 0, "The startup failure handler must preserve the original error.");
   const startupCatch = launcher.slice(startupCatchStart);
   const stop = startupCatch.indexOf("Stop-Services");
   const gate = startupCatch.indexOf("if ($servicesStopped)");
@@ -1487,4 +1488,33 @@ test("launcher retains the previous release if service shutdown cannot be verifi
   const directStop = launcher.slice(directStopStart, directStopEnd);
   assert.match(directStop, /\.Kill\(\)/);
   assert.match(directStop, /WaitForExit\(10000\)/);
+});
+
+test("developer launcher fails closed on corrupt process state and WMI query failures", () => {
+  const readerStart = launcherCommon.indexOf("function Read-TrackedPids");
+  const readerEnd = launcherCommon.indexOf("\nfunction Get-ProcessIdentity", readerStart);
+  const reader = launcherCommon.slice(readerStart, readerEnd);
+  assert.match(reader, /ConvertFrom-Json -ErrorAction Stop/);
+  assert.match(reader, /developer services state file is unreadable or invalid/);
+  assert.match(reader, /rename or delete this file/);
+  assert.doesNotMatch(reader, /catch \{ return \$null \}/);
+
+  const identityStart = launcherCommon.indexOf("function Get-ProcessIdentity");
+  const identityEnd = launcherCommon.indexOf("\nfunction Test-ProcessIdentity", identityStart);
+  const identity = launcherCommon.slice(identityStart, identityEnd);
+  assert.match(identity, /could not verify the identity of Willard process/);
+  assert.match(identity, /did not return enough identity information/);
+  assert.doesNotMatch(identity, /catch \{ return \$null \}/);
+
+  const stopHandleStart = launcherCommon.indexOf("function Stop-LauncherStartedProcessHandle");
+  const stopHandleEnd = launcherCommon.indexOf("\nfunction Read-TrackedPids", stopHandleStart);
+  const stopHandle = launcherCommon.slice(stopHandleStart, stopHandleEnd);
+  assert.match(stopHandle, /\.Kill\(\)/);
+  assert.match(stopHandle, /WaitForExit\(10000\)/);
+
+  const startServicesStart = developerLauncher.indexOf("function Start-WillardServices");
+  const startServicesEnd = developerLauncher.indexOf("\n$services =", startServicesStart);
+  const startServices = developerLauncher.slice(startServicesStart, startServicesEnd);
+  assert.match(startServices, /Stop-LauncherStartedProcessHandle \$webProc/);
+  assert.match(startServices, /Stop-LauncherStartedProcessHandle \$apiProc/);
 });

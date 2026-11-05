@@ -1973,3 +1973,20 @@ Fast Validation #861 reached the release/storage contract suite and failed one n
 The corrupt-process-state error now also gives an explicit recovery path: preserve a copy for diagnosis, manually confirm all Willard processes are stopped, then rename or delete the invalid state file and retry. This avoids leaving a user with an error that says to retry while the same unreadable file remains in place.
 
 **Validation status:** Fast Validation #861 failed only at the rollback source-contract assertion; the Windows job was skipped because Linux validation failed. Dependency Review #624 passed. The corrected assertion and explicit recovery instructions are in the next branch-head validation batch.
+
+## 2026-11-05 follow-up — extend fail-closed service ownership to the developer launcher
+
+Source inspection found the same process-state weakness in the developer launcher (`scripts/launcher/common.ps1`): `Read-TrackedPids` treated malformed JSON as an absent process list, and `Get-ProcessIdentity` treated every CIM failure as a process that no longer existed. The startup function also attempted journal-based cleanup after a tracking failure but did not retain a direct cleanup path for the API/web `Process` handles it had just created.
+
+**Fix in this batch:** the developer launcher now validates the versioned process journal and executable identity fields, preserves invalid state for manual recovery, and distinguishes a missing process from a failed CIM query. The developer startup failure handler attempts the existing tracked-process shutdown and then stops only the exact process handles created by that startup attempt. The Windows updater journal smoke now parses the production developer process-state reader, tests valid and corrupt records, and injects a synthetic CIM failure into the production identity helper. Linux source-contract tests cover the developer shutdown fallback.
+
+Fast Validation #862 failed at the rollback-gating source assertion because the test file still contained the prior `lastIndexOf` selector. The assertion is now explicitly anchored to the outer handler marker `$startupError = $_`; this is a test-selection correction, not a change to the already committed runtime gate. Dependency Review #625 passed. The current batch includes the corrected assertion and the developer-launcher regression coverage; validation is pending.
+
+### Prioritized findings ledger — developer launcher follow-up
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Developer launcher treats corrupt process journal or WMI query failure as no running services | fixed / target-tested pending CI | this batch | Windows process-state smoke and real developer launch/stop integration pending |
+| Medium | Developer launcher may leave a just-started API/web process untracked if PID persistence fails | fixed / target-tested pending CI | this batch | Direct `Process` handle cleanup is covered by source-contract tests; full failure injection on Windows remains pending |
+
+**Validation classification:** source inspection and focused regression tests added. The Windows updater smoke now exercises both packaged and developer process-state readers, but the full installed Inno uninstall-while-running lifecycle and a real developer launcher fault-injection run remain unexecuted on this PR branch.

@@ -4,6 +4,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Launcher = Join-Path $Root "desktop\\WillardMediaCenter.ps1"
 $Node = (Get-Command node.exe -ErrorAction Stop).Source
 $ReleaseContract = Join-Path $Root "desktop\release-contract.mjs"
+$DeveloperCommon = Join-Path $Root "scripts\launcher\common.ps1"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-update-journal-$([guid]::NewGuid().ToString('N'))"
 $UpdateJournal = Join-Path $TempRoot "updates\\swap-journal.json"
 $InstallRoot = Join-Path $TempRoot "install"
@@ -93,6 +94,57 @@ try {
     $incompleteProcessStateRejected = $_.Exception.Message -match "services state file is unreadable or invalid"
   }
   Assert-True $incompleteProcessStateRejected "A process state record without executable identity was accepted."
+  Remove-Item -LiteralPath $PidFile -Force
+
+  $developerTokens = $null
+  $developerParseErrors = $null
+  $developerAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $DeveloperCommon,
+    [ref]$developerTokens,
+    [ref]$developerParseErrors
+  )
+  Assert-True ($developerParseErrors.Count -eq 0) ("Developer launcher has PowerShell parse errors: " + ($developerParseErrors -join "; "))
+  $developerReaderAst = $developerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+      $node.Name -eq "Read-TrackedPids"
+  }, $true)
+  Assert-True ($null -ne $developerReaderAst) "Read-TrackedPids was not found in the developer launcher."
+  $developerReaderSource = $developerReaderAst.Extent.Text -replace "^function Read-TrackedPids", "function Read-DeveloperTrackedPids"
+  . ([scriptblock]::Create($developerReaderSource))
+
+  @{
+    version = 2
+    runToken = "developer-process-state-smoke"
+    api = @{ pid = 23456; path = "C:\Willard\runtime\node.exe"; commandLine = "node.exe --developer-smoke" }
+    web = $null
+  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $PidFile -Encoding UTF8
+  $developerState = Read-DeveloperTrackedPids
+  Assert-True ($developerState.api.pid -eq 23456) "The developer launcher rejected a valid process state record."
+
+  Set-Content -LiteralPath $PidFile -Value "{not-json" -Encoding UTF8
+  $developerCorruptStateRejected = $false
+  try { Read-DeveloperTrackedPids | Out-Null } catch {
+    $developerCorruptStateRejected = $_.Exception.Message -match "developer services state file is unreadable or invalid"
+  }
+  Assert-True $developerCorruptStateRejected "The developer launcher treated corrupt process state as no running services."
+  Assert-True (Test-Path -LiteralPath $PidFile -PathType Leaf) "The developer launcher deleted corrupt process state."
+
+  $developerIdentityAst = $developerAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+      $node.Name -eq "Get-ProcessIdentity"
+  }, $true)
+  Assert-True ($null -ne $developerIdentityAst) "Get-ProcessIdentity was not found in the developer launcher."
+  $developerIdentitySource = $developerIdentityAst.Extent.Text -replace "^function Get-ProcessIdentity", "function Get-DeveloperProcessIdentity"
+  . ([scriptblock]::Create($developerIdentitySource))
+  function Get-CimInstance { throw "synthetic WMI query failure" }
+  $developerWmiFailureRejected = $false
+  try { Get-DeveloperProcessIdentity 23456 | Out-Null } catch {
+    $developerWmiFailureRejected = $_.Exception.Message -match "could not verify the identity of Willard process"
+  }
+  Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
+  Assert-True $developerWmiFailureRejected "The developer launcher treated a WMI query failure as a missing process."
   Remove-Item -LiteralPath $PidFile -Force
 
   $actualWindowsVersion = Get-InstalledWindowsVersion
