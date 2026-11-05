@@ -79,7 +79,7 @@ function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMove
       typeof move.to !== "string" || !path.isAbsolute(move.to) ||
       typeof move.sourceHash !== "string" || !/^[a-f0-9]{64}$/i.test(move.sourceHash) ||
       typeof move.destHash !== "string" || move.destHash !== move.sourceHash ||
-      move.verified !== true ||
+      typeof move.verified !== "boolean" ||
       (move.sourceRelPath !== undefined && typeof move.sourceRelPath !== "string")
     ) {
       throw new Error(`Recovery journal entry ${index + 1} is incomplete or unverified`);
@@ -95,7 +95,7 @@ function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMove
       to: move.to,
       sourceHash: move.sourceHash,
       destHash: move.destHash,
-      verified: true,
+      verified: move.verified as boolean,
       sourceRelPath: move.sourceRelPath as string | undefined,
     };
   });
@@ -2342,6 +2342,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       existingMoves = parseOrganizationMoveJournal(job.fileMoves, nasPath);
     } catch (error) {
       send("error", { message: error instanceof Error ? error.message : "Recovery journal is invalid" });
+      res.end();
+      return;
+    }
+    if (existingMoves.some((move) => !move.verified)) {
+      send("error", { message: "This job has a pending file-move intent from an interrupted attempt. Complete rollback in Recovery Center before resuming." });
       res.end();
       return;
     }
