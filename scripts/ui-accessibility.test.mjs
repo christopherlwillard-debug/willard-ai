@@ -35,6 +35,12 @@ test("search controls expose accessible names and toggle state", () => {
   assert.match(submit, /aria-label=\{search\.isPending \?/);
 });
 
+test("search failures are announced to assistive technology", () => {
+  const error = openingTagForTestId('data-testid="text-search-error"');
+  assert.match(error, /role="alert"/);
+  assert.match(error, /aria-live="assertive"/);
+});
+
 test("saved-search controls expose context-specific accessible names", () => {
   const saveInput = openingTagForTestId('data-testid="input-save-name"');
   assert.match(saveInput, /aria-label="Saved search name"/);
