@@ -706,7 +706,7 @@ Remaining archive hardening:
 - Feature review found that `GET /cleanup/empty-folders` swallowed directory enumeration failures and could report a partial scan as complete. It also ignored symlinks and special filesystem entries when deciding whether a directory was empty, potentially presenting a directory containing such an entry as empty.
 - Extracted the scan into `findEmptyDirectories`. It uses `lstat`, never traverses symlinks, treats symlinks and special entries as contents, reports empty descendant directories and parents that become empty after their empty children are removed, and propagates read/stat errors so the route returns 500 rather than a misleading partial list.
 - Fixed a related summary correctness defect: `emptyFolderCount` was inferred only from distinct parent folders in `media_files`. Truly empty folders have no media rows, so they could never be discovered by that query. The summary now uses the same filesystem scan as the Empty Folders feature.
-- Added tests for nested empty directories, symlink containment, and missing/unreadable scan roots. Added the test file to the Fast Validation targeted backend suite.
+- Added tests for nested empty directories, symlink containment, and a missing scan root. Added the test file to the Fast Validation targeted backend suite.
 - Commits: scanner `1fc2c8e95a897da858ef504c2cac2e062b6fb56f`; tests `3b32beec08317d56d1dafc4d05060653ffef4c7e`; route integration `8d6a1fcb56ede3e4150e1338d0563e1e6e52d9a0`; workflow test inclusion `32c40eae697e2cb9bf07d48e7890664e36024c67`; summary correction `d542e41780384333069f93d7fc4ad7358dadd723`.
 - Validation: local Node test run against a staged copy of the branch helper and regression cases passed **3/3**. The new Fast Validation command was inspected and its line continuation corrected before finalizing; GitHub CI has not yet been observed for the latest commit. Permission-denied traversal was not separately exercised under a non-privileged account; the missing-root case verifies fail-closed error propagation.
 
@@ -846,3 +846,19 @@ Remaining archive hardening:
 - Commits: canonical query `b557f0c61a928da9931b6354dac61d1c700f6e9a`; fixture schema `7dac6e05422b7c95a37fb0425470bb8581ab0e47`; corrected query assertion `cca95e5bec4c4f66c217afbcaf7f14d1ba6dc792`.
 - Validation: #639's 18 other database-backup tests passed; the recovery drill failed as described. The corrected fixture/query have not yet passed a rerun. No other Fast Validation stages (7-Zip, targeted backend regressions, Windows) ran because the release/storage step failed.
 - Remaining limitation: the single-library backup manifest still does not describe multiple distinct NAS roots stored in one database; that requires a multi-library manifest and restore/remapping design. This change only ensures the one root it records is the canonical active settings row.
+
+## Fast Validation #644: integrated audit fixes and regression corrections (2026-11-05)
+
+- Fast Validation [#644](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41959379158) passed on code/test commit `ff3cb8e1751314448bfd8fce50fc2743293fbdb7`. Linux passed TypeScript/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 compatibility, and targeted backend regressions (**183 passed, 0 failed, 2 skipped**).
+- The Windows `windows-archive-and-updater-smoke` job also passed: storage migration concurrency/no-overwrite regressions, NAS temporary-path/cleanup safety, official Windows 7-Zip hash verification, Linux-created symlink metadata parsing, updater journal writes, and updater preservation/rollback.
+- Dependency Review [#408](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41959379311) passed.
+- The prior Fast Validation #642 targeted suite reported seven failures. Review confirmed they were test defects: one AI-context assertion expected an obsolete helper signature, the Media Health source assertion searched outside the intended walker, four organization fixtures created directories where files were intended, and the resume-route source test used the wrong end boundary. These tests were corrected; #644 is the passing run for the corrected test head.
+- No production data, credentials, main branch, or release artifacts were changed.
+
+## AI enrichment exclusions normalize Windows paths before selecting pending work (2026-11-05)
+
+- Follow-up feature review found that the AI enrichment pending-work SQL compared `lower(f.relative_path)` against normalized excluded-folder paths using SQL `LIKE`. On Windows, stored relative paths can contain backslashes while exclusions are normalized to forward slashes. The SQL filter could therefore fail to exclude the configured folder; the later in-process privacy check skipped those files without marking them complete, allowing excluded rows to repeatedly occupy the batch limit and starve eligible files. SQL `LIKE` also treated literal `%` and `_` characters in folder names as wildcards.
+- Updated the query to normalize database separators with `replace(relative_path, chr(92), '/')` and compare folder equality/prefix using `left(..., length(folder)+1)`, avoiding wildcard interpretation and matching the existing in-process exclusion semantics.
+- Added a regression to `ai-media-scope.test.ts` checking Windows separator normalization and literal folder-boundary comparison. The test is already part of the Fast Validation targeted backend suite.
+- Commits: implementation `f743945ce2773daf5431147f30292ad32466e7a9`; regression `3cc8427e3127155174444ad71617134e10ccbd6f`.
+- Validation: pending Fast Validation for this latest AI-enrichment change. The preceding #644 run does not include these two commits.
