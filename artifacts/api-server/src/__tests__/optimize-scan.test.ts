@@ -81,19 +81,22 @@ test("optimization scan fails closed when a nested directory is unreadable", {
   }
 });
 
-test("optimization scan rejects a file replaced by a symlink after directory enumeration", () => {
+test("optimization scan does not follow symlinks as regular media files", {
+  skip: process.platform === "win32",
+}, () => {
   const f = fixture();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-optimize-link-target-"));
   try {
-    const file = path.join(f.root, "photo.jpg");
-    fs.writeFileSync(file, "image");
-    // A dangling link is not reported by Dirent as a regular file, so it is
-    // skipped. The lstat guard protects the narrower replacement race after
-    // the directory entry has been classified.
+    const target = path.join(outside, "private.jpg");
+    fs.writeFileSync(target, "outside library");
+    fs.symlinkSync(target, path.join(f.root, "linked.jpg"));
+
     const { groups, counter } = scan(f.root);
-    assert.equal(counter.total, 1);
-    assert.equal(groups.get("jpg")?.count, 1);
+    assert.equal(counter.total, 0);
+    assert.equal(groups.has("jpg"), false);
   } finally {
     f.cleanup();
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 
