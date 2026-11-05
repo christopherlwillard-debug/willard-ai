@@ -2061,7 +2061,8 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPath = await getNasPath();
-    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
+    if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
+    const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "completed") { res.status(409).json({ error: "Job must be completed before applying disposition" }); return; }
     // Do not accept truthy strings/numbers for a destructive or file-moving action.
