@@ -14,6 +14,7 @@ import { appSettingsTable, organizationJobsTable, conversionJobsTable } from "@w
 import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { getActiveNasPath } from "./lib/active-library.ts";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachableAsync } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs, notifyUiConnected, emitStartupHealth, startThumbnailReconciliation } from "./lib/library-engine";
@@ -310,8 +311,7 @@ app.use(apiNotFoundHandler);
 app.use(apiErrorHandler);
 
 // Initialize NAS log stream from persisted settings on startup
-db.select().from(appSettingsTable).limit(1).then(async (rows) => {
-  const nasPath = rows[0]?.nasPath;
+getActiveNasPath().then(async (nasPath) => {
   if (nasPath) {
     // Only bootstrap/attach logging when the location is actually reachable.
     // Bootstrapping an unreachable path (e.g. a Windows "Z:" drive) would
