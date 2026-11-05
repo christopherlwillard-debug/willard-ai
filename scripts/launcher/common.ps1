@@ -918,124 +918,17 @@ function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $lo
 }
 
 
-function Get-EnvValue($key) {
-    $envPath = Join-Path $Root ".env"
-    if (-not (Test-Path $envPath)) { return $null }
-    foreach ($line in Get-Content $envPath) {
-        if ($line -match ("^\s*" + [regex]::Escape($key) + "\s*=\s*(.+)\s*$")) {
-            return $Matches[1].Trim()
-        }
-    }
-    return $null
-}
 
 
-function Wait-ForDatabase($timeoutSeconds = 30) {
-    $until = (Get-Date).AddSeconds($timeoutSeconds)
-    while ((Get-Date) -lt $until) {
-        if (Test-DatabaseConnection) { return $true }
-        Start-Sleep -Seconds 2
-    }
-    return $false
-}
 
 
-function Test-PortFree($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-    return (-not $conn)
-}
-
-function Get-PortOwnerPid($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($conn) { return $conn.OwningProcess }
-    return $null
-}
 
 
-function Get-ProcessIdentity($processId) {
-    if (-not $processId) { return $null }
-    try {
-        $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
-        if (-not $process) { return $null }
-        return @{
-            pid = [int]$process.ProcessId
-            path = [string]$process.ExecutablePath
-            commandLine = [string]$process.CommandLine
-            creationDate = [string]$process.CreationDate
-        }
-    } catch {
-        return $null
-    }
-}
-
-function Test-ProcessIdentity($tracked) {
-    if (-not $tracked) { return $false }
-    $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
-    $current = Get-ProcessIdentity $trackedProcessId
-    if (-not $current) { return $false }
-    # Refuse to act on legacy PID-only records. A reused PID must never be
-    # mistaken for a Willard process.
-    if (-not $tracked.path -or -not $tracked.commandLine) { return $false }
-    return ($current.path -eq $tracked.path -and
-        $current.commandLine -eq $tracked.commandLine -and
-        (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
-}
-
-function Save-TrackedPids($apiPid, $webPid) {
-    Ensure-LogDir
-    $apiIdentity = Get-ProcessIdentity $apiPid
-    $webIdentity = Get-ProcessIdentity $webPid
-    @{ version = 2; runToken = $script:WillardRunToken; api = $apiIdentity; web = $webIdentity; startedAt = (Get-Date).ToString("o") } |
-        ConvertTo-Json | Set-Content $PidFile
-}
 
 
-function Test-ProcessAlive($processId) {
-    if ($processId -is [psobject] -and $processId.pid) {
-        return (Test-ProcessIdentity $processId)
-    }
-    if (-not $processId) { return $false }
-    return [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)
-}
 
 
-function Get-LogTail($path, $lines = 20) {
-    if (-not (Test-Path $path)) { return "(no log was written)" }
-    try {
-        return ((Get-Content $path -Tail $lines -ErrorAction Stop) -join " ")
-    } catch {
-        return "(log could not be read: " + $_.Exception.Message + ")"
-    }
-}
 
-function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $logPath = $null) {
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $lastTick = -5
-    while ($sw.Elapsed.TotalSeconds -lt $timeoutSeconds) {
-        if ($processId -and -not (Test-ProcessAlive $processId)) {
-            $script:LastWaitFailureReason = "$label process exited before it became ready. " +
-                (Get-LogTail $logPath)
-            return $false
-        }
-        try {
-            $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-            $content = [string]$r.Content
-            if ($r.StatusCode -eq 200) {
-                if ($url -match "/api/healthz$") {
-                    if ($content -match '"status"\s*:\s*"ok"') { return $true }
-                } elseif ($content -match "<html|<!doctype html") {
-                    return $true
-                }
-            }
-        } catch { }
-        $elapsed = [int]$sw.Elapsed.TotalSeconds
-        if ($elapsed - $lastTick -ge 5) {
-            Write-Info ("Still getting " + $label + " ready... (" + $elapsed + "s)")
-            $lastTick = $elapsed
-        }
-        Start-Sleep -Milliseconds 800
-    }
-    $script:LastWaitFailureReason = "$label did not answer $url within $timeoutSeconds seconds. " +
-        (Get-LogTail $logPath)
-    return $false
-}
+
+
+
