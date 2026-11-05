@@ -1340,3 +1340,18 @@ The repository contains scripts/windows/installer-lifecycle-smoke.ps1, which exe
 Fast Validation #755 completed successfully on commit e0d69e50: both the Linux validate job and Windows archive/updater smoke job passed. The Linux job ran workspace typecheck and generated contract checks, release/storage tests, the new UI accessibility source-contract suite (2/2), PostgreSQL advisory-lock and finalization-recovery integration tests, and targeted backend regressions. The Windows job passed PowerShell parsing, environment-file encoding, storage migration concurrency/no-overwrite, NAS temp cleanup, conversion finalization rollback, official 7-Zip/symlink metadata checks, packaged updater journal writes, and developer updater preservation/rollback. Dependency Review #519 also passed.
 
 **Interpretation:** Search control accessibility is target-tested at source-contract level only. Developer updater journal cleanup is integration-tested on Windows. Neither result proves browser/screen-reader behavior or a clean standard-user installer lifecycle. Critical replace rollback and stale-worker fencing remain blocked as documented above.
+
+
+## 2026-11-05 audit batch — strict numeric route identifiers
+
+**Finding (medium, API correctness and unintended record targeting):** Several media, archive, saved-search, organize-job, and conversion-job handlers converted path identifiers with JavaScript `parseInt` or `Number`. These coercions accept malformed segments such as `12garbage`, `12.9`, or `1e2` as valid identifiers (and `Number` can accept whitespace or exponent notation). A malformed request could therefore act on a different, valid record than the path visibly names; other malformed values could reach PostgreSQL and become a 500.
+
+**Correction:** Added a shared, dependency-free `parsePositiveIntegerParam` that accepts only canonical decimal positive safe integers. Applied it to media tag/favorite/delete/rename, archive detail/peek, saved-search run/delete and similar-media lookup, organize-job lifecycle handlers, and optimize-job lifecycle handlers. Invalid identifiers now receive a 400 before database lookups, action-token consumption, or state changes. No database schema or data was changed.
+
+**Regression coverage:** Added positive-boundary and invalid-coercion cases, plus a source-contract assertion that the affected route files do not regress to `parseInt(req.params...)` or `Number(req.params...)`. Added the test to Fast Validation's targeted backend suite.
+
+**Validation status:** Source changes and regression tests are committed together on the audit branch. Targeted test, typecheck, and Fast Validation results remain pending until the matching latest GitHub Actions run completes.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media, archives, saved search, organize jobs, conversion jobs — malformed numeric path IDs | fixed; target test pending | This audit batch | Other route modules may contain additional numeric path parsing; continue repository-wide inventory |

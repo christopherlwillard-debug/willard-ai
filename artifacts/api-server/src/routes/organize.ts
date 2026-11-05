@@ -35,6 +35,7 @@ import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMove
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
+import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
 import {
@@ -874,7 +875,8 @@ router.get("/organize/jobs", async (_req, res) => {
 
 router.get("/organize/jobs/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
     const nasPath = await getNasPath();
     if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
     const job = await getScopedOrganizationJob(id, nasPath);
@@ -885,7 +887,8 @@ router.get("/organize/jobs/:id", async (req, res) => {
 
 router.delete("/organize/jobs/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
     const nasPath = await getNasPath();
     const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
@@ -925,7 +928,8 @@ router.delete("/organize/jobs/:id", async (req, res) => {
 });
 
 router.post("/organize/jobs/:id/analyze", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1103,7 +1107,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 
 /** Update plan exclusions. Resets pre-flight so the user re-validates the updated plan. */
 router.patch("/organize/jobs/:id/plan", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1143,7 +1148,8 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
 });
 
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1350,7 +1356,8 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
  * Uses existing planJson routes to compute destinations, detect conflicts, and warn about blank settings.
  */
 router.get("/organize/jobs/:id/dry-run", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1480,8 +1487,9 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
 });
 
 router.post("/organize/jobs/:id/execute-token", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  
   try {
     const nasPath = await getNasPath();
     const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
@@ -1506,7 +1514,8 @@ router.post("/organize/jobs/:id/execute-token", async (req, res) => {
  * - Archive disposition `move_to_processed` is applied automatically after 100% verification.
  */
 router.get("/organize/jobs/:id/execute", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
 
   if (!await consumeActionToken(req, req.query.token, "organize-execute", String(id))) {
     res.status(403).json({ error: "A valid one-time execution token is required." });
@@ -2023,7 +2032,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
  * The body must include { confirm: true } to proceed.
  */
 router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -2117,7 +2127,8 @@ router.get("/organize/recovery", async (_req, res) => {
  * Valid for jobs in "executing" or "failed" status only.
  */
 router.post("/organize/jobs/:id/rollback", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   let stopHeartbeat: (() => void) | null = null;
   let nasPath = "";
   try {
@@ -2207,7 +2218,8 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
  * Clears partial fileMoves so a fresh run starts cleanly.
  */
 router.post("/organize/jobs/:id/reset", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
     const nasPath = await getNasPath();
     if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
@@ -2267,8 +2279,9 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
 });
 
 router.post("/organize/jobs/:id/resume-token", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  
   try {
     const nasPath = await getNasPath();
     const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
@@ -2290,7 +2303,8 @@ router.post("/organize/jobs/:id/resume-token", async (req, res) => {
  * moves the remaining files with SHA-256 verification, then marks the job complete.
  */
 router.get("/organize/jobs/:id/resume", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
 
   if (!await consumeActionToken(req, req.query.token, "organize-resume", String(id))) {
     res.status(403).json({ error: "A valid one-time resume token is required." });

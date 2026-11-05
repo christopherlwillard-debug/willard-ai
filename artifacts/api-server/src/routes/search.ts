@@ -9,6 +9,7 @@ import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import {
   SAVED_SEARCH_LIMIT,
   SEARCH_HISTORY_RETENTION,
@@ -135,8 +136,9 @@ router.post("/search/ai", async (req, res) => {
 
 router.get("/search/similar/:id", async (req, res) => {
   try {
-    const fileId = Number(req.params.id);
-    if (!Number.isInteger(fileId)) return res.status(400).json({ error: "Invalid file id" });
+    const fileId = parsePositiveIntegerParam(req.params.id);
+    if (fileId === null) return res.status(400).json({ error: "Invalid file id" });
+    
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
     const results = await findSimilar(nasPath, fileId);
@@ -216,7 +218,8 @@ router.post("/search/saved", async (req, res) => {
 
 router.post("/search/saved/:id/run", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const { rows } = await pool.query(`SELECT query, intent_json FROM saved_searches WHERE id = $1`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Saved search not found" });
     const nasPath = await getNasPath();
@@ -242,7 +245,9 @@ router.post("/search/saved/:id/run", async (req, res) => {
 });
 
 router.delete("/search/saved/:id", async (req, res) => {
-  await pool.query(`DELETE FROM saved_searches WHERE id = $1`, [Number(req.params.id)]);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  await pool.query(`DELETE FROM saved_searches WHERE id = $1`, [id]);
   res.json({ ok: true });
 });
 

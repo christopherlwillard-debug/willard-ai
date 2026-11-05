@@ -15,6 +15,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
+import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import {
   evaluateCapacity,
   reserveCapacity,
@@ -1285,8 +1286,9 @@ router.get("/optimize/jobs", async (_req, res) => {
 
 router.post("/optimize/jobs/:id/retry", async (req, res) => {
   try {
-  const id = parseInt(req.params.id);
-    if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+    
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "failed") {
@@ -1316,8 +1318,9 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
 
 router.post("/optimize/jobs/:id/cancel", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+    
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "running") {
@@ -1354,9 +1357,10 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
   let jobLockClient: ConversionJobLockClient | null = null;
   let lockJobId: number | null = null;
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
     lockJobId = id;
-    if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+    
 
     const { action } = req.body as { action?: string };
     const VALID_ACTIONS = ["recycle", "replace", "keep-both", "archive"];
@@ -1602,7 +1606,8 @@ router.post("/optimize/jobs/:id/finalize", finalizeHandlerImpl);
 
 router.get("/optimize/jobs/:id", async (req, res) => {
   try {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     res.json(job);
@@ -1612,8 +1617,9 @@ router.get("/optimize/jobs/:id", async (req, res) => {
 });
 
 router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if (!Number.isInteger(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  
   try {
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
@@ -1633,7 +1639,8 @@ router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
  * Streams events: status | file_done | summary | error
  */
 router.get("/optimize/jobs/:id/execute", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
 
   if (!await consumeActionToken(req, req.query.token, "optimize-execute", String(id))) {
     res.status(403).json({ error: "A valid one-time execution token is required." });

@@ -9,7 +9,7 @@ import { StoragePolicyError } from "../lib/storage-policy.ts";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
-import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
@@ -202,8 +202,9 @@ router.get("/media/files", async (req: Request, res: Response) => {
 
 // ── PUT /api/media/files/:id/tags — replace a file's user tags ────────────────
 router.put("/media/files/:id/tags", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
   const [file] = await db.select({ id: mediaFilesTable.id })
@@ -289,11 +290,9 @@ router.get("/media/folders", async (_req: Request, res: Response) => {
 // ── POST /api/media/files/:id/favorite — toggle favorite flag ────────────────
 
 router.post("/media/files/:id/favorite", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const favorite = req.body?.favorite === true;
 
   const [updated] = await db
@@ -312,8 +311,9 @@ router.post("/media/files/:id/favorite", async (req: Request, res: Response) => 
 // ── DELETE /api/media/files/:id — soft-delete from library ──────────────────
 
 router.delete("/media/files/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
 
@@ -331,8 +331,9 @@ router.delete("/media/files/:id", async (req: Request, res: Response) => {
 // ── PATCH /api/media/files/:id/rename — rename file on disk + DB ─────────────
 
 router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
   const newName: string = (req.body?.name ?? "").trim();
   if (!newName || newName.length > 255 || /[/\\<>:"|?*]/.test(newName)) {
@@ -505,11 +506,9 @@ function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
 }
 
 router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
   // Confirm the file is still discoverable before using the thumbnail cache.
   // Recycled files must not remain reachable through an old thumbnail URL.
@@ -621,11 +620,9 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
 // ── GET /api/media/file/:id/stream — stream original file ────────────────────
 
 router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
   const nasPath = await getNasPath();
   if (!nasPath) {

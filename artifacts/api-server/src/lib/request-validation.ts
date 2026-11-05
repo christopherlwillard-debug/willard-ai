@@ -30,6 +30,12 @@ export function parseBoundedInteger(value: unknown, options: IntegerOptions): nu
   return parsed;
 }
 
+/** Parse a canonical positive safe-integer path parameter without accepting parseInt/Number coercions. */
+export function parsePositiveIntegerParam(value: unknown): number | null {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 export function parseOptionalDate(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);

@@ -26,7 +26,7 @@ import {
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
 import { logger } from "../lib/logger.ts";
-import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
   ARCHIVE_ENTRY_PAGE_LIMIT,
   ARCHIVE_LIST_LIMIT,
@@ -254,7 +254,8 @@ router.get("/archives/:id", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
     const entryLimit = parseBoundedInteger(req.query.entryLimit, {
@@ -289,7 +290,8 @@ router.post("/archives/:id/peek", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
 
