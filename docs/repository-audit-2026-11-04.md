@@ -1540,3 +1540,56 @@ Fast Validation #801 (run `42071283343`) completed successfully on `f4aca0a3bbe4
 | Medium | Media browser → repeated scalar query parameters and unsupported filters | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `media-query-validation.test.ts` | Latest Fast Validation pending; live HTTP route validation remains outstanding. |
 | Medium | Media browser → literal `%`, `_`, and backslash filter matching | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `sql-like.ts` and regression cases | Requires PostgreSQL integration verification to confirm the bound pattern/escape behavior on the deployed PostgreSQL version. |
 | Medium | Explorer → repeated `path` query parameter returns generic server error | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `media-query-validation.test.ts` | Filesystem-backed HTTP test and Windows path behavior remain outstanding. |
+
+
+## 2026-11-05 audit batch — Explorer accessibility, Windows installer validation, and media SQL integration
+
+### Validation of the previous media-query batch
+
+Fast Validation #810 (run 42088350368) completed successfully on implementation/documentation head `db8b85782ae9938cc85cd503b33f4f645f9fb898`:
+- Linux validation job: passed, including generated API checks, all workspace TypeScript checks, release/storage contracts, UI accessibility contracts, PostgreSQL conversion lock/recovery tests, and targeted backend regressions.
+- Targeted backend regressions: **257 tests, 255 passed, 0 failed, 2 skipped**. All four new media/Explorer query tests passed.
+- Windows archive/updater integration job: passed all steps, including PowerShell parsing, fresh environment-file encoding, storage migration no-overwrite tests, NAS temporary-path cleanup, conversion rollback, official 7-Zip staging and symlink metadata, packaged updater journal, and developer updater preservation/rollback.
+- Dependency Review #573 (run 42088350365): passed.
+- This is Fast Validation and Windows integration coverage, not full release CI or installed-product lifecycle validation.
+
+### Explorer keyboard accessibility
+
+**Confirmed source finding:** The Explorer sort headers and entire file/folder rows used click handlers on table elements without keyboard-operable controls. The icon-only library-root button also lacked an accessible name. The folder error state was not announced as an alert.
+
+**Correction (commit 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1):**
+- Sort headers now contain real buttons, expose the active sort direction through `aria-sort`, and provide current-state accessible names.
+- Folder/file navigation and file details use named buttons inside the name cell; the parent-folder action is also a button.
+- The library-root icon button has an accessible name.
+- Explorer load errors use an alert role.
+- Added Explorer-specific assertions to the existing UI accessibility suite. No new dependency.
+
+**Validation boundary:** The source and test contracts are committed. Latest Fast Validation is pending. These are source-contract checks; keyboard-only browser and screen-reader verification remain outstanding.
+
+### Windows installer lifecycle validation
+
+**Confirmed test-coverage gap:** The standard-user lifecycle smoke verified Start Menu shortcut creation after install, but did not verify that upgrade preserved exactly one shortcut or that uninstall removed it.
+
+**Correction (same commit 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1):**
+- Added Start Menu shortcut count assertions after in-place upgrade and after uninstall.
+- Added a `validate_only` boolean input to the existing Windows release workflow. Manual dispatch defaults to validation-only. When true, the workflow builds and signs local artifacts and runs the installed lifecycle tests but skips the GitHub Release publication step. Push-to-main release behavior is unchanged.
+- Updated trust-summary wording so a validation-only run does not claim an artifact has already been published.
+- Added static regression coverage for the new assertions and publish guard.
+
+**Validation boundary:** The workflow and smoke changes await the matching Fast Validation run. The full standard-user installer lifecycle has **not** been run in this audit. The manual validation-only path requires the repository's existing signing secrets; it does not modify them. No release was published or workflow dispatched.
+
+### PostgreSQL LIKE integration
+
+**Correction (same commit 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1):**
+- Added a real PostgreSQL test for literal `%`, `_`, and backslash matching using the same escaping helper and explicit backslash `ESCAPE` semantics used by the media route.
+- Registered a dedicated Fast Validation step against the disposable PostgreSQL 16 service. The existing source-level route tests remain in the targeted backend suite.
+
+**Validation boundary:** The PostgreSQL integration test is committed and awaits the matching Fast Validation run. It validates the SQL pattern semantics, not the full HTTP route or browser interaction.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Explorer → sort, folder navigation, file details, and error announcement accessibility | **fixed; target test pending** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; `scripts/ui-accessibility.test.mjs` | Browser keyboard navigation and assistive-technology verification remain outstanding. |
+| Medium | Windows installer → Start Menu shortcut lifecycle coverage | **test coverage fixed; lifecycle unvalidated** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; `installer-lifecycle-smoke.ps1` and static tests | Requires a manual validation-only Windows workflow run; not run here. |
+| Medium | Windows installer → accidental publication during manual validation | **guard added; target test pending** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; `validate_only` defaults true and gates the publish action | Static test pending; actual workflow_dispatch behavior has not been executed. |
+| Medium | Media browser → literal SQL LIKE wildcard semantics | **integration test added; pending** | 83b0f0ea26a96c4960e0b382fae0fbd382fbd3b1; PostgreSQL test step | Latest PostgreSQL integration run pending; HTTP route integration remains outstanding. |
+
