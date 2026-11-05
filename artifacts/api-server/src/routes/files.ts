@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { mediaFilesTable } from "@workspace/db";
 import { eq, ilike, gte, lte, and, sql, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { reconcileLegacyCatalog } from "../lib/catalog-reconciliation";
 import { parseBoundedInteger, parseOptionalDate, RequestValidationError } from "../lib/request-validation.ts";
 
@@ -38,9 +39,7 @@ router.get("/files/search", async (req, res) => {
       throw new RequestValidationError("Invalid date range");
     }
 
-    const [settings] = await db.select({ nasPath: appSettingsTable.nasPath })
-      .from(appSettingsTable).limit(1);
-    const nasPath = settings?.nasPath?.trim();
+    const nasPath = await getActiveNasPath();
     if (!nasPath) {
       res.json({ files: [], total: 0, offset: off, limit: lim, sources: { local: 0 } });
       return;
