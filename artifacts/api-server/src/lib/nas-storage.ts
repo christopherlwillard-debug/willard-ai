@@ -515,11 +515,14 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
   const suffix = requestedSuffix && requestedSuffix !== "." && requestedSuffix !== ".."
     ? requestedSuffix
     : `job-${randomUUID()}`;
-  const tempRoot = path.join(getWillardAIDir(nasPath), "temp");
+  const willardRoot = getWillardAIDir(nasPath);
+  const tempRoot = path.join(willardRoot, "temp");
   const tempDir = path.join(tempRoot, suffix);
   try {
-    // The shared temp parent must be private before per-job directories are
-    // created beneath it, preventing other NAS users from swapping a child.
+    // Protect the whole app-managed parent chain before creating child paths;
+    // otherwise a shared WillardAI directory could let another NAS user swap
+    // the private temp directory itself.
+    ensureDirectoryWithinRoot(willardRoot, nasPath, PRIVATE_DIR_MODE);
     ensureDirectoryWithinRoot(tempRoot, nasPath, PRIVATE_DIR_MODE);
     return ensureDirectoryWithinRoot(tempDir, nasPath, PRIVATE_DIR_MODE);
   } catch (err) {
