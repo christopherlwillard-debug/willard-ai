@@ -614,3 +614,11 @@ Remaining archive hardening:
 - Added regression coverage asserting both production completion paths perform the final destination hash comparison.
 - Commits: route `e29c794ceeeff2a2f97ed1202cec70c637a24078`; regression `d4c1ec630f63670bf916f014ff9e3267fed05c30`.
 - Validation pending. This detects changes before the completion boundary; it cannot prevent a separate actor from modifying a file after the job has completed.
+
+
+## NAS temporary cleanup refuses symlink redirection (2026-11-05)
+
+- `getTempDir` now creates private NAS-scoped per-job directories and rejects symlinked path components. A separate review found that `cleanTempDir` still recursively removed the caller-provided path without checking its relationship to the NAS root. If a temp parent or job path were replaced with a symlink between creation and cleanup, recursive cleanup could follow the changed parent path and remove data outside the intended job directory.
+- `cleanTempDir` now requires the configured NAS root, accepts only a direct child of that root's `WillardAI/temp` directory, and checks each path component with `lstat` immediately before removal. Symlinked parents and targets are left untouched. All organize route cleanup sites pass the NAS root.
+- Added tests for ordinary cleanup, a replaced temp-parent symlink, and a job-directory symlink. Fast Validation for this latest change is pending; Windows behavior is also included in the cross-platform NAS path test job.
+- This is defense in depth, not a complete defense against a hostile process running as the same OS account and racing filesystem operations. Private directory permissions reduce that exposure on POSIX; Windows ACL behavior requires installed-runtime verification.
