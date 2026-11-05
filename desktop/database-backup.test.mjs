@@ -726,10 +726,8 @@ test(
       await writeFile(tamperedManifestPath, `${JSON.stringify(tamperedManifest, null, 2)}\n`);
       await assert.rejects(
         runCli([
-          "restore", "--backup-dir", tamperedManifestBackup, "--library-root", reattachedNasRoot,
-          "--confirm-library-id", manifest.library.libraryId,
+          "verify", "--backup-dir", tamperedManifestBackup,
         ], {
-          WILLARD_RESTORE_DATABASE_URL: targetUrl,
           WILLARD_BACKUP_PASSPHRASE: passphrase,
         }),
         /passphrase or authenticated backup metadata/,
