@@ -18,8 +18,8 @@ function normalizeExtension(value: string): string {
  * before any AI context is aggregated or serialized.
  */
 export function buildAiMediaExclusionCondition(
-  relativePathColumn: unknown,
-  nameColumn: unknown,
+  relativePathColumn: any,
+  nameColumn: any,
   settings: AiExclusions | null | undefined,
 ): SQL {
   const folders = [...new Set((settings?.aiExcludedFolders ?? []).map(normalizeFolder).filter(Boolean))];
