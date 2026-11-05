@@ -586,3 +586,13 @@ Remaining archive hardening:
 - Added a regression that tampers with the destination after the forward move and verifies rollback preserves that only remaining copy, returns zero successful restores, and records a verification failure.
 - Implementation commit: `b2a8ad536c3eb9e533608d8d2b08bf0074bdc72a`; regression commit: `c27feace4476472d34b7282416ccea68b9b234bf`.
 - Validation: pending Fast Validation and Dependency Review on the updated branch. This closes the false-success accounting defect; it does not resolve the separate `conflictPolicy=replace` backup/rollback risk or the stale-worker fencing issue.
+
+
+## Execute rollback status and journal-checkpoint correction (2026-11-05)
+
+- Follow-up inspection found the normal execute route marked a job `rolled_back` unconditionally after an error, even when `rollbackMoves` reported fewer restored files than the move journal contained. This contradicted the recovery endpoint's stricter behavior and could hide incomplete recovery.
+- The execute failure path now marks the job `rolled_back` only when every journaled move was restored and checksum-verified; otherwise it marks the job `failed` and records the incomplete count plus a manual-recovery warning.
+- The per-file journal checkpoint is now fail-closed. If the database cannot persist the move journal, execution throws into the rollback path rather than continuing to move additional files without durable recovery records.
+- Added source regression coverage for conditional rollback status and fail-closed checkpoint behavior.
+- Commits: route fix `f4903220b3af5725231fbf26371a980834c06e61`; regression `3779ca4f331cb511bab6c7d539609e31b5fb955b`.
+- Validation pending. The pre-move journaling window and stale-worker fencing still require a separate durable ownership/journal design; this correction prevents continued unjournaled moves after a detected checkpoint failure but does not eliminate a process crash between filesystem mutation and its post-move journal write.
