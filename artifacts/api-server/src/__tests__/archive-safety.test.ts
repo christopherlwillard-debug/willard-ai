@@ -138,6 +138,22 @@ test("bounds entry count, per-file expansion, total expansion, and duplicate pat
     },
     /duplicate entry path/,
   );
+  assertSafetyFailure(
+    () => {
+      const budget = createArchiveBudget();
+      validateArchiveEntry({ path: "Photos/Cat.jpg", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "photos/cat.JPG", sizeBytes: 1 }, budget);
+    },
+    /duplicate entry path/,
+  );
+  assertSafetyFailure(
+    () => {
+      const budget = createArchiveBudget();
+      validateArchiveEntry({ path: "café.jpg", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "cafe\u0301.jpg", sizeBytes: 1 }, budget);
+    },
+    /duplicate entry path/,
+  );
 });
 
 test("atomically refuses a symlink output and never changes the outside target", (t) => {
