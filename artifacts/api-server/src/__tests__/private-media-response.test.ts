@@ -77,7 +77,12 @@ test("thumbnail stream failures clear cache and use shared status handling", () 
   assert.match(routeSource, /function serveCachedThumb/);
   assert.match(routeSource, /_thumbCache\.delete\(id\)/);
   assert.match(routeSource, /handlePrivateMediaStreamError\(res, streamError, "Thumbnail not found"\)/);
-  assert.match(routeSource, /res\.destroy/);
+  const helperPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../lib/private-media-response.ts",
+  );
+  const helperSource = fs.readFileSync(helperPath, "utf8");
+  assert.match(helperSource, /response\.destroy/);
 });
 
 test("private media stream failures return 404 before headers and destroy after headers", () => {
