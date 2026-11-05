@@ -940,3 +940,52 @@ Remaining archive hardening:
 - The Windows archive/updater job also passed: storage-migration concurrency/no-overwrite tests, NAS temp-path/cleanup checks, official Windows 7-Zip hash verification, cross-platform symlink metadata parsing, updater journal writes, and the full developer updater preservation/rollback smoke.
 - Dependency Review [#424](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41964162185) passed on the same code/test commit.
 - The subsequent commit `9cce52233fa7c7e018d0d7512ab3a491db617ea2` records the Linux result while the Windows job was running; this entry records the final successful Windows outcome. No application code or tests changed after the successful #660 validation. No production data, credentials, main branch, or release artifacts were touched.
+
+
+## Conversion scan, JPEG analysis, and NAS path-safety corrections (2026-11-05)
+
+### Unreadable conversion directories were silently omitted
+
+- Confirmed that walkForConversion swallowed every readdirSync error and returned as though the directory were empty. An inaccessible nested directory could therefore be omitted from the conversion job; an unreadable root could be mistaken for a library with no convertible files.
+- Changed the walker to throw a path-specific error. The existing execution error handler now marks the job failed rather than treating an incomplete traversal as a successful empty scan. No source files are modified by this scan failure.
+- Added a regression to artifacts/api-server/src/__tests__/optimize-job-claim.test.ts covering the fail-closed walker and the execution route's failed-state handling.
+
+### JPEG analysis errors were incorrectly treated as “already optimal”
+
+- Confirmed that analyzeJpegFile returned an empty issue list for every exception, and its file-size lookup converted statSync failures to zero. The execute path interprets an empty list as “already optimal”, so a missing, unreadable, or uninspectable JPEG could be silently skipped instead of reported.
+- Analysis and file-size errors now propagate as a path-specific error. The execute path records the file as failed, increments failedFiles, emits a failed file_done event, and continues with the remaining files. It no longer classifies analysis failure as an optimal file.
+- Added a regression covering error propagation and per-file failed accounting. The scan-time Promise.allSettled path still leaves a failed analysis without a cached decision; execution rechecks it and records the failure rather than assuming it is optimal.
+
+### Conversion staging and finalization paths needed NAS-root checks
+
+- Confirmed that conversion staging used recursive fs.mkdirSync, which follows an existing symlink in WillardAI/conversions or a nested staging directory. Finalization also trusted persisted stagingDir, original, staged, and output paths without checking them against the active NAS root.
+- Staging root and per-file staging directories now use the existing ensureDirectoryWithinRoot helper. Finalization validates the staging directory, original and staged file paths, converted output, keep-both output, archive destination, and trash destination with assertWithinRoot before filesystem operations and validates the staging path again before recursive cleanup.
+- Added a route-wiring regression. The existing nas-storage-paths.test.ts suite exercises the helper's symlink rejection on real temporary directories; it is part of Fast Validation.
+- Limitation: these checks reject existing/stable symlink escapes and out-of-root persisted paths, but they do not eliminate a time-of-check/time-of-use race between canonical path validation and a later path-based filesystem operation. Strong race resistance requires handle-relative operations or a journaled filesystem transaction.
+
+### Validation for these changes
+
+- Code/test head: 55ad1c17c1851532d0de343365e4157948c6d998.
+- Fast Validation #666 (https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41974529162): Linux job completed successfully. TypeScript/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 checks, and targeted backend regressions all passed. Targeted backend suite: 188 passed, 0 failed, 2 skipped. The three new conversion regressions explicitly passed.
+- Dependency Review #430 (https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41974529111) passed.
+- At the time this entry was written, the Windows archive/updater job in #666 had passed storage-migration concurrency/no-overwrite tests, NAS temp-path/cleanup checks, official Windows 7-Zip verification, cross-platform symlink metadata checks, and updater-journal writes. Its final developer-updater preservation/rollback step was still running; no final Windows result is claimed here.
+- Test limitation: the new route regressions are source-contract tests, not live HTTP/database integration tests. The full optimize-cycle.test.ts integration path was not run by Fast Validation.
+
+### Critical conversion finalization remains unresolved
+
+The path checks above do not make conversion finalization transactional. Confirmed destructive gaps remain:
+
+1. A missing staged output is still silently skipped.
+2. Per-file finalization failures can still be followed by staging-directory deletion and a job status of done.
+3. replace can unlink the original before the staged output is installed.
+4. archive and recycle can move the original before output publication succeeds.
+5. fs.renameSync can replace an existing destination on POSIX; cross-format output and _optimized keep-both paths are not protected by no-replace publication.
+6. Concurrent finalization requests are not protected by an atomic claim, and there is no durable per-file intent/result journal for crash recovery.
+
+Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion finalization/data-loss fix. The next safe implementation should adapt the existing organization engine's persisted move-intent, verifiedMove, no-overwrite, and rollbackMoves patterns to conversion finalization, with an atomic job claim and crash recovery. The finalization rewrite was not attempted in this pass because a partial patch could strand or overwrite user media.
+
+### First-run authentication bootstrap remains an unresolved deployment/security decision
+
+- Reconfirmed that /auth/setup is in the public-path allowlist and the setup route accepts the first password while passwordHash is null, without an owner-provisioning token or local-only restriction. The API currently calls app.listen(port) without an explicit loopback host restriction.
+- On an uninitialized instance reachable by an untrusted network visitor, the first visitor can claim the initial administrator password. This is a concrete exposure if the service is deployed publicly or on an untrusted LAN.
+- No code change was made: a safe fix depends on the intended deployment model and owner bootstrap mechanism (for example, installer-generated one-time setup secret or explicit local-console provisioning). A rate limit alone would not prevent first-visitor takeover.
