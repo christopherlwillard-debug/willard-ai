@@ -339,10 +339,11 @@ test(
         `
           CREATE TABLE app_settings (
             id integer PRIMARY KEY, nas_path text, photos_destination text,
-            videos_destination text, documents_destination text, other_files_destination text
+            videos_destination text, documents_destination text, other_files_destination text,
+            password_hash text
           );
           INSERT INTO app_settings VALUES
-            (1, ${sqlLiteral(nasRoot)}, ${sqlLiteral(path.join(nasRoot, "photos"))}, '', '', '');
+            (1, ${sqlLiteral(nasRoot)}, ${sqlLiteral(path.join(nasRoot, "photos"))}, '', '', '', NULL);
           CREATE TABLE willard_schema_versions (version integer PRIMARY KEY);
           INSERT INTO willard_schema_versions VALUES (2);
           CREATE TABLE media_files (
