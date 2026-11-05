@@ -122,7 +122,8 @@ jobs:
             artifacts/api-server/src/__tests__/active-library-cache.test.ts \\
             artifacts/api-server/src/__tests__/storage-active-library.test.ts \\
             artifacts/api-server/src/__tests__/canonical-active-library.test.ts \\
-            artifacts/api-server/src/__tests__/ai-media-scope.test.ts
+            artifacts/api-server/src/__tests__/ai-media-scope.test.ts \\
+            artifacts/api-server/src/__tests__/optimize-job-claim.test.ts
 
   windows-archive-and-updater-smoke:
     needs: validate
