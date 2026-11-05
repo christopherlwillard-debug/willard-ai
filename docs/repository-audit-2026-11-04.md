@@ -821,3 +821,12 @@ Remaining archive hardening:
 - Added source regressions for the legacy scan adapter, media detail, and job-engine preference and completion-write behavior.
 - Commits: scan adapter `c942d8fa367cfefd26fb305aaffb3cd97e5f4fc4`; media detail `ffe9bc3bdb4973c3d03bbc5c5eca3d5bc7416a5b`; job engine `4e31179777fc076fe4217a5ba1f23797f9a8ad32`; regression `98d77b2b0ece33ebd7b45a531d9d5d6a5634c1d2`.
 - Validation: static regression added to Fast Validation; full typecheck and live scan/switch integration test still pending CI execution.
+
+## Database backup identifies the canonical active NAS library (2026-11-05)
+
+- Feature review found that the desktop database-backup manifest selected a non-empty `app_settings.nas_path` using `LIMIT 1` without an ordering rule. The application uses a canonical active-settings selection (authenticated/password-bearing row first, then lowest ID), so legacy duplicate settings rows could cause a backup manifest to bind the database snapshot to a different NAS root than the application considers active.
+- Updated the backup snapshot query to use the same deterministic ordering as `getActiveAppSettings()`.
+- Added a regression to `desktop/database-backup.test.mjs`; the existing Fast Validation workflow invokes this suite through `pnpm run test:database-backup`.
+- Commits: implementation `93209c3a21f699a9fd6ab68a541d0a5988070716`; regression `eb7c9b9a83006440835c98bc1697d0549bb125fc`.
+- Validation: pending GitHub Fast Validation. No disposable PostgreSQL fixture with duplicate settings rows was run in this turn.
+- Remaining limitation: the backup manifest still represents one NAS library identity while the database dump contains the full database. Databases containing media rows for multiple distinct NAS roots need an explicit multi-library manifest/restore design or a fail-closed preflight; this review did not change that behavior.
