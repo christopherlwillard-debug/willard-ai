@@ -1396,3 +1396,20 @@ Statuses use the strongest evidence currently available: found, fixed, target-te
 ### Validation boundary
 
 Source inspection is complete for this batch. Focused parser, route-wiring, API-contract, and accessibility tests were added. Latest-head targeted tests are pending #779; archive HTTP/database integration and browser/screen-reader testing have not been run. Full release CI was intentionally not run because the Windows release workflow can publish artifacts.
+
+
+## 2026-11-05 generated API artifact repair
+
+**Finding (high, build and API-contract reliability):** Fast Validation run `42057014248` failed at the workspace typecheck step with TypeScript `TS2451` duplicate block-scoped declarations in `lib/api-zod/src/generated/api.ts`. The run stopped before contract generation, backend regressions, or Windows validation. Dependency Review run `42057014279` succeeded on the pre-fix head; it does not validate this code change.
+
+**Source inspection:** The committed Zod API module contained 851 top-level exported declarations but only 328 distinct names. 262 names were declared three times and one was declared twice. The duplicate archive query schemas disagreed: one used the current OpenAPI `format: date` representation (`zod.date()`), while another retained the abandoned pattern-based date-regex experiment. A malformed stale regex helper and orphaned closing tokens were also present. The OpenAPI source currently uses `format: date`; the generated React API module had no duplicate exports.
+
+**Correction:** Rebuilt the generated Zod API module with one declaration per symbol, kept the schema matching the current OpenAPI date format, and removed the stale date-regex artifacts. The repaired module has 327 unique exported declarations. Added a dependency-free regression test that checks both generated React and Zod API modules for duplicate exported symbols. The test runs immediately after Orval code generation and before the generated-library typecheck.
+
+**Validation workflow correction:** Fast Validation now runs API contract parity/code generation before the broad workspace typecheck. This lets the generated-contract step refresh and validate generated artifacts first, rather than allowing stale generated output to stop the workflow before codegen runs.
+
+**Status:** Source repair and test wiring are committed. Targeted test, regenerated-output parity, workspace typecheck, full Fast Validation, and Windows validation are pending the latest branch run. The failed pre-fix run is not counted as a pass.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| High | API code generation → duplicate Zod exports blocking TypeScript validation | fixed; target test pending | Generated artifact repair, generated-export regression test, and codegen/CI ordering commits in this batch | Latest codegen must reproduce the committed output; Fast Validation must pass contract parity and typecheck. Archive HTTP/database integration and browser testing remain outstanding. |
