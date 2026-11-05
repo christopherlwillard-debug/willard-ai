@@ -647,3 +647,10 @@ Remaining archive hardening:
 - Commits: implementation `0340a1c02d76d2ba814ac88599cd0c9231f60e00`; regression tests `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
 - Validation: Fast Validation passed on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`, including the concurrent-copy and destination-collision regressions. Dependency Review passed on commit `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
 - Remaining limitations: the regression uses a fake database client to exercise advisory-lock ownership; a live PostgreSQL advisory-lock integration test and a real NAS/SMB publication test remain outstanding. If the database connection is lost during a long-running copy, PostgreSQL releases the lock; the exclusive no-replace destination publication still protects existing files, but the manifest can require a retry/reconciliation. Older deterministic partial files left by an interrupted pre-fix copy are not automatically deleted, to avoid removing a file still owned by an older running process.
+
+
+## Operational NAS directories reject symlink redirection (2026-11-05)
+
+- A follow-up review found that organize operation logs/reports and the library startup-history cache still used `ensurePrivateDir`, which performs recursive mkdir/chmod without validating the directory chain against the configured NAS root. A symlink in one of those paths could redirect writes or permission changes outside the intended library.
+- These NAS-owned directories now use `ensureDirectoryWithinRoot`, which checks every component and rejects symlinks before creation. Added tests for symlinked logs and cache paths, plus route wiring assertions for logs, reports, and startup cache.
+- Validation is pending on the latest audit branch commit. This change does not replace the need for appropriate NAS/Windows ACLs against other users with write access to parent directories.
