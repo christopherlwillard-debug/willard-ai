@@ -539,5 +539,5 @@ test("organization reset refuses to discard a non-empty recovery journal", () =>
   assert.match(resetRoute, /Array\.isArray\(job\.fileMoves\) \|\| job\.fileMoves\.length > 0/);
   assert.match(resetRoute, /Resume it or complete rollback in Recovery Center before resetting/);
   assert.match(resetRoute, /isNull\(organizationJobsTable\.fileMoves\)/);
-  assert.match(resetRoute, /jsonb_typeof\(\$\{organizationJobsTable\.fileMoves\}\) = 'array' AND jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0/);
+  assert.match(resetRoute, /CASE WHEN jsonb_typeof\(\$\{organizationJobsTable\.fileMoves\}\) = 'array' THEN jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0 ELSE false END/);
 });
