@@ -9,6 +9,7 @@ import { promisify } from "util";
 import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
+import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
@@ -314,7 +315,7 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
 
 // ── Optimize scan cache ────────────────────────────────────────────────────────
 
-const CACHE_VERSION    = 6; // bump when scan result shape or safety classification changes
+const CACHE_VERSION    = 7; // bump when scan result shape or safety classification changes
 const CACHE_TTL_MS     = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_FILENAME   = "optimize-scan.json";
 
@@ -471,6 +472,21 @@ async function analyzeJpegFile(filePath: string): Promise<string[]> {
   }
 }
 
+/**
+ * Inspect a PNG immediately before it is considered for JPEG conversion.
+ * Any missing/ambiguous metadata is a preserve-original decision.
+ */
+async function analyzePngFile(filePath: string): Promise<PngSafetyDecision> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const metadata = await sharp(filePath, { failOn: "error" }).metadata();
+    return classifyPngForJpegConversion(metadata);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to analyze PNG "${filePath}": ${reason}`);
+  }
+}
+
 // ── Per-file video codec detection via ffprobe ─────────────────────────────────
 
 const LOSSLESS_CODECS = new Set(["prores", "prores_ks", "dnxhd", "dnxhr", "huffyuv", "utvideo", "v210", "v410"]);
@@ -524,7 +540,7 @@ function buildExplainerText(ext: string, rule: FormatRule, profile: OptimizeProf
     return `JPEGs can often be made 10–25% smaller by re-encoding with optimized Huffman tables and progressive scan order, with no perceptible change in image quality. The file will remain a standard .jpg — fully compatible with every device and photo viewer.`;
   }
   if (ext === "png") {
-    return `PNG files can be re-compressed losslessly using adaptive filtering and maximum DEFLATE compression. The pixel data is identical after optimization — only the compressed representation changes. Typical savings: 10–20%.`;
+    return `Opaque, static 8-bit PNGs may be converted to high-quality JPEG. JPEG is lossy, so some pixel data can change; transparent, animated, high-bit-depth, or unreadable PNGs are preserved without conversion. Review the result before replacing originals.`;
   }
   if (ext === "bmp") {
     return `BMP is an uncompressed Windows bitmap format. Every pixel is stored as raw bytes with no compression. Converting to PNG applies lossless compression and typically reduces file size by 60–75%. PNG is fully compatible with Windows and will remain readable for decades.`;
@@ -951,7 +967,7 @@ router.get("/optimize/scan", async (req, res) => {
 
     const JPEG_ANALYZE_LIMIT = 20; // analyze up to this many JPEGs per group
 
-    for (const [ext, { samples, paths }] of groups.entries()) {
+    for (const [ext, { count, samples, paths }] of groups.entries()) {
       if (ext === "jpg" || ext === "jpeg") {
         // Per-file JPEG analysis: analyze each file individually (up to limit)
         const filesToAnalyze = paths.slice(0, JPEG_ANALYZE_LIMIT);
@@ -978,13 +994,35 @@ router.get("/optimize/scan", async (req, res) => {
 
       if (ext === "png") {
         enrichPromises.push((async () => {
-          const sharp = (await import("sharp")).default;
-          for (const p of paths.slice(0, JPEG_ANALYZE_LIMIT)) {
-            try {
-              const meta = await sharp(p, { failOn: "none" }).metadata();
-              if (meta.hasAlpha) { pngAttentionMap.set(ext, "Transparent PNG — converting to JPEG would lose the alpha channel."); break; }
-              if (meta.depth && !["uchar", "char"].includes(meta.depth)) { pngAttentionMap.set(ext, "HDR / high-bit-depth PNG — preserve the original dynamic range."); break; }
-            } catch { /* individual metadata failures are non-fatal */ }
+          const PNG_ANALYZE_BATCH_SIZE = 16;
+          for (let offset = 0; offset < paths.length; offset += PNG_ANALYZE_BATCH_SIZE) {
+            const batch = await Promise.all(paths.slice(offset, offset + PNG_ANALYZE_BATCH_SIZE).map(async (p) => {
+              try {
+                return { path: p, decision: await analyzePngFile(p) };
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                return {
+                  path: p,
+                  decision: {
+                    convert: false,
+                    reason: `PNG metadata analysis failed; original preserved: ${reason.slice(0, 160)}`,
+                  },
+                };
+              }
+            }));
+            for (const { path: p, decision } of batch) {
+              fileDecisions[p] = { convert: decision.convert, targetExt: "jpg", reasons: [decision.reason] };
+              if (!decision.convert && !pngAttentionMap.has(ext)) {
+                pngAttentionMap.set(ext, decision.reason);
+              }
+            }
+          }
+
+          if (count > paths.length && !pngAttentionMap.has(ext)) {
+            pngAttentionMap.set(
+              ext,
+              `Only ${paths.length} of ${count} PNG files were inspected during the scan; remaining files will be checked individually before conversion.`,
+            );
           }
         })());
       }
@@ -1730,6 +1768,29 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
         continue;
+      }
+
+      // Re-check every PNG immediately before conversion so stale scan metadata
+      // cannot turn a newly transparent, animated, or high-bit-depth file into JPEG.
+      if (ext === "png") {
+        let pngDecision: PngSafetyDecision;
+        try {
+          pngDecision = await analyzePngFile(fullPath);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          failed++;
+          results.push({ filePath: fullPath, status: "failed", error: message });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "failed", error: message.slice(0, 300), processed: i + 1, total: totalFiles });
+          continue;
+        }
+        if (!pngDecision.convert) {
+          skipped++;
+          results.push({ filePath: fullPath, status: "skipped", error: pngDecision.reason });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "skipped", error: pngDecision.reason, processed: i + 1, total: totalFiles });
+          continue;
+        }
       }
 
       // Resolve target extension: per-file decision takes priority over static rule
