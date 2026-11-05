@@ -33,6 +33,7 @@ import {
   walkDirectoryFiles,
   verifiedMove,
   rollbackMoves,
+  canDeleteOrganizationJob,
   type FileMoveRecord,
 } from "../lib/organize-helpers.ts";
 
@@ -565,4 +566,54 @@ test("recovery routes validate persisted move journals before touching files", (
   const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
   const resumeEnd = source.indexOf('export default router', resumeStart);
   assert.match(source.slice(resumeStart, resumeEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+});
+
+test("rollbackMoves: refuses a symlink destination instead of counting its target as restored", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlink creation is not guaranteed on Windows runners");
+    return;
+  }
+  const content = "the original file bytes";
+  const src = writeFile(path.join(mkTmp("rb-symlink-src"), "linked.txt"), content);
+  const dest = path.join(mkTmp("rb-symlink-dest"), "linked.txt");
+  const external = writeFile(path.join(mkTmp("rb-symlink-external"), "outside.txt"), content);
+  const record = await verifiedMove(src, dest);
+
+  fs.unlinkSync(dest);
+  fs.symlinkSync(external, dest);
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a symlink is not a restored regular file");
+  assert.equal(fs.existsSync(src), false, "the symlink must not be moved into the staging source path");
+  assert.equal(fs.lstatSync(dest).isSymbolicLink(), true, "the untrusted destination symlink must be preserved");
+  assert.equal(fs.readFileSync(external, "utf8"), content, "the symlink target must remain untouched");
+  assert.ok(logs.some(message => message.includes("not a regular file") && message.includes("destination preserved")));
+});
+
+test("canDeleteOrganizationJob preserves active and unresolved recovery journals", () => {
+  const moves = [{ from: "/nas/temp/file", to: "/nas/files/file", sourceHash: "a".repeat(64), destHash: "a".repeat(64), verified: true }];
+  assert.equal(canDeleteOrganizationJob("failed", moves), false);
+  assert.equal(canDeleteOrganizationJob("failed", []), true);
+  assert.equal(canDeleteOrganizationJob("failed", null), true);
+  assert.equal(canDeleteOrganizationJob("completed", moves), true);
+  assert.equal(canDeleteOrganizationJob("rolled_back", moves), true);
+  assert.equal(canDeleteOrganizationJob("executing", []), false);
+  assert.equal(canDeleteOrganizationJob("rolling_back", []), false);
+  assert.equal(canDeleteOrganizationJob("analyzing", []), false);
+  assert.equal(canDeleteOrganizationJob("failed", { malformed: true }), false);
+  assert.equal(canDeleteOrganizationJob("unknown", null), false);
+});
+
+test("organize job deletion preserves unresolved journals and conditionally excludes active states", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const start = source.indexOf('router.delete("/organize/jobs/:id"');
+  const end = source.indexOf('router.post("/organize/jobs/:id/analyze"', start);
+  const route = source.slice(start, end);
+  assert.match(route, /canDeleteOrganizationJob\(job\.status, job\.fileMoves\)/);
+  assert.match(route, /jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0/);
+  assert.match(route, /inArray\(organizationJobsTable\.status, \["completed", "rolled_back"\]\)/);
+  assert.match(route, /inArray\(organizationJobsTable\.status, \["pending", "planned", "verified", "failed"\]\)/);
+  assert.match(route, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
 });
