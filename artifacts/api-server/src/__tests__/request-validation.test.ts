@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parseAllowedString, parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
+import { normalizeOptionalDateOnlyRange, parseAllowedString, parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 
 test("parsePositiveIntegerParam accepts canonical positive safe integer identifiers", () => {
   assert.equal(parsePositiveIntegerParam("1"), 1);
@@ -115,6 +115,37 @@ test("archive route validates filters and treats the selected end date as inclus
   assert.ok(page.includes("const params: ListArchivesParams ="));
   assert.ok(page.includes("minSizeMb !== \"\""));
   assert.ok(page.includes("maxSizeMb !== \"\""));
+});
+
+test("search intent date normalization rejects impossible and contradictory calendar ranges", () => {
+  assert.deepEqual(normalizeOptionalDateOnlyRange("2026-11-05", "2026-11-06"), {
+    dateFrom: "2026-11-05",
+    dateTo: "2026-11-06",
+  });
+  assert.deepEqual(normalizeOptionalDateOnlyRange("2026-02-30", "2026-03-01"), {
+    dateFrom: null,
+    dateTo: null,
+  });
+  assert.deepEqual(normalizeOptionalDateOnlyRange("2026-11-06", "2026-11-05"), {
+    dateFrom: null,
+    dateTo: null,
+  });
+  assert.deepEqual(normalizeOptionalDateOnlyRange(null, undefined), {
+    dateFrom: null,
+    dateTo: null,
+  });
+});
+
+test("search SQL uses a half-open end-date bound and validates date-only intent", () => {
+  const source = readFileSync("artifacts/api-server/src/lib/ai-search.ts", "utf8");
+  assert.ok(source.includes("parseOptionalDateOnlyRange(intent.dateFrom ?? undefined, intent.dateTo ?? undefined)"));
+  assert.match(source, /COALESCE\(f\.date_taken, f\.modified_at\) < \$\{add\(dateRange\.toExclusive/);
+  assert.doesNotMatch(source, /T23:59:59/);
+
+  const route = readFileSync("artifacts/api-server/src/routes/search.ts", "utf8");
+  assert.ok(route.includes("normalizeOptionalDateOnlyRange(o.dateFrom, o.dateTo)"));
+  assert.ok(route.includes("parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined)"));
+  assert.ok(route.includes("instanceof RequestValidationError"));
 });
 
 test("parseAllowedString accepts exact enum values and rejects coercions", () => {
