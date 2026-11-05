@@ -2153,7 +2153,7 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
       eq(organizationJobsTable.nasPath, nasPath),
       or(
         isNull(organizationJobsTable.fileMoves),
-        sql`jsonb_typeof(${organizationJobsTable.fileMoves}) = 'array' AND jsonb_array_length(${organizationJobsTable.fileMoves}) = 0`,
+        sql`CASE WHEN jsonb_typeof(${organizationJobsTable.fileMoves}) = 'array' THEN jsonb_array_length(${organizationJobsTable.fileMoves}) = 0 ELSE false END`,
       ),
       or(
         eq(organizationJobsTable.status, "failed"),
