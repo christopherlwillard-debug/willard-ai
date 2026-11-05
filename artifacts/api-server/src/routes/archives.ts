@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { archivesTable } from "@workspace/db";
-import { eq, gte, lte, and, desc, count } from "drizzle-orm";
+import { eq, gte, lte, lt, and, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
@@ -26,7 +26,7 @@ import {
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
 import { logger } from "../lib/logger.ts";
-import { parseBoundedInteger, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
   ARCHIVE_ENTRY_PAGE_LIMIT,
   ARCHIVE_LIST_LIMIT,
@@ -199,7 +199,21 @@ router.get("/archives", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const { category, minSize, maxSize, status, dateFrom, dateTo } = req.query as Record<string, string>;
+    const category = parseOptionalQueryString(req.query.category, "category");
+    const status = parseOptionalQueryString(req.query.status, "status");
+    const minSizeBytes = req.query.minSize === undefined ? undefined : parseBoundedInteger(req.query.minSize, {
+      name: "minSize", min: 0, max: Number.MAX_SAFE_INTEGER,
+    });
+    const maxSizeBytes = req.query.maxSize === undefined ? undefined : parseBoundedInteger(req.query.maxSize, {
+      name: "maxSize", min: 0, max: Number.MAX_SAFE_INTEGER,
+    });
+    const { from: dateFrom, toExclusive: dateToExclusive } = parseOptionalDateOnlyRange(
+      req.query.dateFrom,
+      req.query.dateTo,
+    );
+    if (minSizeBytes !== undefined && maxSizeBytes !== undefined && minSizeBytes > maxSizeBytes) {
+      throw new RequestValidationError("minSize must be less than or equal to maxSize");
+    }
     const limit = parseBoundedInteger(req.query.limit, {
       name: "limit", defaultValue: 50, min: 1, max: ARCHIVE_LIST_LIMIT,
     });
@@ -208,11 +222,11 @@ router.get("/archives", async (req, res) => {
     });
     const conditions: SQL[] = [archiveScope(nasPath)];
     if (category) conditions.push(eq(archivesTable.category, category));
-    if (minSize) conditions.push(gte(archivesTable.sizeBytes, parseInt(minSize)));
-    if (maxSize) conditions.push(lte(archivesTable.sizeBytes, parseInt(maxSize)));
+    if (minSizeBytes !== undefined) conditions.push(gte(archivesTable.sizeBytes, minSizeBytes));
+    if (maxSizeBytes !== undefined) conditions.push(lte(archivesTable.sizeBytes, maxSizeBytes));
     if (status) conditions.push(eq(archivesTable.peekStatus, status));
-    if (dateFrom) conditions.push(gte(archivesTable.modifiedAt, new Date(dateFrom)));
-    if (dateTo) conditions.push(lte(archivesTable.modifiedAt, new Date(dateTo)));
+    if (dateFrom) conditions.push(gte(archivesTable.modifiedAt, dateFrom));
+    if (dateToExclusive) conditions.push(lt(archivesTable.modifiedAt, dateToExclusive));
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [{ total }] = await db.select({ total: count() }).from(archivesTable).where(where);
     // Do not pull peek_entries into the collection response. A single archive
