@@ -3,9 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { walkForOptimize, type OptimizeExtGroup } from "../lib/optimize-scan.ts";
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git"]);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
+const optimizeRouteSource = fs.readFileSync(path.join(repoRoot, "artifacts/api-server/src/routes/optimize.ts"), "utf8");
+const optimizePageSource = fs.readFileSync(path.join(repoRoot, "artifacts/willard-ai/src/pages/optimize.tsx"), "utf8");
 
 function fixture(): { root: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-optimize-scan-"));
@@ -17,7 +21,7 @@ function fixture(): { root: string; cleanup: () => void } {
 
 function scan(root: string, maxFiles = 500_000) {
   const groups = new Map<string, OptimizeExtGroup>();
-  const counter = { total: 0 };
+  const counter = { total: 0, limitReached: false };
   walkForOptimize(root, groups, maxFiles, counter, SKIP_DIRS);
   return { groups, counter };
 }
@@ -108,4 +112,44 @@ test("optimization scan enforces a positive file limit", () => {
   } finally {
     f.cleanup();
   }
+});
+
+test("optimization scan marks the safety limit when it reaches the configured maximum", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, "one.jpg"), "1");
+    fs.writeFileSync(path.join(f.root, "two.jpg"), "22");
+    fs.writeFileSync(path.join(f.root, "three.jpg"), "333");
+
+    const { groups, counter } = scan(f.root, 2);
+    assert.equal(counter.total, 2);
+    assert.equal(counter.limitReached, true);
+    assert.equal(groups.get("jpg")?.count, 2);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("optimization scan leaves the safety-limit flag clear below the configured maximum", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, "one.jpg"), "1");
+    fs.writeFileSync(path.join(f.root, "two.jpg"), "22");
+
+    const { counter } = scan(f.root, 3);
+    assert.equal(counter.total, 2);
+    assert.equal(counter.limitReached, false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("scan-limit state is cached, returned by the API, and warned about in Optimize Center", () => {
+  assert.match(optimizeRouteSource, /const CACHE_VERSION\s*=\s*8/);
+  assert.match(optimizeRouteSource, /scanLimitReached:\s*counter\.limitReached/);
+  assert.match(optimizeRouteSource, /scanLimit:\s*OPTIMIZE_SCAN_MAX_FILES/);
+  assert.match(optimizePageSource, /scanLimitReached\?:\s*boolean/);
+  assert.match(optimizePageSource, /scanResult\.scanLimitReached/);
+  assert.match(optimizePageSource, /Scan limit reached/);
+  assert.match(optimizePageSource, /videos outside the scan window are safely skipped/);
 });
