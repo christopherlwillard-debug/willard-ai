@@ -37,6 +37,10 @@ export interface ConversionFinalizeInput {
   files: ConversionFinalizeFile[];
   /** Test seam for simulating a destination appearing after preflight. */
   beforeMoveHook?: (move: { from: string; to: string; kind: "backup" | "publish"; index: number }) => void | Promise<void>;
+  /** Persist the source identity before any filesystem mutation. */
+  onMoveIntent?: (move: FileMoveRecord) => void | Promise<void>;
+  /** Persist the verified result after each filesystem mutation. */
+  onMoveComplete?: (move: FileMoveRecord) => void | Promise<void>;
 }
 
 export interface ConversionFinalizeOutcome {
@@ -53,12 +57,19 @@ export interface ConversionFinalizeResult {
 export class ConversionFinalizationError extends Error {
   readonly rollbackComplete: boolean;
   readonly recoveryMoves: FileMoveRecord[];
+  readonly journalMoves: FileMoveRecord[];
 
-  constructor(message: string, rollbackComplete: boolean, recoveryMoves: FileMoveRecord[] = []) {
+  constructor(
+    message: string,
+    rollbackComplete: boolean,
+    recoveryMoves: FileMoveRecord[] = [],
+    journalMoves: FileMoveRecord[] = [],
+  ) {
     super(message);
     this.name = "ConversionFinalizationError";
     this.rollbackComplete = rollbackComplete;
     this.recoveryMoves = recoveryMoves;
+    this.journalMoves = journalMoves;
   }
 }
 
@@ -104,28 +115,36 @@ async function moveAndTrack(
   expectedHash: string,
   moves: FileMoveRecord[],
   beforeMoveHook: ConversionFinalizeInput["beforeMoveHook"],
+  onMoveIntent: ConversionFinalizeInput["onMoveIntent"],
+  onMoveComplete: ConversionFinalizeInput["onMoveComplete"],
   kind: "backup" | "publish",
 ): Promise<void> {
   const index = moves.length;
-  await beforeMoveHook?.({ from, to, kind, index });
+  const intent: FileMoveRecord = {
+    from,
+    to,
+    sourceHash: expectedHash,
+    destHash: "",
+    verified: false,
+  };
+
+  // The database checkpoint must complete before the first link/copy/unlink.
+  // If the process stops after this point, startup recovery can inspect both
+  // paths and decide whether the move happened.
+  await onMoveIntent?.(intent);
+  moves.push(intent);
+
   try {
+    await beforeMoveHook?.({ from, to, kind, index });
     const record = await verifiedMove(from, to, { expectedSourceHash: expectedHash });
-    moves.push(record);
+    moves[index] = record;
+    // If this checkpoint fails, the pre-move intent is still durable and the
+    // in-memory record is available for immediate rollback.
+    await onMoveComplete?.(record);
   } catch (error) {
-    // verifiedMove normally restores a failed post-move verification itself.
-    // If it could not, retain a provisional rollback record whenever the
-    // destination exists. rollbackMoves checks hashes and never overwrites a
-    // conflicting source path.
-    const destination = lstatIfExists(to);
-    if (destination?.isFile() && !destination.isSymbolicLink()) {
-      moves.push({
-        from,
-        to,
-        sourceHash: expectedHash,
-        destHash: "",
-        verified: false,
-      });
-    }
+    // Keep the pre-move intent even if verifiedMove could not complete. The
+    // rollback helper distinguishes an untouched source from a completed move
+    // by checking both paths and the expected source hash.
     throw error;
   }
 }
@@ -237,6 +256,8 @@ export async function finalizeConversionFiles(
           plan.originalHash,
           moves,
           input.beforeMoveHook,
+          input.onMoveIntent,
+          input.onMoveComplete,
           "backup",
         );
       }
@@ -249,6 +270,8 @@ export async function finalizeConversionFiles(
         plan.stagedHash,
         moves,
         input.beforeMoveHook,
+        input.onMoveIntent,
+        input.onMoveComplete,
         "publish",
       );
       outcomes.push({
@@ -273,6 +296,50 @@ export async function finalizeConversionFiles(
       `${errorMessage(error)}${rollbackComplete ? " All completed file moves were restored; staged conversions are preserved." : " Automatic rollback was incomplete; preserve all remaining files for manual recovery."}`,
       rollbackComplete,
       recoveryMoves,
+      moves,
     );
   }
+}
+
+/**
+ * Reconcile a persisted pre-move journal after a process restart. Every path is
+ * revalidated against the active library root before rollback; malformed or
+ * out-of-root records are retained for manual recovery and never touched.
+ */
+export async function recoverConversionFinalizationMoves(
+  moves: FileMoveRecord[],
+  nasPath: string,
+): Promise<{ complete: boolean; rollbackCount: number; unresolvedMoves: FileMoveRecord[] }> {
+  const safeMoves: FileMoveRecord[] = [];
+  const unresolvedMoves: FileMoveRecord[] = [];
+
+  for (const move of moves) {
+    try {
+      if (
+        !move ||
+        typeof move.from !== "string" ||
+        typeof move.to !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(move.sourceHash)
+      ) {
+        throw new Error("Malformed conversion finalization journal entry");
+      }
+      assertWithinRoot(move.from, nasPath);
+      assertWithinRoot(move.to, nasPath);
+      safeMoves.push(move);
+    } catch {
+      unresolvedMoves.push(move);
+    }
+  }
+
+  let rollbackCount = 0;
+  try {
+    rollbackCount = await rollbackMoves(safeMoves);
+  } catch {
+    // The verification pass below decides whether any source remains missing
+    // or changed. Do not discard an entry merely because one rollback threw.
+  }
+
+  unresolvedMoves.push(...await findUnrestoredMoves(safeMoves));
+  const complete = unresolvedMoves.length === 0 && rollbackCount === safeMoves.length;
+  return { complete, rollbackCount, unresolvedMoves };
 }
