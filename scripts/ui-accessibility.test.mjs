@@ -131,3 +131,23 @@ test("media rename refreshes both the viewer path and the media-list cache", () 
   assert.ok(mediaPage.includes("{ ...item, name, relativePath }"));
   assert.ok(mediaPage.includes('queryClient.invalidateQueries({ queryKey: ["media-files"] })'));
 });
+
+test("search result cards are keyboard operable and keep similar-search actions separate", () => {
+  const cardStart = searchPage.indexOf("function ResultCard(");
+  const cardEnd = searchPage.indexOf("// ── Detail sheet", cardStart);
+  assert.ok(cardStart >= 0 && cardEnd > cardStart, "ResultCard component should exist");
+  const card = searchPage.slice(cardStart, cardEnd);
+  assert.match(card, /<button\\s+type="button"/);
+  assert.match(card, /aria-label=\\{"Open " \\+ item\\.name \\+ " details"\\}/);
+  assert.match(card, /onClick=\\{\\(\\) => onOpen\\(item\\)\\}/);
+  assert.match(card, /focus-visible:ring-2/);
+  assert.doesNotMatch(card, /<div[^>]*onClick=/);
+
+  const mainButtonClose = card.indexOf("</button>");
+  const similarAction = card.indexOf('data-testid={"button-similar-" + item.id}');
+  assert.ok(mainButtonClose >= 0 && similarAction > mainButtonClose,
+    "Similar-search action must not be nested inside the card's open button");
+  assert.match(card, /aria-label=\\{"Find similar files to " \\+ item\\.name\\}/);
+  assert.match(card, /sm:group-focus-within:opacity-100/,
+    "Hover-revealed action must also become visible when keyboard-focused");
+});
