@@ -198,10 +198,13 @@ export function canDeleteOrganizationJob(status: string, fileMoves: unknown): bo
 export async function verifiedMove(
   from: string,
   to:   string,
-  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string },
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
 ): Promise<FileMoveRecord> {
   // Hash before moving; an unreadable source must never be moved.
   const sourceHash = await sha256File(from);
+  if (opts?.expectedSourceHash && sourceHash !== opts.expectedSourceHash) {
+    throw new Error(`Source changed after its recovery intent was recorded: ${path.basename(from)}`);
+  }
   let destinationCreated = false;
 
   try {
