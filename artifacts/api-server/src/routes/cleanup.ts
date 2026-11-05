@@ -415,7 +415,7 @@ router.post("/cleanup/execute", async (req, res) => {
     let recoveredBytes = 0;
     const errors: string[] = [];
     const deletedFiles: Array<{ path: string; sizeBytes: number }> = [];
-    const trashTimestamp = String(Date.now());
+    const trashTimestamp = `${Date.now()}-${randomUUID()}`;
 
     const uniqueFileIds = [...new Set(deleteFileIds)];
     for (const fileId of uniqueFileIds) {
