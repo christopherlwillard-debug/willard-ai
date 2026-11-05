@@ -2545,7 +2545,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
+      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       newMoves[newMoves.length - 1] = record;
       moved++;
 
