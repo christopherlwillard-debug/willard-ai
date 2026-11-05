@@ -1098,3 +1098,16 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Added a regression contract covering the API host option and the packaged launcher setting.
 - This closes the direct LAN listener exposure for the Windows desktop deployment. It does **not** resolve the separate remote first-run `/auth/setup` owner-takeover issue for hosted deployments; that still needs a secure provisioning mechanism.
 - Validation is pending on the new commit.
+
+
+## Audit batch — cryptographic Windows session-secret generation
+
+**Finding:** Both Windows first-run launchers generated new `SESSION_SECRET` values with PowerShell `Get-Random`. That generator is not intended for cryptographic secrets, so new desktop/developer installations did not use the operating system's cryptographic random-number generator.
+
+**Correction:** The source launcher and packaged desktop launcher now generate 32 random bytes with .NET `RandomNumberGenerator`, dispose the RNG instance, and encode the bytes as 64 lowercase hexadecimal characters. Existing `.env` secrets are preserved; only new settings-file creation is affected.
+
+**Regression coverage:** Added a source-contract test requiring cryptographic RNG use in both launchers and rejecting the former `Get-Random` session-secret construction.
+
+**Verification status:** Source change and regression test committed. Runtime PowerShell execution and the matching Fast Validation/Windows workflow are still pending; this is not yet marked fully validated.
+
+**Risk remaining:** The separate first-run administrator provisioning issue remains unresolved. This secret-generation correction does not close the unauthenticated `/auth/setup` exposure.
