@@ -140,3 +140,24 @@ test("organize job creation validates archive IDs and source-compatible options"
   const page = readFileSync("artifacts/willard-ai/src/pages/organize.tsx", "utf8");
   assert.match(page, /archiveDisposition:\s*form\.sourceType === "archive"\s*\?\s*form\.archiveDisposition(?:\s+as any)?\s*:\s*"keep"/);
 });
+
+
+test("archive disposition requires an explicit boolean confirmation", () => {
+  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  assert.ok(route.includes("req.body?.confirm !== true"));
+  assert.doesNotMatch(route, /if\s*\(!req\.body\?\.confirm\)/);
+});
+
+test("archive disposition results persist and failed processed moves can be retried", () => {
+  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  assert.ok(route.includes("reportJson: nextReport as any"));
+  assert.ok(route.includes("dispositionPending: false"));
+  assert.ok(route.includes("dispositionError = redactText"));
+  assert.ok(route.includes('previousResult === "already_gone"'));
+  assert.ok(route.includes("destinationHash !== sourceHash"));
+
+  const page = readFileSync("artifacts/willard-ai/src/pages/organize.tsx", "utf8");
+  assert.ok(page.includes("report?.dispositionPending === true"));
+  assert.ok(page.includes("Retry move to processed"));
+  assert.ok(page.includes("Archive is no longer present. No further deletion was performed."));
+});
