@@ -1256,3 +1256,13 @@ Statuses distinguish code inspection and focused tests from integration and full
 **Verification status:** The #742 run confirmed generated API contracts, workspace typecheck, Expo config, and desktop web-server safety passed, then failed in release contracts at the helper-name assertion (54 !== 71). The installer correction and focused regression are committed after that failure; targeted/full validation is pending.
 
 **Remaining limitation:** The new stop guard has source-contract coverage, but a fault-injected Windows integration run where `taskkill` deliberately fails is not yet present. Clean-machine standard-user install/upgrade/uninstall coverage remains a separate blocked milestone.
+
+## 2026-11-05 audit batch — restore developer launcher environment-file generation
+
+**Finding (high, installer/startup correctness):** The #744 release-contract test failed because `Ensure-EnvFile` in `scripts/launcher/common.ps1` ended at an unterminated `-replace '^SESSION_SECRET=.*` expression. The function never wrote the generated 256-bit secret back to `.env`, and the PowerShell source was syntactically incomplete. The existing UTF-8/no-BOM regression caught the missing `WriteAllLines` call before the Windows smoke could run.
+
+**Correction:** Restored the complete anchored replacement expression, writes the updated environment file with `UTF8Encoding(false)`, and preserves the OS-generated 32-byte cryptographic secret. This makes the developer launcher setup path consistent with the packaged launcher and the existing security requirement.
+
+**Verification:** Fast Validation #744 reached release contracts and failed specifically at the existing `Ensure-EnvFile must persist the generated secret as UTF-8 without a BOM` assertion. The repair is source-reviewed and triggers a new run. The Windows workflow's fresh-environment smoke then executes the actual PowerShell helper and checks Node can read the 64-character hexadecimal secret; that integration result is still pending.
+
+**Remaining limitation:** No live Windows runner has yet confirmed this repaired helper in the current batch. The next run must pass both the source contract and Windows environment-file smoke.
