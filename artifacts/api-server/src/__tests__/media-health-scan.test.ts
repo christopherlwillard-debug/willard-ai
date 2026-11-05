@@ -45,4 +45,5 @@ test("media health checks library reachability and uses fail-closed missing-file
   assert.match(source, /if \(!reachability\.online\)/);
   assert.match(source, /isMissingRegularMediaFile\(source\)/);
   assert.doesNotMatch(source, /if \(!fs\.existsSync\(source\)\) missing\.push\(row\)/);
+  assert.doesNotMatch(source, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
 });
