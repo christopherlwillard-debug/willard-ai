@@ -6,7 +6,9 @@ import * as path from "node:path";
 import {
   ConversionFinalizationError,
   finalizeConversionFiles,
+  recoverConversionFinalizationMoves,
 } from "../lib/conversion-finalize.ts";
+import { sha256File, type FileMoveRecord } from "../lib/organize-helpers.ts";
 
 interface Fixture {
   root: string;
@@ -42,6 +44,7 @@ function input(
   action: "recycle" | "replace" | "keep-both" | "archive",
   files: Array<{ filePath: string; stagedPath: string; status: string }>,
   beforeMoveHook?: Parameters<typeof finalizeConversionFiles>[0]["beforeMoveHook"],
+  journalHooks?: Pick<Parameters<typeof finalizeConversionFiles>[0], "onMoveIntent" | "onMoveComplete">,
 ) {
   return {
     action,
@@ -51,6 +54,7 @@ function input(
     archiveBase: f.archiveBase,
     files,
     beforeMoveHook,
+    ...journalHooks,
   } as const;
 }
 
@@ -193,5 +197,154 @@ test("recycle uses the application's recoverable trash instead of an unrollbacka
     assert.equal(result.outcomes[0]?.action, "recycle");
   } finally {
     f.cleanup();
+  }
+});
+
+
+test("finalization persists each move intent before mutation and checkpoints its verified result", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const staged = write(path.join(f.stagingDir, "photos", "portrait.jpg"), "converted bytes");
+    const events: string[] = [];
+    const journal: FileMoveRecord[] = [];
+
+    await finalizeConversionFiles(input(f, "replace", [
+      { filePath: original, stagedPath: staged, status: "success" },
+    ], undefined, {
+      onMoveIntent: async (move) => {
+        events.push(`intent:${path.basename(move.from)}`);
+        assert.equal(move.verified, false);
+        assert.equal(move.destHash, "");
+        assert.equal(fs.existsSync(move.from), true, "source must exist when intent is checkpointed");
+        assert.equal(fs.existsSync(move.to), false, "destination must not exist before the intent checkpoint");
+        journal.push(move);
+      },
+      onMoveComplete: async (move) => {
+        events.push(`complete:${path.basename(move.from)}`);
+        const index = journal.findIndex((entry) => entry.from === move.from && entry.to === move.to);
+        assert.ok(index >= 0, "completion must follow a persisted intent");
+        assert.equal(move.verified, true);
+        assert.equal(fs.existsSync(move.to), true);
+        journal[index] = move;
+      },
+    }));
+
+    assert.deepEqual(events, [
+      "intent:portrait.png",
+      "complete:portrait.png",
+      "intent:portrait.jpg",
+      "complete:portrait.jpg",
+    ]);
+    assert.equal(journal.length, 2);
+    assert.ok(journal.every((move) => move.verified));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("startup recovery restores an original moved after its durable intent checkpoint", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const backup = path.join(f.stagingDir, ".originals", "photos", "portrait.png");
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    const sourceHash = await sha256File(original);
+
+    // Simulate process termination after the filesystem move but before the
+    // completion checkpoint could update the database journal.
+    fs.renameSync(original, backup);
+    const recovery = await recoverConversionFinalizationMoves([{
+      from: original,
+      to: backup,
+      sourceHash,
+      destHash: "",
+      verified: false,
+    }], f.root);
+
+    assert.equal(recovery.complete, true);
+    assert.equal(recovery.rollbackCount, 1);
+    assert.deepEqual(recovery.unresolvedMoves, []);
+    assert.equal(fs.readFileSync(original, "utf8"), "original bytes");
+    assert.equal(fs.existsSync(backup), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("startup recovery safely clears an intent when its filesystem move never started", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const backup = path.join(f.stagingDir, ".originals", "photos", "portrait.png");
+    const sourceHash = await sha256File(original);
+
+    const recovery = await recoverConversionFinalizationMoves([{
+      from: original,
+      to: backup,
+      sourceHash,
+      destHash: "",
+      verified: false,
+    }], f.root);
+
+    assert.equal(recovery.complete, true);
+    assert.equal(recovery.rollbackCount, 1);
+    assert.equal(fs.readFileSync(original, "utf8"), "original bytes");
+    assert.equal(fs.existsSync(backup), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("startup recovery preserves a changed backup and reports manual recovery", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const backup = path.join(f.stagingDir, ".originals", "photos", "portrait.png");
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    const sourceHash = await sha256File(original);
+    fs.renameSync(original, backup);
+    fs.writeFileSync(backup, "unexpected changed bytes");
+
+    const recovery = await recoverConversionFinalizationMoves([{
+      from: original,
+      to: backup,
+      sourceHash,
+      destHash: "",
+      verified: false,
+    }], f.root);
+
+    assert.equal(recovery.complete, false);
+    assert.equal(recovery.unresolvedMoves.length, 1);
+    assert.equal(fs.existsSync(original), false);
+    assert.equal(fs.readFileSync(backup, "utf8"), "unexpected changed bytes");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("startup recovery refuses journal paths outside the active library root", async () => {
+  const f = fixture();
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-conversion-outside-"));
+  try {
+    const outside = write(path.join(outsideRoot, "protected.bin"), "do not touch");
+    const destination = path.join(f.stagingDir, "protected.bin");
+    const sourceHash = await sha256File(outside);
+
+    const recovery = await recoverConversionFinalizationMoves([{
+      from: outside,
+      to: destination,
+      sourceHash,
+      destHash: "",
+      verified: false,
+    }], f.root);
+
+    assert.equal(recovery.complete, false);
+    assert.equal(recovery.unresolvedMoves.length, 1);
+    assert.equal(fs.readFileSync(outside, "utf8"), "do not touch");
+    assert.equal(fs.existsSync(destination), false);
+  } finally {
+    f.cleanup();
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
   }
 });
