@@ -666,13 +666,3983 @@ export const listArchivesQueryMaxSizeMax = 9007199254740991;
 
 
 
+export const listArchivesQueryDateFromRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}
+
+export const ListArchivesResponse = zod.object({
+  "archives": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "containedFileCount": zod.number().nullable(),
+  "photoCount": zod.number().nullable(),
+  "videoCount": zod.number().nullable(),
+  "documentCount": zod.number().nullable(),
+  "category": zod.string(),
+  "peekStatus": zod.string(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSize": zod.number().nullable()
+})),
+  "total": zod.number(),
+  "offset": zod.number(),
+  "limit": zod.number()
+})
+
+
+/**
+ * @summary Get archive details
+ */
+export const GetArchiveParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetArchiveResponse = zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "containedFileCount": zod.number().nullable(),
+  "photoCount": zod.number().nullable(),
+  "videoCount": zod.number().nullable(),
+  "documentCount": zod.number().nullable(),
+  "category": zod.string(),
+  "peekStatus": zod.string(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSize": zod.number().nullable(),
+  "peekEntries": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "sizeBytes": zod.number(),
+  "isDirectory": zod.boolean(),
+  "fileType": zod.string()
+}))
+})
+
+
+/**
+ * @summary Peek inside an archive without extracting
+ */
+export const PeekArchiveParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PeekArchiveResponse = zod.object({
+  "archiveId": zod.number(),
+  "filename": zod.string(),
+  "entries": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "sizeBytes": zod.number(),
+  "isDirectory": zod.boolean(),
+  "fileType": zod.string()
+})),
+  "totalEntries": zod.number(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSizeBytes": zod.number(),
+  "category": zod.string(),
+  "photoCount": zod.number(),
+  "videoCount": zod.number(),
+  "documentCount": zod.number()
+})
+
+
+/**
+ * @summary List indexed documents
+ */
+export const ListDocumentsQueryParams = zod.object({
+  "q": zod.coerce.string().optional(),
+  "fileType": zod.enum(['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'other']).optional(),
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const ListDocumentsResponse = zod.object({
+  "documents": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string()
+})),
+  "total": zod.number(),
+  "offset": zod.number(),
+  "limit": zod.number()
+})
+
+
+/**
+ * @summary Get NAS storage statistics
+ */
+export const GetStorageStatsResponse = zod.object({
+  "totalSizeBytes": zod.number(),
+  "fileCount": zod.number(),
+  "typeBreakdown": zod.array(zod.object({
+  "fileType": zod.string(),
+  "count": zod.number(),
+  "sizeBytes": zod.number(),
+  "percentage": zod.number()
+})),
+  "nasPathConfigured": zod.boolean()
+})
+
+
+/**
+ * @summary Get top 20 largest folders
+ */
+export const GetTopFoldersResponseItem = zod.object({
+  "folder": zod.string(),
+  "fileCount": zod.number(),
+  "totalSizeBytes": zod.number()
+})
+export const GetTopFoldersResponse = zod.array(GetTopFoldersResponseItem)
+
+
+/**
+ * @summary Get top 20 largest files
+ */
+export const GetTopFilesResponseItem = zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})
+export const GetTopFilesResponse = zod.array(GetTopFilesResponseItem)
+
+
+/**
+ * @summary Preview a safe storage-location migration
+ */
+export const PreviewStorageMigrationBody = zod.object({
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string().optional(),
+  "destinationLabel": zod.string().optional()
+})
+
+export const PreviewStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary List persisted storage migration manifests
+ */
+export const ListStorageMigrationsResponseItem = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+export const ListStorageMigrationsResponse = zod.array(ListStorageMigrationsResponseItem)
+
+
+/**
+ * @summary Get a persisted storage migration manifest
+ */
+export const GetStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Copy and verify a storage migration
+ */
+export const CopyStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CopyStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Confirm cleanup of verified disposable source artifacts
+ */
+export const ConfirmStorageMigrationCleanupParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ConfirmStorageMigrationCleanupResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Execute previously confirmed migration cleanup
+ */
+export const CleanupStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CleanupStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
+ */
+export const GetDuplicateFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetDuplicateFilesResponse = zod.object({
+  "groups": zod.array(zod.object({
+  "hash": zod.string(),
+  "fileCount": zod.number(),
+  "totalWastedBytes": zod.number(),
+  "matchType": zod.enum(['HASH_IDENTICAL', 'PERCEPTUAL_SIMILAR']),
+  "matchConfidence": zod.number(),
+  "confirmationStatus": zod.enum(['CONFIRMED', 'UNCONFIRMED_FINGERPRINT', 'UNCONFIRMED_LARGE']),
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullish(),
+  "folder": zod.string(),
+  "contentHash": zod.string().nullish(),
+  "mediaId": zod.number().nullish(),
+  "thumbnailPath": zod.string().nullish(),
+  "width": zod.number().nullish(),
+  "height": zod.number().nullish(),
+  "durationSeconds": zod.number().nullish(),
+  "dateTaken": zod.string().nullish(),
+  "dateCreated": zod.string().nullish(),
+  "cameraMake": zod.string().nullish(),
+  "cameraModel": zod.string().nullish()
+}))
+})),
+  "totalGroups": zod.number(),
+  "totalWastedBytes": zod.number()
+})
+
+
+/**
+ * @summary Get files larger than 500MB
+ */
+export const GetLargeFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetLargeFilesResponse = zod.object({
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})),
+  "total": zod.number(),
+  "totalSizeBytes": zod.number()
+})
+
+
+/**
+ * @summary Get files not modified in 5+ years
+ */
+export const GetOldFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetOldFilesResponse = zod.object({
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})),
+  "total": zod.number()
+})
+
+
+/**
+ * @summary Get empty folders on the NAS
+ */
+export const GetEmptyFoldersResponseItem = zod.object({
+  "path": zod.string(),
+  "name": zod.string()
+})
+export const GetEmptyFoldersResponse = zod.array(GetEmptyFoldersResponseItem)
+
+
+/**
+ * @summary Get cleanup summary counts
+ */
+export const GetCleanupSummaryResponse = zod.object({
+  "duplicateGroups": zod.number(),
+  "duplicateWastedBytes": zod.number(),
+  "duplicateCandidates": zod.number(),
+  "candidateWastedBytes": zod.number(),
+  "largeFileCount": zod.number(),
+  "largeFilesBytes": zod.number(),
+  "oldFileCount": zod.number(),
+  "emptyFolderCount": zod.number()
+})
+
+
+/**
+ * @summary Move selected files to Recycle Bin / .Trash and record history
+ */
+export const ExecuteCleanupBody = zod.object({
+  "deleteFileIds": zod.array(zod.number())
+})
+
+export const ExecuteCleanupResponse = zod.object({
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "errors": zod.array(zod.string())
+})
+
+
+/**
+ * @summary Get cleanup history sessions (newest first)
+ */
+export const GetCleanupHistoryResponse = zod.object({
+  "sessions": zod.array(zod.object({
+  "ts": zod.string(),
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "platform": zod.string(),
+  "files": zod.array(zod.object({
+  "path": zod.string(),
+  "sizeBytes": zod.number()
+})),
+  "errors": zod.array(zod.string())
+}))
+})
+
+
+/**
+ * @summary List files currently in the .Trash folder (newest first)
+ */
+export const GetCleanupTrashResponse = zod.object({
+  "entries": zod.array(zod.object({
+  "ts": zod.string(),
+  "originalPath": zod.string(),
+  "trashPath": zod.string(),
+  "sizeBytes": zod.number(),
+  "expiresAt": zod.string(),
+  "filename": zod.string(),
+  "expired": zod.boolean()
+}))
+})
+
+
+/**
+ * @summary Restore a file from .Trash back to its original location
+ */
+export const RestoreFromTrashBody = zod.object({
+  "trashPath": zod.string(),
+  "originalPath": zod.string().optional().describe('Ignored by the server — destination is derived from the manifest to prevent arbitrary file moves. Kept for client compatibility.')
+})
+
+export const RestoreFromTrashResponse = zod.object({
+  "restored": zod.boolean()
+})
+
+
+/**
+ * @summary List all conversations
+ */
+export const ListOpenaiConversationsResponseItem = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListOpenaiConversationsResponse = zod.array(ListOpenaiConversationsResponseItem)
+
+
+/**
+ * @summary Create a new conversation
+ */
+export const CreateOpenaiConversationBody = zod.object({
+  "title": zod.string()
+})
+
+export const CreateOpenaiConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get conversation with messages
+ */
+export const GetOpenaiConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOpenaiConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "messages": zod.array(zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Delete a conversation
+ */
+export const DeleteOpenaiConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteOpenaiConversationResponse = zod.void()
+
+
+/**
+ * @summary List messages in a conversation
+ */
+export const ListOpenaiMessagesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListOpenaiMessagesResponseItem = zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListOpenaiMessagesResponse = zod.array(ListOpenaiMessagesResponseItem)
+
+
+/**
+ * @summary Send a message and get a streaming AI response with NAS context
+ */
+export const SendOpenaiMessageParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const SendOpenaiMessageBody = zod.object({
+  "content": zod.string()
+})
+
+export const SendOpenaiMessageResponse = zod.unknown()
+
+
+/**
+ * @summary List all organization jobs
+ */
+export const ListOrganizeJobsResponseItem = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+export const ListOrganizeJobsResponse = zod.array(ListOrganizeJobsResponseItem)
+
+
+/**
+ * @summary Create a new organization job
+ */
+export const CreateOrganizeJobBody = zod.object({
+  "sourceType": zod.enum(['archive', 'folder']),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.enum(['waiting', 'keep', 'move_to_processed', 'delete']).optional(),
+  "conflictPolicy": zod.enum(['keep_existing', 'replace', 'rename', 'skip']).optional()
+})
+
+export const CreateOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Get a specific organization job
+ */
+export const GetOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Delete an organization job
+ */
+export const DeleteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteOrganizeJobResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Analyze source and generate organization plan with AI confidence score
+ */
+export const AnalyzeOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AnalyzeOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Run pre-flight checks (disk space, writability, collisions)
+ */
+export const PreflightOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PreflightOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Execute the organization job (SSE stream of progress events)
+ */
+export const ExecuteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ExecuteOrganizeJobResponse = zod.unknown()
+
+
+/**
+ * @summary Update plan exclusions (categories and/or specific file paths to skip)
+ */
+export const UpdateOrganizeJobPlanParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateOrganizeJobPlanBody = zod.object({
+  "excludeCategories": zod.array(zod.enum(['image', 'video', 'document', 'other'])).optional(),
+  "excludePaths": zod.array(zod.string()).optional()
+})
+
+export const UpdateOrganizeJobPlanResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Apply archive disposition (requires confirm=true; only valid after job is completed)
+ */
+export const ApplyOrganizeJobDispositionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ApplyOrganizeJobDispositionBody = zod.object({
+  "confirm": zod.boolean()
+})
+
+export const ApplyOrganizeJobDispositionResponse = zod.object({
+  "ok": zod.boolean(),
+  "dispositionResult": zod.string(),
+  "sourcePath": zod.string()
+})
+
+
+/**
+ * @summary Stream the current branding logo
+ */
+export const GetSettingsLogoResponse = zod.unknown()
+
+
+/**
+ * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+ */
+export const UploadSettingsLogoBody = zod.object({
+  "file": zod.instanceof(File)
+})
+
+export const UploadSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
+})
+
+
+/**
+ * @summary Remove the current branding logo
+ */
+export const DeleteSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
+})
+
+
+/**
+ * @summary Server environment awareness (local vs cloud, platform)
+ */
+export const GetSystemEnvironmentResponse = zod.object({
+  "isReplit": zod.boolean(),
+  "isLocal": zod.boolean(),
+  "platform": zod.string(),
+  "isWindows": zod.boolean(),
+  "driveDetectionAvailable": zod.boolean()
+})
+
+
+/**
+ * @summary Detect reachable drives/mounts (local servers only)
+ */
+export const GetSystemDrivesResponse = zod.object({
+  "available": zod.boolean(),
+  "drives": zod.array(zod.object({
+  "path": zod.string(),
+  "label": zod.string(),
+  "kind": zod.enum(['network', 'external', 'local']),
+  "online": zod.boolean(),
+  "itemCount": zod.number().nullable(),
+  "message": zod.string()
+}))
+})
+
+
+/**
+ * @summary Smart library health snapshot (reachability, indexing, reconnect)
+ */
+export const GetLibraryHealthResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Start a durable library scan job
+ */
+export const StartLibraryScanBody = zod.object({
+  "profile": zod.enum(['QUICK', 'FULL', 'HEALTH_SCAN']).optional(),
+  "rootPath": zod.string().optional()
+})
+
+export const StartLibraryScanResponse = zod.object({
+  "jobId": zod.number(),
+  "alreadyRunning": zod.boolean()
+})
+
+
+/**
+ * @summary Get the active durable library job or the last completion
+ */
+export const GetLibraryJobsActiveResponse = zod.union([zod.object({
+  "jobId": zod.number(),
+  "jobType": zod.string(),
+  "status": zod.string(),
+  "phase": zod.string(),
+  "profile": zod.string().nullable(),
+  "progress": zod.number(),
+  "filesProcessed": zod.number(),
+  "filesTotal": zod.number(),
+  "currentPath": zod.string(),
+  "currentFileStartedAt": zod.number().nullable(),
+  "etaSeconds": zod.number().nullable(),
+  "speed": zod.number(),
+  "counters": zod.record(zod.string(), zod.unknown()),
+  "summary": zod.record(zod.string(), zod.unknown()).nullable()
+}),zod.null()])
+
+
+/**
+ * @summary Get persisted durable library scan history
+ */
+export const GetLibraryJobsHistoryResponse = zod.object({
+  "jobs": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
+ * @summary Immediately re-check library reachability ("Retry Now")
+ */
+export const RetryLibraryConnectionResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Dismiss the one-time "library reconnected" announcement
+ */
+export const AcknowledgeLibraryReconnectResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Pause background indexing (and any running job)
+ */
+export const PauseIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Resume background indexing (and the most recent paused job)
+ */
+export const ResumeIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetCollectionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateCollectionsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateCollectionsIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateCollectionsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteCollectionsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteCollectionsIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteCollectionsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetCollectionsIdItemsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetCollectionsIdItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsIdItemsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateCollectionsIdItemsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsIdItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteCollectionsIdItemsFileIdParams = zod.object({
+  "id": zod.coerce.number(),
+  "fileId": zod.coerce.number()
+})
+
+export const DeleteCollectionsIdItemsFileIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteCollectionsIdItemsFileIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsIdMergeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateCollectionsIdMergeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsIdMergeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsRebuildBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsRebuildResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetDebugLibraryStateResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetDiagnosticsScansResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetFacesPeopleResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateFacesPeopleIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateFacesPeopleIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateFacesPeopleIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFacesFaceIdReassignParams = zod.object({
+  "faceId": zod.coerce.number()
+})
+
+export const CreateFacesFaceIdReassignBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFacesFaceIdReassignResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFacesPeopleIdMergeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateFacesPeopleIdMergeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFacesPeopleIdMergeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetFacesPeopleIdFilesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetFacesPeopleIdFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime binary media endpoint
+ */
+export const GetFacesFaceIdCropParams = zod.object({
+  "faceId": zod.coerce.number()
+})
+
+export const GetFacesFaceIdCropResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdFacesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdFacesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFilesReconcileLegacyBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFilesReconcileLegacyResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibrarySeqResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryActivityResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryScanDryRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryScanDryRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime server-sent event endpoint
+ */
+export const GetLibraryJobsEventsResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsBackgroundResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetLibraryJobsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdPauseParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdPauseBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdPauseResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdResumeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdResumeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdResumeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdCancelParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdCancelBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdCancelResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteLibraryActiveJobBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteLibraryActiveJobResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryThumbnailsStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsPrioritizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsPrioritizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteLibraryThumbnailsCacheBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteLibraryThumbnailsCacheResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsRebuildBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsRebuildResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsIdFilesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetLibraryJobsIdFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryDuplicatesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateLibraryThumbnailsQualityBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateLibraryThumbnailsQualityResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryScanBenchmarkBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryScanBenchmarkResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryOutdatedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryReprocessBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryReprocessResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryOptimizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryOptimizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaMapResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdDetailParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdDetailResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdRelatedParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdRelatedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateMediaFilesIdAiParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateMediaFilesIdAiBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateMediaFilesIdAiResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaHealthResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaCleanupBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaCleanupResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFoldersResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaFilesIdFavoriteParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateMediaFilesIdFavoriteBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaFilesIdFavoriteResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteMediaFilesIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteMediaFilesIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteMediaFilesIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateMediaFilesIdRenameParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateMediaFilesIdRenameBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateMediaFilesIdRenameResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaTimelineResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaTimelineItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime binary media endpoint
+ */
+export const GetMediaThumbnailIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaThumbnailIdResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeScanResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeAiSummaryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeAiSummaryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdRetryParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdRetryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdRetryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdCancelParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdCancelBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdCancelResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeConversionJobIdActionParams = zod.object({
+  "jobId": zod.coerce.number()
+})
+
+export const CreateOptimizeConversionJobIdActionBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeConversionJobIdActionResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdFinalizeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdFinalizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdFinalizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOptimizeJobsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdExecuteTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdExecuteTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdExecuteTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsIdExecuteParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOptimizeJobsIdExecuteResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOrganizeJobsIdDryRunParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobsIdDryRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdExecuteTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdExecuteTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdExecuteTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOrganizeRecoveryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdRollbackParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdRollbackBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdRollbackResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdResetParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdResetBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdResetResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdResumeTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdResumeTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdResumeTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime server-sent event endpoint
+ */
+export const GetOrganizeJobsIdResumeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobsIdResumeResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchAiBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchAiResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSimilarIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetSearchSimilarIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSuggestionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchHistoryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteSearchHistoryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteSearchHistoryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSavedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchSavedBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchSavedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchSavedIdRunParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateSearchSavedIdRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchSavedIdRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteSearchSavedIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteSearchSavedIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteSearchSavedIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchAiStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSettingsScannerResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateSettingsScannerBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateSettingsScannerResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+);
+export const listArchivesQueryDateToRegExp = new RegExp('^[0-9]{4}-[0-9]{2}-[0-9]{2}
+
+export const ListArchivesResponse = zod.object({
+  "archives": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "containedFileCount": zod.number().nullable(),
+  "photoCount": zod.number().nullable(),
+  "videoCount": zod.number().nullable(),
+  "documentCount": zod.number().nullable(),
+  "category": zod.string(),
+  "peekStatus": zod.string(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSize": zod.number().nullable()
+})),
+  "total": zod.number(),
+  "offset": zod.number(),
+  "limit": zod.number()
+})
+
+
+/**
+ * @summary Get archive details
+ */
+export const GetArchiveParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetArchiveResponse = zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "containedFileCount": zod.number().nullable(),
+  "photoCount": zod.number().nullable(),
+  "videoCount": zod.number().nullable(),
+  "documentCount": zod.number().nullable(),
+  "category": zod.string(),
+  "peekStatus": zod.string(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSize": zod.number().nullable(),
+  "peekEntries": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "sizeBytes": zod.number(),
+  "isDirectory": zod.boolean(),
+  "fileType": zod.string()
+}))
+})
+
+
+/**
+ * @summary Peek inside an archive without extracting
+ */
+export const PeekArchiveParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PeekArchiveResponse = zod.object({
+  "archiveId": zod.number(),
+  "filename": zod.string(),
+  "entries": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string(),
+  "sizeBytes": zod.number(),
+  "isDirectory": zod.boolean(),
+  "fileType": zod.string()
+})),
+  "totalEntries": zod.number(),
+  "isPasswordProtected": zod.boolean(),
+  "hasNestedArchives": zod.boolean(),
+  "estimatedExtractionSizeBytes": zod.number(),
+  "category": zod.string(),
+  "photoCount": zod.number(),
+  "videoCount": zod.number(),
+  "documentCount": zod.number()
+})
+
+
+/**
+ * @summary List indexed documents
+ */
+export const ListDocumentsQueryParams = zod.object({
+  "q": zod.coerce.string().optional(),
+  "fileType": zod.enum(['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'other']).optional(),
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const ListDocumentsResponse = zod.object({
+  "documents": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string()
+})),
+  "total": zod.number(),
+  "offset": zod.number(),
+  "limit": zod.number()
+})
+
+
+/**
+ * @summary Get NAS storage statistics
+ */
+export const GetStorageStatsResponse = zod.object({
+  "totalSizeBytes": zod.number(),
+  "fileCount": zod.number(),
+  "typeBreakdown": zod.array(zod.object({
+  "fileType": zod.string(),
+  "count": zod.number(),
+  "sizeBytes": zod.number(),
+  "percentage": zod.number()
+})),
+  "nasPathConfigured": zod.boolean()
+})
+
+
+/**
+ * @summary Get top 20 largest folders
+ */
+export const GetTopFoldersResponseItem = zod.object({
+  "folder": zod.string(),
+  "fileCount": zod.number(),
+  "totalSizeBytes": zod.number()
+})
+export const GetTopFoldersResponse = zod.array(GetTopFoldersResponseItem)
+
+
+/**
+ * @summary Get top 20 largest files
+ */
+export const GetTopFilesResponseItem = zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})
+export const GetTopFilesResponse = zod.array(GetTopFilesResponseItem)
+
+
+/**
+ * @summary Preview a safe storage-location migration
+ */
+export const PreviewStorageMigrationBody = zod.object({
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string().optional(),
+  "destinationLabel": zod.string().optional()
+})
+
+export const PreviewStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary List persisted storage migration manifests
+ */
+export const ListStorageMigrationsResponseItem = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+export const ListStorageMigrationsResponse = zod.array(ListStorageMigrationsResponseItem)
+
+
+/**
+ * @summary Get a persisted storage migration manifest
+ */
+export const GetStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Copy and verify a storage migration
+ */
+export const CopyStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CopyStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Confirm cleanup of verified disposable source artifacts
+ */
+export const ConfirmStorageMigrationCleanupParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ConfirmStorageMigrationCleanupResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Execute previously confirmed migration cleanup
+ */
+export const CleanupStorageMigrationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const CleanupStorageMigrationResponse = zod.object({
+  "version": zod.number(),
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "state": zod.enum(['PREVIEW', 'READY', 'COPYING', 'PAUSED', 'VERIFIED', 'FAILED', 'CLEANUP_PENDING', 'CLEANED']),
+  "sourceRoot": zod.string(),
+  "destinationRoot": zod.string(),
+  "sourceLabel": zod.string(),
+  "destinationLabel": zod.string(),
+  "requiredBytes": zod.number(),
+  "copiedBytes": zod.number(),
+  "verifiedBytes": zod.number(),
+  "freeBytes": zod.number().nullable(),
+  "capacitySafe": zod.boolean().nullable(),
+  "referenceCount": zod.number(),
+  "conflicts": zod.number(),
+  "unsafeFiles": zod.number(),
+  "missingFiles": zod.number(),
+  "eligibleFileCount": zod.number(),
+  "orphanedFiles": zod.array(zod.string()),
+  "entries": zod.array(zod.object({
+  "id": zod.string(),
+  "namespace": zod.string(),
+  "sourcePath": zod.string(),
+  "destinationPath": zod.string(),
+  "relativePath": zod.string(),
+  "sizeBytes": zod.number(),
+  "sourceHash": zod.string().nullable(),
+  "destinationHash": zod.string().nullable(),
+  "referenceCount": zod.number(),
+  "references": zod.array(zod.object({
+  "table": zod.enum(['media_files', 'faces', 'conversion_jobs', 'organization_jobs']),
+  "column": zod.string(),
+  "rowId": zod.number(),
+  "value": zod.string()
+})),
+  "protected": zod.boolean(),
+  "state": zod.enum(['pending', 'verified', 'conflict', 'missing', 'unsafe', 'error']),
+  "error": zod.string().optional()
+})),
+  "cleanupConfirmed": zod.boolean(),
+  "cleanupCompletedAt": zod.string().optional(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * @summary Get groups of duplicate files (by hash or perceptual fingerprint)
+ */
+export const GetDuplicateFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetDuplicateFilesResponse = zod.object({
+  "groups": zod.array(zod.object({
+  "hash": zod.string(),
+  "fileCount": zod.number(),
+  "totalWastedBytes": zod.number(),
+  "matchType": zod.enum(['HASH_IDENTICAL', 'PERCEPTUAL_SIMILAR']),
+  "matchConfidence": zod.number(),
+  "confirmationStatus": zod.enum(['CONFIRMED', 'UNCONFIRMED_FINGERPRINT', 'UNCONFIRMED_LARGE']),
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullish(),
+  "folder": zod.string(),
+  "contentHash": zod.string().nullish(),
+  "mediaId": zod.number().nullish(),
+  "thumbnailPath": zod.string().nullish(),
+  "width": zod.number().nullish(),
+  "height": zod.number().nullish(),
+  "durationSeconds": zod.number().nullish(),
+  "dateTaken": zod.string().nullish(),
+  "dateCreated": zod.string().nullish(),
+  "cameraMake": zod.string().nullish(),
+  "cameraModel": zod.string().nullish()
+}))
+})),
+  "totalGroups": zod.number(),
+  "totalWastedBytes": zod.number()
+})
+
+
+/**
+ * @summary Get files larger than 500MB
+ */
+export const GetLargeFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetLargeFilesResponse = zod.object({
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})),
+  "total": zod.number(),
+  "totalSizeBytes": zod.number()
+})
+
+
+/**
+ * @summary Get files not modified in 5+ years
+ */
+export const GetOldFilesQueryParams = zod.object({
+  "limit": zod.coerce.number().optional(),
+  "offset": zod.coerce.number().optional()
+})
+
+export const GetOldFilesResponse = zod.object({
+  "files": zod.array(zod.object({
+  "id": zod.number(),
+  "path": zod.string(),
+  "filename": zod.string(),
+  "extension": zod.string(),
+  "fileType": zod.string(),
+  "sizeBytes": zod.number(),
+  "modifiedAt": zod.string().nullable(),
+  "folder": zod.string(),
+  "source": zod.string(),
+  "indexedAt": zod.string()
+})),
+  "total": zod.number()
+})
+
+
+/**
+ * @summary Get empty folders on the NAS
+ */
+export const GetEmptyFoldersResponseItem = zod.object({
+  "path": zod.string(),
+  "name": zod.string()
+})
+export const GetEmptyFoldersResponse = zod.array(GetEmptyFoldersResponseItem)
+
+
+/**
+ * @summary Get cleanup summary counts
+ */
+export const GetCleanupSummaryResponse = zod.object({
+  "duplicateGroups": zod.number(),
+  "duplicateWastedBytes": zod.number(),
+  "duplicateCandidates": zod.number(),
+  "candidateWastedBytes": zod.number(),
+  "largeFileCount": zod.number(),
+  "largeFilesBytes": zod.number(),
+  "oldFileCount": zod.number(),
+  "emptyFolderCount": zod.number()
+})
+
+
+/**
+ * @summary Move selected files to Recycle Bin / .Trash and record history
+ */
+export const ExecuteCleanupBody = zod.object({
+  "deleteFileIds": zod.array(zod.number())
+})
+
+export const ExecuteCleanupResponse = zod.object({
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "errors": zod.array(zod.string())
+})
+
+
+/**
+ * @summary Get cleanup history sessions (newest first)
+ */
+export const GetCleanupHistoryResponse = zod.object({
+  "sessions": zod.array(zod.object({
+  "ts": zod.string(),
+  "recycled": zod.number(),
+  "recoveredBytes": zod.number(),
+  "platform": zod.string(),
+  "files": zod.array(zod.object({
+  "path": zod.string(),
+  "sizeBytes": zod.number()
+})),
+  "errors": zod.array(zod.string())
+}))
+})
+
+
+/**
+ * @summary List files currently in the .Trash folder (newest first)
+ */
+export const GetCleanupTrashResponse = zod.object({
+  "entries": zod.array(zod.object({
+  "ts": zod.string(),
+  "originalPath": zod.string(),
+  "trashPath": zod.string(),
+  "sizeBytes": zod.number(),
+  "expiresAt": zod.string(),
+  "filename": zod.string(),
+  "expired": zod.boolean()
+}))
+})
+
+
+/**
+ * @summary Restore a file from .Trash back to its original location
+ */
+export const RestoreFromTrashBody = zod.object({
+  "trashPath": zod.string(),
+  "originalPath": zod.string().optional().describe('Ignored by the server — destination is derived from the manifest to prevent arbitrary file moves. Kept for client compatibility.')
+})
+
+export const RestoreFromTrashResponse = zod.object({
+  "restored": zod.boolean()
+})
+
+
+/**
+ * @summary List all conversations
+ */
+export const ListOpenaiConversationsResponseItem = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListOpenaiConversationsResponse = zod.array(ListOpenaiConversationsResponseItem)
+
+
+/**
+ * @summary Create a new conversation
+ */
+export const CreateOpenaiConversationBody = zod.object({
+  "title": zod.string()
+})
+
+export const CreateOpenaiConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get conversation with messages
+ */
+export const GetOpenaiConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOpenaiConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "messages": zod.array(zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Delete a conversation
+ */
+export const DeleteOpenaiConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteOpenaiConversationResponse = zod.void()
+
+
+/**
+ * @summary List messages in a conversation
+ */
+export const ListOpenaiMessagesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListOpenaiMessagesResponseItem = zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListOpenaiMessagesResponse = zod.array(ListOpenaiMessagesResponseItem)
+
+
+/**
+ * @summary Send a message and get a streaming AI response with NAS context
+ */
+export const SendOpenaiMessageParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const SendOpenaiMessageBody = zod.object({
+  "content": zod.string()
+})
+
+export const SendOpenaiMessageResponse = zod.unknown()
+
+
+/**
+ * @summary List all organization jobs
+ */
+export const ListOrganizeJobsResponseItem = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+export const ListOrganizeJobsResponse = zod.array(ListOrganizeJobsResponseItem)
+
+
+/**
+ * @summary Create a new organization job
+ */
+export const CreateOrganizeJobBody = zod.object({
+  "sourceType": zod.enum(['archive', 'folder']),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.enum(['waiting', 'keep', 'move_to_processed', 'delete']).optional(),
+  "conflictPolicy": zod.enum(['keep_existing', 'replace', 'rename', 'skip']).optional()
+})
+
+export const CreateOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Get a specific organization job
+ */
+export const GetOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Delete an organization job
+ */
+export const DeleteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteOrganizeJobResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Analyze source and generate organization plan with AI confidence score
+ */
+export const AnalyzeOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AnalyzeOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Run pre-flight checks (disk space, writability, collisions)
+ */
+export const PreflightOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PreflightOrganizeJobResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Execute the organization job (SSE stream of progress events)
+ */
+export const ExecuteOrganizeJobParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ExecuteOrganizeJobResponse = zod.unknown()
+
+
+/**
+ * @summary Update plan exclusions (categories and/or specific file paths to skip)
+ */
+export const UpdateOrganizeJobPlanParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateOrganizeJobPlanBody = zod.object({
+  "excludeCategories": zod.array(zod.enum(['image', 'video', 'document', 'other'])).optional(),
+  "excludePaths": zod.array(zod.string()).optional()
+})
+
+export const UpdateOrganizeJobPlanResponse = zod.object({
+  "id": zod.number(),
+  "status": zod.enum(['pending', 'analyzing', 'planned', 'preflight', 'verified', 'executing', 'rolling_back', 'completed', 'failed', 'rolled_back']),
+  "sourceType": zod.string(),
+  "sourcePath": zod.string(),
+  "archiveId": zod.number().nullish(),
+  "archiveDisposition": zod.string(),
+  "conflictPolicy": zod.string(),
+  "planJson": zod.object({
+
+}).passthrough().nullish(),
+  "preflightJson": zod.object({
+
+}).passthrough().nullish(),
+  "fileMoves": zod.array(zod.object({
+
+}).passthrough()).nullish(),
+  "reportPath": zod.string().nullish(),
+  "error": zod.string().nullish(),
+  "createdAt": zod.string(),
+  "completedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Apply archive disposition (requires confirm=true; only valid after job is completed)
+ */
+export const ApplyOrganizeJobDispositionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ApplyOrganizeJobDispositionBody = zod.object({
+  "confirm": zod.boolean()
+})
+
+export const ApplyOrganizeJobDispositionResponse = zod.object({
+  "ok": zod.boolean(),
+  "dispositionResult": zod.string(),
+  "sourcePath": zod.string()
+})
+
+
+/**
+ * @summary Stream the current branding logo
+ */
+export const GetSettingsLogoResponse = zod.unknown()
+
+
+/**
+ * @summary Upload a branding logo (PNG, JPG, or SVG; max 2MB)
+ */
+export const UploadSettingsLogoBody = zod.object({
+  "file": zod.instanceof(File)
+})
+
+export const UploadSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
+})
+
+
+/**
+ * @summary Remove the current branding logo
+ */
+export const DeleteSettingsLogoResponse = zod.object({
+  "nasPath": zod.string(),
+  "lastScanAt": zod.string().nullable(),
+  "totalFilesIndexed": zod.number(),
+  "photosDestination": zod.string(),
+  "videosDestination": zod.string(),
+  "documentsDestination": zod.string(),
+  "otherFilesDestination": zod.string(),
+  "logoPath": zod.string().nullish(),
+  "scanPerformance": zod.enum(['HIGH', 'BALANCED', 'LOW']).optional(),
+  "indexingPaused": zod.boolean().optional(),
+  "onboardingDismissedAt": zod.string().nullish(),
+  "celebrationShownAt": zod.string().nullish(),
+  "optimizeProfile": zod.enum(['ARCHIVE', 'BALANCED', 'MAXIMUM']).optional(),
+  "rawConversionEnabled": zod.boolean().optional(),
+  "aiEnrichmentEnabled": zod.boolean().optional(),
+  "aiLocalOnly": zod.boolean().optional(),
+  "aiExcludedFolders": zod.array(zod.string()).optional(),
+  "aiExcludedExtensions": zod.array(zod.string()).optional(),
+  "aiConsentAt": zod.string().nullish(),
+  "aiConsentProvider": zod.string().nullish(),
+  "aiConsentVersion": zod.string().nullish(),
+  "backupEnabled": zod.boolean().optional(),
+  "backupScheduleHours": zod.number().optional(),
+  "backupStatus": zod.enum(['NEVER_CONFIGURED', 'PENDING', 'PROTECTED', 'FAILED']).optional(),
+  "backupLastAttemptAt": zod.string().nullish(),
+  "backupLastSuccessAt": zod.string().nullish(),
+  "backupLastVerifiedAt": zod.string().nullish(),
+  "backupLastError": zod.string().nullish()
+})
+
+
+/**
+ * @summary Server environment awareness (local vs cloud, platform)
+ */
+export const GetSystemEnvironmentResponse = zod.object({
+  "isReplit": zod.boolean(),
+  "isLocal": zod.boolean(),
+  "platform": zod.string(),
+  "isWindows": zod.boolean(),
+  "driveDetectionAvailable": zod.boolean()
+})
+
+
+/**
+ * @summary Detect reachable drives/mounts (local servers only)
+ */
+export const GetSystemDrivesResponse = zod.object({
+  "available": zod.boolean(),
+  "drives": zod.array(zod.object({
+  "path": zod.string(),
+  "label": zod.string(),
+  "kind": zod.enum(['network', 'external', 'local']),
+  "online": zod.boolean(),
+  "itemCount": zod.number().nullable(),
+  "message": zod.string()
+}))
+})
+
+
+/**
+ * @summary Smart library health snapshot (reachability, indexing, reconnect)
+ */
+export const GetLibraryHealthResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Start a durable library scan job
+ */
+export const StartLibraryScanBody = zod.object({
+  "profile": zod.enum(['QUICK', 'FULL', 'HEALTH_SCAN']).optional(),
+  "rootPath": zod.string().optional()
+})
+
+export const StartLibraryScanResponse = zod.object({
+  "jobId": zod.number(),
+  "alreadyRunning": zod.boolean()
+})
+
+
+/**
+ * @summary Get the active durable library job or the last completion
+ */
+export const GetLibraryJobsActiveResponse = zod.union([zod.object({
+  "jobId": zod.number(),
+  "jobType": zod.string(),
+  "status": zod.string(),
+  "phase": zod.string(),
+  "profile": zod.string().nullable(),
+  "progress": zod.number(),
+  "filesProcessed": zod.number(),
+  "filesTotal": zod.number(),
+  "currentPath": zod.string(),
+  "currentFileStartedAt": zod.number().nullable(),
+  "etaSeconds": zod.number().nullable(),
+  "speed": zod.number(),
+  "counters": zod.record(zod.string(), zod.unknown()),
+  "summary": zod.record(zod.string(), zod.unknown()).nullable()
+}),zod.null()])
+
+
+/**
+ * @summary Get persisted durable library scan history
+ */
+export const GetLibraryJobsHistoryResponse = zod.object({
+  "jobs": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
+ * @summary Immediately re-check library reachability ("Retry Now")
+ */
+export const RetryLibraryConnectionResponse = zod.object({
+  "status": zod.enum(['unconfigured', 'online', 'offline']),
+  "path": zod.string(),
+  "message": zod.string(),
+  "lastCheckAt": zod.string().nullable(),
+  "lastOnlineAt": zod.string().nullable(),
+  "offlineSince": zod.string().nullable(),
+  "reconnectedAt": zod.string().nullable(),
+  "reconnectScanJobId": zod.number().nullable(),
+  "indexingPaused": zod.boolean(),
+  "watching": zod.boolean(),
+  "lastScanAt": zod.string().nullish(),
+  "activeJob": zod.object({
+
+}).passthrough().nullish(),
+  "lastCompleted": zod.object({
+
+}).passthrough().nullish()
+})
+
+
+/**
+ * @summary Dismiss the one-time "library reconnected" announcement
+ */
+export const AcknowledgeLibraryReconnectResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * @summary Pause background indexing (and any running job)
+ */
+export const PauseIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Resume background indexing (and the most recent paused job)
+ */
+export const ResumeIndexingResponse = zod.object({
+  "ok": zod.boolean(),
+  "indexingPaused": zod.boolean(),
+  "resumedJobId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetCollectionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateCollectionsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateCollectionsIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateCollectionsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteCollectionsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteCollectionsIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteCollectionsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetCollectionsIdItemsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetCollectionsIdItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsIdItemsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateCollectionsIdItemsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsIdItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteCollectionsIdItemsFileIdParams = zod.object({
+  "id": zod.coerce.number(),
+  "fileId": zod.coerce.number()
+})
+
+export const DeleteCollectionsIdItemsFileIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteCollectionsIdItemsFileIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsIdMergeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateCollectionsIdMergeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsIdMergeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateCollectionsRebuildBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateCollectionsRebuildResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetDebugLibraryStateResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetDiagnosticsScansResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetFacesPeopleResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateFacesPeopleIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateFacesPeopleIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateFacesPeopleIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFacesFaceIdReassignParams = zod.object({
+  "faceId": zod.coerce.number()
+})
+
+export const CreateFacesFaceIdReassignBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFacesFaceIdReassignResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFacesPeopleIdMergeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateFacesPeopleIdMergeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFacesPeopleIdMergeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetFacesPeopleIdFilesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetFacesPeopleIdFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime binary media endpoint
+ */
+export const GetFacesFaceIdCropParams = zod.object({
+  "faceId": zod.coerce.number()
+})
+
+export const GetFacesFaceIdCropResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdFacesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdFacesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateFilesReconcileLegacyBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateFilesReconcileLegacyResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibrarySeqResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryActivityResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryScanDryRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryScanDryRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime server-sent event endpoint
+ */
+export const GetLibraryJobsEventsResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsBackgroundResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetLibraryJobsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdPauseParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdPauseBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdPauseResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdResumeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdResumeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdResumeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryJobsIdCancelParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateLibraryJobsIdCancelBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryJobsIdCancelResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteLibraryActiveJobBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteLibraryActiveJobResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryThumbnailsStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsPrioritizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsPrioritizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteLibraryThumbnailsCacheBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteLibraryThumbnailsCacheResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryThumbnailsRebuildBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryThumbnailsRebuildResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryJobsIdFilesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetLibraryJobsIdFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryDuplicatesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateLibraryThumbnailsQualityBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateLibraryThumbnailsQualityResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryScanBenchmarkBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryScanBenchmarkResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetLibraryOutdatedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryReprocessBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryReprocessResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateLibraryOptimizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateLibraryOptimizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaMapResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdDetailParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdDetailResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesIdRelatedParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaFilesIdRelatedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateMediaFilesIdAiParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateMediaFilesIdAiBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateMediaFilesIdAiResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaHealthResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaCleanupBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaCleanupResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFilesResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaFoldersResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaFilesIdFavoriteParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateMediaFilesIdFavoriteBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaFilesIdFavoriteResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteMediaFilesIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteMediaFilesIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteMediaFilesIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateMediaFilesIdRenameParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateMediaFilesIdRenameBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateMediaFilesIdRenameResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaTimelineResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaTimelineItemsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime binary media endpoint
+ */
+export const GetMediaThumbnailIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetMediaThumbnailIdResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeScanResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeAiSummaryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeAiSummaryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdRetryParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdRetryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdRetryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdCancelParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdCancelBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdCancelResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeConversionJobIdActionParams = zod.object({
+  "jobId": zod.coerce.number()
+})
+
+export const CreateOptimizeConversionJobIdActionBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeConversionJobIdActionResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdFinalizeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdFinalizeBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdFinalizeResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOptimizeJobsIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOptimizeJobsIdExecuteTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOptimizeJobsIdExecuteTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOptimizeJobsIdExecuteTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOptimizeJobsIdExecuteParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOptimizeJobsIdExecuteResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOrganizeJobsIdDryRunParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobsIdDryRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdExecuteTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdExecuteTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdExecuteTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetOrganizeRecoveryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdRollbackParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdRollbackBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdRollbackResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdResetParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdResetBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdResetResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateOrganizeJobsIdResumeTokenParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateOrganizeJobsIdResumeTokenBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateOrganizeJobsIdResumeTokenResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime server-sent event endpoint
+ */
+export const GetOrganizeJobsIdResumeParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetOrganizeJobsIdResumeResponse = zod.unknown()
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchAiBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchAiResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSimilarIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetSearchSimilarIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSuggestionsResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchHistoryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteSearchHistoryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteSearchHistoryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchSavedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchSavedBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchSavedResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateSearchSavedIdRunParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CreateSearchSavedIdRunBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateSearchSavedIdRunResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const DeleteSearchSavedIdParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteSearchSavedIdBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const DeleteSearchSavedIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSearchAiStatusResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetSettingsScannerResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const UpdateSettingsScannerBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const UpdateSettingsScannerResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+);
+
+
 export const ListArchivesQueryParams = zod.object({
   "category": zod.coerce.string().optional(),
   "status": zod.coerce.string().optional(),
   "minSize": zod.coerce.number().min(listArchivesQueryMinSizeMin).max(listArchivesQueryMinSizeMax).optional(),
   "maxSize": zod.coerce.number().min(listArchivesQueryMaxSizeMin).max(listArchivesQueryMaxSizeMax).optional(),
-  "dateFrom": zod.date().optional(),
-  "dateTo": zod.date().optional(),
+  "dateFrom": zod.coerce.string().regex(listArchivesQueryDateFromRegExp).optional(),
+  "dateTo": zod.coerce.string().regex(listArchivesQueryDateToRegExp).optional(),
   "limit": zod.coerce.number().optional(),
   "offset": zod.coerce.number().optional()
 })
