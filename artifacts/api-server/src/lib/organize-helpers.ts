@@ -177,6 +177,18 @@ export interface FileMoveRecord {
 }
 
 /**
+ * A job may be deleted only when no active worker or unresolved file-move
+ * journal depends on it. Completed and fully rolled-back jobs retain history
+ * only; failed jobs with moves must remain available for recovery.
+ */
+export function canDeleteOrganizationJob(status: string, fileMoves: unknown): boolean {
+  if (fileMoves !== null && fileMoves !== undefined && !Array.isArray(fileMoves)) return false;
+  if (status === "completed" || status === "rolled_back") return true;
+  if (!["pending", "planned", "verified", "failed"].includes(status)) return false;
+  return fileMoves == null || fileMoves.length === 0;
+}
+
+/**
  * Move a file without replacing an existing destination, then verify its
  * SHA-256 integrity. If verification fails after the move, restore the file
  * to its source path with a no-replace operation before propagating the error.
@@ -295,6 +307,15 @@ export async function rollbackMoves(
         } catch { /* normal no-replace move below will preserve any conflict */ }
       }
 
+      // Never hash or move a symlink/FIFO/device as though it were the
+      // original regular file. In particular, hashing a symlink follows its
+      // target and could falsely report that an external file was restored.
+      const destinationStat = fs.lstatSync(mv.to);
+      if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+        log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.to)} is not a regular file; destination preserved`);
+        continue;
+      }
+
       // Verify the destination still contains the exact original bytes before
       // restoring it. A file changed after the forward move must not be counted
       // as successfully rolled back or silently replace the original source.
@@ -305,6 +326,20 @@ export async function rollbackMoves(
       }
 
       moveFileNoReplace(mv.to, mv.from);
+
+      // Re-check the restored path without following links. This closes the
+      // ordinary symlink replacement window between destination inspection
+      // and the no-replace move; an unverified entry is returned when possible.
+      const restoredStat = fs.lstatSync(mv.from);
+      if (!restoredStat.isFile() || restoredStat.isSymbolicLink()) {
+        try {
+          moveFileNoReplace(mv.from, mv.to);
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; entry returned to destination`);
+        } catch (preserveError: any) {
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; could not return it to destination: ${preserveError.message}`);
+        }
+        continue;
+      }
 
       // Count only checksum-verified restores. If bytes change between the
       // preflight hash and the move, put the unverified file back at its
