@@ -284,8 +284,8 @@ async function fetchPending(
          OR NOT EXISTS (
            SELECT 1
            FROM unnest($3::text[]) AS excluded(folder)
-           WHERE lower(f.relative_path) = excluded.folder
-              OR lower(f.relative_path) LIKE excluded.folder || '/%'
+           WHERE lower(replace(f.relative_path, chr(92), '/')) = excluded.folder
+              OR left(lower(replace(f.relative_path, chr(92), '/')), length(excluded.folder) + 1) = excluded.folder || '/'
          )
        )
        AND (
