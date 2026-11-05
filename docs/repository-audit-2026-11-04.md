@@ -1693,11 +1693,25 @@ Fast Validation #813 (run 42089895124) failed because scripts/windows/installer-
 
 These are Fast Validation and Dependency Review results, not full CI or release validation. The Windows release workflow was not dispatched, no installer was published, and no release was created. The full installed-product lifecycle remains unverified because the Authenticode signing certificate has not been configured, as previously reported.
 
+## 2026-11-05 audit continuation — replacement recovery and conversion ownership
+
+### Organize replacement re-audit
+
+The local audit commit `16286b416dcc7d10e69547885c436d26cb959bae` adds a durable replacement intent before filesystem mutation. The intent records the incoming source and destination plus a unique backup path and the prior destination's SHA-256. `verifiedReplace` moves the prior regular file without overwriting, verifies that backup, publishes and verifies the incoming file, and restores or retains both copies on failure. Recovery validates all journal paths beneath the active library root and preserves ambiguous copies for manual recovery.
+
+The source-level data-loss path is therefore **mitigated in the current code**, not still unaddressed. The crash/restart behavior is not fully closed: this pass ran the focused organization helper and conversion-finalization/lock tests, but did not run the database-backed recovery route or the installed Windows/NAS process-restart scenario. The existing “Confirm interrupted replacements recover after process restarts” task remains the required end-to-end confirmation.
+
+### Conversion worker ownership re-audit
+
+The conversion lock is still a PostgreSQL session advisory lock held on a dedicated pool client. The execution and finalization routes acquire it before work and release it in `finally`, but the in-flight conversion code does not monitor that client or gate filesystem mutations on continued lock ownership. A database connection loss releases the advisory lock while the original process can continue writing staged files or finalizing media; another process can then acquire the lock. This remains a **critical, unresolved fencing gap**. No code change was made here because safe fencing must cover the actual filesystem mutation boundary, including supported NAS/SMB behavior—not only add another status check.
+
+Validation for this continuation: the targeted organization-helper, conversion-job-lock, and conversion-finalization tests passed **67/67**. These tests do not simulate a live conversion continuing after its advisory-lock connection is lost, and the route recovery tests requiring a database were not run.
+
 ### Updated prioritized findings ledger
 
 | Severity | Workflow / finding | Status | Commit | Remaining risk / next action |
 |---|---|---|---|---|
-| Critical | Organize → replace can remove the destination before durable displaced-original recovery intent exists | **blocked** | — | Design a durable replacement journal and verified recovery copy; add crash-injection tests before changing destructive operations. |
+| Critical | Organize → replace can lose the previous destination during replacement or recovery | **mitigated; restart validation pending** | 16286b416dcc7d10e69547885c436d26cb959bae | Durable intent, verified backup, no-replace publication, and recovery retention are implemented and unit-tested. Confirm the existing process-restart recovery task against the database route and supported Windows/NAS paths before closing. |
 | Critical | Conversion worker can continue filesystem writes after losing its PostgreSQL advisory-lock connection | **blocked** | — | Design process-lifetime filesystem mutation fencing and validate on Windows, local disks, SMB, and supported NAS filesystems. |
 | High | Packaged updater → malformed or unreadable update journal is silently treated as absent (Read-UpdateJournal catches and returns null) | **found / blocked** | — | A corrupt journal can prevent recovery from discovering the displaced installation backup. Design explicit absent/valid/corrupt states, preserve ambiguous backups, and add crash/corruption recovery tests; do not blindly select a backup. |
 | High | Windows release workflow → manual validate_only still runs with workflow-level contents: write and receives production manifest-signing and Authenticode secrets | **found / blocked** | — | Split validation and publication into separate jobs. Give validation read-only permissions and ephemeral test signing identities; expose production signing secrets and write permission only to the protected publish job. No workflow dispatch was run. |
@@ -1709,5 +1723,9 @@ These are Fast Validation and Dependency Review results, not full CI or release 
 ### Branch and PR preservation
 
 The latest fetched remote audit branch was `f44f1c6629bc8f9382f7b1291a46bfe85d1de6ac`, the then-current head of open, unmerged PR #2 targeting `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`. At that check it was 833 commits ahead and 1 behind. The local Replit workspace had no audit branch and was on `main`; the existing remote PR branch was recovered, and the local audit commits were joined with the three subsequently fetched PR commits using a local non-fast-forward merge. This does not merge the GitHub PR or change `main`. No force-push or history rewrite was performed; the local merge remains unpushed.
+
+The ancestry check found that local `main` includes the earlier audit history through `1a971f7cd647b8c3688e115635a48839dcbf21af` via local merge commit `405cd29b6f366813f8a4b7ab2cfd267d8abf745e`. The current remote PR head is not merged into `main`. Patch-equivalence comparison found 79 audit-branch-only commits and four local-main-only commits: `694a055` (the PR base update), `9dcce45` (audit-runner isolation and generated API updates), `e621e9e` (local audit verification), and `5ce1269` (the organize replacement fix). The relevant `5ce1269` fix was preserved as `16286b4`; `9dcce45` and `e621e9` remain intact on local `main` and were not imported into the audit branch. The PR base update was not merged into the audit branch.
+
+The cherry-picked organize commit had also included two unreferenced test-generated cache JSON files. They were removed from the audit branch in a separate cleanup commit; the original commit and files remain recoverable in Git history and local `main`. No `main` ref was changed.
 
 No production data, credentials, or published releases were changed.
