@@ -339,3 +339,10 @@ Remaining archive hardening:
 - Trash root directories were already being checked, but individual manifest paths still used a resolver that followed symlinks. A symlink inside `.Trash` pointing at another file inside the trash root could therefore cause restore/removal to act on the target instead of the manifest path.
 - Added component-by-component `lstat` resolution for trash paths. It rejects symlinks and non-directory parent components, including links that remain inside the trash root. Manifest insertion, restore reconciliation, purge, and tombstone removal now use this resolver.
 - Added a regression test that creates a trash symlink pointing at a different file and verifies removal refuses to follow it and preserves both the target and link. Fast Validation is pending.
+
+
+## Windows 7-Zip release payload path (2026-11-05)
+
+- The API resolver loads the packaged executable from `api-runtime/dist/vendor/7zip/7z.exe`, relative to `dist/lib/sevenzip.js`. The Windows release builder staged official 7-Zip at `api-runtime/vendor/7zip`, one directory too high. The installer could therefore contain the binary but the installed API would not find it.
+- Changed the release staging destination to `deployOutput/dist/vendor/7zip`, which maps to the resolver's exact packaged path after deployment/copy. Added a release-payload contract test comparing the builder destination with the runtime resolver.
+- Official 7-Zip 26.05 asset SHA-256 values used by the staging scripts were checked against the upstream GitHub release metadata; the Linux x64 archive, Windows extra archive, Windows installer, and 7zr hashes match upstream release digests. Fast Validation is pending.
