@@ -321,9 +321,14 @@ function Test-PackagedUpdateFault($point) {
   }
 }
 function Restore-UpdateBackup {
-  $journal = Read-UpdateJournal
+  # Prefer the path captured in memory after this process moved the original
+  # installation. A damaged journal must not prevent that known-safe rollback.
+  # On a fresh process, the journal remains the only recovery source and is
+  # therefore required to parse and validate successfully.
+  $journal = $null
+  if (-not $script:UpdateBackup) { $journal = Read-UpdateJournal }
   $backup = if ($script:UpdateBackup) { $script:UpdateBackup } elseif ($journal) { $journal.backup } else { $null }
-  if (-not $backup -or -not (Test-Path $backup)) { return $false }
+  if (-not $backup -or -not (Test-Path -LiteralPath $backup -PathType Container)) { return $false }
 
   $failed = $InstallRoot + ".failed-" + [guid]::NewGuid().ToString()
   $parent = Split-Path -Parent $InstallRoot
@@ -389,6 +394,11 @@ function Invoke-PackagedVersionSwap($candidate, $backup) {
   Push-Location $parent
   try {
     Move-Item -LiteralPath $InstallRoot -Destination $backup -ErrorAction Stop
+    # Keep a trusted in-process rollback path before the next journal write.
+    # If that write fails or the journal becomes unreadable, this process can
+    # still restore the directory it just displaced.
+    $script:UpdateBackup = $backup
+    $script:UpdateCandidate = $candidate
     Write-UpdateJournal "backup-created" $candidate $backup
     Test-PackagedUpdateFault "swap-after-backup"
     Move-Item -LiteralPath $candidate -Destination $InstallRoot -ErrorAction Stop
