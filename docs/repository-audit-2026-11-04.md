@@ -645,8 +645,15 @@ Remaining archive hardening:
 - Manifest write temporary names are now unique as well, avoiding same-process and cross-process collisions on the old PID-only temporary filename.
 - Added focused regressions: (1) two service instances sharing a simulated database lock cannot copy the same manifest concurrently, and the lock is reusable after completion; (2) a destination created after preview is never overwritten, the source remains intact, and the current operation's partial file is cleaned.
 - Commits: implementation `0340a1c02d76d2ba814ac88599cd0c9231f60e00`; regression tests `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
-- Validation: Fast Validation passed on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`, including the concurrent-copy and destination-collision regressions. Dependency Review passed on commit `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
+- Validation: Fast Validation passed on commit `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`, including concurrent-copy and destination-collision regressions on Linux and Windows. Dependency Review passed on commit `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
 - Remaining limitations: the regression uses a fake database client to exercise advisory-lock ownership; a live PostgreSQL advisory-lock integration test and a real NAS/SMB publication test remain outstanding. If the database connection is lost during a long-running copy, PostgreSQL releases the lock; the exclusive no-replace destination publication still protects existing files, but the manifest can require a retry/reconciliation. Older deterministic partial files left by an interrupted pre-fix copy are not automatically deleted, to avoid removing a file still owned by an older running process.
+
+
+## Recovery rollback and job deletion preserve filesystem safety (2026-11-05)
+
+- Recovery rollback previously hashed destination paths with normal file reads, which follow symbolic links. A destination replaced with a symlink could therefore be mistaken for the original regular file. `rollbackMoves` now uses `lstat` to reject symlinks and non-regular destination entries before hashing, then rechecks the restored source entry after moving it.
+- Organize job deletion previously blocked only `executing` jobs. A failed job with unresolved file moves, or a job in `rolling_back`, could be deleted and lose its recovery journal. Added `canDeleteOrganizationJob` and a database-side DELETE predicate that allows deletion only for terminal completed/rolled-back jobs or inactive jobs with an empty journal. The predicate protects against a concurrent worker acquiring a lease or adding recovery records after the initial read.
+- Added regression tests for symlink-safe rollback and recovery-aware deletion. Fast Validation passed on commit `2b476dfc5a3ecf776317a1eb34d019fdf54596fa`.
 
 
 ## Operational NAS directories reject symlink redirection (2026-11-05)
