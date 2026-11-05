@@ -348,3 +348,27 @@ test("startup recovery refuses journal paths outside the active library root", a
     fs.rmSync(outsideRoot, { recursive: true, force: true });
   }
 });
+
+
+test("startup recovery rejects same-path journal entries without deleting the only file", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "same-path.jpg"), "preserve this original");
+    const sourceHash = await sha256File(original);
+
+    const recovery = await recoverConversionFinalizationMoves([{
+      from: original,
+      to: original,
+      sourceHash,
+      destHash: "",
+      verified: false,
+    }], f.root);
+
+    assert.equal(recovery.complete, false);
+    assert.equal(recovery.rollbackCount, 0);
+    assert.equal(recovery.unresolvedMoves.length, 1);
+    assert.equal(fs.readFileSync(original, "utf8"), "preserve this original");
+  } finally {
+    f.cleanup();
+  }
+});
