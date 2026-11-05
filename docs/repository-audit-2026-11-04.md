@@ -605,3 +605,12 @@ Remaining archive hardening:
 - Added regression coverage for incomplete-resume journal retention and fail-closed resume checkpointing.
 - Commits: route `00bac4bf1946d4237a172d6b5f1c6efad2a88d4c`; regression `c2132abae83f8e62eb2f7a824e60a6f5edbe8fab`.
 - Validation pending. The broader pre-move journal-intent and worker-fencing gaps remain open.
+
+
+## Final destination checksum verification (2026-11-05)
+
+- Found that both execute and resume performed a final existence-only check. A file could pass the immediate post-move SHA-256 check, be modified before the job's completion boundary, and still be included in a completed report because the stored `verified` flag was trusted without re-reading the destination.
+- Both completion paths now stream-hash every destination against its journaled `sourceHash` immediately before marking the job completed. Missing files and checksum mismatches fail the operation; resume reports only the files actually re-hashed successfully.
+- Added regression coverage asserting both production completion paths perform the final destination hash comparison.
+- Commits: route `e29c794ceeeff2a2f97ed1202cec70c637a24078`; regression `d4c1ec630f63670bf916f014ff9e3267fed05c30`.
+- Validation pending. This detects changes before the completion boundary; it cannot prevent a separate actor from modifying a file after the job has completed.
