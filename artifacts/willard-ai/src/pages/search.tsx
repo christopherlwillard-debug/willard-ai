@@ -494,7 +494,7 @@ export default function SearchPage() {
       </form>
 
       {search.isError && (
-        <p className="text-sm text-destructive" data-testid="text-search-error">{(search.error as Error).message}</p>
+        <p role="alert" aria-live="assertive" className="text-sm text-destructive" data-testid="text-search-error">{(search.error as Error).message}</p>
       )}
 
       {/* Refinement trail */}
