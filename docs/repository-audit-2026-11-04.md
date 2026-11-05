@@ -508,3 +508,12 @@ Remaining archive hardening:
 - Confirmed a high-priority data-loss risk in both initial execution and resume paths. When `conflictPolicy === "replace"`, `organize.ts` calls `fs.unlinkSync(destFile)` before `verifiedMove` installs and hashes the replacement. If that move/hash fails, or a later file/verification step fails, the catch path calls `rollbackMoves(fileMoves)`; `FileMoveRecord` contains only the new source/destination hashes and `rollbackMoves` has no backup record for the previous destination. The old destination is therefore not restored even though the job reports a rollback.
 - Left unchanged because a safe correction requires durable per-file backup intents, crash recovery for the interval between backup/move/checkpoint, and rollback support in both initial and resumed execution. A temporary rename without journaled recovery could strand the only old copy after a process crash; changing `replace` to skip/abort would alter user-visible semantics and needs approval.
 - Until that transactional backup design and its crash-recovery tests exist, treat `replace` as unsafe for valuable existing destination files. The default `keep_existing` path is not affected by this finding.
+
+
+## Explicitly disable 7-Zip symbolic-link materialization (2026-11-05)
+
+- Follow-up review focused on the remaining gap between metadata-based link rejection and actual extraction. The organize route rejected links reported by Seven.list, but Seven.extractFull did not explicitly disable link materialization. That left extraction behavior dependent on the 7-Zip build and archive format if link metadata was incomplete.
+- Added the explicit -snl- switch through the documented node-7z $raw option on the organize extraction call. This is defense in depth alongside preflight metadata rejection and the post-extraction lstat tree inspection.
+- Added a regression assertion that the real organize route's 7-Zip extraction call passes -snl- and retains an extraction error listener.
+- Commits: e811b13b145f73fbea79e1e82678a8940155a141 (implementation) and cf7f16242075d71576f48798671f3a2829504e9f (regression test).
+- Validation is pending for the latest branch head. This narrows the risk but does not replace a full Windows organize-route test with a crafted malicious archive; that remains an explicit validation item.
