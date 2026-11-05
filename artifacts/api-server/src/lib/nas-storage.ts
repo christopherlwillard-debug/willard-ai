@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Writable } from "stream";
 import { Worker } from "worker_threads";
 import { redactOperationalData } from "./log-redaction.ts";
@@ -511,9 +511,13 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
       "NAS storage is required for temporary media work; no library location is configured.",
     );
   }
-  const requestedSuffix = (jobId ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  const rawJobId = jobId ?? "default";
+  const sanitizedJobId = rawJobId.replace(/[^A-Za-z0-9._-]/g, "_");
+  const requestedSuffix = sanitizedJobId.slice(0, 120);
   const suffix = requestedSuffix && requestedSuffix !== "." && requestedSuffix !== ".."
-    ? requestedSuffix
+    ? sanitizedJobId === rawJobId && rawJobId.length <= 120
+      ? requestedSuffix
+      : `${requestedSuffix.slice(0, 107)}-${createHash("sha256").update(rawJobId).digest("hex").slice(0, 12)}`
     : `job-${randomUUID()}`;
   const willardRoot = getWillardAIDir(nasPath);
   const tempRoot = path.join(willardRoot, "temp");
