@@ -1355,3 +1355,18 @@ Fast Validation #755 completed successfully on commit e0d69e50: both the Linux v
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Media, archives, saved search, organize jobs, conversion jobs — malformed numeric path IDs | fixed; target test pending | This audit batch | Other route modules may contain additional numeric path parsing; continue repository-wide inventory |
+
+
+## 2026-11-05 route-input audit expansion
+
+The first strict-ID batch exposed additional instances during the complete route-module inventory. The same permissive coercion pattern was present in collections, face/person routes, media detail, library-job controls, and OpenAI conversation routes. Collection membership/merge bodies also used `Number`/`parseInt(String(...))`, which could silently turn malformed IDs into another valid file or album ID.
+
+**Additional corrections:** Extended the shared parser to accept either a positive safe-integer JSON number or a canonical decimal string. Applied it to collection IDs, collection item IDs, face/person IDs, and OpenAI conversation IDs; malformed collection file/source ID arrays are rejected instead of silently filtering/coercing values. Collection pagination and library-job list limits now use bounded integer validation. Cleanup duplicate/large-file/old-file pagination now rejects malformed or out-of-range limits/offsets with HTTP 400 rather than allowing permissive prefixes or negative values to reach SQL.
+
+**Regression coverage:** Extended helper tests for JSON-number and string values, invalid coercions, and route-source wiring across the additional modules. The same Fast Validation backend test executes the expanded suite.
+
+**Ledger update:** The medium-severity malformed numeric identifier finding now covers media, archives, search, organize, optimize, collections, faces, library jobs, media details, and OpenAI conversations. Query-boundary correctness also covers collection/library/cleanup pagination. The batch is fixed in source; targeted and CI validation are pending.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Collection membership/merge, face reassignment/merge, library jobs, media details, OpenAI conversations, cleanup pagination | fixed; target test pending | This audit batch | Other non-route inputs and body schemas still require independent validation; no runtime browser test claimed |

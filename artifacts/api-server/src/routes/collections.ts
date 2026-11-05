@@ -5,6 +5,7 @@ import { and, eq, sql, count, desc, isNull, inArray } from "drizzle-orm";
 import { buildSmartConditions, parseSmartRule, validateSmartRule, rebuildAutoCollections, type SmartRule } from "../lib/collections-engine";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { parseBoundedInteger, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 
 const router = Router();
 
@@ -145,8 +146,8 @@ router.post("/collections", async (req: Request, res: Response) => {
 
 router.patch("/collections/:id", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  if (!nasPath || !Number.isFinite(id)) {
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (!nasPath || id === null) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
@@ -187,8 +188,8 @@ router.patch("/collections/:id", async (req: Request, res: Response) => {
 
 router.delete("/collections/:id", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  if (!nasPath || !Number.isFinite(id)) {
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (!nasPath || id === null) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
@@ -214,8 +215,8 @@ router.delete("/collections/:id", async (req: Request, res: Response) => {
 
 router.get("/collections/:id/items", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  if (!nasPath || !Number.isFinite(id)) {
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (!nasPath || id === null) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
@@ -225,8 +226,8 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
     return;
   }
 
-  const page = Math.max(1, parseInt(req.query["page"] as string) || 1);
-  const limit = Math.min(200, Math.max(1, parseInt(req.query["limit"] as string) || 60));
+  const page = parseBoundedInteger(req.query["page"], { name: "page", min: 1, max: 10_000_000, defaultValue: 1 });
+  const limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 60 });
   const offset = (page - 1) * limit;
 
   if (c.kind === "smart") {
@@ -271,16 +272,15 @@ router.get("/collections/:id/items", async (req: Request, res: Response) => {
 // ── POST /api/collections/:id/items — add files to a manual album ───────────
 router.post("/collections/:id/items", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  const fileIds: number[] = Array.isArray(req.body?.fileIds)
-    ? (req.body.fileIds as unknown[])
-      .map((value): number => Number(value))
-      .filter((value: number) => Number.isInteger(value) && value > 0)
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  const parsedFileIds: Array<number | null> = Array.isArray(req.body?.fileIds)
+    ? (req.body.fileIds as unknown[]).map(parsePositiveIntegerValue)
     : [];
-  if (!nasPath || !Number.isInteger(id) || fileIds.length === 0) {
+  if (!nasPath || id === null || parsedFileIds.length === 0 || parsedFileIds.some((value) => value === null)) {
     res.status(400).json({ error: "Provide a collection id and at least one file id" });
     return;
   }
+  const fileIds = parsedFileIds as number[];
   const collection = await loadCollection(id, nasPath);
   if (!collection || collection.removedAt) {
     res.status(404).json({ error: "Collection not found" });
@@ -312,9 +312,9 @@ router.post("/collections/:id/items", async (req: Request, res: Response) => {
 // ── DELETE /api/collections/:id/items/:fileId — remove a file from an album
 router.delete("/collections/:id/items/:fileId", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  const fileId = parseInt(req.params["fileId"] as string, 10);
-  if (!nasPath || !Number.isInteger(id) || !Number.isInteger(fileId)) {
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  const fileId = parsePositiveIntegerParam(req.params["fileId"]);
+  if (!nasPath || id === null || fileId === null) {
     res.status(400).json({ error: "Invalid request" });
     return;
   }
@@ -338,11 +338,14 @@ router.delete("/collections/:id/items/:fileId", async (req: Request, res: Respon
 
 router.post("/collections/:id/merge", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
-  const id = parseInt(req.params["id"] as string, 10);
-  const sourceIds: number[] = Array.isArray(req.body?.sourceIds)
-    ? req.body.sourceIds.map((n: unknown) => parseInt(String(n), 10)).filter((n: number) => Number.isFinite(n) && n !== id)
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  const parsedSourceIds: Array<number | null> = Array.isArray(req.body?.sourceIds)
+    ? (req.body.sourceIds as unknown[]).map(parsePositiveIntegerValue)
     : [];
-  if (!nasPath || !Number.isFinite(id) || sourceIds.length === 0) {
+  const sourceIds = parsedSourceIds.every((value): value is number => value !== null)
+    ? [...new Set(parsedSourceIds.filter((value) => value !== id))]
+    : [];
+  if (!nasPath || id === null || sourceIds.length === 0) {
     res.status(400).json({ error: "Provide target id and sourceIds" });
     return;
   }

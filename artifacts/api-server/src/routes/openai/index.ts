@@ -11,6 +11,7 @@ import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider, isM
 import { archiveScope } from "../../lib/archive-scope.ts";
 import { buildAiMediaExclusionCondition } from "../../lib/ai-media-scope.ts";
 import { getActiveAppSettings } from "../../lib/active-library.ts";
+import { parsePositiveIntegerParam } from "../../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
@@ -241,7 +242,8 @@ router.post("/openai/conversations", async (req, res) => {
 
 router.get("/openai/conversations/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
     const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
@@ -253,7 +255,8 @@ router.get("/openai/conversations/:id", async (req, res) => {
 
 router.delete("/openai/conversations/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
     await db.delete(messages).where(eq(messages.conversationId, id));
@@ -266,7 +269,8 @@ router.delete("/openai/conversations/:id", async (req, res) => {
 
 router.get("/openai/conversations/:id/messages", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
     res.json(msgs);
   } catch {
@@ -284,7 +288,8 @@ router.post("/openai/conversations/:id/messages", async (req, res) => {
       });
       return;
     }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
 

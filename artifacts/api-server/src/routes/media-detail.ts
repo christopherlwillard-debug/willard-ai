@@ -6,6 +6,7 @@ import { logger } from "../lib/logger.ts";
 import { isVectorAvailable } from "../lib/vector-capability.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
@@ -87,8 +88,8 @@ router.get("/media/map", async (_req: Request, res: Response) => {
 
 router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
     const embeddingAvailability = isVectorAvailable()
@@ -217,8 +218,8 @@ router.get("/media/files/:id/detail", async (req: Request, res: Response) => {
 
 router.get("/media/files/:id/related", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
 
@@ -360,8 +361,8 @@ router.get("/media/files/:id/related", async (req: Request, res: Response) => {
 
 router.patch("/media/files/:id/ai", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(404).json({ error: "File not found" });
 

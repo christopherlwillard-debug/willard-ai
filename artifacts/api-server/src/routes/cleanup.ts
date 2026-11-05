@@ -16,6 +16,7 @@ import { logger } from "../lib/logger.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { getDuplicateSummary } from "../lib/duplicate-summary.ts";
 import { findEmptyDirectories } from "../lib/empty-folder-scan.ts";
+import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
@@ -39,10 +40,8 @@ router.get("/cleanup/duplicates", async (req, res) => {
       res.json({ groups: [], totalGroups: 0, totalWastedBytes: 0 });
       return;
     }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "20"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const pageLimit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 20));
-    const pageOffset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const pageLimit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 100, defaultValue: 20 });
+    const pageOffset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
 
     // ── 1. Exact-hash groups ────────────────────────────────────────────────
     const exactHashGroups = await db.execute(sql`
@@ -201,6 +200,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
 
     res.json({ groups, totalGroups, totalWastedBytes });
   } catch (e: any) {
+    if (e instanceof RequestValidationError) { res.status(400).json({ error: e.message }); return; }
     logger.error({ err: e, operation: "cleanup_duplicates" }, "Duplicate cleanup failed");
     res.status(500).json({ error: "Failed to get duplicates" });
   }
@@ -212,10 +212,8 @@ router.get("/cleanup/large-files", async (req, res) => {
   try {
     const nasPath = await getConfiguredNasPath();
     if (!nasPath) { res.json({ files: [], total: 0, totalSizeBytes: 0 }); return; }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
-    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const limit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 200, defaultValue: 50 });
+    const offset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
     const result = await db.execute(sql`
       SELECT id, nas_path || '/' || relative_path AS path, name AS filename, extension,
              media_type AS "fileType", size_bytes AS "sizeBytes", modified_at AS "modifiedAt",
@@ -235,7 +233,8 @@ router.get("/cleanup/large-files", async (req, res) => {
     `);
     const row = (totals.rows[0] ?? {}) as any;
     res.json({ files: result.rows, total: Number(row.total ?? 0), totalSizeBytes: Number(row.total_size ?? 0) });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestValidationError) { res.status(400).json({ error: error.message }); return; }
     res.status(500).json({ error: "Failed to get large files" });
   }
 });
@@ -246,10 +245,8 @@ router.get("/cleanup/old-files", async (req, res) => {
   try {
     const nasPath = await getConfiguredNasPath();
     if (!nasPath) { res.json({ files: [], total: 0 }); return; }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
-    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const limit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 200, defaultValue: 50 });
+    const offset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
     const result = await db.execute(sql`
@@ -270,7 +267,8 @@ router.get("/cleanup/old-files", async (req, res) => {
          AND ${activeMediaCondition}
     `);
     res.json({ files: result.rows, total: Number((totals.rows[0] as any)?.total ?? 0) });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestValidationError) { res.status(400).json({ error: error.message }); return; }
     res.status(500).json({ error: "Failed to get old files" });
   }
 });

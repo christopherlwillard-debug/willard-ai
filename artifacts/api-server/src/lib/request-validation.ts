@@ -37,6 +37,12 @@ export function parsePositiveIntegerParam(value: unknown): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+/** Parse a positive safe-integer identifier supplied as a JSON number or canonical decimal string. */
+export function parsePositiveIntegerValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+  return parsePositiveIntegerParam(value);
+}
+
 export function parseOptionalDate(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);
