@@ -316,6 +316,24 @@ export async function rollbackMoves(
         continue;
       }
 
+      // A durable pre-move intent can survive a crash before the source
+      // leaves staging. If the original source is still intact, the move never
+      // completed (or a previous rollback already restored it); preserve any
+      // destination that appeared independently and close this journal entry.
+      if (fs.existsSync(mv.from)) {
+        try {
+          const sourceStat = fs.lstatSync(mv.from);
+          if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
+            const sourceHash = await sha256File(mv.from);
+            if (sourceHash === mv.sourceHash) {
+              rolledBack++;
+              log(`ROLLBACK_SOURCE_INTACT: ${path.basename(mv.from)} remains at source; destination preserved`);
+              continue;
+            }
+          }
+        } catch { /* a later no-replace restore will preserve any source conflict */ }
+      }
+
       // Verify the destination still contains the exact original bytes before
       // restoring it. A file changed after the forward move must not be counted
       // as successfully rolled back or silently replace the original source.
