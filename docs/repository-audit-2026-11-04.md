@@ -485,3 +485,12 @@ Remaining archive hardening:
 - Updated the shared handler to return 404 only for filesystem `ENOENT` and `ENOTDIR`; other pre-header errors return a generic 500. Once headers are sent, the response is still destroyed with the original error to avoid a second response or truncated successful-looking payload.
 - Added regression coverage for missing files, logo-specific not-found messaging, permission-denied errors, and post-header stream failure.
 - Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. Validation is pending.
+
+
+## Thumbnail and byte-range stream error consistency (2026-11-05)
+
+- The follow-up stream audit found two related inconsistencies: cached thumbnail delivery returned 404 for every stream failure and ended an already-started response cleanly (potentially making a truncated thumbnail look like a successful response); byte-range media delivery returned 500 even when the underlying file was missing.
+- Cached thumbnails now evict the failed cache entry, log the failure, and use the shared media stream handler. Missing paths return 404; permission/I/O failures return 500; failures after headers are sent destroy the response rather than ending it as a successful partial payload.
+- Byte-range media delivery now uses the same handler, and its missing-file regression expects 404.
+- Regression tests cover thumbnail route wiring and the shared handler's ENOENT/EACCES/post-header behavior.
+- Commits: `260b003d08c26a8eb44e7f719b69a5156d52f8ca`, `6c25ed61edc0f826a16d128ed4e9ae38819cd0aa`, `f4f43a1e7852541ab07a836749d3f3a761fc4464`, `65f259f3a0534f948a182922b7566b6c6748bba3`, and `b16814e15267ce4d704a5305b3a7344973817ea7`. Validation pending.
