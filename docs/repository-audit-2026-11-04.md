@@ -442,3 +442,11 @@ Remaining archive hardening:
 
 - Targeted run `41940230121` initially reported 119 passing, 2 skipped, and 2 failing tests. The duplicate-path fixture was updated from an empty path component (`./nested//same.txt`) to the portable harmless-dot form (`./nested/same.txt`); the tombstone fixture was corrected to append a real JSONL newline rather than a literal backslash-n.
 - These test-only corrections are in commits `4ea49d1edec4a108d6d9f74e28be068a5de66004` and `49fe5e2497f74bd61ef4c1b32338d72534d5bdd4`. The full targeted backend suite then passed in Fast Validation run `41941085454`.
+
+## Windows-native 7-Zip symlink metadata coverage (2026-11-04)
+
+- Confirmed a validation gap: the official-binary compatibility test created and listed a real symlink archive only on non-Windows hosts (`process.platform !== "win32"`). The Windows smoke job verified ordinary archive creation/extraction and updater behavior, but did not verify that the Windows 7-Zip binary and `node-7z` expose a link entry through the technical `Attributes` Map consumed by the archive preflight.
+- The Linux compatibility test now exports its verified symlink-bearing 7z archive as a short-lived CI artifact. The Windows job downloads that fixture and runs the same `node-7z` compatibility test against the hash-verified official Windows 7-Zip 26.05 binary. This avoids depending on Windows symlink-creation privileges while exercising the Windows parser and metadata path.
+- The Windows compatibility test lists the fixture only; it does not extract the link-bearing archive. The existing application preflight remains responsible for rejecting links before extraction.
+- Validation status: pending for code/workflow commit `3becd96194b2c15a744fa927eb34093d313472f9`. The preceding audit head's Fast Validation and dependency review passed, but those results do not validate this new Windows path.
+- Remaining limitation: this closes the cross-platform link-metadata test gap only. It does not yet exercise the complete organize route against a malicious Windows reparse-point archive or validate malformed archive behavior on a packaged Windows installation.
