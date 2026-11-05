@@ -89,6 +89,9 @@ const finalizeStart = source.indexOf("async function finalizeHandlerImpl(");
 const finalizeEnd = source.indexOf("\n}", finalizeStart);
 const finalizeSource = source.slice(finalizeStart, finalizeEnd < 0 ? source.length : finalizeEnd);
 
+const finalizerPath = fileURLToPath(new URL("../lib/conversion-finalize.ts", import.meta.url));
+const finalizerSource = readFileSync(finalizerPath, "utf8");
+
 test("conversion staging and finalization paths stay inside the active NAS root", () => {
   assert.match(executeSource, /ensureDirectoryWithinRoot\(\s*path\.join\(getWillardAIDir\(nasPath\), "conversions", String\(id\)\),\s*nasPath/);
   assert.match(executeSource, /ensureDirectoryWithinRoot\(stagedDir, nasPath\)/);
@@ -96,12 +99,11 @@ test("conversion staging and finalization paths stay inside the active NAS root"
   assert.doesNotMatch(executeSource, /fs\.mkdirSync\(stagedDir/);
 
   assert.match(finalizeSource, /assertWithinRoot\(resultData\.stagingDir, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(originalPath, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(stagedPath, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(convertedPath, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(trashPath, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(keepBothPath, nasPath\)/);
-  assert.match(finalizeSource, /assertWithinRoot\(archivePath, nasPath\)/);
+  assert.match(finalizeSource, /finalizeConversionFiles\(/);
+  assert.match(finalizerSource, /assertWithinRoot\(originalPath, input\.nasPath\)/);
+  assert.match(finalizerSource, /assertWithinRoot\(stagedPath, input\.stagingDir\)/);
+  assert.match(finalizerSource, /assertWithinRoot\(outputPath, input\.nasPath\)/);
+  assert.match(finalizerSource, /assertWithinRoot\(backupPath, input\.nasPath\)/);
 });
 
 
@@ -172,4 +174,18 @@ test("conversion execution does not mark an unclaimed job failed when lock or pr
   assert.ok(claim >= 0 && catchStart > claim, "the claim flag must be set only after the atomic pending-to-running update");
   assert.match(catchBlock, /if \(jobClaimed\)/);
   assert.match(catchBlock, /eq\(conversionJobsTable\.status, "running"\)/);
+});
+
+
+test("conversion finalization delegates to verified no-overwrite moves and preserves staging on failure", () => {
+  assert.match(finalizeSource, /instanceof ConversionFinalizationError/);
+  assert.match(finalizeSource, /finalizationRecoveryMoves/);
+  assert.match(finalizeSource, /status: "done"/);
+  assert.match(finalizeSource, /staging cleanup was not finished/);
+  assert.doesNotMatch(finalizeSource, /fs\.unlinkSync\(originalPath\)/);
+  assert.doesNotMatch(finalizeSource, /fs\.renameSync\(stagedPath/);
+  assert.match(finalizerSource, /verifiedMove\(/);
+  assert.match(finalizerSource, /rollbackMoves\(moves\)/);
+  assert.match(finalizerSource, /output already exists/);
+  assert.match(finalizerSource, /Original backup destination already exists/);
 });

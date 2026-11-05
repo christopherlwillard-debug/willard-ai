@@ -22,6 +22,8 @@ import {
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
 import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
+import { finalizeConversionFiles, ConversionFinalizationError } from "../lib/conversion-finalize.ts";
+import { rollbackMoves } from "../lib/organize-helpers.ts";
 import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
 import {
   acquireConversionJobLock,
@@ -1360,11 +1362,11 @@ router.post("/optimize/jobs/:id/cancel", async (req, res) => {
 /**
  * POST /optimize/jobs/:id/finalize — Stage 4: apply user's choice for what to do with originals.
  * Body: { action: "recycle" | "replace" | "keep-both" | "archive" }
- * - recycle:   Move original to WillardAI/.Trash/<ts>/<relPath>; staged file takes original's path.
- * - replace:   Delete original permanently; staged file takes original's path.
- * - keep-both: Keep original in place; staged file saved as <stem>_optimized.<ext> next to original.
- * - archive:   Move original to WillardAI/archive/<relPath>; staged file takes original's path.
- * Appends each action to WillardAI/logs/conversions.jsonl. Cleans up staging dir on completion.
+ * - recycle:   Move original to WillardAI/.Trash/<timestamp>/<relPath> on every platform.
+ * - replace:   Keep the original in staging backup until the converted output is verified and committed.
+ * - keep-both: Keep original in place; publish converted file as <stem>_optimized.<ext> without overwriting.
+ * - archive:   Move original to WillardAI/archive/<relPath>; publish converted file without overwriting.
+ * Finalization verifies every staged file and rolls ordinary failures back before preserving staging.
  */
 // Canonical alias from the task spec: POST /optimize/conversion/:jobId/action
 // Bridges jobId → id param so the shared handler can read req.params.id.
@@ -1428,112 +1430,114 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       });
       return;
     }
-    const ts      = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-    const trashBase   = path.join(getWillardAIDir(nasPath), ".Trash", ts);
+    const ts = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+    const trashBase = path.join(getWillardAIDir(nasPath), ".Trash", ts);
     const archiveBase = path.join(getWillardAIDir(nasPath), "archive");
-
-    const fileOutcomes: Array<{ originalPath: string; outputPath: string; action: string; error?: string }> = [];
-
-    for (const file of resultData.files) {
-      if (file.status !== "success" || !file.stagedPath) continue;
-
-      const originalPath  = file.filePath;
-      const stagedPath    = file.stagedPath;
-      assertWithinRoot(originalPath, nasPath);
-      assertWithinRoot(stagedPath, nasPath);
-      if (!fs.existsSync(stagedPath)) continue;
-      const originalExt   = path.extname(originalPath).slice(1).toLowerCase();
-      const convertedExt  = path.extname(stagedPath).slice(1).toLowerCase();
-      const isCrossFormat = convertedExt !== originalExt;
-      const stem          = path.basename(originalPath, path.extname(originalPath));
-      const dir           = path.dirname(originalPath);
-      const relPath       = path.relative(path.resolve(nasPath), path.resolve(originalPath));
-
-      // For cross-format conversions (RAW→JPG, AVI→MP4, etc.) the output file MUST use the
-      // converted format's extension. Never write JPEG bytes into a .cr2 file.
-      const convertedPath = isCrossFormat
-        ? path.join(dir, `${stem}.${convertedExt}`)
-        : originalPath;
-      assertWithinRoot(convertedPath, nasPath);
-      const convertedRelPath = isCrossFormat
-        ? path.relative(path.resolve(nasPath), path.resolve(convertedPath))
-        : relPath;
-
-      let outputPath = "";
-
-      try {
-        if (action === "replace") {
-          // Remove original, place converted file at its correct path (may differ in extension)
-          if (fs.existsSync(originalPath)) fs.unlinkSync(originalPath);
-          fs.renameSync(stagedPath, convertedPath);
-          outputPath = convertedPath;
-        } else if (action === "recycle") {
-          if (process.platform === "win32") {
-            // Windows: use PowerShell to send original to OS Recycle Bin (recoverable)
-            const psResult = spawnSync("powershell", [
-              "-NoProfile", "-Command",
-              `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${originalPath.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`,
-            ], { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
-            if (psResult.status !== 0) {
-              throw new Error(`Recycle Bin move failed: ${(psResult.stderr ?? "").slice(0, 300)}`);
-            }
-          } else {
-            // Linux/macOS/Replit: move original to WillardAI/.Trash/<timestamp>/ (reversible)
-            const trashPath = path.join(trashBase, relPath);
-            assertWithinRoot(trashPath, nasPath);
-            fs.mkdirSync(path.dirname(trashPath), { recursive: true });
-            if (fs.existsSync(originalPath)) fs.renameSync(originalPath, trashPath);
-          }
-          // Place converted at correct path (extension matches format)
-          fs.renameSync(stagedPath, convertedPath);
-          outputPath = convertedPath;
-        } else if (action === "keep-both") {
-          // Original stays in place; converted gets _optimized suffix with converted extension
-          const keepBothPath = path.join(dir, `${stem}_optimized.${convertedExt}`);
-          assertWithinRoot(keepBothPath, nasPath);
-          fs.renameSync(stagedPath, keepBothPath);
-          outputPath = keepBothPath;
-        } else if (action === "archive") {
-          // Archive original at WillardAI/archive/; converted placed at correct path
-          const archivePath = path.join(archiveBase, relPath);
-          assertWithinRoot(archivePath, nasPath);
-          fs.mkdirSync(path.dirname(archivePath), { recursive: true });
-          if (fs.existsSync(originalPath)) fs.renameSync(originalPath, archivePath);
-          fs.renameSync(stagedPath, convertedPath);
-          outputPath = convertedPath;
-        }
-        void convertedRelPath; // used for logging only
-        fileOutcomes.push({ originalPath, outputPath, action });
-      } catch (err: any) {
-        fileOutcomes.push({ originalPath, outputPath: "", action, error: err.message });
-      }
-
-      appendConversionLog(nasPath, {
-        ts:                  new Date().toISOString(),
-        jobId:               id,
-        action,
-        originalPath,
-        outputPath:          fileOutcomes[fileOutcomes.length - 1]?.outputPath ?? "",
-        originalBytes:       file.originalBytes,
-        convertedBytes:      file.convertedBytes,
-        savedBytes:          Math.max(0, (file.originalBytes ?? 0) - (file.convertedBytes ?? 0)),
-        verificationResults: file.verification ?? { passed: false, checks: [] },
-        error:               fileOutcomes[fileOutcomes.length - 1]?.error,
+    const existingRecoveryMoves = (resultData as typeof resultData & {
+      finalizationRecoveryMoves?: unknown[];
+    }).finalizationRecoveryMoves;
+    if (Array.isArray(existingRecoveryMoves) && existingRecoveryMoves.length > 0) {
+      res.status(409).json({
+        error: "This conversion has files requiring manual recovery. Automatic finalization is blocked to preserve remaining media.",
+        recoveryMoves: existingRecoveryMoves.length,
       });
+      return;
     }
 
-    // Clean up staging dir
+    let finalized: Awaited<ReturnType<typeof finalizeConversionFiles>>;
+    try {
+      finalized = await finalizeConversionFiles({
+        action: action as "recycle" | "replace" | "keep-both" | "archive",
+        nasPath,
+        stagingDir: resultData.stagingDir,
+        trashBase,
+        archiveBase,
+        files: resultData.files,
+      });
+    } catch (error) {
+      if (error instanceof ConversionFinalizationError) {
+        const updatedResult = {
+          ...resultData,
+          action,
+          finalizationError: error.message,
+          finalizationRollbackComplete: error.rollbackComplete,
+          finalizationRecoveryMoves: error.recoveryMoves,
+        };
+        await db.update(conversionJobsTable)
+          .set({ resultJson: updatedResult, error: error.message })
+          .where(and(
+            eq(conversionJobsTable.id, id),
+            eq(conversionJobsTable.status, "awaiting_action"),
+          ));
+        res.status(409).json({
+          error: error.message,
+          rollbackComplete: error.rollbackComplete,
+          recoveryRequired: !error.rollbackComplete,
+          recoveryMoves: error.recoveryMoves.length,
+        });
+        return;
+      }
+      throw error;
+    }
+
+    const fileOutcomes = finalized.outcomes;
+    const [completedJob] = await db.update(conversionJobsTable).set({
+      status: "done",
+      error: null,
+      resultJson: {
+        ...resultData,
+        action,
+        fileOutcomes,
+        finalizationError: null,
+        finalizationRollbackComplete: true,
+        finalizationRecoveryMoves: [],
+      },
+    }).where(and(
+      eq(conversionJobsTable.id, id),
+      eq(conversionJobsTable.status, "awaiting_action"),
+    )).returning({ id: conversionJobsTable.id });
+
+    if (!completedJob) {
+      const restored = await rollbackMoves(finalized.moves);
+      if (restored !== finalized.moves.length) {
+        logger.error({
+          jobId: id,
+          rollbackRestored: restored,
+          rollbackExpected: finalized.moves.length,
+        }, "Conversion finalization database commit failed and filesystem rollback was incomplete");
+      }
+      throw new Error("Conversion job changed before finalization could be committed; filesystem rollback was attempted.");
+    }
+
+    for (const outcome of fileOutcomes) {
+      const file = resultData.files.find((candidate: any) => candidate.filePath === outcome.originalPath);
+      try {
+        appendConversionLog(nasPath, {
+          ts: new Date().toISOString(),
+          jobId: id,
+          action,
+          originalPath: outcome.originalPath,
+          outputPath: outcome.outputPath,
+          originalBytes: file?.originalBytes,
+          convertedBytes: file?.convertedBytes,
+          savedBytes: Math.max(0, (file?.originalBytes ?? 0) - (file?.convertedBytes ?? 0)),
+          verificationResults: file?.verification ?? { passed: false, checks: [] },
+        });
+      } catch (error) {
+        logger.warn({ err: error, jobId: id, originalPath: outcome.originalPath }, "Unable to append conversion history entry");
+      }
+    }
+
+    // The database now records a verified completed operation. Cleanup is
+    // intentionally last; a cleanup failure leaves extra recoverable bytes.
     try {
       if (resultData.stagingDir && fs.existsSync(resultData.stagingDir)) {
         assertWithinRoot(resultData.stagingDir, nasPath);
         fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
       }
-    } catch { /* best effort */ }
-
-    await db.update(conversionJobsTable).set({
-      status:     "done",
-      resultJson: { ...resultData, action, fileOutcomes },
-    }).where(eq(conversionJobsTable.id, id));
+    } catch (error) {
+      logger.error({ err: error, jobId: id, stagingDir: resultData.stagingDir }, "Conversion completed but staging cleanup was not finished");
+    }
 
     res.json({ action, filesProcessed: fileOutcomes.length, outcomes: fileOutcomes });
   } catch (e: any) {
