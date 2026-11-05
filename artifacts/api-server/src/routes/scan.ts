@@ -11,7 +11,7 @@
  *   GET  /api/diagnostics/scans
  */
 import { Router, type Request, type Response } from "express";
-import { db, appSettingsTable, libraryJobsTable } from "@workspace/db";
+import { db, libraryJobsTable } from "@workspace/db";
 import { and, desc, eq, or } from "drizzle-orm";
 import {
   getActiveJobId,
@@ -19,6 +19,7 @@ import {
   startJob,
   type JobProfile,
 } from "../lib/library-engine";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router = Router();
 
@@ -30,12 +31,7 @@ function markDeprecated(res: Response): void {
 }
 
 async function getNasPath(): Promise<string | null> {
-  const [settings] = await db
-    .select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable)
-    .limit(1);
-  const nasPath = settings?.nasPath?.trim();
-  return nasPath || null;
+  return getActiveNasPath();
 }
 
 function legacyStatus(status: string): "running" | "completed" | "failed" | "idle" {
