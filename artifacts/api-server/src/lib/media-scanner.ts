@@ -7,6 +7,7 @@ import { eq, and } from "drizzle-orm";
 import { getWillardAIDir, resolveWithinRoot } from "./nas-storage";
 import { getThumbnailDir, thumbnailFilename } from "./thumbnail-engine";
 import { isSystemDir, isSystemFile, isInIgnoredFolder, DEFAULT_SCANNER_SETTINGS, type ScannerSettings } from "./system-filter";
+import { getActiveAppSettings } from "./active-library.ts";
 
 // ── Media type classification ─────────────────────────────────────────────────
 
@@ -361,17 +362,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
       // Load user scanner settings from DB (fall back to defaults if not set)
       let scannerSettings: ScannerSettings = DEFAULT_SCANNER_SETTINGS;
       try {
-        const { appSettingsTable } = await import("@workspace/db");
-        const [row] = await db.select({
-          ignoredFolders:    appSettingsTable.ignoredFolders,
-          ignoredExtensions: appSettingsTable.ignoredExtensions,
-          ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
-          ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
-          ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
-          ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
-          ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
-          followSymlinks:     appSettingsTable.followSymlinks,
-        }).from(appSettingsTable).limit(1);
+        const row = await getActiveAppSettings();
         if (row) {
           scannerSettings = {
             ignoredFolders:    row.ignoredFolders    ?? [],
