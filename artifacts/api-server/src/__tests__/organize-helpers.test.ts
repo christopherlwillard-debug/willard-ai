@@ -621,7 +621,7 @@ test("organize job deletion preserves unresolved journals and conditionally excl
 
 
 test("rollbackMoves: a pending move intent with its source intact is a safe no-op", async () => {
-  const source = writeFile(mkTmp("pending-intent", "source.txt"), "original bytes");
+  const source = writeFile(path.join(mkTmp("pending-intent"), "source.txt"), "original bytes");
   const destination = path.join(mkTmp("pending-intent", "destination"), "source.txt");
   const sourceHash = await sha256File(source);
   const intent: FileMoveRecord = {
@@ -641,7 +641,7 @@ test("rollbackMoves: a pending move intent with its source intact is a safe no-o
 });
 
 test("rollbackMoves: a pending intent restores a file moved before its verified checkpoint", async () => {
-  const source = writeFile(mkTmp("pending-after-move", "source.txt"), "original bytes");
+  const source = writeFile(path.join(mkTmp("pending-after-move"), "source.txt"), "original bytes");
   const destination = path.join(mkTmp("pending-after-move", "destination"), "source.txt");
   const sourceHash = await sha256File(source);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -663,8 +663,8 @@ test("rollbackMoves: a pending intent restores a file moved before its verified 
 });
 
 test("rollbackMoves: pending intent preserves an independent destination when source never moved", async () => {
-  const source = writeFile(mkTmp("pending-race", "source.txt"), "original bytes");
-  const destination = writeFile(mkTmp("pending-race", "destination", "source.txt"), "independent destination");
+  const source = writeFile(path.join(mkTmp("pending-race"), "source.txt"), "original bytes");
+  const destination = writeFile(path.join(mkTmp("pending-race", "destination"), "source.txt"), "independent destination");
   const sourceHash = await sha256File(source);
   const intent: FileMoveRecord = {
     from: source,
@@ -684,7 +684,7 @@ test("rollbackMoves: pending intent preserves an independent destination when so
 
 
 test("verifiedMove refuses bytes that differ from the persisted pre-move intent", async () => {
-  const source = writeFile(mkTmp("intent-hash", "source.txt"), "changed after intent");
+  const source = writeFile(path.join(mkTmp("intent-hash"), "source.txt"), "changed after intent");
   const destination = path.join(mkTmp("intent-hash", "destination"), "source.txt");
 
   await assert.rejects(
@@ -703,7 +703,8 @@ test("execute and resume persist move intents before invoking filesystem moves",
   const executeStart = source.indexOf('router.get("/organize/jobs/:id/execute"');
   const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
   const executeRoute = source.slice(executeStart, rollbackStart);
-  const resumeRoute = source.slice(resumeStart, rollbackStart);
+  const resumeEnd = source.indexOf("\\nrouter.", resumeStart + 1);
+  const resumeRoute = source.slice(resumeStart, resumeEnd < 0 ? source.length : resumeEnd);
 
   for (const route of [executeRoute, resumeRoute]) {
     const intentIndex = route.indexOf("const intent: FileMoveRecord");
