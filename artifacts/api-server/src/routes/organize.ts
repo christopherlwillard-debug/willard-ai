@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { eq, desc, inArray, or, and, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { organizationJobsTable, archivesTable } from "@workspace/db";
+import { eq, desc, inArray, or, and, isNull, lt, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -15,6 +15,7 @@ import { getSevenZipPath } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
+import { getActiveAppSettings, getActiveNasPath } from "../lib/active-library.ts";
 import {
   ARCHIVE_LIMITS,
   ArchiveSafetyError,
@@ -48,9 +49,7 @@ import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
 const router: IRouter = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
+  return getActiveNasPath();
 }
 
 async function getScopedOrganizationJob(id: number, nasPath: string) {
@@ -935,9 +934,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 
     await db.update(organizationJobsTable).set({ status: "analyzing" }).where(eq(organizationJobsTable.id, id));
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] ?? {};
-    const nasPath = ((settings as any).nasPath ?? "").trim();
+    const settings = await getActiveAppSettings();
+    const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(eq(organizationJobsTable.id, id));
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
@@ -1154,9 +1152,8 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
 
     const plan = job.planJson as any;
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] as any ?? {};
-    const nasPath = (settings.nasPath ?? "").trim();
+    const settings = await getActiveAppSettings();
+    const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running preflight." }); return;
     }
@@ -1361,9 +1358,8 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first to build the plan" }); return; }
 
     const plan = job.planJson as any;
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] as any ?? {};
-    const nasPath = (settings.nasPath ?? "").trim();
+    const settings = await getActiveAppSettings();
+    const nasPath = (settings?.nasPath ?? "").trim();
 
     const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
 
@@ -1558,9 +1554,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (job.status !== "verified") { send("error", { message: "Pre-flight must pass before executing" }); res.end(); return; }
 
     const plan = job.planJson as any;
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] as any ?? {};
-    const nasPath = (settings.nasPath ?? "").trim();
+    const settings = await getActiveAppSettings();
+    const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
     }
@@ -2041,8 +2036,7 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
       res.status(400).json({ error: "Disposition is only valid for archive source jobs" }); return;
     }
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const nasPath = (settingsRows[0] as any)?.nasPath ?? "";
+    const nasPath = (await getActiveNasPath()) ?? "";
 
     let dispositionResult = "kept";
     if (job.archiveDisposition === "delete") {
@@ -2329,9 +2323,8 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     if (!job.planJson)                                     { send("error", { message: "Job has no plan — delete and recreate it" });           res.end(); return; }
 
     const plan = job.planJson as any;
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0] as any ?? {};
-    const nasPath = (settings.nasPath ?? "").trim();
+    const settings = await getActiveAppSettings();
+    const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured" }); res.end(); return;
     }
