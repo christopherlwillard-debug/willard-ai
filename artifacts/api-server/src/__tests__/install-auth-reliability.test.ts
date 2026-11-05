@@ -121,3 +121,19 @@ test("developer desktop launcher and local Vite servers bind only to loopback", 
   assert.match(viteConfigSource, /const serverHost = isReplit \? "0\.0\.0\.0" : "127\.0\.0\.1"/);
   assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
 });
+
+test("remote first-run setup requires an operator secret and rate-limits attempts", () => {
+  assert.match(authSource, /authorizeFirstRunSetup/);
+  assert.match(authSource, /configuredToken: process\.env\["WILLARD_SETUP_TOKEN"\]/);
+  assert.match(authSource, /router\.post\("\/auth\/setup", setupRateLimiter/);
+  assert.match(authSource, /remoteAddress: req\.ip \?\? req\.socket\.remoteAddress/);
+  assert.match(authSource, /authorization === "token_misconfigured"/);
+  assert.match(authSource, /authorization === "token_required" \|\| authorization === "token_invalid"/);
+  assert.match(authSource, /status\(503\)/);
+  assert.match(authSource, /status\(403\)/);
+  const authCheck = authSource.indexOf("const authorization = authorizeFirstRunSetup");
+  const settingsRead = authSource.indexOf("const settings = await getOrCreateSettings()", authCheck);
+  assert.ok(authCheck >= 0 && settingsRead > authCheck, "remote bootstrap authorization must precede the setup credential lookup/write");
+  assert.match(authSource, /const setupRateLimiter = rateLimit\(/);
+});
+
