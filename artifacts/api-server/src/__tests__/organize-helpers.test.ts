@@ -681,3 +681,17 @@ test("rollbackMoves: pending intent preserves an independent destination when so
   assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
   assert.equal(fs.readFileSync(destination, "utf8"), "independent destination");
 });
+
+
+test("verifiedMove refuses bytes that differ from the persisted pre-move intent", async () => {
+  const source = writeFile(mkTmp("intent-hash", "source.txt"), "changed after intent");
+  const destination = path.join(mkTmp("intent-hash", "destination"), "source.txt");
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, { expectedSourceHash: "0".repeat(64) }),
+    /Source changed after its recovery intent was recorded/,
+  );
+
+  assert.equal(fs.readFileSync(source, "utf8"), "changed after intent");
+  assert.equal(fs.existsSync(destination), false);
+});
