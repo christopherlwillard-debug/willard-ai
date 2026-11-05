@@ -119,6 +119,11 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-job-lock-postgres.test.ts
 
+      - name: Verify conversion finalization restart recovery with PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalization-recovery-postgres.test.ts
+
       - name: Run targeted backend regressions
         run: |
           node --experimental-strip-types --test \
