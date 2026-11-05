@@ -1242,3 +1242,17 @@ Statuses distinguish code inspection and focused tests from integration and full
 - Fast Validation #741 again reached `check:api-contracts` and failed only on two generated JSDoc indentation differences in `api-client-react/src/generated/api.schemas.ts` and `api-zod/src/generated/types/authSetupInput.ts`. The generated Zod runtime schema now matched exactly; workspace typecheck and runtime-route parity had already passed in #740.
 - Corrected the two interface comments to the exact Orval output shown by the #741 diff. The next Fast Validation run will verify the complete generated diff and continue through the backend and Windows jobs.
 - Status remains pending until that run completes; no claim of full validation is made.
+
+## 2026-11-05 audit batch — fail-closed Windows installer shutdown
+
+**Finding (high, installer reliability/data preservation):** `PrepareToInstall` launched the packaged `-Stop` helper but ignored both the `Exec` launch result and the helper's exit code. The packaged `Stop-Services` and developer `Stop-TrackedProcesses` functions also ignored `taskkill` outcomes and cleared their PID manifests without confirming the owned processes had exited. An upgrade could therefore continue into `[InstallDelete]` while an old API/web process was still alive, risking a mixed or partially replaced application directory.
+
+**Related confirmed cleanup defect:** `scripts/launcher/common.ps1` contained six duplicate, byte-identical PowerShell helper definitions (`New-WillardShortcut`, `Test-DatabaseConnection`, `Ensure-AppDatabase`, `Read-TrackedPids`, `Clear-TrackedPids`, and `Stop-TrackedProcesses`). The existing uniqueness regression failed with 54 unique names versus 71 declarations because it also counted JavaScript functions inside PowerShell here-strings. The later duplicate PowerShell definitions silently overrode the earlier ones and made future edits easy to apply to the wrong copy.
+
+**Correction:** Removed only the six duplicate PowerShell definitions after confirming each pair was identical. Corrected the uniqueness regression to ignore here-string contents and count only actual PowerShell functions. Both stop routines now issue a bounded wait, recheck the exact process identity, retain the PID manifest and throw if an owned process remains. Inno Setup now aborts before payload deletion when the launcher cannot start or returns a nonzero stop result.
+
+**Regression coverage:** Extended `scripts/windows/installer-config.test.mjs` to assert the fail-closed Inno result handling, bounded process wait, identity recheck, and delayed PID-manifest cleanup. The helper-name regression now excludes JavaScript function declarations embedded in here-strings. The test is part of `pnpm run test:release-contracts` in Fast Validation.
+
+**Verification status:** The #742 run confirmed generated API contracts, workspace typecheck, Expo config, and desktop web-server safety passed, then failed in release contracts at the helper-name assertion (54 !== 71). The installer correction and focused regression are committed after that failure; targeted/full validation is pending.
+
+**Remaining limitation:** The new stop guard has source-contract coverage, but a fault-injected Windows integration run where `taskkill` deliberately fails is not yet present. Clean-machine standard-user install/upgrade/uninstall coverage remains a separate blocked milestone.

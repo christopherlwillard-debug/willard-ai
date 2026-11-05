@@ -229,6 +229,30 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   );
 });
 
+test("installer refuses payload replacement when the running application cannot stop", () => {
+  const prepareStart = config.indexOf("function PrepareToInstall");
+  const prepare = config.slice(prepareStart);
+  assert.match(prepare, /if not Exec\(/);
+  assert.match(prepare, /ResultCode <> 0/);
+  assert.match(prepare, /existing installation was left unchanged/);
+
+  const packagedStopStart = launcher.indexOf("function Stop-Services {");
+  const packagedStopEnd = launcher.indexOf("\nfunction Save-Services", packagedStopStart);
+  const packagedStop = launcher.slice(packagedStopStart, packagedStopEnd);
+  assert.match(packagedStop, /Wait-Process/);
+  assert.match(packagedStop, /Test-ProcessIdentity/);
+  assert.match(packagedStop, /if \(\$remaining\.Count -gt 0\)/);
+  assert.ok(packagedStop.indexOf("Remove-Item $PidFile") > packagedStop.indexOf("if ($remaining.Count -gt 0)"));
+
+  const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses {");
+  const developerStopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", developerStopStart);
+  const developerStop = launcherCommon.slice(developerStopStart, developerStopEnd);
+  assert.match(developerStop, /Wait-Process/);
+  assert.match(developerStop, /Test-ProcessIdentity/);
+  assert.match(developerStop, /throw/);
+  assert.ok(developerStop.indexOf("Clear-TrackedPids") > developerStop.indexOf("if ($remaining.Count -gt 0)"));
+});
+
 test("installer deliberately leaves external services outside its payload", () => {
   const installSources = config
     .split(/\r?\n/)
@@ -876,8 +900,19 @@ test("Windows launchers generate cryptographic session secrets for new installs"
   assert.match(launcherCommon, /\$secretBytes = New-Object byte\[\] 32/);
   assert.match(launcherCommon, /\$rng\.GetBytes\(\$secretBytes\)/);
   assert.doesNotMatch(launcherCommon, /\$secret = -join .*Get-Random/);
-  const helperNames = [...launcherCommon.matchAll(/^\s*function\s+([A-Za-z0-9_-]+)/gm)].map((match) => match[1]);
-  assert.equal(new Set(helperNames).size, helperNames.length, "shared launcher helpers must not be duplicated");
+  const helperNames = [];
+  let hereStringTerminator = null;
+  for (const line of launcherCommon.split(/\r?\n/)) {
+    if (hereStringTerminator) {
+      if (line.trim() === hereStringTerminator) hereStringTerminator = null;
+      continue;
+    }
+    const match = line.match(/^\s*function\s+([A-Za-z0-9_-]+)/);
+    if (match) helperNames.push(match[1]);
+    const opener = line.match(/=\s*@(['"])\s*$/);
+    if (opener) hereStringTerminator = opener[1] === "'" ? "'@" : '"@';
+  }
+  assert.equal(new Set(helperNames).size, helperNames.length, "PowerShell launcher helpers must not be duplicated");
   const ensureEnvStart = launcherCommon.indexOf("function Ensure-EnvFile {");
   const ensureEnvEnd = launcherCommon.indexOf("\nfunction New-WillardShortcut", ensureEnvStart);
   const ensureEnv = launcherCommon.slice(ensureEnvStart, ensureEnvEnd);

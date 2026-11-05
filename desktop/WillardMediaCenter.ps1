@@ -216,8 +216,19 @@ function Is-Alive($process) {
 }
 function Stop-Services {
   $pids = Read-Pids
+  $remaining = @()
   foreach ($process in @($pids.api, $pids.web)) {
-    if (Test-ProcessIdentity $process) { & taskkill /PID $process.pid /T /F 2>&1 | Out-Null }
+    if (Test-ProcessIdentity $process) {
+      & taskkill /PID $process.pid /T /F 2>&1 | Out-Null
+      try {
+        Wait-Process -Id $process.pid -Timeout 10 -ErrorAction SilentlyContinue
+      } catch {}
+      if (Test-ProcessIdentity $process) { $remaining += $process }
+    }
+  }
+  if ($remaining.Count -gt 0) {
+    $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
+    throw "Could not stop Willard Media Center process(es): $remainingPids. The running installation was left in place."
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }

@@ -75,8 +75,16 @@ var
 begin
   Result := '';
   Launcher := ExpandConstant('{app}\desktop\WillardMediaCenter.ps1');
-  if FileExists(Launcher) then
-    Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+  if FileExists(Launcher) then begin
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
       '-NoProfile -ExecutionPolicy Bypass -File "' + Launcher + '" -Stop',
-      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
+      Result := 'Willard Media Center could not start its shutdown helper. Close the application and try again.';
+      exit;
+    end;
+    if ResultCode <> 0 then begin
+      Result := 'Willard Media Center did not stop cleanly. The existing installation was left unchanged; close running Media Center processes and try again.';
+      exit;
+    end;
+  end;
 end;

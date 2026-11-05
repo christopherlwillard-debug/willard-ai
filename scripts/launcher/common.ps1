@@ -842,16 +842,28 @@ function Test-ProcessAlive($processId) {
 
 function Stop-TrackedProcesses {
     # Stops ONLY what the launcher started (tracked PIDs + their children).
+    # Retain the PID manifest if any owned process survives the stop attempt.
     $pids = Read-TrackedPids
     $stopped = 0
+    $remaining = @()
     if ($pids) {
         foreach ($p in @($pids.api, $pids.web)) {
             if ($p -and (Test-ProcessIdentity $p)) {
-                # Stop the whole tree the tracked process spawned
                 & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
-                $stopped++
+                try {
+                    Wait-Process -Id $p.pid -Timeout 10 -ErrorAction SilentlyContinue
+                } catch {}
+                if (Test-ProcessIdentity $p) {
+                    $remaining += $p
+                } else {
+                    $stopped++
+                }
             }
         }
+    }
+    if ($remaining.Count -gt 0) {
+        $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
+        throw "Could not stop tracked Willard process(es): $remainingPids. The process list was retained for a safe retry."
     }
     Clear-TrackedPids
     return $stopped
@@ -905,43 +917,6 @@ function Wait-ForUrl($url, $label, $timeoutSeconds = 60, $processId = $null, $lo
     return $false
 }
 
-function New-WillardShortcut {
-    param(
-        [Parameter(Mandatory = $true)][string]$ShortcutPath,
-        [Parameter(Mandatory = $true)][string]$TargetPath,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
-        [string]$IconPath,
-        [string]$Description = "Start your local Willard Media Center"
-    )
-
-    $shortcutDirectory = Split-Path -Parent $ShortcutPath
-    if (-not (Test-Path $shortcutDirectory)) {
-        New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
-    }
-
-    # Target cmd.exe rather than the batch file itself so Windows honors the
-    # working directory consistently, even when the shortcut is launched from
-    # Explorer, Start, or a different current directory.
-    $shell = New-Object -ComObject WScript.Shell
-    try {
-        $shortcut = $shell.CreateShortcut($ShortcutPath)
-        $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\cmd.exe"
-        $shortcut.Arguments = '/d /c ""' + $TargetPath + '""'
-        $shortcut.WorkingDirectory = $WorkingDirectory
-        $shortcut.Description = $Description
-        if ($IconPath -and (Test-Path $IconPath)) {
-            $shortcut.IconLocation = $IconPath + ",0"
-        }
-        $shortcut.Save()
-    } finally {
-        if ($shortcut) {
-            [Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
-        }
-        if ($shell) {
-            [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
-        }
-    }
-}
 
 function Get-EnvValue($key) {
     $envPath = Join-Path $Root ".env"
@@ -954,38 +929,6 @@ function Get-EnvValue($key) {
     return $null
 }
 
-function Test-DatabaseConnection {
-    # TCP reachability check using Node's built-in net module - no npm
-    # packages needed. Returns $true/$false; detail lands in the api log.
-    $dbUrl = Get-EnvValue "DATABASE_URL"
-    if (-not $dbUrl) { return $false }
-    $testJs = @"
-var net = require('net');
-var url = new URL(process.env.WILLARD_DB_TEST_URL);
-var port = parseInt(url.port) || 5432;
-var host = url.hostname || 'localhost';
-var s = net.createConnection({ port: port, host: host });
-s.setTimeout(5000);
-s.on('connect', function() { s.destroy(); process.exit(0); });
-s.on('timeout', function() { s.destroy(); process.exit(1); });
-s.on('error', function(e) { process.stderr.write(e.message + '\n'); process.exit(1); });
-"@
-    $tmp = Join-Path $env:TEMP "willard-db-test.js"
-    Set-Content -Path $tmp -Value $testJs
-    $env:WILLARD_DB_TEST_URL = $dbUrl
-    try {
-        $savedPref = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
-        $out = & node $tmp 2>&1
-        $okExit = ($LASTEXITCODE -eq 0)
-        $ErrorActionPreference = $savedPref
-        if (-not $okExit) { Add-Content $ApiLog ("[launcher] Database test failed: " + ($out -join " ")) }
-        return $okExit
-    } finally {
-        Remove-Item $tmp -ErrorAction SilentlyContinue
-        Remove-Item Env:\WILLARD_DB_TEST_URL -ErrorAction SilentlyContinue
-    }
-}
 
 function Wait-ForDatabase($timeoutSeconds = 30) {
     $until = (Get-Date).AddSeconds($timeoutSeconds)
@@ -996,88 +939,6 @@ function Wait-ForDatabase($timeoutSeconds = 30) {
     return $false
 }
 
-function Ensure-AppDatabase {
-    # Creates the Willard AI database if it doesn't exist yet, then verifies
-    # the connection. Returns $true on success, $false on failure.
-    $dbUrl = Get-EnvValue "DATABASE_URL"
-    if (-not $dbUrl) { return $false }
-    $createJs = @'
-const { Client } = require('pg');
-const url = new URL(process.env.WILLARD_DB_URL);
-let dbName;
-try {
-  dbName = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
-} catch {
-  console.error('DATABASE_URL is not a valid PostgreSQL connection string.');
-  process.exit(1);
-}
-if (!dbName || dbName.includes('\0') || Buffer.byteLength(dbName, 'utf8') > 63) {
-  console.error('DATABASE_URL must contain a non-empty PostgreSQL database name no longer than 63 bytes.');
-  process.exit(1);
-}
-function quoteIdentifier(identifier) {
-  return '"' + identifier.replaceAll('"', '""') + '"';
-}
-(async () => {
-  const target = new Client({ connectionString: process.env.WILLARD_DB_URL, connectionTimeoutMillis: 5000 });
-  let targetExists = false;
-  try {
-    await target.connect();
-    targetExists = true;
-  } catch (error) {
-    if (!error || error.code !== '3D000') {
-      console.error('The configured PostgreSQL role could not connect to database "' + dbName + '": ' +
-        (error && error.message ? error.message : 'connection failed'));
-      process.exitCode = 1;
-      return;
-    }
-  } finally {
-    try { await target.end(); } catch {}
-  }
-  if (targetExists) return;
-
-  url.pathname = '/postgres';
-  const admin = new Client({ connectionString: url.toString(), connectionTimeoutMillis: 5000 });
-  try {
-    await admin.connect();
-    const result = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
-    if (result.rows.length === 0) {
-      try {
-        await admin.query('CREATE DATABASE ' + quoteIdentifier(dbName));
-      } catch (error) {
-        if (error && (error.code === '42501' || /permission denied.*database/i.test(error.message || ''))) {
-          throw new Error('The configured PostgreSQL role cannot create database "' + dbName +
-            '". Create it with an administrator or grant CREATEDB, then run setup again.');
-        }
-        throw error;
-      }
-    }
-  } catch (error) {
-    if (error && error.code === '42501') {
-      console.error('Database "' + dbName + '" does not exist and the configured PostgreSQL role cannot access ' +
-        'the maintenance database to create it. Ask an administrator to create the database and grant this role access.');
-    } else {
-      console.error(error.message);
-    }
-    process.exitCode = 1;
-  } finally {
-    try { await admin.end(); } catch {}
-  }
-})();
-'@
-    $tmp = Join-Path $env:TEMP "willard-db-create.js"
-    Set-Content -Path $tmp -Value $createJs
-    $env:WILLARD_DB_URL = $dbUrl
-    try {
-        $out = & node $tmp 2>&1
-        $okExit = ($LASTEXITCODE -eq 0)
-        if (-not $okExit) { Add-Content $ApiLog ("[launcher] Database create failed: " + ($out -join " ")) }
-        return $okExit
-    } finally {
-        Remove-Item $tmp -ErrorAction SilentlyContinue
-        Remove-Item Env:\WILLARD_DB_URL -ErrorAction SilentlyContinue
-    }
-}
 
 function Test-PortFree($port) {
     $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -1090,10 +951,6 @@ function Get-PortOwnerPid($port) {
     return $null
 }
 
-function Read-TrackedPids {
-    if (-not (Test-Path $PidFile)) { return $null }
-    try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
-}
 
 function Get-ProcessIdentity($processId) {
     if (-not $processId) { return $null }
@@ -1132,9 +989,6 @@ function Save-TrackedPids($apiPid, $webPid) {
         ConvertTo-Json | Set-Content $PidFile
 }
 
-function Clear-TrackedPids {
-    Remove-Item $PidFile -ErrorAction SilentlyContinue
-}
 
 function Test-ProcessAlive($processId) {
     if ($processId -is [psobject] -and $processId.pid) {
@@ -1144,22 +998,6 @@ function Test-ProcessAlive($processId) {
     return [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)
 }
 
-function Stop-TrackedProcesses {
-    # Stops ONLY what the launcher started (tracked PIDs + their children).
-    $pids = Read-TrackedPids
-    $stopped = 0
-    if ($pids) {
-        foreach ($p in @($pids.api, $pids.web)) {
-            if ($p -and (Test-ProcessIdentity $p)) {
-                # Stop the whole tree the tracked process spawned
-                & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
-                $stopped++
-            }
-        }
-    }
-    Clear-TrackedPids
-    return $stopped
-}
 
 function Get-LogTail($path, $lines = 20) {
     if (-not (Test-Path $path)) { return "(no log was written)" }
