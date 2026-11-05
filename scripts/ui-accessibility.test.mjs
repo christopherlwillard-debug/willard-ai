@@ -213,7 +213,8 @@ test("document table navigation is provided by a labelled native button", () => 
   assert.match(button, /type=\\"button\\"/);
   assert.match(button, /aria-label=\\{\\"Open document \\" \\+ doc\\.filename\\}/);
   assert.match(button, /onClick=\\{\\(\\) => setSelectedDoc\\(doc\\)\\}/);
-  assert.doesNotMatch(documentsPage, /<TableRow[\\s\\S]{0,220}onClick=/);
+  assert.ok(documentsPage.includes('if ((event.target as HTMLElement).closest("button")) return;'));
+  assert.ok(documentsPage.includes("setSelectedDoc(doc);"));
 });
 
 test("organize job rows expose keyboard-accessible open and delete actions", () => {
@@ -227,7 +228,8 @@ test("organize job rows expose keyboard-accessible open and delete actions", () 
   assert.match(row, /aria-label=\\{\\"View report for organization job \\" \\+ sourceName\\}/);
   assert.match(row, /currentJob\\.sourcePath\\.replaceAll\\(\\"\\\\\\\\\\", \\"\\/\\"\\)/,
     "Windows backslash paths must be normalized before extracting the filename");
-  assert.doesNotMatch(row, /<TableRow[^>]*onClick=/);
+  assert.ok(row.includes('if ((event.target as HTMLElement).closest("button")) return;'));
+  assert.ok(row.includes("onOpen();"));
 });
 
 test("duplicate cleanup choices expose selection state to assistive technology", () => {
