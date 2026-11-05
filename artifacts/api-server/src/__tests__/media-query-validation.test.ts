@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { Pool } from "pg";
 import { parseOptionalQueryString, RequestValidationError } from "../lib/request-validation.ts";
 import { escapeLikePattern } from "../lib/sql-like.ts";
 
@@ -49,7 +48,7 @@ const databaseUrl = process.env.DATABASE_URL;
 
 test("PostgreSQL LIKE filters match wildcard characters literally", { skip: !databaseUrl }, async () => {
   if (!databaseUrl) return;
-  const pool = new Pool({ connectionString: databaseUrl });
+  const { pool } = await import("@workspace/db");
   try {
     const searchPattern = "%" + escapeLikePattern("family_100%\\photos") + "%";
     const folderPattern = escapeLikePattern("albums_100%\\family/") + "%";
