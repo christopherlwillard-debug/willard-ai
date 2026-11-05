@@ -1559,7 +1559,13 @@ function OrganizeJobRow({
   const sourceName = currentJob.sourcePath.replaceAll("\\", "/").split("/").pop() || currentJob.sourcePath;
 
   return (
-    <TableRow className="hover:bg-secondary/30">
+    <TableRow
+      className="cursor-pointer hover:bg-secondary/30"
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        onOpen();
+      }}
+    >
       <TableCell className="font-mono text-xs max-w-[180px] truncate" title={currentJob.sourcePath}>
         <button
           type="button"
