@@ -130,7 +130,7 @@ test("trash root refuses a symlink outside the configured library during manifes
   }
 });
 
-test("trash manifest removal refuses symlinked entries inside the trash root", () => {
+test("trash manifest removal refuses symlinked entries inside the trash root", (context) => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
   const target = path.join(trashRoot, "keep.jpg");
@@ -138,7 +138,15 @@ test("trash manifest removal refuses symlinked entries inside the trash root", (
   try {
     fs.mkdirSync(trashRoot, { recursive: true });
     fs.writeFileSync(target, "preserve target");
-    fs.symlinkSync(target, link, "file");
+    try {
+      fs.symlinkSync(target, link, "file");
+    } catch (error) {
+      if (process.platform === "win32") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
     fs.appendFileSync(manifestPath(nasPath), JSON.stringify({
       originalPath: path.join(nasPath, "original.jpg"),
       trashPath: link,
