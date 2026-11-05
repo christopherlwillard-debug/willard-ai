@@ -72,10 +72,22 @@ export function resolveLibraryTrashPath(targetPath: string, nasPath: string): st
 }
 
 export function resolveTrashPath(targetPath: string, root: string): string {
+  const lexicalRoot = path.resolve(root);
   const canonicalRoot = canonicalizePath(root);
-  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
+  let relative = path.relative(lexicalRoot, path.resolve(targetPath));
   if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
-    throw new Error("Trash path is outside the configured trash root");
+    // The manual restore route may pass back the already-canonical path
+    // returned by this resolver. Accept that form only when the configured
+    // library root itself is a symlink alias; ordinary outside paths remain
+    // rejected and lexical symlink entries are still checked component-wise.
+    if (canonicalRoot === lexicalRoot) {
+      throw new Error("Trash path is outside the configured trash root");
+    }
+    const canonicalTarget = canonicalizePath(targetPath);
+    relative = path.relative(canonicalRoot, canonicalTarget);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("Trash path is outside the configured trash root");
+    }
   }
   const rootStat = fs.lstatSync(canonicalRoot);
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
