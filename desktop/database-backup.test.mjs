@@ -85,6 +85,16 @@ test("restore plaintext dump uses an exclusive file in a private operation works
   assert.match(source, /await rm\(restoreWorkRoot, \{ recursive: true, force: true \}\)/);
 });
 
+test("backup encryption and decryption clear derived key buffers", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const encryptStart = source.indexOf("function encryptDump");
+  const decryptStart = source.indexOf("function decryptDump");
+  const clearStart = source.indexOf("async function overwriteFileWithZeroes");
+  assert.ok(encryptStart >= 0 && decryptStart > encryptStart && clearStart > decryptStart);
+  assert.match(source.slice(encryptStart, decryptStart), /finally\s*\{\s*key\.fill\(0\)/);
+  assert.match(source.slice(decryptStart, clearStart), /finally\s*\{\s*key\.fill\(0\)/);
+});
+
 test("temporary database dump clearing uses bounded chunks and handles partial writes", async () => {
   const size = 2 * 1024 * 1024 + 37;
   const chunkSize = 64 * 1024;
