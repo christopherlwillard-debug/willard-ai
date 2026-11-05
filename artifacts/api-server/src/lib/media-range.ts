@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import * as fs from "node:fs";
+import { handlePrivateMediaStreamError } from "./private-media-response.ts";
 
 export type ByteRange = {
   start: number;
@@ -55,12 +56,8 @@ export function streamFileWithErrorHandling(
   options?: { start?: number; end?: number },
 ): void {
   const stream = fs.createReadStream(filePath, options);
-  stream.once("error", () => {
-    if (!res.headersSent) {
-      res.status(500).json({ error: "File stream failed" });
-    } else {
-      res.destroy();
-    }
+  stream.once("error", (error) => {
+    handlePrivateMediaStreamError(res, error);
   });
   stream.pipe(res);
 }
