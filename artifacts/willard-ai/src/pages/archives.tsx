@@ -277,7 +277,8 @@ export default function Archives() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10"></TableHead>              <TableHead>Filename</TableHead>
+              <TableHead className="w-10"></TableHead>
+              <TableHead>Filename</TableHead>
               <TableHead>Category</TableHead>
               <TableHead className="text-right">Files</TableHead>
               <TableHead>Location</TableHead>
