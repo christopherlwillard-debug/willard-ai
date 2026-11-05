@@ -9,6 +9,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { parseOptionalQueryString, RequestValidationError } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
@@ -40,7 +41,17 @@ router.get("/explorer", async (req, res) => {
       return;
     }
 
-    const relativePath = ((req.query.path as string) ?? "").replace(/\\/g, "/");
+    let requestedPath: string | undefined;
+    try {
+      requestedPath = parseOptionalQueryString(req.query.path, "path");
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const relativePath = (requestedPath ?? "").replace(/\\/g, "/");
     const targetPath = safeResolve(nasPath, relativePath);
 
     if (!targetPath) {

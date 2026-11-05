@@ -130,6 +130,7 @@ jobs:
           node --experimental-strip-types --test \
             artifacts/api-server/src/__tests__/capacity-service.test.ts \
             artifacts/api-server/src/__tests__/request-validation.test.ts \
+            artifacts/api-server/src/__tests__/media-query-validation.test.ts \
             artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
             artifacts/api-server/src/__tests__/cleanup-retention.test.ts \
             artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts \

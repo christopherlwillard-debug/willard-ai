@@ -3,13 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
-import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
 import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
-import { parseBoundedInteger, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
+import { escapeLikePattern } from "../lib/sql-like.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
@@ -26,6 +27,8 @@ let _nasPathCached: string | null | undefined = undefined;
 let _nasPathCachedAt = 0;
 const NAS_PATH_TTL_MS = 60_000;
 const ACTIVE_MEDIA = activeMediaCondition;
+const MEDIA_TYPES = new Set(["photo", "video", "audio", "document", "other"]);
+const MEDIA_SORTS = new Set(["indexed_desc", "name_asc", "name_desc", "size_asc", "size_desc", "modified_asc", "modified_desc"]);
 
 async function getNasPath(): Promise<string | null> {
   const now = Date.now();
@@ -119,9 +122,26 @@ export async function warmThumbnailCache(): Promise<void> {
 router.get("/media/files", async (req: Request, res: Response) => {
   let page: number;
   let limit: number;
+  let mediaType: string | undefined;
+  let favorites: string | undefined;
+  let folder: string | undefined;
+  let search: string | undefined;
+  let sort: string;
   try {
     page = parseBoundedInteger(req.query["page"], { name: "page", min: 1, max: 10_000_000, defaultValue: 1 });
     limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 60 });
+    mediaType = parseOptionalQueryString(req.query["mediaType"], "mediaType");
+    favorites = parseOptionalQueryString(req.query["favorites"], "favorites");
+    folder = parseOptionalQueryString(req.query["folder"], "folder");
+    search = parseOptionalQueryString(req.query["search"], "search");
+    sort = parseOptionalQueryString(req.query["sort"], "sort") ?? "indexed_desc";
+    if (mediaType !== undefined && mediaType !== "all" && !MEDIA_TYPES.has(mediaType)) {
+      throw new RequestValidationError("Invalid mediaType");
+    }
+    if (favorites !== undefined && favorites !== "true" && favorites !== "false") {
+      throw new RequestValidationError("Invalid favorites");
+    }
+    if (!MEDIA_SORTS.has(sort)) throw new RequestValidationError("Invalid sort");
   } catch (error) {
     if (error instanceof RequestValidationError) {
       res.status(error.statusCode).json({ error: error.message });
@@ -136,13 +156,8 @@ router.get("/media/files", async (req: Request, res: Response) => {
     return;
   }
 
-  const mediaType = req.query["mediaType"] as string | undefined;
-  const favorites = req.query["favorites"] as string | undefined;
-  const folder    = req.query["folder"]    as string | undefined;
-  const search    = req.query["search"]    as string | undefined;
   const tags = normalizeTags(typeof req.query["tags"] === "string" ? (req.query["tags"] as string).split(",") : req.query["tags"]);
-  const sort      = (req.query["sort"]     as string) || "indexed_desc";
-  const offset    = (page - 1) * limit;
+  const offset = (page - 1) * limit;
 
   const conditions = [eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA];
   if (mediaType && mediaType !== "all") {
@@ -150,12 +165,14 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
   if (folder) {
     const prefix = folder.endsWith("/") ? folder : folder + "/";
+    const prefixPattern = `${escapeLikePattern(prefix)}%`;
     conditions.push(
-      sql`(${mediaFilesTable.relativePath} = ${folder} OR ${mediaFilesTable.relativePath} LIKE ${prefix + "%"})`
+      sql`(${mediaFilesTable.relativePath} = ${folder} OR ${mediaFilesTable.relativePath} LIKE ${prefixPattern} ESCAPE E'\\\\')`
     );
   }
   if (search) {
-    conditions.push(like(mediaFilesTable.name, `%${search}%`));
+    const searchPattern = `%${escapeLikePattern(search)}%`;
+    conditions.push(sql`${mediaFilesTable.name} LIKE ${searchPattern} ESCAPE E'\\\\'`);
   }
   if (favorites === "true") {
     conditions.push(eq(mediaFilesTable.favorite, true));
