@@ -585,7 +585,7 @@ Remaining archive hardening:
 - After moving, rollback hashes the restored source again and increments the success count only on an exact match. If bytes change between the preflight hash and the move, it attempts to return the unverified file to its destination and leaves the move incomplete. If that preservation move fails, it logs the failure and still does not claim success.
 - Added a regression that tampers with the destination after the forward move and verifies rollback preserves that only remaining copy, returns zero successful restores, and records a verification failure.
 - Implementation commit: `b2a8ad536c3eb9e533608d8d2b08bf0074bdc72a`; regression commit: `c27feace4476472d34b7282416ccea68b9b234bf`.
-- Validation: pending Fast Validation and Dependency Review on the updated branch. This closes the false-success accounting defect; it does not resolve the separate `conflictPolicy=replace` backup/rollback risk or the stale-worker fencing issue.
+- Validation: Fast Validation #699 (run 42018392739) passed overall; the checksum-verified rollback regression in organize-helpers.test.ts passed. Dependency Review #463 (run 42018392979) passed. This closes the false-success accounting defect; it does not resolve the separate conflictPolicy=replace backup/rollback risk or the stale-worker fencing issue.
 
 
 ## Execute rollback status and journal-checkpoint correction (2026-11-05)
@@ -595,7 +595,7 @@ Remaining archive hardening:
 - The per-file journal checkpoint is now fail-closed. If the database cannot persist the move journal, execution throws into the rollback path rather than continuing to move additional files without durable recovery records.
 - Added source regression coverage for conditional rollback status and fail-closed checkpoint behavior.
 - Commits: route fix `f4903220b3af5725231fbf26371a980834c06e61`; regression `3779ca4f331cb511bab6c7d539609e31b5fb955b`.
-- Validation pending. The pre-move journaling window and stale-worker fencing still require a separate durable ownership/journal design; this correction prevents continued unjournaled moves after a detected checkpoint failure but does not eliminate a process crash between filesystem mutation and its post-move journal write.
+- Validation: Fast Validation #699 (run 42018392739) passed; the organization execute rollback-incomplete regression passed. The pre-move journaling window and stale-worker fencing still require a separate durable ownership/journal design; this correction prevents continued unjournaled moves after a detected checkpoint failure but does not eliminate a process crash between filesystem mutation and its post-move journal write.
 
 
 ## Resume recovery journal retention (2026-11-05)
@@ -604,7 +604,7 @@ Remaining archive hardening:
 - Found that the resume failure handler unconditionally reset the persisted journal to the pre-resume `existingMoves`, even if one or more new moves could not be restored. It now discards the resume-pass entries only when every new move was checksum-verified as restored; otherwise it retains the complete journal and explicitly reports that manual recovery is required.
 - Added regression coverage for incomplete-resume journal retention and fail-closed resume checkpointing.
 - Commits: route `00bac4bf1946d4237a172d6b5f1c6efad2a88d4c`; regression `c2132abae83f8e62eb2f7a824e60a6f5edbe8fab`.
-- Validation pending. The broader pre-move journal-intent and worker-fencing gaps remain open.
+- Validation: Fast Validation #699 (run 42018392739) passed; the organization resume rollback-incomplete regression passed. The broader pre-move journal-intent and worker-fencing gaps remain open.
 
 
 ## Final destination checksum verification (2026-11-05)
@@ -1086,9 +1086,9 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Fast Validation #698 (https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42017739135), code/test head `3aca80b3c59ddaf7141c65a17fa66cc42fa5f012): **passed overall**. TypeScript/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip verification, PostgreSQL conversion lock integration (1/1), and PostgreSQL conversion restart-recovery integration (2/2) passed. The targeted backend suite reported 226 tests, 224 passed, 0 failed, 2 skipped. All five new optimization-scan regressions passed. The Windows archive/updater job passed storage migration concurrency/no-overwrite, NAS path/cleanup safety, conversion-finalization rollback/no-overwrite, official 7-Zip hash verification, symlink metadata compatibility, updater journal writes, and full updater preservation/rollback.
 - Dependency Review #462 (https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42017739148), head `3aca80b3c59ddaf7141c65a17fa66cc42fa5f012`: **passed**.
 - Implementation/test commits: `656b327b9bb52d1e69f3effc68503abf323e584d` (extract fail-closed scan walker and wire route/CI), `054e46bf21e6ba2f5e3177a11129462615abac03` (symlink regression semantics), `2926254953abe5b681bc3f65d8d96fe0971914a3` (filesystem-order-independent assertion), `6aea61e83026609316652dc72daebc6939d5e8ad` (remove obsolete path-limit constant), and `3aca80b3c59ddaf7141c65a17fa66cc42fa5f012` (correct scan-total expectation).
-- Remaining limitation: the scan still has its existing 500,000-file traversal cap and does not yet return a truncation indicator to the UI. Libraries beyond that cap can still receive a partial summary, although inaccessible directories and failed file metadata lookups now fail closed. Add an explicit truncated-scan result and user-facing warning before treating very large library summaries as exhaustive.
-- The first-run `/auth/setup` owner-takeover exposure remains unresolved: the first unauthenticated visitor can still claim an uninitialized installation. I left it unchanged because a safe remote bootstrap secret / local-only provisioning model must preserve legitimate desktop and hosted installs. Conversion worker fencing also remains open: a stale worker that loses its PostgreSQL session lock could still race filesystem operations outside a checked boundary.
-- Next priority remains first-run owner provisioning, followed by stronger conversion-worker fencing. The scan-cap indicator is a lower-risk usability follow-up.
+- Historical limitation at the time of this finding: the 500,000-file cap had no user-facing indicator. The follow-up below adds scanLimitReached/scanLimit, cache-version invalidation, an Optimize Center warning, and an exported-report marker. The fixed cap remains; the flag is intentionally conservative and may warn when a library contains exactly 500,000 recognized files.
+- The first-run `/auth/setup` owner-takeover exposure remains unresolved for publicly hosted deployments: the first unauthenticated visitor can still claim an uninitialized Replit instance. Local non-Replit API and Vite listeners now default to loopback; explicit HOST=0.0.0.0 can intentionally expose a non-Replit hosted deployment. Conversion worker fencing also remains open: a stale worker that loses its PostgreSQL session lock could still race filesystem operations outside a checked boundary.
+- The scan-cap indicator is resolved in the follow-up below. Next priority remains secure first-run owner provisioning, followed by stronger conversion-worker fencing.
 
 
 ## Desktop API network exposure (2026-11-05)
@@ -1097,7 +1097,7 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - The API listener now honors an explicit `HOST` environment variable while preserving the existing default for hosted deployments. The Windows launcher explicitly sets `HOST=127.0.0.1` before starting the API, restricting the packaged desktop API to the local machine.
 - Added a regression contract covering the API host option and the packaged launcher setting.
 - This closes the direct LAN listener exposure for the Windows desktop deployment. It does **not** resolve the separate remote first-run `/auth/setup` owner-takeover issue for hosted deployments; that still needs a secure provisioning mechanism.
-- Validation is pending on the new commit.
+- The packaged-only correction was broadened to the standard developer/manual local path in the follow-up below. Final combined validation is pending.
 
 
 ## Audit batch — cryptographic Windows session-secret generation
@@ -1108,6 +1108,64 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 
 **Regression coverage:** Added a source-contract test requiring cryptographic RNG use in both launchers and rejecting the former `Get-Random` session-secret construction.
 
-**Verification status:** Source change and regression test committed. Runtime PowerShell execution and the matching Fast Validation/Windows workflow are still pending; this is not yet marked fully validated.
+**Verification status:** The initial source change exposed a malformed duplicate helper block in an intermediate commit; scripts/launcher/common.ps1 was restored to one helper set and Ensure-EnvFile was repaired. The writer now uses UTF-8 without a BOM so Windows PowerShell 5.1 output is readable by Node's --env-file. Source regressions, a PowerShell parser step, and a real Windows env-file/Node smoke are committed; final combined validation is pending.
 
 **Risk remaining:** The separate first-run administrator provisioning issue remains unresolved. This secret-generation correction does not close the unauthenticated `/auth/setup` exposure.
+
+
+## Optimize Center scan-limit reporting (2026-11-05)
+
+**Confirmed issue:** The Optimize Center summary walker stopped at 500,000 recognized files but returned no indication that the cap had been reached. Counts, storage totals, savings estimates, and per-file video decisions could therefore look exhaustive when they represented only a prefix of a large library.
+
+**Correction:**
+- OptimizeScanCounter now records limitReached as soon as the configured cap is reached. This is deliberately conservative: exactly 500,000 files also raises the warning because the walker stops without scanning beyond the cap.
+- The scan and status responses include scanLimitReached and scanLimit; the recommendation key includes completeness state.
+- Scan cache version increased from 7 to 8 so older cached records cannot be presented as complete.
+- Optimize Center displays a visible partial-scan warning and the exported report records whether the limit was reached.
+- The warning explains that counts/estimates cover only scanned files and that video files outside the per-file analysis window are safely skipped during conversion.
+
+**Regression coverage:** Added direct walker tests for reaching the cap and staying below it, plus route/cache/UI wiring assertions. The existing fail-closed scan, symlink, and metadata regressions remain in the targeted suite.
+
+**Validation history:**
+- Fast Validation #703 (run 42028657169) initially failed one stale source-contract assertion that still expected cache version 7. The application code had intentionally moved to version 8; the assertion was corrected in commit 2fcdf48315c75148d92a40d21dfa7af4927324dc.
+- Fast Validation #704 (run 42029108847), on code/test head 2fcdf48315c75148d92a40d21dfa7af4927324dc, passed Linux validation: 229 backend tests, 227 passed, 0 failed, 2 skipped. The Windows job was superseded by later launcher-security commits and is not claimed as a completed pass for that head.
+- Dependency Review #468 (run 42029108841) passed.
+- The current combined branch includes further listener and Windows launcher hardening; its final Fast Validation is pending.
+
+**Commits:** 4800c9aa (walker limit state), 6757ef6a (API/cache wiring), c2c44fdb (walker and route/UI regressions), e9483206 (Optimize Center warning/report), 2fcdf483 (cache-version regression correction).
+
+**Remaining limitation:** There is still no pagination or resumable scan. Libraries beyond the 500,000-file cap receive a partial summary, but it is now explicitly labelled. The flag may be conservative when a library contains exactly the cap and no more recognized files.
+
+## Local API and Vite listeners default to loopback off Replit (2026-11-05)
+
+**Confirmed issue:** The packaged desktop launcher was corrected to set HOST=127.0.0.1, but review of Start Willard AI.bat, scripts/launcher/start.ps1, and the manual two-terminal flow in LOCAL_SETUP.md found a second local path. That launcher started the API without a host, while Vite dev and preview servers were configured for 0.0.0.0 even outside Replit. A LAN client could reach the Vite proxy and API from a local installation.
+
+**Correction:**
+- The developer launcher sets HOST=127.0.0.1 before starting the API.
+- The API defaults to 127.0.0.1 when REPL_ID is absent and HOST is unset. An explicit HOST still overrides; Replit retains its wildcard listener.
+- Vite dev and preview listeners use 127.0.0.1 off Replit and 0.0.0.0 on Replit.
+- The packaged desktop launcher also explicitly sets HOST=127.0.0.1.
+
+**Regression coverage:** install-auth-reliability.test.ts checks the API host default, developer launcher ordering, and both Vite listener hosts. These are source-contract tests, not a live socket reachability test.
+
+**Validation:** The latest combined validation is pending. The prior Fast Validation #711 was cancelled when the branch advanced; no overall pass is claimed for that run.
+
+**Remaining limitation:** An explicit HOST=0.0.0.0 can intentionally expose a non-Replit deployment. The public Replit instance still needs secure first-run owner provisioning; loopback defaults do not fix remote /auth/setup takeover.
+
+## Windows launcher session-secret, helper, and env-file hardening (2026-11-05)
+
+**Confirmed issues and corrections:**
+- Both Windows first-run launchers previously used PowerShell Get-Random for new SESSION_SECRET values. Both now generate 32 bytes with .NET RandomNumberGenerator and encode 64 lowercase hexadecimal characters.
+- An intermediate helper update duplicated 17 shared functions and split the Ensure-EnvFile replacement command, leaving common.ps1 malformed. The file was restored to one helper set; Ensure-EnvFile now contains its complete write operation.
+- Start Willard AI.bat invokes Windows PowerShell 5.1, whose default Set-Content encoding is UTF-16LE. Node's --env-file expects UTF-8. The developer launcher now writes the updated .env using UTF8Encoding(false) and File.WriteAllLines, avoiding a BOM and UTF-16 output.
+
+**Regression and validation work:**
+- installer-config.test.mjs now requires 32-byte cryptographic buffers, rejects the old Get-Random construction, verifies helper names are unique, and checks the complete UTF-8 write occurs inside Ensure-EnvFile.
+- The Windows workflow now parses every PowerShell script under scripts/launcher, scripts/windows, and desktop.
+- A Windows runtime smoke dot-sources the real common.ps1, creates a temporary .env, and verifies Node can read the generated 64-character secret with --env-file.
+
+**Commits:** 248e7ab356ffec52f52894dfa245116fbde3d380 (restore single helper set and repair secret persistence), 8c8e930c64b76186ee58139b590e9f661b5a8f37 (duplicate-helper and env-body regression), 3c4fcb0f088ad506389d77a47c8aa64493ab1ecb (PowerShell parser CI), 777bbebf96f39b9b33d06285a5515f1af3ca44b2 (repair source assertions), 9bd3478bb9d7b2751ab634818db907fa3c15a586 (UTF-8 no-BOM writer), e1edcfa06897ac22604c399f92c56df2aeeaa907 (UTF-8 regression), 55727ad49ebae4c2a67f3c785861f6e1308d63ce (Windows runtime smoke), c2c00e9cb80d07aea17cd4dfd303fe5f79ad3181 (256-bit buffer assertions).
+
+**Validation status:** The latest combined Fast Validation has not yet completed. The earlier run #719 on c2c00e9 was cancelled by later commits; the current Windows parser and env-file smoke must pass before this batch is called validated.
+
+**Remaining limitation:** These changes harden local installation secrets and listener exposure but do not fix the public first-run /auth/setup takeover issue for hosted deployments. That still needs an explicit bootstrap/owner-provisioning model.
