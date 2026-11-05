@@ -1481,3 +1481,38 @@ The lifecycle smoke was not run. The only existing invocation is inside `.github
 PR #2 remains open and draft. The current audit branch head is c36ef16ad0cfe951be7a34f83c17a916625e3b45. The Windows updater correction is integration-tested by Fast Validation #799; the organize creation batch is awaiting its first matching validation run. The two critical data-integrity findings remain blocked: destructive organize replace can lose the previous destination, and conversion-worker filesystem writes are not fenced against a lost advisory-lock connection. The standard-user installer lifecycle is also not validated because its only existing invocation is inside the release-publishing workflow.
 
 No merge, PR close, main-branch change, production-data change, credential change, or release publication was performed.
+
+
+## 2026-11-05 audit batch — archive disposition confirmation and recovery
+
+**Confirmed findings (source inspection):**
+- The archive disposition endpoint accepted any truthy `confirm` value. A request with `{ "confirm": "false" }` or `{ "confirm": 1 }` could pass the confirmation gate even though the contract requires the literal boolean `true`.
+- Successful archive deletion was tracked only in `DoneStep` component state. Reopening the completed job or refreshing the page could show the destructive confirmation again because the result was not saved in `reportJson`.
+- A missing archive was returned as `already_gone`, but the UI presented every successful response as “Archive deleted successfully,” overstating what the server had verified.
+- Automatic `move_to_processed` errors were logged and swallowed. The job could still be marked completed with `dispositionPending: false` while the archive remained in its original location.
+
+**Corrections:**
+- The endpoint now requires `req.body.confirm === true`; truthy strings and numbers are rejected.
+- Completed disposition results are persisted in the existing job `reportJson` field. Repeated requests return the saved terminal result rather than repeating the filesystem action.
+- A missing source is recorded as `already_gone` and is presented accurately as “no longer present,” not as a confirmed deletion.
+- Processed-folder moves are SHA-256 checked and use the existing no-overwrite move helper. Failed automatic moves retain `dispositionPending: true`, include a redacted error, and expose a retry action in the completed-job report.
+- The UI reads persisted disposition state after reload and distinguishes deleted, already-missing, and moved-to-processed outcomes.
+- No schema migration, new dependency, credential change, or production-data operation was introduced.
+
+**Regression coverage:** Extended `request-validation.test.ts` with checks for the literal-boolean confirmation gate, persisted disposition result, checksum verification, accurate UI state, and the processed-move retry action. These are source-contract regressions; they do not replace live HTTP/filesystem integration tests.
+
+**Validation boundary:** Fast Validation #801 (run `42071283343`) passed on the parent commit `f4aca0a3bbe4add1fe021bc5a70c4d89deb863e1`: Linux validation/typecheck/generated contracts/targeted backend regressions and the Windows archive/updater integration job all succeeded; Dependency Review #564 also passed. Those results predate this batch. The new disposition changes require their own matching Fast Validation run. No full release workflow was run.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| High | Organize → explicit archive delete/move confirmation accepted truthy non-booleans | **fixed; target test pending** | This batch; literal-boolean check and regression assertion added | Latest Fast Validation pending; HTTP route integration and concurrent-request behavior remain untested |
+| Medium | Organize → disposition result lost after report reload | **fixed; target test pending** | This batch; result persisted in `reportJson` and UI derives terminal state from it | Crash between filesystem action and final DB result write can still require manual reconciliation |
+| Medium | Organize → move-to-processed failure silently reported as completion | **fixed; target test pending** | This batch; failed moves remain pending with error and retry UI | Live NAS/Windows filesystem retry integration remains outstanding |
+
+### Validation update — parent commit
+
+Fast Validation #801 (run `42071283343`) completed successfully on `f4aca0a3bbe4add1fe021bc5a70c4d89deb863e1`:
+- Linux validation job: all steps succeeded, including typecheck/generated API contract checks, release/storage contracts, PostgreSQL conversion-lock and restart-recovery tests, and targeted backend regressions.
+- Windows archive/updater job: all steps succeeded, including PowerShell parsing, storage migration no-overwrite tests, conversion finalization rollback, official 7-Zip symlink metadata, packaged updater journal writes, and developer updater preservation/rollback.
+- Dependency Review #564 (run `42071283227`) succeeded.
+- These checks validate the parent only, not this new disposition batch. No full CI/release publishing workflow is claimed.
