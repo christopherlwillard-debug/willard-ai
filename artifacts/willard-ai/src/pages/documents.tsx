@@ -152,15 +152,21 @@ export default function Documents() {
                 </TableCell>
               </TableRow>
             ) : data?.documents.map((doc) => (
-              <TableRow
-                key={doc.id}
-                className="cursor-pointer hover:bg-secondary/60"
-                onClick={() => setSelectedDoc(doc)}
-              >
+              <TableRow key={doc.id}>
                 <TableCell>
                   <DocIcon filename={doc.filename} />
                 </TableCell>
-                <TableCell className="font-medium">{doc.filename}</TableCell>
+                <TableCell className="font-medium">
+                  <button
+                    type="button"
+                    className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    aria-label={"Open document " + doc.filename}
+                    onClick={() => setSelectedDoc(doc)}
+                    data-testid={"button-open-document-" + doc.id}
+                  >
+                    {doc.filename}
+                  </button>
+                </TableCell>
                 <TableCell
                   className="text-muted-foreground text-xs truncate max-w-[250px]"
                   title={doc.folder}
