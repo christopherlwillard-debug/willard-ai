@@ -1245,7 +1245,7 @@ async function restoreBackup(options) {
   }
   const restoreWorkRoot = await createPrivateBackupWorkDirectory();
   const temporaryDump = path.join(restoreWorkRoot, "database.dump");
-  let dump: Buffer | undefined;
+  let dump;
   try {
     dump = decryptDump(encrypted, manifest, secret);
     if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
