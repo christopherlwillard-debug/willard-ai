@@ -1266,3 +1266,7 @@ Statuses distinguish code inspection and focused tests from integration and full
 **Verification:** Fast Validation #744 reached release contracts and failed specifically at the existing `Ensure-EnvFile must persist the generated secret as UTF-8 without a BOM` assertion. The repair is source-reviewed and triggers a new run. The Windows workflow's fresh-environment smoke then executes the actual PowerShell helper and checks Node can read the 64-character hexadecimal secret; that integration result is still pending.
 
 **Remaining limitation:** No live Windows runner has yet confirmed this repaired helper in the current batch. The next run must pass both the source contract and Windows environment-file smoke.
+
+### Follow-up correction — stale helper snapshot detected and repaired
+
+The first duplicate-helper cleanup was followed by a stale-file update that reintroduced the original duplicate block and left `Ensure-EnvFile` truncated. Fast Validation #745 exposed the duplicate declarations (53 unique names versus 69 declarations). I rebuilt the helper file from the exact current branch blob, removed all 16 identical duplicate definitions without dropping unique functions, restored the complete UTF-8 secret write, and reinstated the developer stop guard. This correction is intentionally recorded because the earlier cleanup commit did not remain effective. The next run must pass the existing helper uniqueness, UTF-8 source, and Windows fresh-environment smoke checks before these installer fixes can be considered validated.
