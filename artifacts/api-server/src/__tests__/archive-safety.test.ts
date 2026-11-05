@@ -94,6 +94,22 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
   );
 });
 
+test("rejects file entries without a usable archive path", () => {
+  for (const entryPath of ["", ".", "./"]) {
+    assertSafetyFailure(
+      () => validateArchiveEntry({ path: entryPath, sizeBytes: 1 }, createArchiveBudget()),
+      /invalid entry path|no usable path/,
+    );
+  }
+  assert.equal(
+    validateArchiveEntry(
+      { path: "./", sizeBytes: 0, isDirectory: true },
+      createArchiveBudget(),
+    ).isDirectory,
+    true,
+  );
+});
+
 test("normalizes harmless current-directory archive prefixes", () => {
   const result = validateArchiveEntry(
     { path: "./folder/file.txt", sizeBytes: 1 },
