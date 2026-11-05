@@ -176,7 +176,7 @@ export function validateArchiveEntry(
   budget: ArchiveBudget,
 ): { normalizedPath: string; sizeBytes: number; isDirectory: boolean } {
   const rawPath = entry.path;
-  if (typeof rawPath !== "string" || rawPath.includes("\0")) {
+  if (typeof rawPath !== "string" || rawPath.length === 0 || rawPath.includes("\0")) {
     throw new ArchiveSafetyError(`Archive traversal rejected: invalid entry path`);
   }
 
@@ -185,6 +185,9 @@ export function validateArchiveEntry(
     .replace(/^(\.\/)+/, "")
     .replace(/\/+$/, "") || ".";
   const isDirectory = entry.isDirectory === true;
+  if (canonicalPath === "." && !isDirectory) {
+    throw new ArchiveSafetyError("Archive traversal rejected: file entry has no usable path");
+  }
   if (normalizedPath.length > ARCHIVE_LIMITS.maxPathLength) {
     throw new ArchiveSafetyError(
       `Archive entry path exceeds the ${ARCHIVE_LIMITS.maxPathLength}-character limit`,
