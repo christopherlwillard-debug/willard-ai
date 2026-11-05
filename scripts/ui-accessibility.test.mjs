@@ -234,3 +234,9 @@ test("duplicate cleanup choices expose selection state to assistive technology",
   assert.match(button, /aria-label=\\{\\"Choose \\" \\+ file\\.filename \\+ \\" as the copy to keep\\"\\}/);
   assert.match(button, /focus-visible:ring-2/);
 });
+
+test("cleanup thumbnails honor the configured application base path", () => {
+  assert.ok(cleanupPage.includes('import { apiUrl } from "@/lib/api";'));
+  assert.ok(cleanupPage.includes('const thumbUrl = file.mediaId ? apiUrl(`/media/thumbnail/${file.mediaId}`) : null;'));
+  assert.equal(cleanupPage.includes('const thumbUrl = file.mediaId ? `/api/media/thumbnail/${file.mediaId}` : null;'), false);
+});
