@@ -1169,3 +1169,11 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 **Validation status:** The latest combined Fast Validation has not yet completed. The earlier run #719 on c2c00e9 was cancelled by later commits; the current Windows parser and env-file smoke must pass before this batch is called validated.
 
 **Remaining limitation:** These changes harden local installation secrets and listener exposure but do not fix the public first-run /auth/setup takeover issue for hosted deployments. That still needs an explicit bootstrap/owner-provisioning model.
+
+
+## 2026-11-05 follow-up — conversion retry claim race
+
+- Confirmed a retry race in `POST /optimize/jobs/:id/retry`: the route read a job as `failed`, then reset it using only the job ID. A concurrent request or worker could change the job after that read, and the stale retry could reset a newly running or otherwise changed job.
+- Changed the reset to a compare-and-set update requiring the same job ID, active NAS path, and `failed` status. If the row no longer matches, the route now returns HTTP 409 and leaves the changed job untouched.
+- Added a regression assertion covering all three predicates and the conflict response in `optimize-job-claim.test.ts`.
+- Validation: GitHub Actions has not yet completed for this follow-up commit; do not treat this source change as validated until the targeted test and workflow pass.
