@@ -1,6 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 
+export interface OptimizeScanCounter {
+  total: number;
+  limitReached: boolean;
+}
+
 export interface OptimizeSampleFile {
   path: string;
   sizeBytes: number;
@@ -34,13 +39,16 @@ export function walkForOptimize(
   dir: string,
   groups: Map<string, OptimizeExtGroup>,
   maxFiles: number,
-  counter: { total: number },
+  counter: OptimizeScanCounter,
   skipDirs: ReadonlySet<string>,
 ): void {
   if (!Number.isSafeInteger(maxFiles) || maxFiles <= 0) {
     throw new Error("Optimization scan file limit must be a positive safe integer");
   }
-  if (counter.total >= maxFiles) return;
+  if (counter.total >= maxFiles) {
+    counter.limitReached = true;
+    return;
+  }
 
   let entries: fs.Dirent[];
   try {
@@ -53,7 +61,10 @@ export function walkForOptimize(
   }
 
   for (const entry of entries) {
-    if (counter.total >= maxFiles) return;
+    if (counter.total >= maxFiles) {
+    counter.limitReached = true;
+    return;
+  }
 
     if (entry.isDirectory()) {
       if (!skipDirs.has(entry.name) && !entry.name.startsWith(".")) {
@@ -89,6 +100,11 @@ export function walkForOptimize(
         paths: current.paths,
       });
       counter.total++;
+      if (counter.total >= maxFiles) {
+        // Conservative by design: reaching the cap means additional entries may be omitted.
+        counter.limitReached = true;
+        return;
+      }
     }
   }
 }
