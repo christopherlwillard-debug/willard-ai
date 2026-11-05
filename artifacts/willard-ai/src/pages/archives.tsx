@@ -156,8 +156,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
                       <span className="flex items-center justify-center">
                         {entry.isDirectory ? <Folder className="w-3.5 h-3.5 text-muted-foreground" /> : fileIcon(entry.fileType)}
                       </span>
-                      <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>
-                      <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
+                      <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>                      <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
                       <span className="text-right text-muted-foreground">{entry.isDirectory ? "—" : formatBytes(entry.sizeBytes ?? 0)}</span>
                     </div>
                   ))}
@@ -194,7 +193,7 @@ export default function Archives() {
     ...(maxSizeMb !== "" ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
   };
 
-  const { data, isLoading } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
+  const { data, isLoading, isError, refetch } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
 
   const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || minSizeMb !== "" || maxSizeMb !== "";
 
@@ -212,7 +211,7 @@ export default function Archives() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold font-mono tracking-tight">ARCHIVE_INDEX</h1>
-        <p className="text-muted-foreground mt-1 font-mono text-sm">{data?.total ?? 0} archives indexed</p>
+        <p className="text-muted-foreground mt-1 font-mono text-sm">{data ? `${data.total.toLocaleString()} archives indexed` : isError ? "Archive index unavailable" : "Loading archive index…"}</p>
       </div>
 
       {/* Filters */}
@@ -267,12 +266,18 @@ export default function Archives() {
         )}
       </div>
 
+      {isError && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+          <span>{data ? "Archive refresh failed. Showing the last loaded results." : "Unable to load archives. Check the library connection and filters, then retry."}</span>
+          <Button variant="outline" size="sm" onClick={() => refetch()} aria-label="Retry loading archives">Retry</Button>
+        </div>
+      )}
+
       <div className="rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10"></TableHead>
-              <TableHead>Filename</TableHead>
+              <TableHead className="w-10"></TableHead>              <TableHead>Filename</TableHead>
               <TableHead>Category</TableHead>
               <TableHead className="text-right">Files</TableHead>
               <TableHead>Location</TableHead>
@@ -283,15 +288,21 @@ export default function Archives() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {isLoading && !data ? (
               <TableRow><TableCell colSpan={9}><Skeleton className="h-24 w-full" /></TableCell></TableRow>
-            ) : data?.archives.length === 0 ? (
+            ) : !data ? (
+              <TableRow>
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-8 font-mono text-sm">
+                  Archive data is unavailable
+                </TableCell>
+              </TableRow>
+            ) : data.archives.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-muted-foreground py-8 font-mono text-sm">
                   {hasFilters ? "No archives match the current filters" : "No archives indexed yet — run a scan first"}
                 </TableCell>
               </TableRow>
-            ) : data?.archives.map((archive) => (
+            ) : data.archives.map((archive) => (
               <TableRow key={archive.id}>
                 <TableCell><Archive className="h-4 w-4 text-muted-foreground" /></TableCell>
                 <TableCell className="font-medium">
