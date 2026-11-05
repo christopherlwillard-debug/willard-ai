@@ -804,3 +804,11 @@ Remaining archive hardening:
 - Extended the canonical active-library source regression to include organize and dashboard routes.
 - Commits: organizer `b83d700c798bd87afdcff49f4fd13279d8aa8468`; dashboard `9e905a2f342ee3cc5ab3e8ff599e56523f8c2300`; canonical regression `8a563f6163401111fb9494d63ee353f30cfc7395`; archive import `3a5e022a647cc678f8fdac38a833ff7150cd39f5`; dashboard import `822f94c8bc23276688557fdfb02079af7f6cbe3c`; consolidated imports `da0574894cd9c76259aaf4d85c672e6e009c0471`.
 - Validation: source and regression coverage re-read from the audit branch. A subsequent review found that repeated workflow edits had introduced doubled shell continuation backslashes in the targeted test command; corrected all eight affected lines so each continued line has exactly one trailing backslash. Workflow correction commit: `93df5bfdfaea8b63059f9effbceb35766e73d648`. CI still needs to run successfully against the latest branch head; no full compile/test pass is claimed.
+
+## Media Health directory inventory fails closed on unreadable subdirectories (2026-11-05)
+
+- Follow-up review found that the same Media Health inspection still swallowed nested `readdirSync` errors in its directory walker. The health report could therefore claim a complete empty-folder inventory even when part of the library could not be enumerated.
+- Removed the catch-and-return behavior. A nested enumeration error now aborts inspection; the health endpoint reports a failure and cleanup marks its job failed before applying any selected action.
+- Extended `media-health-scan.test.ts` with a route-source regression ensuring the directory walker no longer suppresses read errors.
+- Commits: route `bd989dba145538c9a46b50e960735ce94156bdd4`; test `7f8f87768f4d0a81b9930f209cc9a0c504e97b50`.
+- Validation: pending GitHub Fast Validation. The existing local helper tests cover missing-file classification but do not execute the full Media Health route or a permission-denied nested-directory fixture.
