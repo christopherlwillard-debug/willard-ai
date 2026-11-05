@@ -1965,3 +1965,11 @@ Fast Validation #860 exposed one test-only assertion error: the uninstall source
 The installed lifecycle smoke also now treats an incomplete TCP connection probe as inconclusive and retries rather than reporting the port closed prematurely. Its process-path fixture was normalized to a single Windows path separator.
 
 **Current validation status:** the preceding Fast Validation #860 failed at the source-contract assertion described above; Dependency Review #623 passed. The corrected tests and rollback-gating change are committed in the following batch. The actual Inno Setup uninstall-while-running lifecycle remains unexecuted on this PR branch and must not be described as integration-tested.
+
+### Follow-up test correction — anchor the rollback assertion to the outer startup handler
+
+Fast Validation #861 reached the release/storage contract suite and failed one newly added source-contract assertion. The assertion used `lastIndexOf("} catch {")`, which selected the nested `Stop-Services` catch rather than the outer startup failure handler. The test now anchors on the outer handler assignment `$startupError = $_` and verifies the stop attempt, rollback gate, and restore call in that scope. This is a test-selection correction; the runtime rollback-gating code remains unchanged.
+
+The corrupt-process-state error now also gives an explicit recovery path: preserve a copy for diagnosis, manually confirm all Willard processes are stopped, then rename or delete the invalid state file and retry. This avoids leaving a user with an error that says to retry while the same unreadable file remains in place.
+
+**Validation status:** Fast Validation #861 failed only at the rollback source-contract assertion; the Windows job was skipped because Linux validation failed. Dependency Review #624 passed. The corrected assertion and explicit recovery instructions are in the next branch-head validation batch.

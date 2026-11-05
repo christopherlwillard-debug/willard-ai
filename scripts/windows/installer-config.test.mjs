@@ -1451,6 +1451,7 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   const pidReader = launcher.slice(pidStart, pidEnd);
   assert.match(pidReader, /ConvertFrom-Json -ErrorAction Stop/);
   assert.match(pidReader, /services state file is unreadable or invalid/);
+  assert.match(pidReader, /rename or delete this file/);
   assert.match(pidReader, /executable identity information/);
   assert.doesNotMatch(pidReader, /catch \{ return \$null \}/);
 

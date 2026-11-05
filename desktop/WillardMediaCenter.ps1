@@ -221,7 +221,7 @@ function Read-Pids {
     }
     return $state
   } catch {
-    throw "The Willard services state file is unreadable or invalid. The launcher refused to assume that no services are running. Preserve '$PidFile', close any Willard processes manually, and retry. Details: $($_.Exception.Message)"
+    throw "The Willard services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard processes remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
   }
 }
 function Get-ProcessIdentity($processId) {
