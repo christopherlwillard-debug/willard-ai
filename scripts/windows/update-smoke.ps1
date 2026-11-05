@@ -200,6 +200,21 @@ try {
   Assert-True ((Read-Text $runtimeMarker) -match "old dependency tree") "Interrupted swap changed node_modules."
   Assert-True ((Read-Text $generatedMarker) -match "old generated output") "Interrupted swap changed generated API output."
   Assert-True (-not (Test-Path (Join-Path $TempRoot ".install.willard-update.json"))) "Interrupted swap left an update journal behind."
+  Write-Host "Recovery: developer journal replacement is atomic and leaves no temporary files"
+  $atomicRoot = Join-Path $TempRoot "recovery-atomic"
+  $atomicBackup = $atomicRoot + ".previous-" + (Get-Date -Format "yyyyMMddHHmmss")
+  $atomicCandidate = Join-Path $TempRoot (".recovery-atomic.candidate-" + [guid]::NewGuid().ToString())
+  New-Item -ItemType Directory -Force -Path $atomicRoot, $atomicCandidate | Out-Null
+  $script:Root = $atomicRoot
+  Write-DeveloperUpdateJournal "prepared" $atomicCandidate $atomicBackup
+  Write-DeveloperUpdateJournal "backup-created" $atomicCandidate $atomicBackup
+  $atomicJournalPath = Get-DeveloperUpdateJournalPath
+  $atomicJournal = Get-Content -LiteralPath $atomicJournalPath -Raw | ConvertFrom-Json
+  Assert-True ($atomicJournal.phase -eq "backup-created") "Atomic developer journal replacement did not publish the new complete phase."
+  $atomicArtifacts = @(Get-ChildItem -LiteralPath $TempRoot -File -Filter ".recovery-atomic.willard-update.json.*")
+  Assert-True ($atomicArtifacts.Count -eq 0) "Atomic developer journal replacement left temporary or backup files."
+  Remove-DeveloperUpdateJournal
+
   # Exercise developer updater journal states independently of the installer
   # so each process-crash boundary is tested with a disposable sibling folder.
   Write-Host "Recovery: crash after the live folder moves but before backup-created is recorded"

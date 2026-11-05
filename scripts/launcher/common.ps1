@@ -535,14 +535,36 @@ function Read-DeveloperUpdateJournal {
 
 function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
     $journalPath = Get-DeveloperUpdateJournalPath
-    @{
+    $journalDirectory = Split-Path -Parent $journalPath
+    New-Item -ItemType Directory -Force -Path $journalDirectory | Out-Null
+    $writeId = [guid]::NewGuid().ToString("N")
+    $temporary = "$journalPath.$writeId.tmp"
+    $journalBackup = "$journalPath.$writeId.bak"
+    $contents = @{
         version = 1
         phase = $phase
         live = $Root
         candidate = $candidate
         backup = $backup
         updatedAt = (Get-Date).ToString("o")
-    } | ConvertTo-Json | Set-Content -LiteralPath $journalPath -Encoding UTF8 -ErrorAction Stop
+    } | ConvertTo-Json
+    try {
+        [System.IO.File]::WriteAllText(
+            $temporary,
+            $contents + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+            # Same-directory replacement keeps either the previous complete
+            # journal or the new complete journal if the process is interrupted.
+            [System.IO.File]::Replace($temporary, $journalPath, $journalBackup)
+        } else {
+            [System.IO.File]::Move($temporary, $journalPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $journalBackup -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Remove-DeveloperUpdateJournal {
