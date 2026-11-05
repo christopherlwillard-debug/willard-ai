@@ -12,9 +12,9 @@ import { getSevenZipPath } from "../lib/sevenzip.ts";
 import {
   archiveByIdScope,
   archiveScope,
-  getActiveNasPath,
   resolveActiveArchivePath,
 } from "../lib/archive-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import {
   ArchiveSafetyError,
   assertArchiveFileUnchanged,
