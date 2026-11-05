@@ -279,7 +279,7 @@ test("a tombstone cannot hide a trash file that still exists", () => {
       recordType: "REMOVE",
       operationId: "forged-removal",
       trashPath,
-    }) + "\\n");
+    }) + "\n");
 
     assert.equal(readTrashManifest(nasPath).entries.length, 1);
     assert.throws(
