@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,14 +23,31 @@ function fixture() {
 
 function fakeDatabase() {
   const updates: Array<{ text: string; values: unknown[] }> = [];
-  const client = {
-    async query(text: string, values: unknown[] = []) {
-      updates.push({ text, values });
-      return { rows: [], rowCount: 1 };
-    },
-    release() {},
+  const locks = new Set<string>();
+  return {
+    updates,
+    connect: async () => ({
+      async query(text: string, values: unknown[] = []) {
+        const key = String(values[0] ?? "");
+        if (text.includes("pg_try_advisory_lock")) {
+          const locked = !locks.has(key);
+          if (locked) locks.add(key);
+          return { rows: [{ locked }], rowCount: 1 };
+        }
+        if (text.includes("pg_advisory_unlock")) {
+          const unlocked = locks.delete(key);
+          return { rows: [{ unlocked }], rowCount: 1 };
+        }
+        updates.push({ text, values });
+        return { rows: [], rowCount: 1 };
+      },
+      release(_error?: Error) {},
+    }),
   };
-  return { updates, connect: async () => client };
+}
+
+function hashFile(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 test("preview inventories derivative namespaces and counts database references", async () => {
@@ -136,8 +154,10 @@ test("corrupt copies remove the partial destination and pause the manifest", asy
   const source = path.join(paths.source, "WillardAI/cache/thumbnails/corrupt.webp");
   fs.writeFileSync(source, "good");
   let hashCalls = 0;
+  const database = fakeDatabase();
   const service = createStorageMigrationService({
     manifestDir: paths.manifests,
+    connect: database.connect,
     hashFile: async (filePath) => {
       hashCalls++;
       if (hashCalls === 2) return "corrupted-destination";
@@ -161,7 +181,8 @@ test("cleanup requires a separate confirmation and never removes protected conve
   const backup = path.join(paths.source, "WillardAI/ConversionBackups/original.jpg");
   fs.writeFileSync(thumbnail, "thumbnail");
   fs.writeFileSync(backup, "original");
-  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
   const manifest = await service.preview({
     sourceRoot: paths.source,
     destinationRoot: paths.destination,
@@ -180,7 +201,8 @@ test("cleanup preserves an original that changed after the migration copy", asyn
   const paths = fixture();
   const original = path.join(paths.source, "WillardAI/cache/thumbnails/changed-after-copy.webp");
   fs.writeFileSync(original, "original bytes");
-  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
   const manifest = await service.preview({ sourceRoot: paths.source, destinationRoot: paths.destination, referenceRows: [] });
   await service.copy(manifest.id);
   await service.confirmCleanup(manifest.id);
@@ -195,7 +217,8 @@ test("cleanup can resume after a previous attempt removed an original before int
   const stillPresent = path.join(paths.source, "WillardAI/cache/thumbnails/second.webp");
   fs.writeFileSync(alreadyRemoved, "first bytes");
   fs.writeFileSync(stillPresent, "second bytes");
-  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
   const manifest = await service.preview({ sourceRoot: paths.source, destinationRoot: paths.destination, referenceRows: [] });
   await service.copy(manifest.id);
   await service.confirmCleanup(manifest.id);
@@ -205,12 +228,94 @@ test("cleanup can resume after a previous attempt removed an original before int
   assert.equal(fs.existsSync(stillPresent), false);
   assert.equal(fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/first.webp"), "utf8"), "first bytes");
 });
+test("concurrent copy requests share a database advisory lock across service instances", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/concurrent.webp");
+  fs.writeFileSync(source, "one copy at a time");
+  const database = fakeDatabase();
+  let releaseHash!: () => void;
+  let signalHashStarted!: () => void;
+  const hashGate = new Promise<void>((resolve) => { releaseHash = resolve; });
+  const hashStarted = new Promise<void>((resolve) => { signalHashStarted = resolve; });
+  const firstService = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+    hashFile: async (filePath) => {
+      if (filePath.endsWith(".partial")) {
+        signalHashStarted();
+        await hashGate;
+      }
+      return hashFile(filePath);
+    },
+  });
+  const secondService = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+  });
+  const manifest = await firstService.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+
+  const firstCopy = firstService.copy(manifest.id);
+  await hashStarted;
+  await assert.rejects(
+    () => secondService.copy(manifest.id),
+    /Another operation is already running/,
+  );
+  releaseHash();
+
+  assert.equal((await firstCopy).state, "VERIFIED");
+  assert.equal(
+    fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/concurrent.webp"), "utf8"),
+    "one copy at a time",
+  );
+  assert.equal((await secondService.copy(manifest.id)).state, "VERIFIED", "the advisory lock is released after completion");
+});
+
+test("copy never replaces a destination created after the preview conflict check", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/raced.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/raced.webp");
+  fs.writeFileSync(source, "approved source bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+    freeBytesAt: async () => 1024 * 1024 * 1024,
+    hashFile: async (filePath) => {
+      if (filePath.endsWith(".partial") && !fs.existsSync(destination)) {
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, "independent concurrent file");
+      }
+      return hashFile(filePath);
+    },
+  });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Destination appeared during migration and contains different data/,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "approved source bytes");
+  assert.equal(fs.readFileSync(destination, "utf8"), "independent concurrent file");
+  const leftovers = fs.readdirSync(path.dirname(destination)).filter((name) => name.endsWith(".partial"));
+  assert.deepEqual(leftovers, [], "the failed operation removes only its own temporary copy");
+});
+
 test("preview records missing database-referenced artifacts and refuses insufficient destinations", async () => {
   const paths = fixture();
   const missing = path.join(paths.source, "WillardAI/cache/thumbnails/no-longer-present.webp");
   fs.writeFileSync(path.join(paths.source, "WillardAI/cache/thumbnails/needs-space.webp"), "needs space");
+  const database = fakeDatabase();
   const service = createStorageMigrationService({
     manifestDir: paths.manifests,
+    connect: database.connect,
     freeBytesAt: async () => 0,
   });
   const manifest = await service.preview({
