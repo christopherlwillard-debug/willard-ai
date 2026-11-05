@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { archivesTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { archivesTable, mediaFilesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
