@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { sql } from "drizzle-orm";
-import { db, pool, appSettingsTable } from "@workspace/db";
+import { db, pool } from "@workspace/db";
+import { getActiveAppSettings, getActiveNasPath } from "./active-library.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
@@ -222,9 +223,9 @@ export async function recomputeEmbedding(fileId: number): Promise<void> {
        FROM media_files f
        JOIN media_ai a ON a.media_file_id = f.id
        WHERE f.id = $1
-         AND f.nas_path = (SELECT nas_path FROM app_settings LIMIT 1)
+         AND f.nas_path = $2
          AND (f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`,
-    [fileId],
+    [fileId, await getActiveNasPath()],
   );
   const r = rows[0];
   if (!r) return;
@@ -428,10 +429,7 @@ export async function runEnrichmentTick(): Promise<void> {
     let nasPath: string | null = null;
     let paused = false;
     try {
-      const [row] = await db.select({
-        nasPath: appSettingsTable.nasPath,
-        indexingPaused: appSettingsTable.indexingPaused,
-      }).from(appSettingsTable).limit(1);
+      const row = await getActiveAppSettings();
       nasPath = row?.nasPath ?? null;
       paused = row?.indexingPaused ?? false;
     } catch (err) {
