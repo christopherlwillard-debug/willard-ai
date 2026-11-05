@@ -41,6 +41,8 @@ test("collections and AI privacy use the canonical active settings row", () => {
   assert.doesNotMatch(openai, /appSettingsTable|\.from\(appSettingsTable\)/);
   assert.match(privacy, /getActiveAppSettings/);
   assert.doesNotMatch(privacy, /\.from\(appSettingsTable\)/);
+  assert.match(privacy, /aiConsentVersion: settings\.aiConsentVersion/);
+  assert.doesNotMatch(privacy, /\.\.\.settings/);
 });
 
 test("library settings reads and writes target the canonical active settings row", () => {
