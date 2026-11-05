@@ -1748,3 +1748,30 @@ The current organize execute and resume paths still unlink an existing destinati
 - GitHub reports 842 commits and 141 changed files in the PR.
 - No merge, close, rebase, force-push, or main-branch modification was performed.
 - No production data, credentials, or release artifacts were changed.
+
+
+## 2026-11-05 follow-up — signed minimum-Windows-version requirement is not enforced
+
+### Finding — update compatibility metadata is authenticated but ignored by the installed updater
+
+**Affected workflow:** Installed Windows app → automatic update check and installation.
+
+**Evidence:**
+- `desktop/release-contract.mjs` includes `minimumWindowsVersion` in `SIGNED_FIELDS`, so the value is covered by the release signature.
+- `validateReleaseManifest` accepts an optional string for `minimumWindowsVersion` but does not validate a version format or expose a compatibility decision.
+- `desktop/WillardMediaCenter.ps1` verifies the signed manifest and compares release versions, then downloads and installs the newer package. It does not inspect `remote.minimumWindowsVersion` or compare it with the current Windows version.
+- `scripts/windows/validate-release.mjs` separately checks the packaged `version.json` prerequisite is `10+`, but that is a fixed payload validation assertion; it does not enforce a signed per-release minimum against the end user's machine.
+
+**Impact:** If a future signed release raises its minimum supported Windows version (for example, to a newer Windows release), an older unsupported machine can still be offered and can begin installing that release. The update may then fail at runtime or leave the user with an incompatible installation.
+
+**Status:** Confirmed source-level compatibility gap. No update behavior changed in this pass.
+
+**Safe fix requirements:**
+1. Define one canonical supported value format and comparison function for the signed minimum Windows version (avoid loose string comparison).
+2. Determine the actual Windows version using a supported Windows API/runtime source; do not trust a user-editable environment variable.
+3. Check compatibility after signature verification and before artifact download or service shutdown.
+4. If incompatible, keep the installed version untouched, display a clear message that names the minimum required Windows version, and record a non-sensitive diagnostic.
+5. Add Windows tests for absent requirement (backward-compatible), current OS equal to minimum, newer OS, older OS, malformed signed values, and version-boundary cases.
+6. Keep the check in the shared release/update contract where possible so validation, updater, and tests cannot drift.
+
+**Risk classification:** Medium (availability / failed update), elevated because the update path can replace a previously working installation. The signed metadata is not currently an enforced compatibility boundary.
