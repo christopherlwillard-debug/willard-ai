@@ -269,7 +269,7 @@ router.post("/auth/setup", setupRateLimiter, async (req: Request, res: Response)
     }
 
     const authorization = authorizeFirstRunSetup({
-      remoteAddress: req.ip ?? req.socket.remoteAddress,
+      remoteAddress: req.socket.remoteAddress,
       configuredToken: process.env["WILLARD_SETUP_TOKEN"],
       suppliedToken: parsed.data.setupToken,
     });
