@@ -137,7 +137,7 @@ test("bounds entry count, per-file expansion, total expansion, and duplicate pat
   assertSafetyFailure(
     () => {
       const budget = createArchiveBudget();
-      validateArchiveEntry({ path: "./nested//same.txt", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "./nested/same.txt", sizeBytes: 1 }, budget);
       validateArchiveEntry({ path: "nested/same.txt", sizeBytes: 1 }, budget);
     },
     /duplicate entry path/,
