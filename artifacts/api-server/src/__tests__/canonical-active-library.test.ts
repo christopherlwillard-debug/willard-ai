@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const routeRoot = new URL("../routes/", import.meta.url);
 const files = [
   "documents.ts", "diagnostics.ts", "search.ts", "files.ts",
-  "faces.ts", "health.ts", "explorer.ts", "organize.ts", "dashboard.ts",
+  "faces.ts", "health.ts", "explorer.ts", "organize.ts", "dashboard.ts", "scan.ts", "media-detail.ts",
 ];
 const sources = Object.fromEntries(files.map((name) => [
   name,
@@ -50,4 +50,14 @@ test("library settings reads and writes target the canonical active settings row
   assert.match(library, /getActiveAppSettings/);
   assert.doesNotMatch(library, /\.from\(appSettingsTable\)\.limit\(1\)/);
   assert.doesNotMatch(library, /db\.update\(appSettingsTable\)\.set\(\{ indexingPaused: (?:true|false) \}\);/);
+});
+
+test("library job engine uses canonical scanner settings and only updates the active settings row", () => {
+  const enginePath = fileURLToPath(new URL("../lib/library-engine/job-engine.ts", import.meta.url));
+  const engine = readFileSync(enginePath, "utf8");
+  assert.match(engine, /const settingsRow = await getActiveAppSettings\(\)/);
+  assert.match(engine, /const activeSettings = await getActiveAppSettings\(\)/);
+  assert.match(engine, /activeSettings\?\.nasPath === state\.nasPath/);
+  assert.match(engine, /\.where\(eq\(appSettingsTable\.id, activeSettings\.id\)\)/);
+  assert.doesNotMatch(engine, /\.where\(eq\(appSettingsTable\.nasPath, state\.nasPath\)\)/);
 });
