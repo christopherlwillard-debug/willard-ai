@@ -555,6 +555,14 @@ function Try-Update {
 }
 
 Ensure-Folders
+. (Join-Path $PSScriptRoot "launcher-instance-lock.ps1")
+$script:LauncherMutex = $null
+try {
+  $script:LauncherMutex = Enter-WillardLauncherMutex
+} catch {
+  Report-StartupFailure ("Willard could not obtain its startup lock: " + $_.Exception.Message)
+  exit 1
+}
 Write-Host ""
 Write-Host "  Willard Media Center" -ForegroundColor Cyan
 Write-Host "  Starting your local media library" -ForegroundColor Gray
@@ -562,12 +570,16 @@ try {
   if ($args -contains "-Stop") {
     Stop-Services
     Good "Willard Media Center services stopped."
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
     exit 0
   }
   $existing = Read-Pids
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
     Start-Process $WebUrl
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
     exit 0
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
@@ -619,10 +631,14 @@ try {
   Good "Media Center is ready."
   Close-LoadingScreen
   Start-Process $WebUrl
+  Exit-WillardLauncherMutex $script:LauncherMutex
+  $script:LauncherMutex = $null
 } catch {
   Stop-Services
   try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
   Close-LoadingScreen
   Report-StartupFailure $_.Exception.Message
+  Exit-WillardLauncherMutex $script:LauncherMutex
+  $script:LauncherMutex = $null
   exit 1
 }

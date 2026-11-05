@@ -202,6 +202,10 @@ jobs:
           }
           Write-Host "PowerShell syntax validation passed for $($files.Count) launcher and installer scripts."
 
+      - name: Verify installed launcher serializes concurrent startup
+        shell: pwsh
+        run: .\scripts\windows\launcher-instance-lock-smoke.ps1
+
       - name: Verify fresh launcher environment file is UTF-8 and Node-readable
         shell: pwsh
         run: |

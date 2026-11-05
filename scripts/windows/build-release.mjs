@@ -235,6 +235,7 @@ async function main() {
   await copy(path.join(root, "desktop/library-recovery.mjs"), path.join(output, "desktop/library-recovery.mjs"));
   await copy(path.join(root, "desktop/loading.html"), path.join(output, "desktop/loading.html"));
   await copy(path.join(root, "desktop/WillardMediaCenter.ps1"), path.join(output, "desktop/WillardMediaCenter.ps1"));
+  await copy(path.join(root, "desktop/launcher-instance-lock.ps1"), path.join(output, "desktop/launcher-instance-lock.ps1"));
   await copy(path.join(root, "desktop/Start Willard Media Center.bat"), path.join(output, "Start Willard Media Center.bat"));
   await copy(path.join(root, "installer/willard.ico"), path.join(output, "icons/willard.ico"));
   await copy(path.join(nodeRuntime, "node.exe"), path.join(output, "runtime/node.exe"));

@@ -22,6 +22,10 @@ const launcher = await readFile(
   new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url),
   "utf8",
 );
+const launcherInstanceLock = await readFile(
+  new URL("../../desktop/launcher-instance-lock.ps1", import.meta.url),
+  "utf8",
+);
 const developerLauncher = await readFile(
   new URL("../launcher/start.ps1", import.meta.url),
   "utf8",
@@ -320,6 +324,14 @@ test("release helper produces a checksum-bearing update artifact", () => {
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(
+    workflow,
+    /validate_only:\s*\n\s+description:[^\n]*\n\s+required:\s*false\n\s+type:\s*boolean\n\s+default:\s*true/,
+  );
+  assert.match(
+    workflow,
+    /if:\s*\$\{\{\s*github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true\s*\}\}/,
+  );
   assert.match(workflow, /runs-on: windows-latest/);
   assert.match(
     workflow,
@@ -408,7 +420,7 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(trustMetadataStep, /SignerCertificate/);
   assert.match(trustMetadataStep, /TimeStamperCertificate/);
   assert.match(trustMetadataStep, /expected 'Willard Media Center'/);
-  assert.match(trustMetadataStep, /Release URL:/);
+  assert.match(trustMetadataStep, /Potential release URL \(only if published\):/);
   assert.match(trustMetadataStep, /Signer valid from:/);
   assert.match(trustMetadataStep, /Signer certification path: Valid/);
   assert.match(trustMetadataStep, /Timestamp signer valid from:/);
@@ -551,6 +563,31 @@ test("Windows release publication is preceded by every required quality gate", (
   assert.match(workflow, /pnpm exec playwright install chromium/);
   assert.match(workflow, /WILLARD_START_LOCAL_SERVERS: "true"/);
   assert.match(installerCompiler, /Get-FileHash \$setup -Algorithm SHA256/);
+});
+
+test("installed launcher serializes fresh starts and skips updates for an existing instance", () => {
+  assert.match(launcher, /launcher-instance-lock\.ps1/);
+  assert.match(launcherInstanceLock, /function Enter-WillardLauncherMutex/);
+  assert.match(launcherInstanceLock, /WaitOne\(\$TimeoutMilliseconds\)/);
+  assert.match(launcherInstanceLock, /AbandonedMutexException/);
+  assert.match(launcherInstanceLock, /function Exit-WillardLauncherMutex/);
+
+  const lockAcquire = launcher.indexOf("Enter-WillardLauncherMutex");
+  const existingCheck = launcher.indexOf("$existing = Read-Pids");
+  const updateCheck = launcher.lastIndexOf("  Try-Update\n");
+  assert.ok(lockAcquire >= 0 && lockAcquire < existingCheck && existingCheck < updateCheck,
+    "the startup lock must be acquired before the running-instance check and update check");
+
+  const existingFlow = launcher.slice(existingCheck, updateCheck);
+  assert.match(existingFlow, /Start-Process \$WebUrl/);
+  assert.match(existingFlow, /Exit-WillardLauncherMutex \$script:LauncherMutex/);
+  assert.doesNotMatch(existingFlow, /Try-Update/);
+
+  const releaseCalls = launcher.match(/Exit-WillardLauncherMutex \$script:LauncherMutex/g) ?? [];
+  assert.equal(releaseCalls.length, 4, "stop, existing-instance, normal-start, and failure paths must release the lock");
+
+  assert.match(releaseStager, /desktop\/launcher-instance-lock\.ps1/);
+  assert.match(fastValidationWorkflow, /Verify installed launcher serializes concurrent startup/);
 });
 
 test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
