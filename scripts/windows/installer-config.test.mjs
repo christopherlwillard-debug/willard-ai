@@ -871,6 +871,17 @@ test("developer updates preserve local reference assets without ignoring source 
   assert.match(updater, /tracked source edits/);
 });
 
+test("Windows launchers generate cryptographic session secrets for new installs", () => {
+  assert.match(launcherCommon, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcherCommon, /\$rng\.GetBytes\(\$secretBytes\)/);
+  assert.doesNotMatch(launcherCommon, /\$secret = -join .*Get-Random/);
+
+  assert.match(launcher, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
+  assert.match(launcher, /SESSION_SECRET=\$sessionSecret/);
+  assert.doesNotMatch(launcher, /SESSION_SECRET=.*Get-Random/);
+});
+
 test("Windows backup credentials use native user-scoped DPAPI with legacy compatibility", () => {
   for (const credentialLauncher of [launcherCommon, launcher]) {
     assert.match(credentialLauncher, /ProtectedData\]::Protect/);
