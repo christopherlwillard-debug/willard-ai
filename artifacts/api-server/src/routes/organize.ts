@@ -1738,7 +1738,10 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           .set({ fileMoves: fileMoves as any })
           .where(eq(organizationJobsTable.id, id));
       } catch (e: any) {
-        opLog(`WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}`);
+        // Do not continue moving files when the recovery journal cannot be
+        // persisted. The outer failure path will roll back this in-memory move
+        // and stop the operation instead of widening the unjournaled window.
+        throw new Error(`File-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
       if ((i + 1) % 5 === 0 || moved + excluded + conflictSkipped === total) {
@@ -1899,8 +1902,15 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
+    const rollbackComplete = rolledBack === fileMoves.length;
+    const recoveryError = rollbackComplete
+      ? errMsg
+      : `${errMsg} Rollback incomplete: ${rolledBack}/${fileMoves.length} files were restored; manual recovery is required.`;
     await db.update(organizationJobsTable).set({
-      status: "rolled_back", error: errMsg, fileMoves: fileMoves as any, completedAt: new Date(),
+      status: rollbackComplete ? "rolled_back" : "failed",
+      error: recoveryError,
+      fileMoves: fileMoves as any,
+      completedAt: new Date(),
     }).where(eq(organizationJobsTable.id, id)).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
