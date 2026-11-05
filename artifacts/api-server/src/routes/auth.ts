@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import { authorizeFirstRunSetup } from "../lib/setup-authorization.ts";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, pool } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
@@ -14,7 +15,7 @@ const router: IRouter = Router();
 
 const BCRYPT_ROUNDS = 12;
 const passwordSchema = z.string().min(6, "Password must be at least 6 characters.").max(256, "Password is too long.");
-const setupSchema = z.object({ password: passwordSchema }).strict();
+const setupSchema = z.object({ password: passwordSchema, setupToken: z.string().max(256).optional() }).strict();
 const loginSchema = z.object({ password: z.string().min(1, "Password required.").max(256, "Password is too long.") }).strict();
 const recoverySchema = z.object({
   recoveryKey: z.string().min(1, "Recovery key and new password are required.").max(128),
@@ -229,6 +230,14 @@ export const loginRateLimiter = rateLimit({
   message: { error: "Too many login attempts. Try again in 15 minutes." },
 });
 
+const setupRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many first-run setup attempts. Try again in 15 minutes." },
+});
+
 const recoverRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -251,16 +260,33 @@ router.get("/auth/status", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/auth/setup", async (req: Request, res: Response) => {
+router.post("/auth/setup", setupRateLimiter, async (req: Request, res: Response) => {
   try {
-    const settings = await getOrCreateSettings();
-    if (settings.passwordHash) {
-      res.status(409).json({ error: "Password already set. Use change-password instead." });
-      return;
-    }
     const parsed = setupSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: validationError(parsed) });
+      return;
+    }
+
+    const authorization = authorizeFirstRunSetup({
+      remoteAddress: req.ip ?? req.socket.remoteAddress,
+      configuredToken: process.env["WILLARD_SETUP_TOKEN"],
+      suppliedToken: parsed.data.setupToken,
+    });
+    if (authorization === "token_misconfigured") {
+      res.status(503).json({
+        error: "Remote first-run setup is locked. Configure WILLARD_SETUP_TOKEN with a secret of at least 32 characters, then restart the server.",
+      });
+      return;
+    }
+    if (authorization === "token_required" || authorization === "token_invalid") {
+      res.status(403).json({ error: "A valid remote setup token is required to claim the first administrator account." });
+      return;
+    }
+
+    const settings = await getOrCreateSettings();
+    if (settings.passwordHash) {
+      res.status(409).json({ error: "Password already set. Use change-password instead." });
       return;
     }
     const { password } = parsed.data;
