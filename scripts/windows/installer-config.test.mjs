@@ -1196,7 +1196,9 @@ test("updater smoke can create its temporary branch from a detached source check
     runGit(["-C", source, "add", "README.md"]);
     runGit(["-C", source, "commit", "--quiet", "-m", "initial"]);
     const sourceHead = runGit(["-C", source, "rev-parse", "HEAD"]).trim();
+    const sourceBranch = runGit(["-C", source, "branch", "--show-current"]).trim();
     runGit(["-C", source, "checkout", "--quiet", "--detach", sourceHead]);
+    runGit(["-C", source, "update-ref", "-d", `refs/heads/${sourceBranch}`]);
     runGit(["clone", "--quiet", source, remote]);
 
     assert.equal(
