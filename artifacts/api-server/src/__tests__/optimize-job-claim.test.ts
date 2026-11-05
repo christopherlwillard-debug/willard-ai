@@ -33,6 +33,6 @@ test("conversion retry refuses awaiting-action jobs without deleting staged outp
   assert.doesNotMatch(retryRoute, /fs\.rmSync/);
   assert.doesNotMatch(retryRoute, /job\.status === "awaiting_action"/);
   const guard = retryRoute.indexOf('if (job.status !== "failed")');
-  const reset = retryRoute.indexOf("const [updated] = await db.update(conversionJobsTable)");
+  const reset = retryRoute.indexOf(".update(conversionJobsTable)", guard);
   assert.ok(guard >= 0 && reset > guard, "the status guard must run before resetting the job");
 });
