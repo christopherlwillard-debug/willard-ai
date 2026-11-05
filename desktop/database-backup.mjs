@@ -1457,7 +1457,6 @@ export {
   findWindowsPostgresBinary,
   stableJson,
   overwriteFileWithZeroes,
-  createPrivateBackupWorkDirectory,
   secureRemove,
   validateManifest,
 };
