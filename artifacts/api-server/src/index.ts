@@ -7,6 +7,7 @@ import { installShutdownHandlers } from "./lib/shutdown.ts";
 import { startLibraryBackupCoordinator } from "./lib/backup-coordinator.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
 import { getActiveNasPath } from "./lib/active-library.ts";
+import { recoverInterruptedConversionJobs } from "./lib/conversion-recovery.ts";
 import type { Server } from "node:http";
 
 let server: Server | null = null;
@@ -38,6 +39,23 @@ startupMigrations
       }
       logger.info({ port }, "Server listening");
       startLibraryBackupCoordinator();
+
+      // Conversion recovery queries conversion_jobs and must run only after
+      // startupMigrations has completed. Keep it in the background so a slow
+      // NAS rollback never prevents the HTTP listener from becoming ready.
+      void recoverInterruptedConversionJobs()
+        .then((count) => {
+          if (count > 0) {
+            logger.warn(
+              { count },
+              "RECOVERY: Reconciled interrupted conversion operation(s); review Optimize Center before retrying or finalizing",
+            );
+          }
+        })
+        .catch((recoveryError) => {
+          markStartupDegraded("conversion_recovery", "Conversion recovery did not complete.");
+          logger.error({ err: recoveryError, operation: "conversion_recovery" }, "Conversion recovery did not complete");
+        });
 
       // Health/readiness must be available as soon as the required schema
       // gate has passed. These cleanup and recovery tasks are safe to run
