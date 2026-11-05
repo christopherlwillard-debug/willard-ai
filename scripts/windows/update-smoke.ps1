@@ -212,7 +212,9 @@ try {
   $atomicJournal = Get-Content -LiteralPath $atomicJournalPath -Raw | ConvertFrom-Json
   Assert-True ($atomicJournal.phase -eq "backup-created") "Atomic developer journal replacement did not publish the new complete phase."
   $atomicArtifacts = @(Get-ChildItem -LiteralPath $TempRoot -File | Where-Object {
-    $_.Name -match '^\.recovery-atomic\.willard-update\.json\.[0-9a-f]{32}\.(?:tmp|bak)
+    $_.Name -match '^\.recovery-atomic\.willard-update\.json\.[0-9a-f]{32}\.(?:tmp|bak)$'
+  })
+  Assert-True (Test-Path -LiteralPath $atomicJournalPath -PathType Leaf) "Atomic developer journal replacement removed the live journal."
   Assert-True ($atomicArtifacts.Count -eq 0) (
     "Atomic developer journal replacement left temporary or backup files: " +
     ($atomicArtifacts.Name -join ", ")
