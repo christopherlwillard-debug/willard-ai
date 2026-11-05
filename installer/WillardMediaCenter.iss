@@ -68,7 +68,7 @@ Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\icons"
 
 [Code]
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+function StopWillardServices: String;
 var
   ResultCode: Integer;
   Launcher: String;
@@ -85,6 +85,25 @@ begin
     if ResultCode <> 0 then begin
       Result := 'Willard Media Center did not stop cleanly. The existing installation was left unchanged; close running Media Center processes and try again.';
       exit;
+    end;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := StopWillardServices;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  StopError: String;
+begin
+  if CurUninstallStep = usUninstall then begin
+    StopError := StopWillardServices;
+    if StopError <> '' then begin
+      Log(StopError);
+      SuppressibleMsgBox(StopError, mbError, MB_OK, IDOK);
+      Abort;
     end;
   end;
 end;
