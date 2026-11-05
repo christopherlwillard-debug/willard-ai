@@ -9,7 +9,7 @@ import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
-import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
+import { normalizeOptionalDateOnlyRange, parseOptionalDateOnlyRange, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
   SAVED_SEARCH_LIMIT,
   SEARCH_HISTORY_RETENTION,
@@ -27,13 +27,14 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
   const base = emptyIntent();
   const o = raw as Record<string, unknown>;
   const arr = (v: unknown) => Array.isArray(v) ? v.map(String).slice(0, 10) : [];
+  const dates = normalizeOptionalDateOnlyRange(o.dateFrom, o.dateTo);
   return {
     ...base,
     semanticQuery: typeof o.semanticQuery === "string" ? o.semanticQuery : null,
     keywords: arr(o.keywords),
     mediaTypes: arr(o.mediaTypes),
-    dateFrom: typeof o.dateFrom === "string" ? o.dateFrom : null,
-    dateTo: typeof o.dateTo === "string" ? o.dateTo : null,
+    dateFrom: dates.dateFrom,
+    dateTo: dates.dateTo,
     objects: arr(o.objects),
     exclude: arr(o.exclude),
     favoriteOnly: o.favoriteOnly === true,
@@ -100,8 +101,21 @@ router.post("/search/ai", async (req, res) => {
         intent.mediaTypes = f.mediaTypes.map(String).slice(0, 6);
       }
       if (f.favoriteOnly === true) intent.favoriteOnly = true;
-      if (typeof f.dateFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f.dateFrom)) intent.dateFrom = f.dateFrom;
-      if (typeof f.dateTo === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f.dateTo)) intent.dateTo = f.dateTo;
+      if (f.dateFrom !== undefined || f.dateTo !== undefined) {
+        try {
+          const dates = parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined);
+          if (f.dateFrom !== undefined) intent.dateFrom = dates.from ? String(f.dateFrom) : null;
+          if (f.dateTo !== undefined) intent.dateTo = dates.toExclusive ? String(f.dateTo) : null;
+          const normalizedDates = normalizeOptionalDateOnlyRange(intent.dateFrom, intent.dateTo);
+          intent.dateFrom = normalizedDates.dateFrom;
+          intent.dateTo = normalizedDates.dateTo;
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return res.status(400).json({ error: err.message });
+          }
+          throw err;
+        }
+      }
     }
 
     const results = await executeSearch(nasPath, intent);
