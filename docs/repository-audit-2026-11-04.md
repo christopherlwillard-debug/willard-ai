@@ -400,3 +400,10 @@ Remaining archive hardening:
 - The manifest parser previously treated any syntactically valid `REMOVE` record as authoritative, even if the referenced file still existed. A forged or partially written journal append could hide a recoverable file from the trash list and prevent restore.
 - The parser now honors a tombstone only when `lstat` confirms the recorded trash path is absent. The removal helper refuses to append a tombstone while the file remains. A regression verifies a forged tombstone cannot hide a live file, that the removal helper refuses it, and that the tombstone becomes effective after the file is actually absent.
 - Validation for this follow-up is pending.
+
+
+## Cross-platform archive filename collision detection (2026-11-05)
+
+- Archive duplicate detection previously compared normalized names case-sensitively. An archive containing `Photos/Cat.jpg` and `photos/cat.JPG` could pass preflight on Linux but collide on a case-insensitive Windows or macOS filesystem, allowing extraction order to overwrite one entry. Canonically equivalent Unicode names could also alias on common filesystems.
+- Duplicate detection now uses NFC-normalized, case-folded collision keys while preserving the original normalized path for extraction. This intentionally enforces portable archive names consistently on all platforms.
+- Added regressions for case-only and Unicode-normalization collisions. Fast Validation is pending.
