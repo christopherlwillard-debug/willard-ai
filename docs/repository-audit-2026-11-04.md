@@ -1216,3 +1216,13 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 | Medium | Private media stream I/O error semantics — thumbnail/logo/media preview | target-tested | Regression changes documented in PR body; latest end-to-end status requires fresh CI confirmation | Browser-level interrupted-stream behavior remains to be exercised |
 
 Statuses distinguish code inspection and focused tests from integration and full workflow validation. No blocked item is represented as fixed or fully validated.
+
+## 2026-11-05 audit batch — repair malformed Fast Validation Windows job
+
+**Finding (high, CI/release confidence):** Source inspection of `.github/workflows/fast-validation.yml` found that the Windows environment-file smoke step had been split in the middle of its PowerShell condition. A duplicate copy of the Windows archive/updater steps was interleaved before the condition's closing text, and the complete Windows step sequence remained later in the job. This made the workflow definition malformed and coincided with the latest Fast Validation pushes (#737–#739) failing immediately; the available GitHub job-list endpoint returned zero job records, so no step-level log was available to attribute those failures independently.
+
+**Correction:** Reconstructed the PowerShell smoke step as one complete YAML block, removed the interleaved duplicate job section, and retained exactly one ordered Windows validation sequence. The smoke still creates a disposable environment file, runs the real launcher helper, and verifies that Node reads the generated 64-character hexadecimal session secret as UTF-8.
+
+**Regression/verification:** Added no new runtime dependency. The workflow's own successful parse and execution is the authoritative validation. A new Fast Validation run is triggered by this commit; until it completes, the workflow repair is source-reviewed but not called validated. The earlier runs #737, #738, and #739 remain failures and are not retroactively relabeled.
+
+**Remaining limitation:** The GitHub connection exposes the workflow run status but returned no job records/logs for the malformed runs. The repaired run must create both Linux and Windows jobs and complete them successfully before this batch can be marked fully validated.
