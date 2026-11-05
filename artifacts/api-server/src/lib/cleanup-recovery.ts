@@ -113,13 +113,18 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
   const filePath = manifestPath(nasPath);
   if (!fs.existsSync(filePath)) return { lines: [], entries: [] };
   const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
+  const root = trashRoot(nasPath);
+  const normalizeTrashKey = (value: string) => {
+    try { return pathKey(resolveTrashPath(value, root)); }
+    catch { return pathKey(value); }
+  };
   const removedPaths = new Set<string>();
   const entries: TrashManifestEntry[] = [];
   for (const line of lines) {
     try {
       const record = JSON.parse(line) as Record<string, unknown>;
       if (record.recordType === "REMOVE" && typeof record.trashPath === "string") {
-        removedPaths.add(pathKey(record.trashPath));
+        removedPaths.add(normalizeTrashKey(record.trashPath));
         continue;
       }
       if (typeof record.originalPath === "string" && typeof record.trashPath === "string") {
@@ -132,7 +137,7 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
   return {
     lines,
     entries: entries.filter((entry) =>
-      !removedPaths.has(pathKey(entry.trashPath)),
+      !removedPaths.has(normalizeTrashKey(entry.trashPath)),
     ),
   };
 }
