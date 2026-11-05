@@ -23,7 +23,6 @@ import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
-import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
 import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
 import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-lock";
 import { isShuttingDown } from "./lib/shutdown-state.ts";
@@ -369,22 +368,6 @@ startLibraryMonitor();
 startLibraryWatcher();
 startAiEnrichment();
 startFaceRecognition();
-
-// Detect conversion jobs interrupted mid-run (server died while status was "running").
-// Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
-recoverInterruptedConversionJobs()
-  .then((count) => {
-    if (count > 0) {
-      logger.warn(
-        { count, error: INTERRUPTED_CONVERSION_ERROR },
-        "RECOVERY: Marked interrupted conversion job(s) as failed — visit Optimize Center to retry",
-      );
-    }
-  })
-  .catch((err) => {
-    markStartupDegraded("conversion_recovery", "Conversion recovery did not complete.");
-    logger.error({ err, operation: "conversion_recovery" }, "Conversion recovery did not complete");
-  });
 
 // Detect organize jobs interrupted mid-execution: "executing" status (server died) or
 // "failed" jobs that have a lastStage set (meaning they failed during execute, not during analyze).
