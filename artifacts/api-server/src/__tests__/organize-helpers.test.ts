@@ -527,3 +527,17 @@ test("organization completion re-hashes destination files in execute and resume"
   assert.equal((source.match(/actualHash !== mv\.sourceHash/g) ?? []).length, 2);
   assert.ok(source.includes("missing or checksum-mismatched at destination"));
 });
+
+
+test("organization reset refuses to discard a non-empty recovery journal", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const resetStart = source.indexOf('router.post("/organize/jobs/:id/reset"');
+  const resetEnd = source.indexOf('router.post("/organize/jobs/:id/resume-token"', resetStart);
+  const resetRoute = source.slice(resetStart, resetEnd);
+  assert.match(resetRoute, /job\.fileMoves !== null/);
+  assert.match(resetRoute, /Array\.isArray\(job\.fileMoves\) \|\| job\.fileMoves\.length > 0/);
+  assert.match(resetRoute, /Resume it or complete rollback in Recovery Center before resetting/);
+  assert.match(resetRoute, /isNull\(organizationJobsTable\.fileMoves\)/);
+  assert.match(resetRoute, /jsonb_typeof\(\$\{organizationJobsTable\.fileMoves\}\) = 'array' AND jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0/);
+});
