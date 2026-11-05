@@ -117,7 +117,6 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     assert.equal(replay.status, 403);
     await replay.text();
   });
-});
 
 test("startup recovery skips a conversion job while its live worker holds the advisory lock", async () => {
   const [inserted] = await db.insert(conversionJobsTable).values({
@@ -157,4 +156,7 @@ test("startup recovery skips a conversion job while its live worker holds the ad
     .where(eq(conversionJobsTable.id, activeJobId));
   assert.equal(recovered?.status, "failed");
   assert.equal(recovered?.error, INTERRUPTED_CONVERSION_ERROR);
+});
+
+
 });
