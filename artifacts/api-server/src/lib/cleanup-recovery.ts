@@ -60,7 +60,7 @@ export function manifestPath(nasPath: string): string {
 }
 
 function trashRoot(nasPath: string): string {
-  return resolveWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), path.join(nasPath, "WillardAI"));
+  return ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), nasPath);
 }
 
 function pathKey(value: string): string {
