@@ -1270,3 +1270,20 @@ Statuses distinguish code inspection and focused tests from integration and full
 ### Follow-up correction — stale helper snapshot detected and repaired
 
 The first duplicate-helper cleanup was followed by a stale-file update that reintroduced the original duplicate block and left `Ensure-EnvFile` truncated. Fast Validation #745 exposed the duplicate declarations (53 unique names versus 69 declarations). I rebuilt the helper file from the exact current branch blob, removed all 16 identical duplicate definitions without dropping unique functions, restored the complete UTF-8 secret write, and reinstated the developer stop guard. This correction is intentionally recorded because the earlier cleanup commit did not remain effective. The next run must pass the existing helper uniqueness, UTF-8 source, and Windows fresh-environment smoke checks before these installer fixes can be considered validated.
+
+
+## 2026-11-05 follow-up — repair corrupted Windows launcher helper tail
+
+**Confirmed finding (high, Windows first-run reliability):** Inspection of the current audit branch found that `scripts/launcher/common.ps1` contained 70+ orphaned lines after the complete closing brace of `Wait-ForUrl`. The orphaned fragments repeated the tail of `Ensure-EnvFile` three times and left the shared helper file syntactically invalid for PowerShell parsing. This contradicted the earlier note that the helper file had been repaired; the corruption had reappeared in the current branch snapshot.
+
+**Correction:** Removed only the trailing orphaned fragment, retaining the complete `Ensure-EnvFile` implementation (32-byte OS cryptographic secret and UTF-8 without BOM) and all 55 unique helper definitions. The file now ends at the complete `Wait-ForUrl` function. Added regression assertions that the final helper is complete at end-of-file and no orphaned `SESSION_SECRET` write fragment follows it.
+
+**Commits:** implementation `2301c9a93a36b3b7e7c796551ab137f8826395d6`; regression `22a7287d4e2d9b5351620a5114557842f13c5cba`; assertion-pattern correction follows in this audit batch.
+
+**Validation:** Not yet run on GitHub Actions for this batch. The source boundary and helper count were inspected after the edit; the new regression and Windows PowerShell parser/runtime smoke must pass before this correction is marked validated.
+
+**First-run administrator protection:** The current branch already contains the operator-provisioned `WILLARD_SETUP_TOKEN` guard, constant-time comparison, rate limiting, and reverse-proxy-safe local-launcher opt-in. This addresses the earlier unauthenticated remote first-visitor claim in code. The token is required for LAN/hosted setup; local bypass is restricted to the two supported launchers, loopback bind, and non-Replit runtime. The hosted reverse-proxy deployment test and current full workflow validation remain outstanding; no production secret was provisioned or changed.
+
+**Optimize scan cap:** The current API explicitly returns both `scanLimitReached` and `scanLimit` in the scan and recommendation-status responses. This makes truncation detectable by clients, but the scan remains capped at 500,000 files with no pagination/resume. A visible UI warning and resumable pagination require frontend workflow inspection and are not claimed complete in this pass.
+
+**Remaining critical limitation — stale conversion worker fencing:** PostgreSQL session advisory locks are released when their connection is lost, but a worker may still be executing a filesystem operation. A simple database re-check immediately before a move cannot close the check-to-move race. I have not added a cosmetic lease/check that would falsely claim fencing. A safe fix must make the filesystem mutation boundary itself honor a monotonically increasing fencing generation (or introduce an equivalent cross-process primitive that is valid on supported NAS filesystems), with crash and partition tests. This remains blocked pending that design.
