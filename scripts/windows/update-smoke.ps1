@@ -66,8 +66,11 @@ try {
   # The source clone is the local "GitHub" remote. Make one update commit.
   & git clone --quiet $Root $Remote
   if ($LASTEXITCODE -ne 0) { throw "Could not create the temporary update remote." }
-  $remoteBranch = (& git -C $Remote branch --show-current).Trim()
-  Assert-True $remoteBranch "Could not determine the temporary remote branch."
+  # GitHub Actions checks out pull requests at a detached commit. Create a
+  # dedicated branch in the temporary remote instead of relying on clone HEAD.
+  $remoteBranch = "smoke-update-$([guid]::NewGuid().ToString('N'))"
+  & git -C $Remote checkout --quiet -b $remoteBranch
+  if ($LASTEXITCODE -ne 0) { throw "Could not create a branch in the temporary update remote." }
   & git -C $Remote config user.email "smoke@example.invalid"
   & git -C $Remote config user.name "Windows update smoke"
   Set-Content (Join-Path $Remote "update-smoke-marker.txt") "updated" -Encoding UTF8
