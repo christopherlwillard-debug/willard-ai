@@ -873,6 +873,7 @@ test("developer updates preserve local reference assets without ignoring source 
 
 test("Windows launchers generate cryptographic session secrets for new installs", () => {
   assert.match(launcherCommon, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcherCommon, /\$secretBytes = New-Object byte\[\] 32/);
   assert.match(launcherCommon, /\$rng\.GetBytes\(\$secretBytes\)/);
   assert.doesNotMatch(launcherCommon, /\$secret = -join .*Get-Random/);
   const helperNames = [...launcherCommon.matchAll(/^\s*function\s+([A-Za-z0-9_-]+)/gm)].map((match) => match[1]);
@@ -885,6 +886,7 @@ test("Windows launchers generate cryptographic session secrets for new installs"
     "Ensure-EnvFile must persist the generated secret inside its own function body",
   );
   assert.match(launcher, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcher, /\$sessionSecretBytes = New-Object byte\[\] 32/);
   assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
   assert.match(launcher, /SESSION_SECRET=\$sessionSecret/);
   assert.doesNotMatch(launcher, /SESSION_SECRET=.*Get-Random/);
