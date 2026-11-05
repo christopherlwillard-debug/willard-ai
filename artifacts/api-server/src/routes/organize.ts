@@ -1759,18 +1759,28 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       throw new Error(`Move count mismatch: moved ${moved} + skipped ${conflictSkipped} = ${moved + conflictSkipped} but plan expected ${total}. Investigation required.`);
     }
 
-    // Per-file existence + checksum summary (checksums were verified inline during move)
-    const checksumVerifiedCount  = fileMoves.filter(m => m.verified).length;
-    const checksumUnverifiedCount = fileMoves.filter(m => !m.verified).length;
+    // Re-hash every destination at the completion boundary. Inline verification
+    // proves the bytes immediately after each move; this second pass catches
+    // later modification before the job is reported as completed.
+    let checksumVerifiedCount = 0;
     const unverified: string[] = [];
     for (const mv of fileMoves) {
       if (!fs.existsSync(mv.to)) {
         unverified.push(mv.to);
         opLog("VERIFY_FAIL: destination file missing");
+        continue;
       }
+      const actualHash = await sha256File(mv.to);
+      if (actualHash !== mv.sourceHash) {
+        unverified.push(mv.to);
+        opLog("VERIFY_FAIL: destination checksum mismatch");
+        continue;
+      }
+      checksumVerifiedCount++;
     }
+    const checksumUnverifiedCount = fileMoves.length - checksumVerifiedCount;
     if (unverified.length > 0) {
-      throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files not found at destination.`);
+      throw new Error(`Verification failed: ${unverified.length}/${fileMoves.length} moved files missing or checksum-mismatched at destination.`);
     }
     opLog(`VERIFY_FILES: ${fileMoves.length}/${fileMoves.length} at destination — sha256-verified: ${checksumVerifiedCount}, failed-verification: ${checksumUnverifiedCount}`);
 
@@ -2433,16 +2443,25 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     await setStage("verifying");
     send("status", { stage: "verifying", message: "Verifying all files at destination…", progress: 85 });
 
-    const missing: string[] = [];
+    const unverified: string[] = [];
+    let checksumVerified = 0;
     for (const mv of allMoves) {
-      if (!fs.existsSync(mv.to)) missing.push(mv.to);
+      if (!fs.existsSync(mv.to)) {
+        unverified.push(mv.to);
+        continue;
+      }
+      const actualHash = await sha256File(mv.to);
+      if (actualHash !== mv.sourceHash) {
+        unverified.push(mv.to);
+        continue;
+      }
+      checksumVerified++;
     }
-    if (missing.length > 0) {
-      throw new Error(`Verification failed: ${missing.length}/${allMoves.length} moved files missing at destination`);
+    if (unverified.length > 0) {
+      throw new Error(`Verification failed: ${unverified.length}/${allMoves.length} moved files missing or checksum-mismatched at destination`);
     }
 
     const completedAt = new Date();
-    const checksumVerified = allMoves.filter(m => m.verified).length;
     const report: any = {
       jobId: id, status: "completed", completedAt: completedAt.toISOString(),
       sourcePath: job.sourcePath, sourceType: job.sourceType,
