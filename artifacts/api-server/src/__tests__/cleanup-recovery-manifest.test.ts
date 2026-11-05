@@ -263,6 +263,39 @@ test("manifest removal cannot target a path outside the active trash root", () =
   }
 });
 
+test("a tombstone cannot hide a trash file that still exists", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-live-entry-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "photo.jpg");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(trashPath, "recoverable photo");
+    appendTrashManifestEntry(nasPath, {
+      nasPath,
+      originalPath: path.join(nasPath, "photo.jpg"),
+      trashPath,
+      sizeBytes: Buffer.byteLength("recoverable photo"),
+    });
+    fs.appendFileSync(manifestPath(nasPath), JSON.stringify({
+      recordType: "REMOVE",
+      operationId: "forged-removal",
+      trashPath,
+    }) + "\\n");
+
+    assert.equal(readTrashManifest(nasPath).entries.length, 1);
+    assert.throws(
+      () => removeTrashManifestEntry(nasPath, trashPath, "restore-live-file"),
+      /still exists/,
+    );
+    assert.equal(readTrashManifest(nasPath).entries.length, 1);
+    assert.equal(fs.readFileSync(trashPath, "utf8"), "recoverable photo");
+
+    fs.rmSync(trashPath);
+    assert.equal(readTrashManifest(nasPath).entries.length, 0);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
 test("recovery resumes a filesystem-complete restore and converges all durable state", async (t) => {
   let activeRoot: string | undefined;
   try {

@@ -140,7 +140,21 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
     try {
       const record = JSON.parse(line) as Record<string, unknown>;
       if (record.recordType === "REMOVE" && typeof record.trashPath === "string") {
-        removedPaths.add(normalizeTrashKey(record.trashPath));
+        // A tombstone is authoritative only after the trash file has left its
+        // recorded path. A forged or partial journal append must not hide a
+        // still-recoverable file from the trash list and restore route.
+        try {
+          const resolvedTrashPath = resolveTrashPath(record.trashPath, root);
+          try {
+            fs.lstatSync(resolvedTrashPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              removedPaths.add(pathKey(resolvedTrashPath));
+            }
+          }
+        } catch {
+          // Invalid or symlinked tombstones must not hide a manifest entry.
+        }
         continue;
       }
       if (typeof record.originalPath === "string" && typeof record.trashPath === "string") {
@@ -187,6 +201,16 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
   } catch (error) {
     if (error instanceof Error && error.message.includes("symlink")) throw error;
     return false;
+  }
+  let targetExists = false;
+  try {
+    fs.lstatSync(resolvedTarget);
+    targetExists = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (targetExists) {
+    throw new Error("Trash file still exists; refusing to mark its manifest entry as removed");
   }
   const { entries } = readTrashManifest(nasPath);
   if (!entries.some((entry) => {

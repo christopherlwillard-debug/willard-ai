@@ -254,7 +254,7 @@ Remaining archive hardening:
 
 - Fast Validation run `41930470325` completed successfully on audit commit `a1d844ce85c7b6d536d5f283ac239d45684fe96a`. Both `validate` and `windows-updater-smoke` jobs passed. This includes workspace typecheck, generated API contract checks, desktop web-server safety tests, database backup and PostgreSQL snapshot process tests, release/storage contracts, NAS temporary-directory symlink tests, targeted backend regressions, official 7-Zip candidate compatibility on Linux, and Windows updater/7-Zip smoke tests.
 - The PR dependency-review workflow also passed on the same commit. The separate production dependency refresh workflow previously completed a frozen install, full workspace typecheck, and production audit: no critical, high, or moderate advisories remain; one low `deepmerge` advisory in Expo configuration tooling remains without a patched release.
-- Deployment-path review narrows the residual archive dependency risk: Replit pins official 7-Zip 26.05 in `replit.nix`; Windows release staging downloads hash-verified official 26.05 assets and includes `7z.exe`, `7z.dll`, and the license in `api-runtime/vendor/7zip`. `resolveSevenZipPath` prefers that packaged path, so these packaged deployments do not use the `7zip-bin@5.2.0` fallback. Residual limitation: unprovisioned Linux/macOS and local development can still fall back to `7zip-bin@5.2.0`; the legacy dependency remains in the graph.
+- Historical deployment review initially found that unprovisioned Linux/macOS and local development could fall back to `7zip-bin@5.2.0`. That risk was subsequently resolved in the later “Remove vulnerable legacy 7-Zip fallback” section: the dependency and lockfile entries were removed, and archive operations now fail closed unless an official 7-Zip 26.01+ binary is available. Replit pins official 7-Zip 26.05, and Windows release staging includes hash-verified official assets at the API resolver path. Remaining usability limitation: archive features are unavailable in an unprovisioned local environment until an official binary is installed; API startup and non-archive features remain available.
 - PR #2 remains open and draft against `main`. No merge, production database change, release publication, or main-branch modification occurred.
 
 
@@ -386,3 +386,17 @@ Remaining archive hardening:
 - Archive paths accepted on POSIX could still be unextractable or ambiguous on Windows: alternate data stream separators (`:`), reserved device names (`CON`, `AUX`, `COM1`, etc.), trailing dots/spaces, and Windows-invalid characters can behave differently after extraction.
 - Archive preflight now rejects these Windows-incompatible components for all platforms, so the same archive validation decision is made regardless of the host OS. Regression coverage includes ADS syntax, reserved devices, trailing dot/space, and the portable-path error class.
 - Fast Validation on the immediately preceding commit `a3e6239` passed; this follow-up test and path-policy change are pending validation.
+
+
+## Integrated validation on 2026-11-05
+
+- Fast Validation run `41939971842` passed on commit `a3e62392773f5aa33dd3338c81d5cb1fdf2ca074`. Both `validate` and `windows-updater-smoke` jobs completed successfully. The Linux job passed workspace typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official static 7-Zip 26.05 download and compatibility with `node-7z`, and the targeted backend regression suite. The Windows job passed hash-verified official 7-Zip staging and updater preservation/rollback smoke tests.
+- Dependency review run `41939971796` also passed on that commit.
+- The integrated result includes the cleanup manifest fixture corrections, NAS mount-alias restore handling, backup key-buffer zeroization, ZIP reparse-point and drive-relative path checks, and temporary job-ID path containment. Later Windows ADS/reserved-name archive-path tests were added after this validated commit and are awaiting the next Fast Validation run.
+- The prior targeted backend run `41939454292` had reported 117 passing, 2 skipped, and 2 failing manifest tests. Commit `95bce2a0b0935ed270c12b9572ecb5f28d3d33c7` corrected both fixtures; the targeted suite passed in the integrated run above.
+
+## Trash journal tombstone liveness (2026-11-05)
+
+- The manifest parser previously treated any syntactically valid `REMOVE` record as authoritative, even if the referenced file still existed. A forged or partially written journal append could hide a recoverable file from the trash list and prevent restore.
+- The parser now honors a tombstone only when `lstat` confirms the recorded trash path is absent. The removal helper refuses to append a tombstone while the file remains. A regression verifies a forged tombstone cannot hide a live file, that the removal helper refuses it, and that the tombstone becomes effective after the file is actually absent.
+- Validation for this follow-up is pending.
