@@ -407,3 +407,10 @@ Remaining archive hardening:
 - Archive duplicate detection previously compared normalized names case-sensitively. An archive containing `Photos/Cat.jpg` and `photos/cat.JPG` could pass preflight on Linux but collide on a case-insensitive Windows or macOS filesystem, allowing extraction order to overwrite one entry. Canonically equivalent Unicode names could also alias on common filesystems.
 - Duplicate detection now uses NFC-normalized, case-folded collision keys while preserving the original normalized path for extraction. This intentionally enforces portable archive names consistently on all platforms.
 - Added regressions for case-only and Unicode-normalization collisions. Fast Validation is pending.
+
+
+## Cross-platform archive filename collisions (2026-11-05)
+
+- Two distinct paths on a case-sensitive Linux filesystem can collide when the archive is later extracted on a typical case-insensitive Windows/macOS volume. Unicode-composed and decomposed names can also normalize to the same filename on some filesystems.
+- Archive path uniqueness now uses NFC normalization plus case folding, rejecting those collisions before extraction. Tests cover both case-only and Unicode-normalization-only collisions.
+- Portable filename checks were also tightened to reject ASCII control characters and additional Windows device aliases (`CONIN$`, `CONOUT$`, superscript COM/LPT names, and reserved names with spaces before extensions). Harmless leading `./` archive prefixes remain accepted after normalization. Fast Validation is pending for this follow-up.
