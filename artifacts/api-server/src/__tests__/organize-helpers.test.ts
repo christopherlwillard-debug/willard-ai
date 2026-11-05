@@ -695,3 +695,21 @@ test("verifiedMove refuses bytes that differ from the persisted pre-move intent"
   assert.equal(fs.readFileSync(source, "utf8"), "changed after intent");
   assert.equal(fs.existsSync(destination), false);
 });
+
+
+test("execute and resume persist move intents before invoking filesystem moves", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const executeStart = source.indexOf('router.get("/organize/jobs/:id/execute"');
+  const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
+  const executeRoute = source.slice(executeStart, rollbackStart);
+  const resumeRoute = source.slice(resumeStart, rollbackStart);
+
+  for (const route of [executeRoute, resumeRoute]) {
+    const intentIndex = route.indexOf("const intent: FileMoveRecord");
+    const checkpointIndex = route.indexOf(".set({ fileMoves:", intentIndex);
+    const moveIndex = route.indexOf("verifiedMove(sf.fullPath, destFile", intentIndex);
+    assert.ok(intentIndex >= 0 && checkpointIndex > intentIndex && moveIndex > checkpointIndex);
+    assert.match(route.slice(moveIndex, moveIndex + 250), /expectedSourceHash: sourceHash/);
+  }
+});
