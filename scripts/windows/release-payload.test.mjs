@@ -50,6 +50,16 @@ test("payload validation detects generated drift and missing files", async () =>
   }
 });
 
+test("Windows release stages official 7-Zip at the API resolver path", async () => {
+  const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
+  const resolverSource = await readFile(
+    new URL("../../artifacts/api-server/src/lib/sevenzip.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(buildSource, /path\.join\(deployOutput, "dist", "vendor", "7zip"\)/);
+  assert.match(resolverSource, /"\.\.\/vendor\/7zip", packagedName/);
+});
+
 test("release scripts only accept canonical staging and reject symlinked build paths", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-release-root-"));
   try {
