@@ -913,8 +913,8 @@ test("Windows launchers generate cryptographic session secrets for new installs"
     if (opener) hereStringTerminator = opener[1] === "'" ? "'@" : '"@';
   }
   assert.equal(new Set(helperNames).size, helperNames.length, "PowerShell launcher helpers must not be duplicated");
-  assert.match(launcherCommon, /function Wait-ForUrl[\\s\\S]*\\}\\s*$/, "shared PowerShell helpers must end at the final complete function");
-  assert.doesNotMatch(launcherCommon, /,\s*"SESSION_SECRET=\\$secret"/, "orphaned secret-write fragments must not remain after the final helper");
+  assert.match(launcherCommon, /function Wait-ForUrl[\s\S]*\}\s*$/, "shared PowerShell helpers must end at the final complete function");
+  assert.doesNotMatch(launcherCommon, /,\s*"SESSION_SECRET=\$secret"/, "orphaned secret-write fragments must not remain after the final helper");
   const ensureEnvStart = launcherCommon.indexOf("function Ensure-EnvFile {");
   const ensureEnvEnd = launcherCommon.indexOf("\nfunction New-WillardShortcut", ensureEnvStart);
   const ensureEnv = launcherCommon.slice(ensureEnvStart, ensureEnvEnd);
