@@ -30,6 +30,7 @@ import {
   sha256Buffer,
   moveFile,
   moveFileNoReplace,
+  walkDirectoryFiles,
   verifiedMove,
   rollbackMoves,
   type FileMoveRecord,
@@ -134,6 +135,63 @@ test("moveFileNoReplace: moves when destination is absent", () => {
   moveFileNoReplace(src, dest);
   assert.equal(fs.existsSync(src), false);
   assert.equal(fs.readFileSync(dest, "utf8"), "restored media");
+});
+
+test("walkDirectoryFiles: returns nested regular files with root-relative paths", () => {
+  const root = mkTmp("walk-regular");
+  writeFile(path.join(root, "nested", "photo.jpg"), "image-bytes");
+  const files = walkDirectoryFiles(root);
+  assert.equal(files.length, 1);
+  assert.equal(files[0]?.relativePath, path.join("nested", "photo.jpg"));
+  assert.equal(files[0]?.sizeBytes, 11);
+});
+
+test("walkDirectoryFiles: rejects a missing or non-directory source", () => {
+  assert.throws(() => walkDirectoryFiles(path.join(tmpRoot, "walk-missing")), /Unable to inspect source directory/);
+  const file = writeFile(path.join(mkTmp("walk-not-dir"), "file.txt"), "x");
+  assert.throws(() => walkDirectoryFiles(file), /not a regular directory/);
+});
+
+test("walkDirectoryFiles: rejects symlinks instead of silently omitting them", (t) => {
+  const root = mkTmp("walk-symlink");
+  const outside = writeFile(path.join(mkTmp("walk-symlink-target"), "outside.txt"), "outside");
+  try {
+    fs.symlinkSync(outside, path.join(root, "linked.txt"));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => walkDirectoryFiles(root), /Symbolic links are not supported/);
+});
+
+test("walkDirectoryFiles: surfaces unreadable nested directories instead of returning a partial scan", (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX directory permissions are required for this regression");
+    return;
+  }
+  const root = mkTmp("walk-unreadable");
+  writeFile(path.join(root, "visible.txt"), "visible");
+  const blocked = path.join(root, "blocked");
+  fs.mkdirSync(blocked);
+  fs.chmodSync(blocked, 0);
+
+  try {
+    try {
+      fs.readdirSync(blocked);
+      t.skip("runner can read a mode-000 directory");
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") throw error;
+    }
+    assert.throws(() => walkDirectoryFiles(root), /Unable to read source directory/);
+  } finally {
+    fs.chmodSync(blocked, 0o700);
+  }
 });
 
 // ── 4. verifiedMove — happy path ──────────────────────────────────────────────
