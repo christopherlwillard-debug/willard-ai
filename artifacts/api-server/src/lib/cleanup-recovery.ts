@@ -60,7 +60,11 @@ export function manifestPath(nasPath: string): string {
 }
 
 function trashRoot(nasPath: string): string {
-  return ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), nasPath);
+  const configuredPath = path.resolve(nasPath, "WillardAI", ".Trash");
+  ensureDirectoryWithinRoot(configuredPath, nasPath);
+  // Preserve the configured root spelling so manifest paths stored under a
+  // symlinked library mount remain relative to the same lexical root.
+  return configuredPath;
 }
 
 function resolveTrashPath(targetPath: string, root: string): string {
