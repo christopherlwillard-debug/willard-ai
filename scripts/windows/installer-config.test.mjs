@@ -1224,9 +1224,9 @@ test("Fast Validation updater smoke checks out complete Git history for its loca
   const jobStart = fastValidationWorkflow.indexOf("windows-archive-and-updater-smoke:");
   assert.ok(jobStart >= 0, "Fast Validation must contain the Windows updater smoke job");
   const checkoutStart = fastValidationWorkflow.indexOf("uses: actions/checkout@", jobStart);
-  const checkoutEnd = fastValidationWorkflow.indexOf("\\n\\n", checkoutStart);
+  const checkoutEnd = fastValidationWorkflow.indexOf("\n\n", checkoutStart);
   assert.ok(checkoutStart > jobStart && checkoutEnd > checkoutStart);
-  assert.match(fastValidationWorkflow.slice(checkoutStart, checkoutEnd), /fetch-depth:\\s*0/);
+  assert.match(fastValidationWorkflow.slice(checkoutStart, checkoutEnd), /fetch-depth:\s*0/);
 });
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
