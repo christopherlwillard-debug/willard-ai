@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
 
 const routePath = fileURLToPath(new URL("../routes/openai/index.ts", import.meta.url));
 const source = readFileSync(routePath, "utf8");
