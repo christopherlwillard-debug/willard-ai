@@ -130,6 +130,36 @@ test("trash root refuses a symlink outside the configured library during manifes
   }
 });
 
+test("trash tombstones match entries through a configured NAS mount alias", (context) => {
+  const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-real-root-"));
+  const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-alias-parent-"));
+  const aliasRoot = path.join(aliasParent, "library");
+  const trashPath = path.join(aliasRoot, "WillardAI", ".Trash", "session", "photo.jpg");
+  try {
+    try {
+      fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (process.platform === "win32") {
+        context.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    appendTrashManifestEntry(aliasRoot, {
+      nasPath: aliasRoot,
+      originalPath: path.join(aliasRoot, "photo.jpg"),
+      trashPath,
+      sizeBytes: 1,
+    });
+    assert.equal(readTrashManifest(aliasRoot).entries.length, 1);
+    assert.equal(removeTrashManifestEntry(aliasRoot, trashPath, "restore-alias"), true);
+    assert.equal(readTrashManifest(aliasRoot).entries.length, 0);
+  } finally {
+    fs.rmSync(aliasParent, { recursive: true, force: true });
+    fs.rmSync(realRoot, { recursive: true, force: true });
+  }
+});
+
 test("trash manifest removal refuses symlinked entries inside the trash root", (context) => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
