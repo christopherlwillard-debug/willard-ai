@@ -5,6 +5,8 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 const isReplit = process.env.REPL_ID !== undefined;
+// Replit needs a public listener behind its proxy; local desktop runs stay loopback-only.
+const serverHost = isReplit ? "0.0.0.0" : "127.0.0.1";
 
 // On Replit the platform always provides PORT and BASE_PATH (one per artifact).
 // For a local run off Replit we fall back to sensible defaults so the web app
@@ -72,7 +74,7 @@ export default defineConfig({
   server: {
     port,
     strictPort: true,
-    host: "0.0.0.0",
+    host: serverHost,
     allowedHosts: true,
     fs: {
       strict: true,
@@ -86,7 +88,7 @@ export default defineConfig({
   },
   preview: {
     port,
-    host: "0.0.0.0",
+    host: serverHost,
     allowedHosts: true,
   },
 });
