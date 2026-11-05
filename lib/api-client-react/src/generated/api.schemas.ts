@@ -1240,6 +1240,8 @@ category?: string;
 status?: string;
 minSize?: number;
 maxSize?: number;
+dateFrom?: string;
+dateTo?: string;
 limit?: number;
 offset?: number;
 };
