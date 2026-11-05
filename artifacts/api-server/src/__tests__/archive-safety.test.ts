@@ -65,6 +65,7 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
     "nested/../../outside.txt",
     "/absolute.txt",
     "C:\\outside.txt",
+    "C:relative.txt",
     "\\\\server\\share\\outside.txt",
   ]) {
     assertSafetyFailure(
@@ -176,10 +177,13 @@ test("source replacement between archive phases is detected", () => {
   );
 });
 
-test("detects Unix ZIP symlinks when permission bits are present", () => {
+test("detects Unix ZIP symlinks and Windows reparse points", () => {
   assert.equal(isZipSymlinkEntry(0xA1FF0000), true);
   assert.equal(isZipSymlinkEntry(0xA0000000), true);
   assert.equal(isZipSymlinkEntry(0x81A40000), false);
+  assert.equal(isZipSymlinkEntry(0x00000400), true);
+  assert.equal(isZipSymlinkEntry(0x00001410), true);
+  assert.equal(isZipSymlinkEntry(0x00000020), false);
   assert.equal(isZipSymlinkEntry(undefined), false);
 });
 

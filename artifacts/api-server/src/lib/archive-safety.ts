@@ -62,8 +62,12 @@ export interface ArchiveEntryMetadata {
  * normal symlinks because permission bits are also present.
  */
 export function isZipSymlinkEntry(externalAttributes: number | undefined): boolean {
-  return typeof externalAttributes === "number" &&
-    (((externalAttributes >>> 16) & 0xF000) === 0xA000);
+  if (typeof externalAttributes !== "number") return false;
+  const unixFileType = (externalAttributes >>> 16) & 0xF000;
+  const dosAttributes = externalAttributes & 0xFFFF;
+  // Unix creators store S_IFLNK in the upper 16-bit mode. Windows creators
+  // store FILE_ATTRIBUTE_REPARSE_POINT in the lower DOS attribute word.
+  return unixFileType === 0xA000 || (dosAttributes & 0x0400) !== 0;
 }
 
 /** TAR entry types that create filesystem links rather than regular files. */
@@ -173,7 +177,7 @@ export function validateArchiveEntry(
   if (
     path.isAbsolute(rawPath) ||
     path.isAbsolute(normalizedPath) ||
-    /^[A-Za-z]:[\\/]/.test(rawPath) ||
+    /^[A-Za-z]:/.test(rawPath) ||
     normalizedPath.startsWith("//")
   ) {
     throw new ArchiveSafetyError(`Archive traversal rejected: absolute path in entry "${rawPath}"`);
