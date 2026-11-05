@@ -67,6 +67,10 @@ function trashRoot(nasPath: string): string {
   return configuredPath;
 }
 
+export function resolveLibraryTrashPath(targetPath: string, nasPath: string): string {
+  return resolveTrashPath(targetPath, trashRoot(nasPath));
+}
+
 function resolveTrashPath(targetPath: string, root: string): string {
   const canonicalRoot = canonicalizePath(root);
   const relative = path.relative(path.resolve(root), path.resolve(targetPath));
