@@ -36,6 +36,7 @@ export function parsePositiveIntegerParam(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
+
 export function parseOptionalDate(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);
