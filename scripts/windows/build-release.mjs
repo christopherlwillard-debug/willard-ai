@@ -160,6 +160,17 @@ async function compactWindowsDependencies(payloadRoot) {
   await rm(path.join(payloadRoot, "pnpm-lock.yaml"), { force: true });
 }
 
+async function assertPackagedSevenZip(apiOutput) {
+  const binaryDirectory = path.join(apiOutput, "dist", "vendor", "7zip");
+  for (const filename of ["7z.exe", "7z.dll", "License.txt"]) {
+    const filePath = path.join(binaryDirectory, filename);
+    const info = await lstat(filePath).catch(() => null);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      throw new Error(`Official 7-Zip release payload is missing a regular ${filename} at the API resolver path.`);
+    }
+  }
+}
+
 async function pruneBuildOnlyFiles(apiOutput) {
   for (const relative of [
     "src",
@@ -215,6 +226,7 @@ async function main() {
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
   await copy(path.join(root, "artifacts/api-server/dist"), path.join(output, "api-runtime/dist"));
+  await assertPackagedSevenZip(apiOutput);
   await copy(path.join(root, "setup-db.cjs"), path.join(output, "api-runtime/setup-db.cjs"));
   await copy(path.join(root, "desktop/release-contract.mjs"), path.join(output, "desktop/release-contract.mjs"));
   await copy(path.join(root, "desktop/desktop-web-server.mjs"), path.join(output, "desktop/desktop-web-server.mjs"));
