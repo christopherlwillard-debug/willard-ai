@@ -22,6 +22,22 @@ const mediaPage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/media.tsx", import.meta.url),
   "utf8",
 );
+const peoplePage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/people.tsx", import.meta.url),
+  "utf8",
+);
+const documentsPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/documents.tsx", import.meta.url),
+  "utf8",
+);
+const organizePage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/organize.tsx", import.meta.url),
+  "utf8",
+);
+const cleanupPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/cleanup.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -150,4 +166,69 @@ test("search result cards are keyboard operable and keep similar-search actions 
   assert.match(card, /aria-label=\\{"Find similar files to " \\+ item\\.name\\}/);
   assert.match(card, /sm:group-focus-within:opacity-100/,
     "Hover-revealed action must also become visible when keyboard-focused");
+});
+
+test("media thumbnail cards use a native open button and independent labelled actions", () => {
+  const start = mediaPage.indexOf("function ThumbnailCard(");
+  const end = mediaPage.indexOf("// ── Scan status banner", start);
+  assert.ok(start >= 0 && end > start, "ThumbnailCard component should exist");
+  const card = mediaPage.slice(start, end);
+  assert.match(card, /<button[\\s\\S]*?aria-label=\\{\\"Open \\" \\+ file\\.name\\}/);
+  assert.match(card, /data-testid=\\{\\"button-open-media-\\" \\+ file\\.id\\}/);
+  assert.match(card, /aria-label=\\{selected \\? \\"Deselect \\" \\+ file\\.name : \\"Select \\" \\+ file\\.name\\}/);
+  assert.match(card, /aria-pressed=\\{selected\\}/);
+  assert.match(card, /aria-label=\\{file\\.favorite \\? \\"Remove \\" \\+ file\\.name \\+ \\" from favorites\\" : \\"Add \\" \\+ file\\.name \\+ \\" to favorites\\"\\}/);
+  assert.match(card, /aria-pressed=\\{file\\.favorite\\}/);
+  assert.match(card, /group-focus-within:opacity-100/);
+  assert.doesNotMatch(card, /role=\\"button\\"/);
+});
+
+test("people media tiles separate open and move-face controls", () => {
+  const start = peoplePage.indexOf('data-testid="person-items-grid"');
+  const end = peoplePage.indexOf("<ReassignFaceDialog", start);
+  assert.ok(start >= 0 && end > start, "People media grid should exist");
+  const grid = peoplePage.slice(start, end);
+  assert.match(grid, /<button[\\s\\S]*?aria-label=\\{\\"Open \\" \\+ it\\.name \\+ \\" in media viewer\\"\\}/);
+  assert.match(grid, /aria-label=\\{\\"Move face from \\" \\+ it\\.name\\}/);
+  assert.match(grid, /group-focus-within:opacity-100/);
+  assert.doesNotMatch(grid, /role=\\"button\\"/);
+  assert.doesNotMatch(grid, /onKeyDown=/);
+});
+
+test("document table navigation is provided by a labelled native button", () => {
+  const start = documentsPage.indexOf('data-testid={"button-open-document-" + doc.id}');
+  assert.ok(start >= 0, "Document open action should have a stable test marker");
+  const buttonStart = documentsPage.lastIndexOf("<button", start);
+  const buttonEnd = documentsPage.indexOf("</button>", start);
+  assert.ok(buttonStart >= 0 && buttonEnd > start);
+  const button = documentsPage.slice(buttonStart, buttonEnd);
+  assert.match(button, /type=\\"button\\"/);
+  assert.match(button, /aria-label=\\{\\"Open document \\" \\+ doc\\.filename\\}/);
+  assert.match(button, /onClick=\\{\\(\\) => setSelectedDoc\\(doc\\)\\}/);
+  assert.doesNotMatch(documentsPage, /<TableRow[\\s\\S]{0,220}onClick=/);
+});
+
+test("organize job rows expose keyboard-accessible open and delete actions", () => {
+  const start = organizePage.indexOf("function OrganizeJobRow(");
+  const end = organizePage.indexOf("// ── Page", start);
+  assert.ok(start >= 0 && end > start, "OrganizeJobRow component should exist");
+  const row = organizePage.slice(start, end);
+  assert.match(row, /<TableRow className=\\"hover:bg-secondary\\/30\\">/);
+  assert.match(row, /aria-label=\\{\\"Open organization job \\" \\+ sourceName\\}/);
+  assert.match(row, /aria-label=\\{\\"Delete organization job \\" \\+ sourceName\\}/);
+  assert.match(row, /aria-label=\\{\\"View report for organization job \\" \\+ sourceName\\}/);
+  assert.doesNotMatch(row, /<TableRow[^>]*onClick=/);
+});
+
+test("duplicate cleanup choices expose selection state to assistive technology", () => {
+  const start = cleanupPage.indexOf('data-testid={"button-keep-duplicate-" + file.id}');
+  assert.ok(start >= 0, "Duplicate keep choice should have a stable test marker");
+  const buttonStart = cleanupPage.lastIndexOf("<button", start);
+  const buttonEnd = cleanupPage.indexOf("</button>", start);
+  assert.ok(buttonStart >= 0 && buttonEnd > start);
+  const button = cleanupPage.slice(buttonStart, buttonEnd);
+  assert.match(button, /type=\\"button\\"/);
+  assert.match(button, /aria-pressed=\\{isKeep\\}/);
+  assert.match(button, /aria-label=\\{\\"Choose \\" \\+ file\\.filename \\+ \\" as the copy to keep\\"\\}/);
+  assert.match(button, /focus-visible:ring-2/);
 });
