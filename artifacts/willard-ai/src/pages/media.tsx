@@ -316,7 +316,7 @@ function ThumbnailCard({
           "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
           selected
-            ? "border-primary bg-primary text-primary-foreground"
+            ? "border-primary bg-primary text-primary-foreground opacity-100"
             : "border-white/70 bg-black/50 text-white hover:bg-black/70",
         )}
         data-testid={"button-select-media-" + file.id}
