@@ -30,3 +30,22 @@ test("archive and storage scopes share the same active-library resolver", () => 
   assert.doesNotMatch(archive, /appSettingsTable|\.from\(appSettingsTable\)/);
   assert.doesNotMatch(storage, /appSettingsTable|\.from\(appSettingsTable\)/);
 });
+
+test("collections and AI privacy use the canonical active settings row", () => {
+  const collections = readFileSync(fileURLToPath(new URL("collections.ts", routeRoot)), "utf8");
+  const openai = readFileSync(fileURLToPath(new URL("openai/index.ts", routeRoot)), "utf8");
+  const privacy = readFileSync(fileURLToPath(new URL("../lib/ai-privacy.ts", import.meta.url)), "utf8");
+  assert.match(collections, /getActiveNasPath/);
+  assert.doesNotMatch(collections, /appSettingsTable|\.from\(appSettingsTable\)/);
+  assert.match(openai, /getActiveAppSettings/);
+  assert.doesNotMatch(openai, /appSettingsTable|\.from\(appSettingsTable\)/);
+  assert.match(privacy, /getActiveAppSettings/);
+  assert.doesNotMatch(privacy, /\.from\(appSettingsTable\)/);
+});
+
+test("library settings reads and writes target the canonical active settings row", () => {
+  const library = readFileSync(fileURLToPath(new URL("library.ts", routeRoot)), "utf8");
+  assert.match(library, /getActiveAppSettings/);
+  assert.doesNotMatch(library, /\.from\(appSettingsTable\)\.limit\(1\)/);
+  assert.doesNotMatch(library, /db\.update\(appSettingsTable\)\.set\(\{ indexingPaused: (?:true|false) \}\);/);
+});
