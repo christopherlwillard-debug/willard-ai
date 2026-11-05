@@ -62,9 +62,9 @@ export function walkForOptimize(
 
   for (const entry of entries) {
     if (counter.total >= maxFiles) {
-    counter.limitReached = true;
-    return;
-  }
+      counter.limitReached = true;
+      return;
+    }
 
     if (entry.isDirectory()) {
       if (!skipDirs.has(entry.name) && !entry.name.startsWith(".")) {
