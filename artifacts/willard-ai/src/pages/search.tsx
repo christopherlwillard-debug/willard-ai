@@ -455,12 +455,13 @@ export default function SearchPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={hasSession ? 'Refine — e.g. "only the ones with waterfalls"' : 'e.g. "photos of my truck from last summer"'}
+            aria-label={hasSession ? "Refine library search" : "Search your library"}
             className="pl-9"
             data-testid="input-search"
           />
         </div>
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-36" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label="Filter by media type" className="w-36" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
           <SelectContent>
             {MEDIA_TYPE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
           </SelectContent>
@@ -470,12 +471,19 @@ export default function SearchPage() {
           variant={favoriteOnly ? "default" : "outline"}
           size="icon"
           onClick={() => setFavoriteOnly((v) => !v)}
+          aria-label="Filter favorites only"
+          aria-pressed={favoriteOnly}
           title="Favorites only"
           data-testid="button-favorite-filter"
         >
           <Star className={`h-4 w-4 ${favoriteOnly ? "fill-current" : ""}`} />
         </Button>
-        <Button type="submit" disabled={search.isPending || !input.trim()} data-testid="button-search">
+        <Button
+          type="submit"
+          aria-label={search.isPending ? "Searching" : hasSession ? "Refine search" : "Search"}
+          disabled={search.isPending || !input.trim()}
+          data-testid="button-search"
+        >
           {search.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : hasSession ? "Refine" : "Search"}
         </Button>
         {(hasSession || similarOf) && (
@@ -592,6 +600,7 @@ export default function SearchPage() {
                     <button
                       className="px-2 py-1.5 text-muted-foreground hover:text-destructive transition-colors"
                       onClick={() => deleteSaved.mutate(s.id)}
+                      aria-label={`Delete saved search ${s.name}`}
                       data-testid={`button-delete-saved-${s.id}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -631,6 +640,7 @@ export default function SearchPage() {
           <Input
             value={saveName}
             onChange={(e) => setSaveName(e.target.value)}
+            aria-label="Saved search name"
             placeholder="e.g. Summer truck photos"
             onKeyDown={(e) => e.key === "Enter" && saveName.trim() && saveSearch.mutate()}
             data-testid="input-save-name"

@@ -86,6 +86,7 @@ jobs:
         run: |
           pnpm run test:database-backup
           pnpm run test:release-contracts
+          pnpm run test:ui-contracts
           pnpm run test:storage-conformance
 
       - name: Verify official Windows 7-Zip download retry policy
