@@ -620,7 +620,7 @@ Remaining archive hardening:
 
 - `getTempDir` now creates private NAS-scoped per-job directories and rejects symlinked path components. A separate review found that `cleanTempDir` still recursively removed the caller-provided path without checking its relationship to the NAS root. If a temp parent or job path were replaced with a symlink between creation and cleanup, recursive cleanup could follow the changed parent path and remove data outside the intended job directory.
 - `cleanTempDir` now requires the configured NAS root, accepts only a direct child of that root's `WillardAI/temp` directory, and checks each path component with `lstat` immediately before removal. Symlinked parents and targets are left untouched. All organize route cleanup sites pass the NAS root.
-- Added tests for ordinary cleanup, a replaced temp-parent symlink, and a job-directory symlink. Fast Validation passed on commit `cb02c4a4fd6e6a4d8322ab23b796794bb49bce97`: TypeScript typecheck, all targeted backend regressions, and release/storage contracts passed. The Windows job also passed official 7-Zip 26.05 metadata compatibility, updater journal, and developer update rollback smoke tests. The NAS symlink tests ran on Linux; installed NAS/Windows ACL behavior remains to be verified.
+- Added tests for ordinary cleanup, a replaced temp-parent symlink, and a job-directory symlink. Fast Validation passed on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`: TypeScript typecheck, targeted backend regressions, release/storage contracts, and Windows checks all passed. The NAS temp path and cleanup test suite passed on both Linux and Windows; the Windows job also passed official 7-Zip 26.05 metadata compatibility, updater journal, and developer update rollback smoke tests. Real NAS/SMB ACL and concurrent-user behavior still require installed-environment verification.
 - This is defense in depth, not a complete defense against a hostile process running as the same OS account and racing filesystem operations. Private directory permissions reduce that exposure on POSIX; Windows ACL behavior requires installed-runtime verification.
 
 
@@ -628,14 +628,14 @@ Remaining archive hardening:
 
 - The Recovery Center reset endpoint accepted failed or stale-executing jobs and set `fileMoves` to null. If a prior move or rollback was incomplete, this erased the only durable list of source/destination paths and checksums needed to recover the files. A reset could then re-run the plan without acknowledging files still moved or modified.
 - Reset now refuses jobs with any non-empty or malformed move journal and directs the user to resume or complete rollback first. The SQL update also compare-and-swaps the journal to null or an empty JSON array, so a concurrent worker cannot add move records between the route's read and the reset update and have them silently cleared.
-- Added a regression test for both the user-facing guard and database-side empty-journal predicate. Validation is pending on the current audit branch.
+- Added a regression test for both the user-facing guard and database-side empty-journal predicate. The regression passed in Fast Validation on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`.
 
 
 ## Recovery routes validate persisted move journals (2026-11-05)
 
 - A second pass through Recovery Center found that rollback and resume treated any non-array `fileMoves` value as an empty list. Rollback could therefore report success without restoring anything; resume could proceed without the prior move history. Persisted journal entries were also cast directly to `FileMoveRecord[]` without checking path scope or integrity fields.
 - Added `parseOrganizationMoveJournal` before rollback and resume claim filesystem work. It rejects malformed journals, non-absolute paths, paths outside the configured NAS, missing/invalid SHA-256 values, mismatched source/destination hashes, and records not marked verified. It returns typed records only after validation.
-- Added regression assertions that both recovery routes use the validator and that its path/hash checks remain in place. Fast Validation is pending for this change.
+- Added regression assertions that both recovery routes use the validator and that its path/hash checks remain in place. The tests and TypeScript typecheck passed in Fast Validation on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`.
 
 ## Storage migration concurrent-copy race and destination overwrite (2026-11-04)
 
@@ -645,5 +645,5 @@ Remaining archive hardening:
 - Manifest write temporary names are now unique as well, avoiding same-process and cross-process collisions on the old PID-only temporary filename.
 - Added focused regressions: (1) two service instances sharing a simulated database lock cannot copy the same manifest concurrently, and the lock is reusable after completion; (2) a destination created after preview is never overwritten, the source remains intact, and the current operation's partial file is cleaned.
 - Commits: implementation `0340a1c02d76d2ba814ac88599cd0c9231f60e00`; regression tests `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
-- Validation: Fast Validation run #549 and Dependency Review run #313 were triggered for the test commit. At the time of this entry, Fast Validation is pending and Dependency Review is in progress; no passing result is claimed yet.
+- Validation: Fast Validation passed on commit `53bb575796f69026a9e91e02a4e8ba83c3113ea5`, including the concurrent-copy and destination-collision regressions. Dependency Review passed on commit `3111fa7d8db5f54b6c042f9ffcd59b0ff4deb4f7`.
 - Remaining limitations: the regression uses a fake database client to exercise advisory-lock ownership; a live PostgreSQL advisory-lock integration test and a real NAS/SMB publication test remain outstanding. If the database connection is lost during a long-running copy, PostgreSQL releases the lock; the exclusive no-replace destination publication still protects existing files, but the manifest can require a retry/reconciliation. Older deterministic partial files left by an interrupted pre-fix copy are not automatically deleted, to avoid removing a file still owned by an older running process.
