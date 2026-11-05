@@ -6,6 +6,7 @@ import { recoverInterruptedJobs } from "./lib/library-engine";
 import { installShutdownHandlers } from "./lib/shutdown.ts";
 import { startLibraryBackupCoordinator } from "./lib/backup-coordinator.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
+import { getActiveNasPath } from "./lib/active-library.ts";
 import type { Server } from "node:http";
 
 let server: Server | null = null;
@@ -45,10 +46,7 @@ startupMigrations
         if (schemaReady) await initializeVectorCapability();
         await recoverInterruptedJobs();
         await reconcileCleanupOperations();
-        const settings = await import("@workspace/db").then(({ db, appSettingsTable }) =>
-          db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1),
-        );
-        const nasPath = settings[0]?.nasPath?.trim();
+        const nasPath = await getActiveNasPath();
         if (nasPath) {
           purgeExpiredTrashEntries(nasPath).catch((error) =>
             (() => {
