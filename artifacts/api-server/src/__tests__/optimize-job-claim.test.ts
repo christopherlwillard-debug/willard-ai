@@ -60,24 +60,23 @@ test("conversion scans fail closed when a directory cannot be read", () => {
 const jpegStart = source.indexOf("async function analyzeJpegFile(");
 const jpegEnd = source.indexOf("\n}", jpegStart);
 const jpegAnalyzer = source.slice(jpegStart, jpegEnd < 0 ? source.length : jpegEnd);
-test += `
+
 test("JPEG analysis failures are recorded as failed, never as already optimal", () => {
   assert.ok(jpegStart >= 0 && jpegEnd > jpegStart, "JPEG analyzer should be present");
-  assert.match(jpegAnalyzer, /catch \\(error\\)/);
+  assert.match(jpegAnalyzer, /catch \(error\)/);
   assert.match(jpegAnalyzer, /Unable to analyze JPEG/);
-  assert.doesNotMatch(jpegAnalyzer, /catch \\{\\s*return \\[\\];\\s*\\}/);
-  assert.doesNotMatch(jpegAnalyzer, /catch \\{\\s*return 0;\\s*\\}/);
+  assert.doesNotMatch(jpegAnalyzer, /catch \{\s*return \[\];\s*\}/);
+  assert.doesNotMatch(jpegAnalyzer, /catch \{\s*return 0;\s*\}/);
 
   const executeStart = source.indexOf('router.get("/optimize/jobs/:id/execute"');
-  const executeEnd = source.indexOf("\\nrouter.", executeStart + 1);
+  const executeEnd = source.indexOf("\nrouter.", executeStart + 1);
   const executeRoute = source.slice(executeStart, executeEnd < 0 ? source.length : executeEnd);
   const analysisStart = executeRoute.indexOf("let jpegIssues: string[];");
   const analysisEnd = executeRoute.indexOf("if (jpegIssues.length === 0)", analysisStart);
   const analysisBlock = executeRoute.slice(analysisStart, analysisEnd);
   assert.ok(analysisStart >= 0 && analysisEnd > analysisStart, "on-demand JPEG analysis should be present");
-  assert.match(analysisBlock, /catch \\(error\\)/);
+  assert.match(analysisBlock, /catch \(error\)/);
   assert.match(analysisBlock, /status: "failed"/);
   assert.match(analysisBlock, /failedFiles: failed/);
   assert.match(analysisBlock, /continue;/);
 });
-`;
