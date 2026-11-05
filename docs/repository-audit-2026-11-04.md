@@ -359,3 +359,10 @@ Remaining archive hardening:
 
 - AES-256-GCM backup creation and restore derive per-operation keys with scrypt. Those key buffers previously remained allocated until garbage collection after cipher use.
 - Encryption and decryption now zero the derived key buffers in `finally` blocks, including authentication failures. Added a regression assertion for both paths. Fast Validation is pending.
+
+
+## Trash restore paths through symlinked NAS mount aliases (2026-11-05)
+
+- The symlink-safe trash resolver returns a canonical path. When the configured NAS root is itself a symlink alias, the manual restore route passes that canonical path back to tombstone removal; a purely lexical root comparison would reject it and leave a stale active manifest record.
+- The resolver now accepts either the configured lexical path or its canonical equivalent only when the configured root itself is a symlink alias. It still rejects outside paths and checks every descendant component for symlinks. The mount-alias regression now exercises the canonical path returned by the same resolver used by the route.
+- Fast Validation is pending.
