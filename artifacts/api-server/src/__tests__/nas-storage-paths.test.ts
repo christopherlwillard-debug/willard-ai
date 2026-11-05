@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cleanTempDir, getTempDir } from "../lib/nas-storage.ts";
+import { cleanTempDir, ensureDirectoryWithinRoot, getTempDir } from "../lib/nas-storage.ts";
 
 function makeTempRoot(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -172,6 +172,40 @@ test("cleanTempDir refuses a job-directory symlink instead of following it", () 
 
     assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "outside data");
     assert.equal(fs.lstatSync(tempDir).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("ensureDirectoryWithinRoot rejects symlinked operational log directories", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  const outside = makeTempRoot("willard-nas-outside-");
+  try {
+    fs.mkdirSync(path.join(root, "WillardAI"));
+    fs.symlinkSync(outside, path.join(root, "WillardAI", "logs"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => ensureDirectoryWithinRoot(path.join(root, "WillardAI", "logs"), root),
+      /symlink/,
+    );
+    assert.equal(fs.readdirSync(outside).length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("ensureDirectoryWithinRoot rejects symlinked operational cache directories", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  const outside = makeTempRoot("willard-nas-outside-");
+  try {
+    fs.mkdirSync(path.join(root, "WillardAI"));
+    fs.symlinkSync(outside, path.join(root, "WillardAI", "cache"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => ensureDirectoryWithinRoot(path.join(root, "WillardAI", "cache"), root),
+      /symlink/,
+    );
+    assert.equal(fs.readdirSync(outside).length, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
