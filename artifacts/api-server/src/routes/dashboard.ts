@@ -11,7 +11,8 @@ import { checkNasReachableAsync, type NasReachability } from "../lib/nas-storage
 import { getEnrichmentStatus } from "../lib/ai-enrichment";
 import { getActiveAppSettings } from "../lib/active-library.ts";
 import { getFaceStatus } from "../lib/face-recognition";
-import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
+import { archiveScope } from "../lib/archive-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 
 const execFileAsync = promisify(execFile);
