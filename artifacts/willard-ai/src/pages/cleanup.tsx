@@ -19,6 +19,7 @@ import {
 } from "@/hooks/use-library-scan";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
+import { apiUrl } from "@/lib/api";
 import { readQueue, writeQueue, type CleanupQueueEntry } from "@workspace/cleanup-queue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -164,7 +165,7 @@ function DuplicateTypeBadge({
 
 function FileThumbnail({ file, ring }: { file: DuplicateFileInfo; ring: "keep" | "delete" | "neutral" }) {
   const [imgError, setImgError] = useState(false);
-  const thumbUrl = file.mediaId ? `/api/media/thumbnail/${file.mediaId}` : null;
+  const thumbUrl = file.mediaId ? apiUrl(`/media/thumbnail/${file.mediaId}`) : null;
   const ringClass = ring === "keep"
     ? "ring-2 ring-green-500"
     : ring === "delete"
