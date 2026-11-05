@@ -94,13 +94,14 @@ test("Windows resolves official system 7-Zip instead of a legacy bundled executa
   );
 });
 
-test("packaged official Windows binary takes precedence over system PATH", () => {
-  const packaged = path.join("C:\\", "Willard", "api-runtime", "dist", "vendor", "7z.exe");
+test("packaged official Windows binary takes precedence at api-runtime/vendor/7zip", () => {
+  const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
+  const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7z.exe");
   assert.equal(
     resolveSevenZipPath({
       platform: "win32",
       pathEnv: "C:\\tools",
-      packagedPath: packaged,
+      moduleUrl,
       exists: (candidate) => candidate === packaged || candidate.endsWith("7z.exe"),
       getVersion: (candidate) => candidate === packaged ? "26.05" : "16.02",
     }),
