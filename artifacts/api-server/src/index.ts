@@ -35,7 +35,8 @@ startupMigrations
     // Desktop installs set HOST=127.0.0.1 so the API cannot be reached
     // directly from the LAN around the localhost-only desktop web proxy.
     // Hosted deployments may explicitly set HOST=0.0.0.0 as required.
-    const host = process.env["HOST"]?.trim();
+    const host = process.env["HOST"]?.trim()
+      || (process.env["REPL_ID"] === undefined ? "127.0.0.1" : undefined);
     server = app.listen({ port, ...(host ? { host } : {}) }, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");
