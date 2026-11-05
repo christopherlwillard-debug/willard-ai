@@ -1,15 +1,15 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
-import { collectionsTable, collectionItemsTable, mediaFilesTable, appSettingsTable } from "@workspace/db";
+import { collectionsTable, collectionItemsTable, mediaFilesTable } from "@workspace/db";
 import { and, eq, sql, count, desc, isNull, inArray } from "drizzle-orm";
 import { buildSmartConditions, parseSmartRule, validateSmartRule, rebuildAutoCollections, type SmartRule } from "../lib/collections-engine";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  return row?.nasPath ?? null;
+  return getActiveNasPath();
 }
 
 async function loadCollection(id: number, nasPath: string) {
