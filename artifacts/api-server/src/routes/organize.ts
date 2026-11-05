@@ -1915,24 +1915,38 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // ── Archive disposition (post 100% verification) ─────────────────────────
     let dispositionApplied = "kept";
     let dispositionPending = false;
+    let dispositionError: string | null = null;
+    let dispositionSourceHash: string | null = null;
 
     if (job.sourceType === "archive" && job.archiveDisposition !== "keep") {
       if (job.archiveDisposition === "delete") {
         // REQUIRES explicit second confirmation — do NOT delete automatically
         dispositionPending = true;
-        opLog(`DISPOSITION_PENDING: delete requires explicit confirmation via apply-disposition endpoint`);
+        opLog("DISPOSITION_PENDING: delete requires explicit confirmation via apply-disposition endpoint");
         send("status", { stage: "disposition", message: "Archive delete requires your confirmation — see summary", progress: 92 });
       } else if (job.archiveDisposition === "move_to_processed") {
         send("status", { stage: "disposition", message: "Moving archive to processed folder…", progress: 92 });
         try {
-          const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
-          fs.mkdirSync(processedDir, { recursive: true });
+          const processedDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "archive-index", "processed"), nasPath);
           const dest = path.join(processedDir, path.basename(job.sourcePath));
+          dispositionSourceHash = await sha256File(job.sourcePath);
           moveFileNoReplace(job.sourcePath, dest);
-          dispositionApplied = `moved_to:${dest}`;
-          opLog("DISPOSE_MOVE: archive moved to processed storage");
+          const destinationHash = await sha256File(dest);
+          if (destinationHash !== dispositionSourceHash) {
+            try {
+              moveFileNoReplace(dest, job.sourcePath);
+            } catch (restoreError) {
+              throw new Error("Archive move checksum verification failed and the archive could not be restored: " + (restoreError instanceof Error ? restoreError.message : String(restoreError)));
+            }
+            throw new Error("Archive move checksum verification failed; the original archive was restored.");
+          }
+          dispositionApplied = "moved_to:" + dest;
+          opLog("DISPOSE_MOVE: archive moved to processed folder and SHA-256 verified");
         } catch (e: any) {
-          opLog(`DISPOSE_MOVE_FAIL: ${e.message}`);
+          dispositionPending = true;
+          dispositionError = redactText(e instanceof Error ? e.message : String(e));
+          opLog("DISPOSE_MOVE_FAIL: " + dispositionError);
+          send("status", { stage: "disposition_failed", message: "Archive could not be moved to processed. Retry from the completed job report.", progress: 92 });
         }
       }
     }
@@ -1962,7 +1976,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       sourceType: job.sourceType, sourcePath: job.sourcePath, archiveDisposition: job.archiveDisposition,
       conflictPolicy,
       filesFound: sourceFiles.length, filesMoved: moved, filesExcluded: excluded,
-      filesVerified: fileMoves.length, dispositionApplied, dispositionPending,
+      filesVerified: fileMoves.length, dispositionApplied, dispositionPending, dispositionError, dispositionSourceHash,
       // Checksum verification summary
       checksumVerifiedCount,
       checksumUnverifiedCount,
@@ -2046,53 +2060,117 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   try {
-    const nasPathForJob = await getNasPath();
-    const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
+    const nasPath = await getNasPath();
+    const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (job.status !== "completed") { res.status(409).json({ error: "Job must be completed before applying disposition" }); return; }
-    if (!req.body?.confirm) { res.status(400).json({ error: "confirm: true is required to execute a destructive disposition" }); return; }
+    // Do not accept truthy strings/numbers for a destructive or file-moving action.
+    if (req.body?.confirm !== true) {
+      res.status(400).json({ error: "confirm: true is required to execute an archive disposition" }); return;
+    }
 
-    // Disposition can only operate on archive sources — folders are never touched
     if (job.sourceType !== "archive") {
       res.status(400).json({ error: "Disposition is only valid for archive source jobs" }); return;
     }
-
-    const nasPath = (await getActiveNasPath()) ?? "";
-
-    let dispositionResult = "kept";
-    if (job.archiveDisposition === "delete") {
-      if (!fs.existsSync(job.sourcePath)) {
-        res.json({ ok: true, dispositionResult: "already_gone", sourcePath: job.sourcePath }); return;
-      }
-
-      // Safety: sourcePath must be a regular file (not a directory) before deletion
-      const srcStat = fs.statSync(job.sourcePath);
-      if (!srcStat.isFile()) {
-        res.status(400).json({ error: "sourcePath is not a regular file — refusing to delete" }); return;
-      }
-
-      // Safety: sourcePath must be within the configured NAS root
-      if (nasPath) {
-        try { assertWithinRoot(path.resolve(job.sourcePath), path.resolve(nasPath)); }
-        catch { res.status(403).json({ error: "sourcePath is outside the configured NAS root — deletion refused" }); return; }
-      }
-
-      fs.unlinkSync(job.sourcePath);
-      dispositionResult = "deleted";
-    } else if (job.archiveDisposition === "move_to_processed") {
-      if (nasPath) {
-        try { assertWithinRoot(path.resolve(job.sourcePath), path.resolve(nasPath)); }
-        catch { res.status(403).json({ error: "sourcePath is outside the configured NAS root — move refused" }); return; }
-      }
-      const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
-      fs.mkdirSync(processedDir, { recursive: true });
-      const dest = path.join(processedDir, path.basename(job.sourcePath));
-      moveFileNoReplace(job.sourcePath, dest);
-      dispositionResult = `moved_to:${dest}`;
+    if (job.archiveDisposition !== "delete" && job.archiveDisposition !== "move_to_processed") {
+      res.status(409).json({ error: "This job has no pending archive disposition" }); return;
     }
 
-    res.json({ ok: true, dispositionResult, sourcePath: job.sourcePath });
+    let sourcePath: string;
+    try { sourcePath = resolveActiveArchivePath(job.sourcePath, nasPath); }
+    catch { res.status(403).json({ error: "sourcePath is outside the active library — disposition refused" }); return; }
+
+    const report = job.reportJson && typeof job.reportJson === "object" && !Array.isArray(job.reportJson)
+      ? job.reportJson as Record<string, unknown>
+      : {};
+    const previousResult = typeof report.dispositionApplied === "string" ? report.dispositionApplied : "";
+    const alreadyApplied = report.dispositionPending === false && (
+      previousResult === "deleted" ||
+      previousResult === "already_gone" ||
+      previousResult.startsWith("moved_to:")
+    );
+    if (alreadyApplied) {
+      res.json({ ok: true, dispositionResult: previousResult, sourcePath, alreadyApplied: true });
+      return;
+    }
+
+    let dispositionResult = "kept";
+    let sourceHash: string | null = typeof report.dispositionSourceHash === "string"
+      ? report.dispositionSourceHash
+      : null;
+
+    if (job.archiveDisposition === "delete") {
+      if (!fs.existsSync(sourcePath)) {
+        dispositionResult = "already_gone";
+      } else {
+        const srcStat = fs.lstatSync(sourcePath);
+        if (!srcStat.isFile() || srcStat.isSymbolicLink()) {
+          res.status(400).json({ error: "sourcePath is not a regular non-symlink file — refusing to delete" }); return;
+        }
+        assertWithinRoot(path.resolve(sourcePath), path.resolve(nasPath));
+        fs.unlinkSync(sourcePath);
+        dispositionResult = "deleted";
+      }
+    } else {
+      const processedDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "archive-index", "processed"), nasPath);
+      const dest = path.join(processedDir, path.basename(sourcePath));
+
+      if (!fs.existsSync(sourcePath)) {
+        // Recover an interrupted move only when its recorded checksum proves
+        // that the processed copy is the same archive this job intended to move.
+        if (!fs.existsSync(dest) || !sourceHash || await sha256File(dest) !== sourceHash) {
+          res.status(409).json({ error: "The original archive is missing and the processed copy cannot be verified. No disposition status was changed." });
+          return;
+        }
+      } else {
+        const srcStat = fs.lstatSync(sourcePath);
+        if (!srcStat.isFile() || srcStat.isSymbolicLink()) {
+          res.status(400).json({ error: "sourcePath is not a regular non-symlink file — refusing to move" }); return;
+        }
+        assertWithinRoot(path.resolve(sourcePath), path.resolve(nasPath));
+        if (fs.existsSync(dest)) {
+          res.status(409).json({ error: "A file with the same name already exists in the processed folder. No file was overwritten." });
+          return;
+        }
+        sourceHash = await sha256File(sourcePath);
+        moveFileNoReplace(sourcePath, dest);
+        const destinationHash = await sha256File(dest);
+        if (destinationHash !== sourceHash) {
+          try {
+            moveFileNoReplace(dest, sourcePath);
+          } catch (restoreError) {
+            throw new Error("Processed archive checksum verification failed and the original could not be restored: " + (restoreError instanceof Error ? restoreError.message : String(restoreError)));
+          }
+          throw new Error("Processed archive checksum verification failed; the original archive was restored.");
+        }
+      }
+      dispositionResult = "moved_to:" + dest;
+    }
+
+    const nextReport = {
+      ...report,
+      dispositionApplied: dispositionResult,
+      dispositionPending: false,
+      dispositionError: null,
+      dispositionSourceHash: sourceHash,
+      dispositionUpdatedAt: new Date().toISOString(),
+    };
+    const [updatedJob] = await db.update(organizationJobsTable)
+      .set({ reportJson: nextReport as any })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPath),
+        eq(organizationJobsTable.status, "completed"),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!updatedJob) throw new Error("Archive disposition completed, but its result could not be saved. Reopen the report and verify the archive location.");
+
+    res.json({ ok: true, dispositionResult, sourcePath });
   } catch (e: any) {
+    if (e?.code === "EEXIST") {
+      res.status(409).json({ error: "The processed destination already exists. No file was overwritten." });
+      return;
+    }
     res.status(500).json({ error: e.message ?? "Failed to apply disposition" });
   }
 });
