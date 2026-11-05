@@ -71,8 +71,8 @@ test("file stream errors become a response instead of an unhandled stream error"
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const result = await fetch(`http://127.0.0.1:${address.port}`);
-    assert.equal(result.status, 500);
-    assert.deepEqual(await result.json(), { error: "File stream failed" });
+    assert.equal(result.status, 404);
+    assert.deepEqual(await result.json(), { error: "Media file not found" });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
