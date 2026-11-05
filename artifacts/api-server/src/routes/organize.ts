@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { organizationJobsTable, archivesTable, appSettingsTable } from "@workspace/db";
-import { eq, desc, inArray, or, and, isNotNull, isNull, lt } from "drizzle-orm";
+import { eq, desc, inArray, or, and, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -2131,6 +2131,13 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
     if (!job.planJson || !job.preflightJson) {
       res.status(409).json({ error: "Job is missing plan or preflight data — delete and recreate it" }); return;
     }
+    if (job.fileMoves !== null && job.fileMoves !== undefined &&
+        (!Array.isArray(job.fileMoves) || job.fileMoves.length > 0)) {
+      res.status(409).json({
+        error: "This job still has file-move recovery records. Resume it or complete rollback in Recovery Center before resetting; the move journal will not be discarded.",
+      });
+      return;
+    }
 
     // Reset is destructive to the recovery journal. Only allow it after a
     // failed job or an executing job whose heartbeat has gone stale.
@@ -2144,6 +2151,10 @@ router.post("/organize/jobs/:id/reset", async (req, res) => {
     }).where(and(
       eq(organizationJobsTable.id, id),
       eq(organizationJobsTable.nasPath, nasPath),
+      or(
+        isNull(organizationJobsTable.fileMoves),
+        sql`jsonb_typeof(${organizationJobsTable.fileMoves}) = 'array' AND jsonb_array_length(${organizationJobsTable.fileMoves}) = 0`,
+      ),
       or(
         eq(organizationJobsTable.status, "failed"),
         and(
