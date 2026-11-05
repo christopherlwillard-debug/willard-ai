@@ -4,7 +4,8 @@ import * as path from "node:path";
 import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { isMissingRegularMediaFile } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
@@ -80,6 +81,11 @@ function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]
 }
 
 async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; rows: HealthRow[]; missing: HealthRow[]; missingThumbs: HealthRow[]; orphanThumbs: string[]; emptyFolders: string[] }> {
+  const reachability = checkNasReachable(nasPath);
+  if (!reachability.online) {
+    throw new Error(`Library is not safely readable: ${reachability.message}`);
+  }
+
   const rows = await db.select({
     id: mediaFilesTable.id,
     relativePath: mediaFilesTable.relativePath,
@@ -94,12 +100,8 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
   const validIds = new Set<number>();
   for (const row of rows) {
     validIds.add(row.id);
-    try {
-      const source = resolveLibraryPath(nasPath, row.relativePath);
-      if (!fs.existsSync(source)) missing.push(row);
-    } catch {
-      missing.push(row);
-    }
+    const source = resolveLibraryPath(nasPath, row.relativePath);
+    if (isMissingRegularMediaFile(source)) missing.push(row);
     const needsThumb = row.mediaType === "photo" || row.mediaType === "video";
     if (needsThumb) {
       try {
