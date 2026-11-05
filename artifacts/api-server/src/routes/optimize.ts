@@ -1298,8 +1298,16 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
     const [updated] = await db
       .update(conversionJobsTable)
       .set({ status: "pending", error: null, cancelledAt: null, totalFiles: 0, processedFiles: 0, succeededFiles: 0, failedFiles: 0, skippedFiles: 0, resultJson: null, completedAt: null })
-      .where(eq(conversionJobsTable.id, id))
+      .where(and(
+        eq(conversionJobsTable.id, id),
+        eq(conversionJobsTable.nasPath, job.nasPath),
+        eq(conversionJobsTable.status, "failed"),
+      ))
       .returning();
+    if (!updated) {
+      res.status(409).json({ error: "Conversion job changed before retry could be claimed. Refresh the job and try again." });
+      return;
+    }
     res.json(updated);
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Failed to retry job" });
