@@ -1818,7 +1818,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
+      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
 
