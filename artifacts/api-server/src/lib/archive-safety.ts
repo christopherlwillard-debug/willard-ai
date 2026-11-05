@@ -150,6 +150,21 @@ function entrySize(sizeBytes: ArchiveEntryMetadata["sizeBytes"]): number {
   return size;
 }
 
+function assertPortableArchivePathComponents(rawPath: string, components: string[]): void {
+  const reservedDevice = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$/i;
+  for (const component of components) {
+    if (
+      /[<>:"|?*]/.test(component) ||
+      /[. ]$/.test(component) ||
+      reservedDevice.test(component)
+    ) {
+      throw new ArchiveSafetyError(
+        `Archive entry "${rawPath}" contains a Windows-incompatible path component`,
+      );
+    }
+  }
+}
+
 /**
  * Validate raw archive names before any archive library is allowed to
  * normalize them. In particular, path.isAbsolute alone is insufficient on
@@ -184,6 +199,7 @@ export function validateArchiveEntry(
   }
 
   const components = normalizedPath.split("/");
+  assertPortableArchivePathComponents(rawPath, components);
   if (components.some(component => component === "..")) {
     throw new ArchiveSafetyError(
       `Archive traversal rejected: ".." traversal component in entry "${rawPath}"`,
