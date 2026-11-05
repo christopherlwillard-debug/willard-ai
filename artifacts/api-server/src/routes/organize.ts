@@ -1794,23 +1794,44 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         }
       }
 
-      // verifiedMove: compute source SHA-256 → move → compute dest SHA-256 → compare.
-      // Throws immediately on mismatch so the catch block triggers rollback.
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
-      fileMoves.push(record);
-      moved++;
-
-      opLog("MOVE_OK [sha256]: move verified");
-
-      // Checkpoint after every move so rollback always has a complete record of moved files
+      // Persist a move intent BEFORE touching either filesystem path. If the
+      // process exits between the move and its verified checkpoint, Recovery
+      // Center still knows the source, destination, and expected checksum.
+      const sourceHash = await sha256File(sf.fullPath);
+      const intent: FileMoveRecord = {
+        from: sf.fullPath,
+        to: destFile,
+        sourceHash,
+        destHash: sourceHash,
+        verified: false,
+        sourceRelPath: sf.relativePath,
+      };
+      fileMoves.push(intent);
       try {
         await db.update(organizationJobsTable)
           .set({ fileMoves: fileMoves as any })
           .where(eq(organizationJobsTable.id, id));
       } catch (e: any) {
-        // Do not continue moving files when the recovery journal cannot be
-        // persisted. The outer failure path will roll back this in-memory move
-        // and stop the operation instead of widening the unjournaled window.
+        fileMoves.pop();
+        throw new Error(`File-move intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
+      }
+
+      // verifiedMove computes the source hash again, performs an exclusive
+      // no-replace move, and verifies the destination bytes.
+      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
+      fileMoves[fileMoves.length - 1] = record;
+      moved++;
+
+      opLog("MOVE_OK [sha256]: move verified");
+
+      // Replace the durable intent with the completed, checksum-verified move.
+      try {
+        await db.update(organizationJobsTable)
+          .set({ fileMoves: fileMoves as any })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        // The persisted intent remains sufficient for crash recovery. The
+        // in-memory verified record lets this process roll the move back now.
         throw new Error(`File-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
