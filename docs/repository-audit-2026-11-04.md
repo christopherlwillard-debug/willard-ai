@@ -1413,3 +1413,14 @@ Source inspection is complete for this batch. Focused parser, route-wiring, API-
 | Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
 |---|---|---|---|---|
 | High | API code generation → duplicate Zod exports blocking TypeScript validation | fixed; target test pending | Generated artifact repair, generated-export regression test, and codegen/CI ordering commits in this batch | Latest codegen must reproduce the committed output; Fast Validation must pass contract parity and typecheck. Archive HTTP/database integration and browser testing remain outstanding. |
+
+
+## 2026-11-05 archive index failure-state repair
+
+**Finding (medium, user-facing reliability):** The archive page only consumed `data` and `isLoading` from its list query. When the API returned a validation, library-configuration, or network error, the table had no error branch and the header displayed `0 archives indexed` even though no result had loaded. This made an unavailable archive index look like a valid empty library and left the user without a retry action.
+
+**Correction:** The page now distinguishes loading, unavailable, and loaded states; it does not report a zero count when the query has failed. Query failures are announced in an accessible alert, stale results remain visible if a background refresh fails, and a Retry action calls the query's existing `refetch` function. No new dependency or API endpoint was added.
+
+**Regression coverage:** Extended the existing UI contract suite to assert the error state, accessible alert, accurate unavailable count label, and retry wiring. The test is included in the existing Fast Validation UI contract step.
+
+**Status:** Source correction and focused UI regression are committed. Targeted UI contract test and browser verification are pending the latest Fast Validation run. This is not browser/screen-reader validation.
