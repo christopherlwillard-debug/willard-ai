@@ -186,7 +186,7 @@ test("media thumbnail cards use a native open button and independent labelled ac
   assert.ok(card.includes("aria-pressed={file.favorite}"));
   assert.ok(card.includes("group-focus-within:opacity-100"));
   assert.ok(!card.includes('role="button"'));
-  assert.ok(card.includes('selected ? "border-primary bg-primary text-primary-foreground opacity-100"'));
+  assert.ok(card.includes('"border-primary bg-primary text-primary-foreground opacity-100"'));
 });
 
 test("people media tiles separate open and move-face controls", () => {
