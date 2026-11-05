@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
 import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
@@ -12,8 +13,7 @@ const router: IRouter = Router();
 const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
 
 async function getNasPath(): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT nas_path FROM app_settings LIMIT 1`);
-  return rows[0]?.nas_path?.trim() || null;
+  return getActiveNasPath();
 }
 
 function personOut(r: any) {
