@@ -150,6 +150,15 @@ test("allows an explicit directory entry after its child file", () => {
   assert.equal(directory.isDirectory, true);
 });
 
+test("rejects file-directory prefix collisions across case-insensitive paths", () => {
+  const budget = createArchiveBudget();
+  validateArchiveEntry({ path: "Documents", sizeBytes: 1 }, budget);
+  assertSafetyFailure(
+    () => validateArchiveEntry({ path: "documents/report.pdf", sizeBytes: 1 }, budget),
+    /existing file used as a parent directory/,
+  );
+});
+
 test("bounds entry count, per-file expansion, total expansion, and duplicate paths", () => {
   const countBudget = createArchiveBudget();
   for (let i = 0; i < ARCHIVE_LIMITS.maxEntries; i++) {
