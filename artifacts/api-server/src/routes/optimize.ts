@@ -381,7 +381,12 @@ function walkForOptimize(
 ): void {
   if (counter.total >= maxFiles) return;
   let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to scan conversion directory "${dir}": ${reason}`);
+  }
   for (const entry of entries) {
     if (counter.total >= maxFiles) return;
     if (entry.isDirectory()) {
