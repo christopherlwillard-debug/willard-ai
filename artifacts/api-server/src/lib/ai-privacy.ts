@@ -66,7 +66,16 @@ export function aiProviderBlockedReason(settings: Pick<AiPrivacySettings, "aiEnr
 }
 
 export async function getAiPrivacySettings(): Promise<AiPrivacySettings> {
-  const row = await getActiveAppSettings();
+  const settings = await getActiveAppSettings();
+  const row = settings ? {
+    aiEnrichmentEnabled: settings.aiEnrichmentEnabled,
+    aiLocalOnly: settings.aiLocalOnly,
+    aiExcludedFolders: settings.aiExcludedFolders,
+    aiExcludedExtensions: settings.aiExcludedExtensions,
+    aiConsentAt: settings.aiConsentAt,
+    aiConsentProvider: settings.aiConsentProvider,
+    aiConsentVersion: settings.aiConsentVersion,
+  } : null;
 
   return {
     ...DEFAULTS,
