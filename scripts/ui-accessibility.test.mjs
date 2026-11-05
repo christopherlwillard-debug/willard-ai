@@ -56,3 +56,12 @@ test("archive filter controls expose accessible names", () => {
     assert.ok(archivePage.includes(`aria-label="${label}"`), label);
   }
 });
+
+test("archive index reports request failures and provides a retry action", () => {
+  assert.match(archivePage, /const \\{ data, isLoading, isError, refetch \\} = useListArchives/);
+  assert.match(archivePage, /Archive index unavailable/);
+  assert.match(archivePage, /Unable to load archives/);
+  assert.match(archivePage, /role="alert"/);
+  assert.match(archivePage, /onClick=\\{\\(\\) => refetch\\(\\)\\}/);
+  assert.doesNotMatch(archivePage, /data\\?\\.total \\?\\? 0} archives indexed/);
+});
