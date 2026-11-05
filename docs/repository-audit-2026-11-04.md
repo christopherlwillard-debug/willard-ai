@@ -727,3 +727,12 @@ Remaining archive hardening:
 - Commits: helper `1ac4055eb02ec2cacc19c079ad298e369020dd9c`; tests `78ac6fb239481994cdbe064289e76593b0b64c57`; route fix `8e8f45cbf36bc29d4a25a3b7e464ceb74c59ad7a`; Fast Validation inclusion `6d0a294372de613899f8979b4511fed07dbe9324`.
 - Validation: local Node test run against a staged copy of the branch helper and focused regression cases passed **4/4**. GitHub Fast Validation has not yet been observed for the latest branch head. No live NAS outage/permission test or HTTP/SSE cleanup integration test has been run.
 - Remaining limitation: thumbnail/cache inventory helpers still intentionally treat inaccessible derived-cache subtrees as best-effort and may under-report cache findings; they do not use that partial inventory to delete canonical media rows. The orphaned-record path now fails closed.
+
+
+## Organization moves are journaled before filesystem mutation (2026-11-05)
+
+- A move was previously recorded in `organization_jobs.file_moves` only after `verifiedMove` returned. A process crash after the filesystem move but before that database checkpoint could leave the destination populated and the source missing with no recovery record.
+- Initial execute and resume now persist a `verified: false` move intent containing the absolute source/destination paths and expected SHA-256 before moving the file. `verifiedMove` checks that the source still matches the intent hash before mutation. After successful move verification, the intent is replaced with the completed `verified: true` record.
+- Recovery parsing accepts well-formed pending intents, rollback treats an intact source as a move that never completed (preserving any independently created destination), and resume refuses pending intents until rollback is completed. This avoids silently treating an uncheckpointed move as completed.
+- Added regression coverage for crashes before/after the filesystem move, destination races, source changes after intent, and route checkpoint ordering. Fast Validation is pending on the current audit branch.
+- Scope limitation: the separate `conflictPolicy = "replace"` path still deletes an existing destination before the new source move is journaled. It remains intentionally unresolved pending a durable replacement-backup state machine; this intent fix does not claim to make replacement safe.
