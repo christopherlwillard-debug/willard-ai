@@ -329,24 +329,12 @@ router.get("/cleanup/summary", async (_req, res) => {
     const largeBytes = Number(summaryRow.large_bytes ?? 0);
     const oldFiles = Number(summaryRow.old_files ?? 0);
 
-    let emptyFolderCount = 0;
-    if (fs.existsSync(nasPath)) {
-      const distinctFolders = await db.execute(sql`
-        SELECT DISTINCT regexp_replace(relative_path, '[^/]+$', '') AS folder
-          FROM ${mediaFilesTable}
-         WHERE nas_path = ${nasPath} AND ${activeMediaCondition}
-      `);
-      for (const row of distinctFolders.rows as any[]) {
-        const relativeFolder = String(row.folder ?? "").replace(/^\/+|\/+$/g, "");
-        if (relativeFolder) {
-          try {
-            const folder = resolveLibraryPath(nasPath, relativeFolder);
-            const entries = fs.readdirSync(folder);
-            if (entries.length === 0) emptyFolderCount++;
-          } catch { /* stale rows and missing folders are ignored */ }
-        }
-      }
-    }
+    // Empty directories cannot be inferred from media_files: by definition,
+    // folders with no indexed files have no row from which to discover them.
+    // Use the same fail-closed filesystem scan as the Empty Folders feature.
+    const emptyFolderCount = fs.existsSync(nasPath)
+      ? findEmptyDirectories(nasPath).length
+      : 0;
 
     res.json({
       libraryKey:            (await getActiveLibraryContext())?.libraryKey,
