@@ -1516,3 +1516,27 @@ Fast Validation #801 (run `42071283343`) completed successfully on `f4aca0a3bbe4
 - Windows archive/updater job: all steps succeeded, including PowerShell parsing, storage migration no-overwrite tests, conversion finalization rollback, official 7-Zip symlink metadata, packaged updater journal writes, and developer updater preservation/rollback.
 - Dependency Review #564 (run `42071283227`) succeeded.
 - These checks validate the parent only, not this new disposition batch. No full CI/release publishing workflow is claimed.
+
+
+## 2026-11-05 audit batch — media browser query correctness
+
+**Confirmed findings (source inspection):**
+- The media listing route cast `mediaType`, `favorites`, `folder`, `search`, and `sort` query values to strings without runtime validation. Repeated scalar parameters are parsed as arrays by Express and could reach SQL filters or silently fall through to the default sort.
+- User-supplied `%` and `_` characters in folder and filename filters were interpreted as SQL `LIKE` wildcards rather than literal characters. A search for a literal underscore or percent sign could return unrelated files.
+- The Explorer route similarly cast `path` to a string. A repeated `path` parameter could cause a runtime `.replace` error and return a generic 500 rather than a client validation response.
+
+**Corrections (implementation commit 68094f3142698fca517ca63af488d5035aa2dfe4):**
+- Media scalar query fields now use the existing `parseOptionalQueryString` validator; repeated and non-string values return HTTP 400.
+- Media type and sort values are restricted to the values supported by the UI and query implementation. `favorites` accepts only `true` or `false`.
+- Added a PostgreSQL `LIKE` pattern helper that escapes backslash, `%`, and `_`; both folder-prefix and filename-substring filters now match those characters literally.
+- Explorer validates `path` as a single optional string before path normalization or filesystem access.
+- Added focused regression tests for scalar rejection, literal wildcard escaping, route wiring, and Explorer validation. Registered the suite in Fast Validation.
+- No schema migration, new dependency, production data operation, or filesystem mutation was introduced.
+
+**Validation boundary:** The source paths and UI-supported media types/sorts were inspected on the audit branch. Focused regression tests are committed but await the matching Fast Validation run. The tests exercise the pure parser/escaping helper and assert route wiring; they do not replace live HTTP/PostgreSQL integration or browser testing.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media browser → repeated scalar query parameters and unsupported filters | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `media-query-validation.test.ts` | Latest Fast Validation pending; live HTTP route validation remains outstanding. |
+| Medium | Media browser → literal `%`, `_`, and backslash filter matching | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `sql-like.ts` and regression cases | Requires PostgreSQL integration verification to confirm the bound pattern/escape behavior on the deployed PostgreSQL version. |
+| Medium | Explorer → repeated `path` query parameter returns generic server error | **fixed; target test pending** | 68094f3142698fca517ca63af488d5035aa2dfe4; `media-query-validation.test.ts` | Filesystem-backed HTTP test and Windows path behavior remain outstanding. |
