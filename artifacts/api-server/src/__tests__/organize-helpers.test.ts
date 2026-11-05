@@ -541,3 +541,28 @@ test("organization reset refuses to discard a non-empty recovery journal", () =>
   assert.match(resetRoute, /isNull\(organizationJobsTable\.fileMoves\)/);
   assert.match(resetRoute, /CASE WHEN jsonb_typeof\(\$\{organizationJobsTable\.fileMoves\}\) = 'array' THEN jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0 ELSE false END/);
 });
+
+
+test("recovery routes validate persisted move journals before touching files", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const validatorStart = source.indexOf("function parseOrganizationMoveJournal");
+  const validatorEnd = source.indexOf("const ORGANIZATION_EXECUTION_LEASE_MS", validatorStart);
+  const validator = source.slice(validatorStart, validatorEnd);
+  assert.match(validator, /Array\.isArray\(value\)/);
+  assert.match(validator, /path\.isAbsolute\(move\.from\)/);
+  assert.match(validator, /path\.isAbsolute\(move\.to\)/);
+  assert.match(validator, /move\.sourceHash !== "string"/);
+  assert.match(validator, /move\.destHash !== move\.sourceHash/);
+  assert.match(validator, /move\.verified !== true/);
+  assert.match(validator, /resolveWithinRoot\(move\.from, nasPath\)/);
+  assert.match(validator, /resolveWithinRoot\(move\.to, nasPath\)/);
+
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
+  assert.match(source.slice(rollbackStart, rollbackEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+
+  const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
+  const resumeEnd = source.indexOf('export default router', resumeStart);
+  assert.match(source.slice(resumeStart, resumeEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+});
