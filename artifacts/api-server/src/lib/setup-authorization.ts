@@ -24,10 +24,14 @@ export function isLoopbackAddress(address: string | undefined): boolean {
  */
 export function authorizeFirstRunSetup(input: {
   remoteAddress: string | undefined;
+  allowLoopbackSetup: boolean;
   configuredToken: string | undefined;
   suppliedToken: string | undefined;
 }): SetupAuthorization {
-  if (isLoopbackAddress(input.remoteAddress)) return "local";
+  // A reverse proxy on the same host can make every remote request appear to
+  // originate from loopback. The socket address alone is not an owner signal:
+  // only an explicitly opted-in local desktop launcher may use this bypass.
+  if (input.allowLoopbackSetup && isLoopbackAddress(input.remoteAddress)) return "local";
 
   const configured = input.configuredToken;
   if (!configured || configured.length < 32) return "token_misconfigured";

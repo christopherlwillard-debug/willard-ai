@@ -109,15 +109,17 @@ test("desktop API binds only to loopback behind the localhost web proxy", () => 
   assert.match(indexSource, /app\.listen\(\{\s*port,\s*\.\.\.\(host\s*\?\s*\{\s*host\s*\}\s*:\s*\{\}\)\s*\}/);
   assert.match(indexSource, /app\.listen\(\{ port, \.\.\.\(host \? \{ host \} : \{\}\) \}/);
   assert.match(desktopLauncherSource, /\$env:HOST = "127\.0\.0\.1"/);
+  assert.ok(desktopLauncherSource.indexOf('$env:WILLARD_LOCAL_SETUP = "true"') > desktopLauncherSource.indexOf('$env:HOST = "127.0.0.1"'));
 });
 
 
 test("developer desktop launcher and local Vite servers bind only to loopback", () => {
   const startup = developerLauncherSource.indexOf("function Start-WillardServices");
   const host = developerLauncherSource.indexOf('$env:HOST = "127.0.0.1"', startup);
+  const localSetup = developerLauncherSource.indexOf('$env:WILLARD_LOCAL_SETUP = "true"', startup);
   const apiStart = developerLauncherSource.indexOf("$apiProc = Start-Process", startup);
 
-  assert.ok(startup >= 0 && host > startup && apiStart > host, "developer API host must be set before the process starts");
+  assert.ok(startup >= 0 && host > startup && localSetup > host && apiStart > localSetup, "developer API host and local setup capability must be set before the process starts");
   assert.match(viteConfigSource, /const serverHost = isReplit \? "0\.0\.0\.0" : "127\.0\.0\.1"/);
   assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
 });
@@ -127,6 +129,9 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
   assert.match(authSource, /configuredToken: process\.env\["WILLARD_SETUP_TOKEN"\]/);
   assert.match(authSource, /router\.post\("\/auth\/setup", setupRateLimiter/);
   assert.match(authSource, /remoteAddress: req\.socket\.remoteAddress/);
+  assert.match(authSource, /allowLoopbackSetup:[\s\S]*?WILLARD_LOCAL_SETUP.*?REPL_ID.*?HOST/);
+  assert.match(desktopLauncherSource, /\$env:WILLARD_LOCAL_SETUP = "true"/);
+  assert.match(developerLauncherSource, /\$env:WILLARD_LOCAL_SETUP = "true"/);
   assert.match(authSource, /authorization === "token_misconfigured"/);
   assert.match(authSource, /authorization === "token_required" \|\| authorization === "token_invalid"/);
   assert.match(authSource, /status\(503\)/);

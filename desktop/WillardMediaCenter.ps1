@@ -574,6 +574,8 @@ try {
   $env:PORT = "8080"
   # The API must only be reachable through the localhost-only desktop proxy.
   $env:HOST = "127.0.0.1"
+    # This local-only launcher explicitly authorizes token-free first-run setup.
+    $env:WILLARD_LOCAL_SETUP = "true"
   Start-LoadingScreen
   $BundledSevenZip = Join-Path $InstallRoot "api-runtime\vendor\7zip\7z.exe"
   if (Test-Path -LiteralPath $BundledSevenZip -PathType Leaf) { $env:WILLARD_7ZIP_PATH = $BundledSevenZip }

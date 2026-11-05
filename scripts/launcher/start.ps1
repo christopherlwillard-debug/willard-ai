@@ -225,6 +225,8 @@ function Start-WillardServices {
     $env:PORT = "8080"
     # This launcher is for a local Windows desktop; do not expose the API to the LAN.
     $env:HOST = "127.0.0.1"
+    # This local-only launcher explicitly authorizes token-free first-run setup.
+    $env:WILLARD_LOCAL_SETUP = "true"
     $envFile = Join-Path $Root ".env"
     $apiProc = $null
     try {

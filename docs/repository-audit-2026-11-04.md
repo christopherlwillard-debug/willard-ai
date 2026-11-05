@@ -1189,3 +1189,30 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Validation: pending GitHub Actions on the audit branch. No production credentials or data were changed. Existing installations with a password are unaffected; the guard only matters while the first-run password is unset.
 
 - Hardening detail: the loopback exception uses the TCP socket peer address rather than `req.ip` or `X-Forwarded-For`, so a client cannot spoof a localhost address through forwarded headers. The helper's five isolated Node tests passed in a staged-copy run; the full repository workflow remains unverified.
+
+## 2026-11-05 audit batch — reverse-proxy-safe first-run setup authorization
+
+**Finding (high, deployment-dependent):** The first-run setup guard treated a loopback TCP socket peer as sufficient proof that the browser was local. Express trusts a reverse proxy in Replit/production, and a same-host reverse proxy can connect to the API over 127.0.0.1. In that topology, a remote browser can appear to have a loopback socket peer. Using `req.socket.remoteAddress` prevents spoofing `X-Forwarded-For`, but does not distinguish a local browser from a same-host proxy.
+
+**Correction:** The loopback exception now requires all of the following: a loopback socket peer, explicit `WILLARD_LOCAL_SETUP=true`, no Replit runtime marker, and `HOST=127.0.0.1`. Only the two supported Windows desktop launchers set the local capability, and they set it before spawning the API. Hosted and generic reverse-proxy deployments must use the operator-provisioned `WILLARD_SETUP_TOKEN`. The local bypass flag is explicitly documented as launcher-owned and must not be placed in `.env`.
+
+**Regression coverage:** Added direct helper tests proving that a loopback peer alone does not bypass setup, that explicit local-launcher opt-in works for loopback, and that the opt-in does not authorize LAN peers. Added source-contract checks for the route's deployment gates and both launcher settings. The helper tests are in `setup-authorization.test.ts`; route/launcher contracts are in `install-auth-reliability.test.ts`.
+
+**Verification status:** Source inspection complete. Targeted tests and Fast Validation are pending for the resulting commit; no full validation claim is made yet. The previous Fast Validation run #737 on code commit `1fa65ad04c465aab3082ec416b6caac8d6d48583` concluded failure. The workflow-job endpoint returned no job details through the available GitHub connection, so the precise failing step could not be verified from that run. This batch adds focused regressions and will trigger a fresh validation run.
+
+**Remaining risk:** The bootstrap token is still a bearer secret and must be provisioned through a trusted deployment secret store and delivered to the legitimate installer/operator out of band. The audit does not alter hosted deployment secrets or production configuration. The complete first-run flow has not yet been exercised against a real reverse-proxy deployment.
+
+## Prioritized findings ledger (current audit snapshot)
+
+| Priority | Finding / affected workflow | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| High | Remote first-run administrator claim — hosted setup | fixed | Bootstrap token guard in this branch; helper tests previously run in a staged copy | Full hosted reverse-proxy integration remains outstanding |
+| High | Same-host reverse-proxy loopback ambiguity — first-run setup | fixed | This batch; targeted tests pending | Live reverse-proxy topology test remains outstanding |
+| Critical | Stale conversion worker after advisory-lock connection loss — media conversion/finalization | blocked | Source-reviewed; no fencing token yet | Old worker may continue filesystem writes after lock loss |
+| Critical | `replace` policy backup/rollback safety — archive/media organization | found | Existing audit finding and journal work | Original may be at risk if replacement publication or rollback fails |
+| High | Malicious link-bearing archive end-to-end behavior on Windows — ZIP/7z extraction | blocked | 7-Zip technical metadata and `-snl-` checks exist | Full Windows organize-route integration against malicious fixtures is outstanding |
+| High | Clean standard-user installer upgrade/uninstall lifecycle — Windows installer | blocked | Installer payload cleanup and lifecycle source tests exist | End-user ACL, service shutdown, and upgrade behavior need clean-machine runtime validation |
+| Medium | 500,000-file Optimize Center cap — scan/report UX | target-tested | Fast Validation #704 on code head `2fcdf48315c75148d92a40d21dfa7af4927324dc` | No pagination/resume; warning is conservative at exact cap |
+| Medium | Private media stream I/O error semantics — thumbnail/logo/media preview | target-tested | Regression changes documented in PR body; latest end-to-end status requires fresh CI confirmation | Browser-level interrupted-stream behavior remains to be exercised |
+
+Statuses distinguish code inspection and focused tests from integration and full workflow validation. No blocked item is represented as fixed or fully validated.

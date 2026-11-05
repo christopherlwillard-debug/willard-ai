@@ -270,6 +270,10 @@ router.post("/auth/setup", setupRateLimiter, async (req: Request, res: Response)
 
     const authorization = authorizeFirstRunSetup({
       remoteAddress: req.socket.remoteAddress,
+      allowLoopbackSetup:
+        process.env["WILLARD_LOCAL_SETUP"] === "true" &&
+        process.env["REPL_ID"] === undefined &&
+        process.env["HOST"]?.trim() === "127.0.0.1",
       configuredToken: process.env["WILLARD_SETUP_TOKEN"],
       suppliedToken: parsed.data.setupToken,
     });
