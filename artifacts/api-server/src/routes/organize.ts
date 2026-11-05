@@ -30,7 +30,7 @@ import {
   validateArchiveEntry,
   writeArchiveFileAtomically,
 } from "../lib/archive-safety.ts";
-import { moveFile, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
@@ -1821,7 +1821,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
           fs.mkdirSync(processedDir, { recursive: true });
           const dest = path.join(processedDir, path.basename(job.sourcePath));
-          moveFile(job.sourcePath, dest);
+          moveFileNoReplace(job.sourcePath, dest);
           dispositionApplied = `moved_to:${dest}`;
           opLog("DISPOSE_MOVE: archive moved to processed storage");
         } catch (e: any) {
@@ -1974,7 +1974,7 @@ router.post("/organize/jobs/:id/apply-disposition", async (req, res) => {
       const processedDir = path.join(getWillardAIDir(nasPath), "archive-index", "processed");
       fs.mkdirSync(processedDir, { recursive: true });
       const dest = path.join(processedDir, path.basename(job.sourcePath));
-      moveFile(job.sourcePath, dest);
+      moveFileNoReplace(job.sourcePath, dest);
       dispositionResult = `moved_to:${dest}`;
     }
 

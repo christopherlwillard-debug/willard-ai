@@ -431,10 +431,10 @@ Remaining archive hardening:
 
 ## Latest integrated validation — 2026-11-05
 
-- Fast Validation run [`41941085454`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41941085454) passed on commit `f5b0f2ed479133a1dba912ab5bcb3e9dac73de99`. Both the Linux `validate` job and Windows `windows-updater-smoke` job succeeded. Linux validation included typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 staging and `node-7z` compatibility, and the targeted backend regression suite. Windows smoke verified official 7-Zip staging and updater journal/preservation/rollback behavior.
+- Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`. Both Linux `validate` and Windows `windows-archive-and-updater-smoke` succeeded. Linux validation included typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 compatibility, archive safety and targeted backend regressions. Windows verified the cross-platform symlink metadata fixture with official 7-Zip 26.05 and `node-7z`, plus updater journal/preservation/rollback behavior.
 - Dependency review run [`41941085293`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41941085293) passed on the same commit.
 - This validation includes the Windows-portable archive filename rules (ADS, reserved devices, control characters, trailing dots/spaces, case and Unicode collisions, dot-segment handling, and pathless entries), ZIP Unix/Windows reparse-point rejection, drive-relative path rejection, trash tombstone liveness, NAS mount-alias containment, private temporary-directory parent checks, backup key zeroization, and the earlier authentication/backup regressions.
-- Remaining limitations: browser/runtime verification of the uploaded-SVG sandbox CSP is still outstanding. Windows POSIX permission bits are best-effort; the NAS share ACL must restrict the app-managed temporary directories to the service account. The Windows smoke job currently exercises updater and official 7-Zip packaging, not a full Windows-native archive extraction suite; adding that platform-specific archive smoke is the next validation improvement.
+- Remaining limitations: browser/runtime verification of the uploaded-SVG sandbox CSP is still outstanding. Windows POSIX permission bits are best-effort; the NAS share ACL must restrict the app-managed temporary directories to the service account. The Windows job validates 7-Zip link metadata and updater behavior, but does not yet execute the complete organize route against a malicious Windows archive or validate a packaged installer on a clean end-user machine.
 - PR #2 remains open as a draft against `main`, and GitHub reports it mergeable. No main-branch changes, production-data changes, credential changes, or release publication were made.
 
 
@@ -448,7 +448,7 @@ Remaining archive hardening:
 - Confirmed a validation gap: the official-binary compatibility test created and listed a real symlink archive only on non-Windows hosts (`process.platform !== "win32"`). The Windows smoke job verified ordinary archive creation/extraction and updater behavior, but did not verify that the Windows 7-Zip binary and `node-7z` expose a link entry through the technical `Attributes` Map consumed by the archive preflight.
 - The Linux compatibility test now exports its verified symlink-bearing 7z archive as a short-lived CI artifact. The Windows job downloads that fixture and runs the same `node-7z` compatibility test against the hash-verified official Windows 7-Zip 26.05 binary. This avoids depending on Windows symlink-creation privileges while exercising the Windows parser and metadata path.
 - The Windows compatibility test lists the fixture only; it does not extract the link-bearing archive. The existing application preflight remains responsible for rejecting links before extraction.
-- Fast Validation run [`41945225193`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41945225193) passed on commit `f3a8ee5dd0883e9169160356f461d327cf189f3d`. The Linux job created and uploaded the link-bearing fixture; the Windows job hash-verified official 7-Zip 26.05, installed the API server test dependency graph, and passed the same `node-7z` technical-metadata assertion against that fixture. Windows updater journal and rollback smoke tests also passed.
+- Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`. The Linux job created and uploaded the link-bearing fixture; the Windows job hash-verified official 7-Zip 26.05, installed the API server test dependency graph, and passed the same `node-7z` technical-metadata assertion against that fixture. Windows updater journal and rollback smoke tests also passed.
 - Remaining limitation: this closes the cross-platform link-metadata test gap only. It does not yet exercise the complete organize route against a malicious Windows reparse-point archive or validate malformed archive behavior on a packaged Windows installation.
 
 
@@ -456,7 +456,7 @@ Remaining archive hardening:
 
 - `getTempDir` sanitized job IDs by replacing unsupported characters with `_` and truncating to 120 characters. Distinct IDs such as `job/one` and `job?one`, or long IDs with the same first 120 characters, therefore mapped to the same per-job staging directory. Concurrent jobs could collide or access each other's temporary files.
 - Preserve the readable sanitized prefix but append a deterministic 12-hex SHA-256 suffix whenever the raw ID was changed or truncated. Valid existing IDs retain their previous directory naming. Empty and dot-segment IDs continue to receive unique generated children.
-- Added regression tests for punctuation-sanitization collisions and long common-prefix IDs. Fast Validation run [`41945225193`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41945225193) passed on commit `f3a8ee5dd0883e9169160356f461d327cf189f3d`, including the targeted `nas-storage-paths.test.ts` suite. These cases ran on Linux; the Windows job in that run focused on 7-Zip metadata and updater behavior. The inspected organize-route callers use lowercase prefixes with parsed integer IDs; case-folding and reserved-name behavior for arbitrary future job IDs remains a portability test gap.
+- Added regression tests for punctuation-sanitization collisions and long common-prefix IDs. Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`, including the targeted `nas-storage-paths.test.ts` suite. These cases ran on Linux; the Windows job focused on 7-Zip metadata and updater behavior. The inspected organize-route callers use lowercase prefixes with parsed integer IDs; case-folding and reserved-name behavior for arbitrary future job IDs remains a portability test gap.
 
 
 ## Integrated Windows archive metadata validation and archive prefix-collision fix (2026-11-05)
@@ -465,7 +465,7 @@ Remaining archive hardening:
 - The Windows archive/updater job in the same run completed successfully: official Windows 7-Zip 26.05 staging, cross-platform symlink archive fixture download, Windows `node-7z` technical link-metadata detection, updater journal writes, and updater preservation/rollback smoke all passed. This closes the previously pending Windows metadata-parser validation gap. It still does not run the complete organize route against a malicious archive on Windows or test a packaged installer on a clean end-user machine.
 - A further code review found that archive path uniqueness tracked exact normalized names and portable case/Unicode collisions, but did not distinguish files from directories. A regular file named `documents` and a child entry `documents/report.pdf` could both pass preflight even though they cannot coexist on disk; behavior then depended on extractor ordering and could leave a failed staging operation.
 - Added separate file-path and directory-path tracking to the archive budget. The preflight now rejects a file used as a parent directory and rejects a file replacing a directory implied by an earlier child, independent of entry order. Explicit directory entries that appear after their child files remain allowed.
-- Added focused regressions for both conflicting entry orders and the valid child-before-explicit-directory case. Implementation commit: `a07169f875d3616c5a8035ae456e276d4d9eaba8`; regression-test commit: `4a53b35c51c479c4066d35f8b910bb6422daf808`. Validation for these two commits is pending; no pass is claimed yet.
+- Added focused regressions for both conflicting entry orders and the valid child-before-explicit-directory case. Implementation commit: `a07169f875d3616c5a8035ae456e276d4d9eaba8`; regression-test commit: `4a53b35c51c479c4066d35f8b910bb6422daf808`. The targeted backend regression suite passed in Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`.
 - Dependency Review run [#249](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41945225196) passed on `f3a8ee5dd0883e9169160356f461d327cf189f3d`. The new archive prefix-collision changes do not modify dependencies.
 - Remaining priorities: execute the new prefix-collision regression in Fast Validation; retain the outstanding browser/runtime SVG CSP verification, NAS share ACL confirmation, full Windows organize-route malicious-archive test, and clean-machine installer lifecycle validation.
 
@@ -475,7 +475,7 @@ Remaining archive hardening:
 - Confirmed a reliability gap in `GET /settings/logo`: the route piped `fs.createReadStream(settings.logoPath)` directly to the response without an asynchronous error listener. A concurrent logo replacement/deletion or filesystem read failure after the existence check could emit an unhandled stream error; the surrounding route `try/catch` cannot catch that later event.
 - Reused the existing private-media stream failure handler. Before response headers are sent, the route returns a specific 404; after headers are sent, it destroys the response with the stream error. The error is also logged.
 - Added regression coverage for the route's error listener and the helper's logo-specific not-found response.
-- The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in [Fast Validation run `41946233784`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946233784). The overall run was canceled before the Windows job completed; a fresh run on the latest branch head is still required for full validation.
+- Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`; Linux targeted regressions and the Windows archive/updater job both succeeded.
 - Remaining limitation: this covers the asynchronous stream lifecycle, not a race-free file-handle guarantee against a hostile process replacing a branding path after the realpath check. Browser-level SVG CSP verification remains separate.
 
 
@@ -484,7 +484,7 @@ Remaining archive hardening:
 - Review of the shared stream-error handler found that every pre-header stream failure was being returned as HTTP 404, including permission errors and I/O failures. That incorrectly represented server-side failures as missing files and could hide storage/ACL problems from monitoring and clients.
 - Updated the shared handler to return 404 only for filesystem `ENOENT` and `ENOTDIR`; other pre-header errors return a generic 500. Once headers are sent, the response is still destroyed with the original error to avoid a second response or truncated successful-looking payload.
 - Added regression coverage for missing files, logo-specific not-found messaging, permission-denied errors, and post-header stream failure.
-- Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in run `41946233784`; the full workflow was canceled before Windows validation completed.
+- Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`.
 
 
 ## Thumbnail and byte-range stream error consistency (2026-11-05)
@@ -493,7 +493,7 @@ Remaining archive hardening:
 - Cached thumbnails now evict the failed cache entry, log the failure, and use the shared media stream handler. Missing paths return 404; permission/I/O failures return 500; failures after headers are sent destroy the response rather than ending it as a successful partial payload.
 - Byte-range media delivery now uses the same handler, and its missing-file regression expects 404.
 - Regression tests cover thumbnail route wiring and the shared handler's ENOENT/EACCES/post-header behavior.
-- Commits: `260b003d08c26a8eb44e7f719b69a5156d52f8ca`, `6c25ed61edc0f826a16d128ed4e9ae38819cd0aa`, `f4f43a1e7852541ab07a836749d3f3a761fc4464`, `65f259f3a0534f948a182922b7566b6c6748bba3`, and `b16814e15267ce4d704a5305b3a7344973817ea7`. The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in run `41946233784`; the full workflow was canceled before Windows validation completed. The first test attempt failed because the thumbnail test looked for `res.destroy` in the route instead of the shared helper; commit `464166eb` corrected the assertion to inspect the helper.
+- Commits: `260b003d08c26a8eb44e7f719b69a5156d52f8ca`, `6c25ed61edc0f826a16d128ed4e9ae38819cd0aa`, `f4f43a1e7852541ab07a836749d3f3a761fc4464`, `65f259f3a0534f948a182922b7566b6c6748bba3`, and `b16814e15267ce4d704a5305b3a7344973817ea7`. Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) passed on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`. The first test attempt failed because the thumbnail test looked for `res.destroy` in the route instead of the shared helper; commit `464166eb` corrected the assertion to inspect the helper.
 
 
 ## Branding logo deletion ordering (2026-11-05)
@@ -501,7 +501,7 @@ Remaining archive hardening:
 - Confirmed a data-loss path in `DELETE /settings/logo`: the route unlinked the current logo before clearing `appSettingsTable.logoPath`. If the database update failed, the settings row continued pointing at a file that had already been deleted.
 - Reordered the operation to clear and verify the database pointer first, then perform best-effort file cleanup. A database failure now preserves the original logo; an unlink failure can leave only an unreferenced orphan.
 - Added a regression test that asserts the database pointer update precedes filesystem deletion.
-- Validation status: pending on the next Fast Validation run; no pass is claimed yet.
+- The route-order regression passed in Fast Validation run [`41946861010`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946861010) on commit `69a55e3dc37d41b74dc4bc495de60ba96e19b962`.
 
 ## Organization conflict replacement is not rollback-safe (2026-11-05)
 
@@ -517,3 +517,12 @@ Remaining archive hardening:
 - Added a regression assertion that the real organize route's 7-Zip extraction call passes -snl- and retains an extraction error listener.
 - Commits: e811b13b145f73fbea79e1e82678a8940155a141 (implementation) and cf7f16242075d71576f48798671f3a2829504e9f (regression test).
 - Validation is pending for the latest branch head. This narrows the risk but does not replace a full Windows organize-route test with a crafted malicious archive; that remains an explicit validation item.
+
+
+## Processed archive disposition avoids silent overwrite (2026-11-05)
+
+- Confirmed a data-loss path in both automatic job completion and manual archive disposition: each used `moveFile(job.sourcePath, dest)` for the processed-archive folder. The helper uses rename semantics that can replace an existing destination on POSIX, so two source archives with the same basename could silently overwrite an earlier processed archive.
+- Replaced both calls with the existing `moveFileNoReplace` helper. If a processed archive with that basename already exists, the move fails closed and the source archive remains in place.
+- Added a route regression asserting both disposition paths use no-replace moves; the helper's existing tests cover the EEXIST/no-overwrite behavior.
+- Validation status: pending on the next Fast Validation run.
+

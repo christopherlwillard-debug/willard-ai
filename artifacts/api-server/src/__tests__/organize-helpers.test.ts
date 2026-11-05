@@ -403,3 +403,10 @@ test("rollbackMoves: completes an interrupted same-volume hard-link restore", as
   assert.equal(fs.existsSync(dest), false);
   assert.ok(logs.some(message => message.includes("hard-link finalized")));
 });
+
+test("processed archive dispositions never overwrite an existing archive", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const noReplaceMoves = routeSource.match(/moveFileNoReplace\(job\.sourcePath,\s*dest\)/g) ?? [];
+  assert.equal(noReplaceMoves.length, 2, "both automatic and manual dispositions must use no-replace moves");
+  assert.doesNotMatch(routeSource, /moveFile\(job\.sourcePath,\s*dest\)/);
+});

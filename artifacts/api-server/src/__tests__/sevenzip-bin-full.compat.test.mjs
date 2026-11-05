@@ -70,7 +70,7 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
     if (process.platform !== "win32") {
       fs.symlinkSync("payload.txt", path.join(root, "linked.txt"));
       const linkArchive = path.join(root, "link.7z");
-      const linkCreate = spawnSync(binaryPath, ["a", "-snl", linkArchive, "linked.txt"], {
+      const linkCreate = spawnSync(binaryPath, ["a", "-snl", linkArchive, "payload.txt", "linked.txt"], {
         cwd: root,
         encoding: "utf8",
         timeout: 30_000,
@@ -96,6 +96,35 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       if (process.env.WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT) {
         fs.copyFileSync(linkArchive, process.env.WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT);
       }
+
+      // Exercise the exact extraction switch used by the organize route. A
+      // successful command must not materialize the archive's symlink.
+      const linkDestination = path.join(root, "link-extracted");
+      await new Promise((resolve, reject) => {
+        const stream = Seven.extractFull(linkArchive, linkDestination, {
+          $bin: binaryPath,
+          $progress: false,
+          overwrite: "a",
+          $raw: ["-snl-"],
+        });
+        stream.once("error", reject);
+        stream.once("end", resolve);
+      });
+      assert.equal(
+        fs.readFileSync(path.join(linkDestination, "payload.txt"), "utf8"),
+        "verified archive payload\\n",
+      );
+      let extractedLinkIsSymlink = false;
+      try {
+        extractedLinkIsSymlink = fs.lstatSync(path.join(linkDestination, "linked.txt")).isSymbolicLink();
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      assert.equal(
+        extractedLinkIsSymlink,
+        false,
+        "the -snl- extraction option must not materialize an archive-provided symbolic link",
+      );
     }
 
     const destination = path.join(root, "extracted");
