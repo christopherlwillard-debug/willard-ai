@@ -101,12 +101,12 @@ test("archive route validates filters and treats the selected end date as inclus
   const dateFromIndex = spec.indexOf("name: dateFrom");
   const dateToIndex = spec.indexOf("name: dateTo");
   assert.ok(dateFromIndex >= 0 && dateToIndex > dateFromIndex);
-  assert.ok(spec.slice(dateFromIndex, dateToIndex).includes("format: date"));
-  assert.ok(spec.slice(dateToIndex, dateToIndex + 140).includes("format: date"));
+  assert.ok(spec.slice(dateFromIndex, dateToIndex).includes('pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"'));
+  assert.ok(spec.slice(dateToIndex, dateToIndex + 160).includes('pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"'));
 
   const generatedParams = readFileSync("lib/api-zod/src/generated/types/listArchivesParams.ts", "utf8");
-  assert.ok(generatedParams.includes("dateFrom?: Date;"));
-  assert.ok(generatedParams.includes("dateTo?: Date;"));
+  assert.ok(generatedParams.includes("dateFrom?: string;"));
+  assert.ok(generatedParams.includes("dateTo?: string;"));
   const generatedClientParams = readFileSync("lib/api-client-react/src/generated/api.schemas.ts", "utf8");
   assert.ok(generatedClientParams.includes("dateFrom?: string;"));
   assert.ok(generatedClientParams.includes("dateTo?: string;"));
