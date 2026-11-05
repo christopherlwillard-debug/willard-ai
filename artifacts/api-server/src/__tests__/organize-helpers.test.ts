@@ -167,20 +167,33 @@ test("verifiedMove: source hash equals sha256 of original content", async () => 
 
 // ── 5. verifiedMove — mismatch detection (real throw) ────────────────────────
 
-test("verifiedMove: throws on destination hash mismatch (afterMoveHook corruption)", async () => {
+test("verifiedMove: restores a failed hash-mismatch move to staging", async () => {
   const src  = writeFile(path.join(mkTmp("vm-mismatch-src"), "data.bin"), randomBytes(128));
   const dest = path.join(mkTmp("vm-mismatch-dst"), "data.bin");
 
   await assert.rejects(
     () => verifiedMove(src, dest, {
       afterMoveHook: (to) => {
-        // Corrupt destination after the move but before the post-hash runs
+        // Corrupt destination after the move but before the post-hash runs.
         fs.writeFileSync(to, randomBytes(128));
       },
     }),
     /SHA-256 mismatch/,
     "verifiedMove must throw when source and destination hashes differ",
   );
+
+  assert.equal(fs.existsSync(src), true, "the failed move must be restored to its source path");
+  assert.equal(fs.existsSync(dest), false, "an unverified file must not remain at its final destination");
+});
+
+test("verifiedMove: never overwrites a destination created after conflict checking", async () => {
+  const src = writeFile(path.join(mkTmp("vm-race-src"), "photo.jpg"), "source media");
+  const dest = writeFile(path.join(mkTmp("vm-race-dst"), "photo.jpg"), "independent concurrent file");
+
+  await assert.rejects(() => verifiedMove(src, dest), /EEXIST/);
+
+  assert.equal(fs.readFileSync(src, "utf8"), "source media");
+  assert.equal(fs.readFileSync(dest, "utf8"), "independent concurrent file");
 });
 
 // ── 6. verifiedMove — unreadable source ──────────────────────────────────────
