@@ -104,6 +104,9 @@ test("archive route validates filters and treats the selected end date as inclus
   const generatedParams = readFileSync("lib/api-zod/src/generated/types/listArchivesParams.ts", "utf8");
   assert.ok(generatedParams.includes("dateFrom?: string;"));
   assert.ok(generatedParams.includes("dateTo?: string;"));
+  const generatedClientParams = readFileSync("lib/api-client-react/src/generated/api.schemas.ts", "utf8");
+  assert.ok(generatedClientParams.includes("dateFrom?: string;"));
+  assert.ok(generatedClientParams.includes("dateTo?: string;"));
 
   const page = readFileSync("artifacts/willard-ai/src/pages/archives.tsx", "utf8");
   assert.ok(page.includes("const params: ListArchivesParams ="));
