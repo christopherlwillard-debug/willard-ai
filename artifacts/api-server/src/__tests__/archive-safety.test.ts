@@ -75,7 +75,7 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
   ]) {
     assertSafetyFailure(
       () => validateArchiveEntry({ path: entryPath, sizeBytes: 1 }, createArchiveBudget()),
-      /traversal rejected|absolute path/,
+      /traversal rejected|absolute path|Windows-incompatible path component/,
     );
   }
 
