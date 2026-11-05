@@ -5,10 +5,11 @@ import { db } from "@workspace/db";
 // libraryJobsTable is the SINGLE AUTHORITATIVE SOURCE for library job state.
 // scanJobsTable is the LEGACY scan engine table — kept here only for the debug
 // endpoint. No production isScanning logic may read from scanJobsTable.
-import { mediaFilesTable, archivesTable, scanJobsTable, libraryJobsTable, appSettingsTable, organizationJobsTable } from "@workspace/db";
+import { mediaFilesTable, archivesTable, scanJobsTable, libraryJobsTable, organizationJobsTable } from "@workspace/db";
 import { eq, sql, count, and } from "drizzle-orm";
 import { checkNasReachableAsync, type NasReachability } from "../lib/nas-storage";
 import { getEnrichmentStatus } from "../lib/ai-enrichment";
+import { getActiveAppSettings } from "../lib/active-library.ts";
 import { getFaceStatus } from "../lib/face-recognition";
 import { archiveScope, getActiveNasPath } from "../lib/archive-scope.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
@@ -106,8 +107,7 @@ router.get("/dashboard", async (_req, res) => {
       .limit(1);
     const isScanning = !!runningLibraryJob;
 
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0];
+    const settings = await getActiveAppSettings();
     const nasPath = settings?.nasPath ?? "";
 
     // Async + cached NAS reachability — never blocks the event loop.
