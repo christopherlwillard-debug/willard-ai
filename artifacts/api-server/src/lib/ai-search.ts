@@ -4,6 +4,7 @@ import { embedText, toVectorLiteral } from "./ai-enrichment.ts";
 import { logger } from "./logger.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
 import { activeMediaSql } from "./media-scope.ts";
+import { normalizeOptionalDateOnlyRange, parseOptionalDateOnlyRange } from "./request-validation.ts";
 
 /**
  * AI Search — natural-language hybrid search over the canonical library index.
@@ -101,14 +102,13 @@ export async function parseIntent(
     const p = JSON.parse(resp.choices[0]?.message?.content ?? "{}");
     const arr = (v: unknown): string[] =>
       Array.isArray(v) ? v.map((x) => String(x).toLowerCase().trim()).filter(Boolean).slice(0, 10) : [];
-    const dateOrNull = (v: unknown): string | null =>
-      typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+    const dates = normalizeOptionalDateOnlyRange(p.dateFrom, p.dateTo);
     const parsed: SearchIntent = {
       semanticQuery: typeof p.semanticQuery === "string" && p.semanticQuery.trim() ? p.semanticQuery.trim() : null,
       keywords: arr(p.keywords),
       mediaTypes: arr(p.mediaTypes).filter((t) => ["image", "video", "document", "audio", "archive", "other"].includes(t)),
-      dateFrom: dateOrNull(p.dateFrom),
-      dateTo: dateOrNull(p.dateTo),
+      dateFrom: dates.dateFrom,
+      dateTo: dates.dateTo,
       objects: arr(p.objects),
       exclude: arr(p.exclude),
       favoriteOnly: p.favoriteOnly === true,
@@ -116,7 +116,8 @@ export async function parseIntent(
       location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
       personNames: [],
     };
-    return previous ? mergeRefinedIntent(previous, parsed) : parsed;
+    const merged = previous ? mergeRefinedIntent(previous, parsed) : parsed;
+    return { ...merged, ...normalizeOptionalDateOnlyRange(merged.dateFrom, merged.dateTo) };
   } catch (err) {
     logger.warn({ err, query }, "Intent parsing failed — falling back to keyword search");
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2).slice(0, 8);
@@ -181,13 +182,18 @@ export function buildSearchQuery(
     activeMediaSql("f"),
   ];
   const add = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+  const dateRange = parseOptionalDateOnlyRange(intent.dateFrom ?? undefined, intent.dateTo ?? undefined);
 
   if (intent.mediaTypes.length) {
     where.push(`f.media_type = ANY(${add(normalizedMediaTypes(intent.mediaTypes))})`);
   }
   if (intent.favoriteOnly) where.push(`f.favorite = true`);
-  if (intent.dateFrom) where.push(`COALESCE(f.date_taken, f.modified_at) >= ${add(intent.dateFrom)}`);
-  if (intent.dateTo) where.push(`COALESCE(f.date_taken, f.modified_at) <= ${add(intent.dateTo + "T23:59:59")}`);
+  if (dateRange.from) {
+    where.push(`COALESCE(f.date_taken, f.modified_at) >= ${add(dateRange.from.toISOString().slice(0, 10))}`);
+  }
+  if (dateRange.toExclusive) {
+    where.push(`COALESCE(f.date_taken, f.modified_at) < ${add(dateRange.toExclusive.toISOString().slice(0, 10))}`);
+  }
   if (intent.docTypes.length) where.push(`a.doc_type = ANY(${add(intent.docTypes)})`);
   if (intent.personNames.length) {
     const personNames = add(intent.personNames.map((name) => name.toLowerCase()));
