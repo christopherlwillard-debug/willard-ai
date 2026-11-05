@@ -538,3 +538,13 @@ Remaining archive hardening:
 - Implementation commit: `2545e195cbfe89d8d2856cc733bfcc67e02f5911`; regression-test commit: `2a728ec97eb02d8ea2be510de48b5ccb21e1d02d`.
 - Validation is pending for the latest branch head. The prior processed-archive disposition change passed Fast Validation #508 and Dependency Review #272, but those runs predate this latest helper change.
 - Remaining limitation: the existing `conflictPolicy === "replace"` path still deletes the previous destination before a replacement has been safely journaled. Its durable backup/rollback design remains intentionally unmodified and is documented above.
+
+
+## Fail closed on incomplete folder-source scans (2026-11-05)
+
+- Confirmed a silent-omission correctness issue in the organize folder walker. It caught `readdirSync` failures and returned an empty list for that subtree, and caught per-file `statSync` failures and continued. Analysis and execution could therefore present a partial scan as complete when a NAS subdirectory became unreadable or an entry disappeared during enumeration.
+- Moved directory enumeration into the shared organize helper and changed it to fail with the affected path when the root/subdirectory cannot be read or an entry cannot be inspected. Symlinks and special filesystem entries are now rejected explicitly instead of being silently omitted; the walker uses `lstat` so it does not follow file or directory symlinks.
+- The route still uses the same file-type mapping and plan structure; only incomplete/ambiguous source scans now fail rather than producing a partial plan.
+- Added regressions for nested regular-file enumeration, missing/non-directory roots, symlink rejection, and an unreadable nested directory (the permission test skips only where the runner cannot enforce POSIX mode bits).
+- Commits: `fb986e594602a94aa5865f8f4e242b6280dcbbd9` (strict walker), `c748570859b38f1e99f2f203631fc202e62df9c6` (route integration), and `59aaddf790e6b3f0b154ade6507712ed717c0a92` (tests).
+- Validation is pending on the next Fast Validation run. Fast Validation #511 predates this change and must not be used to claim it passed.
