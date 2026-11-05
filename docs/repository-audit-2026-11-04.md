@@ -1226,3 +1226,13 @@ Statuses distinguish code inspection and focused tests from integration and full
 **Regression/verification:** Added no new runtime dependency. The workflow's own successful parse and execution is the authoritative validation. A new Fast Validation run is triggered by this commit; until it completes, the workflow repair is source-reviewed but not called validated. The earlier runs #737, #738, and #739 remain failures and are not retroactively relabeled.
 
 **Remaining limitation:** The GitHub connection exposes the workflow run status but returned no job records/logs for the malformed runs. The repaired run must create both Linux and Windows jobs and complete them successfully before this batch can be marked fully validated.
+
+## 2026-11-05 audit batch — generated API contract parity for remote setup token
+
+**Finding (high, build/contract correctness):** Fast Validation #740 passed artifact checks, workspace TypeScript, router checks, and both runtime-route parity tests, but failed the final generated-contract drift check. The OpenAPI contract had the optional `setupToken` field and the Zod type file had been edited manually, while the generated React client schema and generated Zod runtime schema were not synchronized. Orval regenerated three files and `git diff --exit-code` correctly rejected the drift.
+
+**Correction:** Committed the Orval-equivalent output for `api-client-react/src/generated/api.schemas.ts`, `api-zod/src/generated/api.ts`, and `api-zod/src/generated/types/authSetupInput.ts`, including the generated max-length constant and schema description. No hand-written API contract or runtime behavior changed in this correction.
+
+**Verification:** The failing run #740 log was inspected. It confirms workspace typecheck passed, runtime-route parity passed 2/2, and Orval code generation completed; the failure was specifically the generated-file diff. This correction triggers a fresh Fast Validation run. Contract parity is not called fixed/validated until the new `check:api-contracts` step passes.
+
+**Remaining limitation:** The bootstrap flow still requires a real hosted reverse-proxy integration test; generated contract parity alone does not validate deployment secret provisioning.

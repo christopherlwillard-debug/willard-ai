@@ -8,5 +8,9 @@
 
 export interface AuthSetupInput {
   password: string;
+  /**
+   * Required for first-run setup from non-loopback clients when WILLARD_SETUP_TOKEN is configured.
+   * @maxLength 256
+   */
   setupToken?: string;
 }
