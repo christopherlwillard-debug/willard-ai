@@ -151,12 +151,13 @@ function entrySize(sizeBytes: ArchiveEntryMetadata["sizeBytes"]): number {
 }
 
 function assertPortableArchivePathComponents(rawPath: string, components: string[]): void {
-  const reservedDevice = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$/i;
+  const reservedDevice = /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/i;
   for (const component of components) {
+    const deviceBaseName = component.split(".", 1)[0]!.replace(/[. ]+$/g, "");
     if (
-      /[<>:"|?*]/.test(component) ||
+      /[\u0001-\u001F<>:"|?*]/.test(component) ||
       /[. ]$/.test(component) ||
-      reservedDevice.test(component)
+      reservedDevice.test(deviceBaseName)
     ) {
       throw new ArchiveSafetyError(
         `Archive entry "${rawPath}" contains a Windows-incompatible path component`,
