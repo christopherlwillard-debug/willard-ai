@@ -124,7 +124,7 @@ test("portable media filenames reject Windows device names and invalid component
     "CON", "con.txt", "PRN.jpg", "AUX", "NUL.tar", "CONIN$", "CONOUT$.log",
     "COM1", "com9.mp4", "COM¹.txt", "LPT1", "lpt³.zip",
     "trailing.", "trailing ", "bad:name", "bad/name", "bad\\\\name",
-    "bad?name", "bad*name", "line\\nbreak", ".", "..",
+    "bad?name", "bad*name", "line\nbreak", ".", "..",
   ]) {
     assert.equal(isPortableMediaFileName(name), false, name);
   }
@@ -148,9 +148,9 @@ test("portable media filename validation accepts ordinary cross-platform names",
 
 test("media rename route validates JSON name type and uses no-replace moves", () => {
   const route = fs.readFileSync("artifacts/api-server/src/routes/media.ts", "utf8");
-  assert.match(route, /const requestedName = req\\.body\\?\\.name;/);
+  assert.match(route, /const requestedName = req\.body\?\.name;/);
   assert.match(route, /typeof requestedName === "string"/);
-  assert.match(route, /isPortableMediaFileName\\(newName\\)/);
-  assert.match(route, /\\(from, to\\) => moveFileNoReplace\\(from, to\\)/);
-  assert.match(route, /if \\(newRelPath === file\\.relativePath\\)/);
+  assert.match(route, /isPortableMediaFileName\(newName\)/);
+  assert.match(route, /\(from, to\) => moveFileNoReplace\(from, to\)/);
+  assert.match(route, /if \(newRelPath === file\.relativePath\)/);
 });
