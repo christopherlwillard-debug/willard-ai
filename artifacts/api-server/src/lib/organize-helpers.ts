@@ -295,21 +295,33 @@ export async function rollbackMoves(
         } catch { /* normal no-replace move below will preserve any conflict */ }
       }
 
-      moveFileNoReplace(mv.to, mv.from);
-      rolledBack++;
-
-      // Verify the restored file matches the original source hash
-      try {
-        const restoredHash = await sha256File(mv.from);
-        const ok = restoredHash === mv.sourceHash;
-        log(
-          ok
-            ? `ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`
-            : `ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}`,
-        );
-      } catch (he: any) {
-        log(`ROLLBACK_HASH_ERR: ${mv.from} — ${he.message}`);
+      // Verify the destination still contains the exact original bytes before
+      // restoring it. A file changed after the forward move must not be counted
+      // as successfully rolled back or silently replace the original source.
+      const destinationHash = await sha256File(mv.to);
+      if (destinationHash !== mv.sourceHash) {
+        log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.to)} expected=${mv.sourceHash} got=${destinationHash}; destination preserved`);
+        continue;
       }
+
+      moveFileNoReplace(mv.to, mv.from);
+
+      // Count only checksum-verified restores. If bytes change between the
+      // preflight hash and the move, put the unverified file back at its
+      // destination when possible and leave this move incomplete for recovery.
+      const restoredHash = await sha256File(mv.from);
+      if (restoredHash !== mv.sourceHash) {
+        try {
+          moveFileNoReplace(mv.from, mv.to);
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; unverified file returned to destination`);
+        } catch (preserveError: any) {
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; could not return unverified file to destination: ${preserveError.message}`);
+        }
+        continue;
+      }
+
+      rolledBack++;
+      log(`ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
     } catch (re: any) {
       log(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);
     }
