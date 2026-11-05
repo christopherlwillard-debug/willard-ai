@@ -622,3 +622,10 @@ Remaining archive hardening:
 - `cleanTempDir` now requires the configured NAS root, accepts only a direct child of that root's `WillardAI/temp` directory, and checks each path component with `lstat` immediately before removal. Symlinked parents and targets are left untouched. All organize route cleanup sites pass the NAS root.
 - Added tests for ordinary cleanup, a replaced temp-parent symlink, and a job-directory symlink. Fast Validation passed on commit `cb02c4a4fd6e6a4d8322ab23b796794bb49bce97`: TypeScript typecheck, all targeted backend regressions, and release/storage contracts passed. The Windows job also passed official 7-Zip 26.05 metadata compatibility, updater journal, and developer update rollback smoke tests. The NAS symlink tests ran on Linux; installed NAS/Windows ACL behavior remains to be verified.
 - This is defense in depth, not a complete defense against a hostile process running as the same OS account and racing filesystem operations. Private directory permissions reduce that exposure on POSIX; Windows ACL behavior requires installed-runtime verification.
+
+
+## Organization reset preserves incomplete move journals (2026-11-05)
+
+- The Recovery Center reset endpoint accepted failed or stale-executing jobs and set `fileMoves` to null. If a prior move or rollback was incomplete, this erased the only durable list of source/destination paths and checksums needed to recover the files. A reset could then re-run the plan without acknowledging files still moved or modified.
+- Reset now refuses jobs with any non-empty or malformed move journal and directs the user to resume or complete rollback first. The SQL update also compare-and-swaps the journal to null or an empty JSON array, so a concurrent worker cannot add move records between the route's read and the reset update and have them silently cleared.
+- Added a regression test for both the user-facing guard and database-side empty-journal predicate. Validation is pending on the current audit branch.
