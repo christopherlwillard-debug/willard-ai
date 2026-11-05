@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { organizationJobsTable, archivesTable } from "@workspace/db";
-import { eq, desc, inArray, or, and, isNull, lt, sql } from "drizzle-orm";
+import { eq, desc, inArray, or, and, isNull, isNotNull, lt, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
