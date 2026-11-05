@@ -19,3 +19,18 @@ test("static resolver blocks traversal and symlinks outside the web root", (t) =
   assert.equal(resolveStaticFile(root, "/../secret.txt"), null);
   assert.equal(resolveStaticFile(root, "/secret.txt"), null);
 });
+
+import { parseDesktopRequestUrl, staticFileReadErrorStatus } from "./web-server-safety.mjs";
+
+test("desktop request URL parsing rejects malformed URLs and path encodings", () => {
+  assert.throws(() => parseDesktopRequestUrl("http://["));
+  assert.throws(() => parseDesktopRequestUrl("/%E0%A4%A"));
+  assert.equal(parseDesktopRequestUrl("/api/healthz?x=1").pathname, "/api/healthz");
+});
+
+test("static file errors distinguish missing assets from server-side read failures", () => {
+  assert.equal(staticFileReadErrorStatus({ code: "ENOENT" }), 404);
+  assert.equal(staticFileReadErrorStatus({ code: "ENOTDIR" }), 404);
+  assert.equal(staticFileReadErrorStatus({ code: "EACCES" }), 500);
+  assert.equal(staticFileReadErrorStatus({ code: "EIO" }), 500);
+});
