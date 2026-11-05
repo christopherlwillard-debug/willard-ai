@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const routeRoot = new URL("../routes/", import.meta.url);
 const files = [
   "documents.ts", "diagnostics.ts", "search.ts", "files.ts",
-  "faces.ts", "health.ts", "explorer.ts",
+  "faces.ts", "health.ts", "explorer.ts", "organize.ts", "dashboard.ts",
 ];
 const sources = Object.fromEntries(files.map((name) => [
   name,
