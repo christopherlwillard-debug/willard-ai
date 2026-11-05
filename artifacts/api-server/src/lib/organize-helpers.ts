@@ -97,6 +97,68 @@ export function moveFileNoReplace(from: string, to: string): void {
   }
 }
 
+/**
+ * Enumerate regular files in a source directory without silently skipping
+ * unreadable entries. A partial walk can make an organize plan appear complete
+ * while leaving files behind, so any read/stat failure aborts the scan.
+ * Symlinks and special filesystem entries are rejected rather than omitted.
+ */
+export function walkDirectoryFiles(
+  directoryPath: string,
+): Array<{ fullPath: string; relativePath: string; sizeBytes: number }> {
+  const root = path.resolve(directoryPath);
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.lstatSync(root);
+  } catch (error) {
+    const detail = error as NodeJS.ErrnoException;
+    throw new Error(`Unable to inspect source directory "${root}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`Source path is not a regular directory: "${root}"`);
+  }
+
+  const results: Array<{ fullPath: string; relativePath: string; sizeBytes: number }> = [];
+  const walk = (directory: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      const detail = error as NodeJS.ErrnoException;
+      throw new Error(`Unable to read source directory "${directory}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(fullPath);
+      } catch (error) {
+        const detail = error as NodeJS.ErrnoException;
+        throw new Error(`Unable to inspect source entry "${fullPath}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+      }
+
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Symbolic links are not supported in organize source folders: "${fullPath}"`);
+      }
+      if (stat.isDirectory()) {
+        walk(fullPath);
+      } else if (stat.isFile()) {
+        results.push({
+          fullPath,
+          relativePath: path.relative(root, fullPath),
+          sizeBytes: stat.size,
+        });
+      } else {
+        throw new Error(`Unsupported filesystem entry in organize source folder: "${fullPath}"`);
+      }
+    }
+  };
+
+  walk(root);
+  return results;
+}
+
 // ── Verified move ─────────────────────────────────────────────────────────────
 
 /**
