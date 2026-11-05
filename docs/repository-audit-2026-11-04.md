@@ -1236,3 +1236,9 @@ Statuses distinguish code inspection and focused tests from integration and full
 **Verification:** The failing run #740 log was inspected. It confirms workspace typecheck passed, runtime-route parity passed 2/2, and Orval code generation completed; the failure was specifically the generated-file diff. This correction triggers a fresh Fast Validation run. Contract parity is not called fixed/validated until the new `check:api-contracts` step passes.
 
 **Remaining limitation:** The bootstrap flow still requires a real hosted reverse-proxy integration test; generated contract parity alone does not validate deployment secret provisioning.
+
+## 2026-11-05 generated-contract validation follow-up
+
+- Fast Validation #741 again reached `check:api-contracts` and failed only on two generated JSDoc indentation differences in `api-client-react/src/generated/api.schemas.ts` and `api-zod/src/generated/types/authSetupInput.ts`. The generated Zod runtime schema now matched exactly; workspace typecheck and runtime-route parity had already passed in #740.
+- Corrected the two interface comments to the exact Orval output shown by the #741 diff. The next Fast Validation run will verify the complete generated diff and continue through the backend and Windows jobs.
+- Status remains pending until that run completes; no claim of full validation is made.
