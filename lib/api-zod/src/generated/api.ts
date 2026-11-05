@@ -658,11 +658,21 @@ export const ListFolderResponse = zod.object({
 /**
  * @summary List all indexed archive files
  */
+export const listArchivesQueryMinSizeMin = 0;
+export const listArchivesQueryMinSizeMax = 9007199254740991;
+
+export const listArchivesQueryMaxSizeMin = 0;
+export const listArchivesQueryMaxSizeMax = 9007199254740991;
+
+
+
 export const ListArchivesQueryParams = zod.object({
   "category": zod.coerce.string().optional(),
   "status": zod.coerce.string().optional(),
-  "minSize": zod.coerce.number().optional(),
-  "maxSize": zod.coerce.number().optional(),
+  "minSize": zod.coerce.number().min(listArchivesQueryMinSizeMin).max(listArchivesQueryMinSizeMax).optional(),
+  "maxSize": zod.coerce.number().min(listArchivesQueryMaxSizeMin).max(listArchivesQueryMaxSizeMax).optional(),
+  "dateFrom": zod.date().optional(),
+  "dateTo": zod.date().optional(),
   "limit": zod.coerce.number().optional(),
   "offset": zod.coerce.number().optional()
 })
