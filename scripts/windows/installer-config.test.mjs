@@ -875,6 +875,426 @@ test("Windows launchers generate cryptographic session secrets for new installs"
   assert.match(launcherCommon, /RandomNumberGenerator\]::Create\(\)/);
   assert.match(launcherCommon, /\$rng\.GetBytes\(\$secretBytes\)/);
   assert.doesNotMatch(launcherCommon, /\$secret = -join .*Get-Random/);
+  const helperNames = [...launcherCommon.matchAll(/^\\s*function\\s+([A-Za-z0-9_-]+)/gm)].map((match) => match[1]);
+  assert.equal(new Set(helperNames).size, helperNames.length, "shared launcher helpers must not be duplicated");
+  const ensureEnvStart = launcherCommon.indexOf("function Ensure-EnvFile {");
+  const ensureEnvEnd = launcherCommon.indexOf("\\nfunction New-WillardShortcut", ensureEnvStart);
+  const ensureEnv = launcherCommon.slice(ensureEnvStart, ensureEnvEnd);
+  assert.ok(
+    ensureEnv.includes(String.raw`(Get-Content $envPath) -replace '^SESSION_SECRET=.*
+  assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
+  assert.match(launcher, /SESSION_SECRET=\$sessionSecret/);
+  assert.doesNotMatch(launcher, /SESSION_SECRET=.*Get-Random/);
+});
+
+test("Windows backup credentials use native user-scoped DPAPI with legacy compatibility", () => {
+  for (const credentialLauncher of [launcherCommon, launcher]) {
+    assert.match(credentialLauncher, /ProtectedData\]::Protect/);
+    assert.match(credentialLauncher, /ProtectedData\]::Unprotect/);
+    assert.match(credentialLauncher, /DataProtectionScope\]::CurrentUser/);
+    assert.match(credentialLauncher, /dpapi-v2:/);
+    assert.match(credentialLauncher, /ConvertTo-SecureString \$stored/);
+  }
+  assert.match(setupLauncher, /-OfferCredentialReset/);
+  assert.match(developerLauncher, /-OfferCredentialReset/);
+  assert.match(repairLauncher, /Library backup protection is ready/);
+});
+
+test("database setup quotes special names and parameterizes catalog lookup", async () => {
+  const calls = [];
+  let instance = 0;
+  class Client {
+    constructor() {
+      this.instance = instance++;
+    }
+    async connect() {
+      if (this.instance === 0) {
+        const error = new Error("database does not exist");
+        error.code = "3D000";
+        throw error;
+      }
+    }
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.startsWith("SELECT 1 FROM pg_database")) return { rows: [] };
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  const name = 'family archive"2026';
+  assert.equal(
+    getDatabaseName(
+      "postgresql://user:pass@localhost:5432/family%20archive%222026",
+    ),
+    name,
+  );
+  assert.equal(quoteIdentifier(name), '"family archive""2026"');
+  await ensureDatabase(
+    "postgresql://user:pass@localhost:5432/family%20archive%222026",
+    Client,
+  );
+  assert.deepEqual(calls[0], {
+    sql: "SELECT 1 FROM pg_database WHERE datname = $1",
+    params: [name],
+  });
+  assert.equal(calls[1].sql, 'CREATE DATABASE "family archive""2026"');
+});
+
+test("database setup rejects invalid names and explains restricted roles safely", async () => {
+  assert.throws(
+    () => getDatabaseName("postgresql://user:pass@localhost:5432/%ZZ"),
+    /not a valid PostgreSQL connection string/,
+  );
+  assert.throws(
+    () =>
+      getDatabaseName(
+        "postgresql://user:pass@localhost:5432/" + "a".repeat(64),
+      ),
+    /no longer than 63 bytes/,
+  );
+
+  let ended = false;
+  let restrictedInstance = 0;
+  class RestrictedClient {
+    constructor() {
+      this.instance = restrictedInstance++;
+    }
+    async connect() {
+      if (this.instance === 0) {
+        const error = new Error("database does not exist");
+        error.code = "3D000";
+        throw error;
+      }
+    }
+    async query(sql) {
+      if (sql.startsWith("SELECT 1 FROM pg_database")) return { rows: [] };
+      const error = new Error("permission denied to create database");
+      error.code = "42501";
+      throw error;
+    }
+    async end() {
+      ended = true;
+    }
+  }
+  await assert.rejects(
+    ensureDatabase(
+      "postgresql://reader:pass@localhost:5432/family",
+      RestrictedClient,
+    ),
+    /cannot create databases.*grant CREATEDB/i,
+  );
+  assert.equal(ended, true);
+
+  let clientCount = 0;
+  class ExistingDatabaseClient {
+    constructor() {
+      clientCount += 1;
+    }
+    async connect() {}
+    async query() {
+      throw new Error("existing target should not query maintenance database");
+    }
+    async end() {}
+  }
+  await ensureDatabase(
+    "postgresql://reader:pass@localhost:5432/existing",
+    ExistingDatabaseClient,
+  );
+  assert.equal(clientCount, 1);
+
+  let maintenanceDeniedInstance = 0;
+  class MaintenanceDeniedClient {
+    constructor() {
+      this.instance = maintenanceDeniedInstance++;
+    }
+    async connect() {
+      const error = new Error(
+        this.instance === 0
+          ? "database does not exist"
+          : "permission denied for database postgres",
+      );
+      error.code = this.instance === 0 ? "3D000" : "42501";
+      throw error;
+    }
+    async end() {}
+  }
+  await assert.rejects(
+    ensureDatabase(
+      "postgresql://reader:pass@localhost:5432/missing",
+      MaintenanceDeniedClient,
+    ),
+    /cannot access the maintenance database.*administrator/i,
+  );
+});
+
+test("launcher database helper also uses target-first least-privilege setup", () => {
+  assert.match(launcherCommon, /datname = \$1/);
+  assert.doesNotMatch(launcherCommon, /datname = [`'"]?\s*\+/);
+  assert.match(launcherCommon, /error\.code !== '3D000'/);
+  assert.match(launcherCommon, /if \(targetExists\) return/);
+  assert.match(launcherCommon, /cannot access[\s\S]*maintenance database/);
+});
+
+test("Windows startup smoke test covers readiness, ownership, and web failure diagnostics", () => {
+  assert.match(workflow, /startup-smoke\.ps1/);
+  assert.match(workflow, /fetch-depth:\s*0/);
+  assert.match(
+    workflow,
+    /Install PostgreSQL for the source launcher smoke test/,
+  );
+  assert.match(workflow, /postgresql-16\.15-1-windows-x64-binaries\.zip/);
+  assert.match(startupSmoke, /\$env:WILLARD_NO_PAUSE = "1"/);
+  assert.match(
+    startupSmoke,
+    /\$env:LOCALAPPDATA = Join-Path \$env:RUNNER_TEMP "willard-startup-localappdata"/,
+  );
+  assert.match(startupSmoke, /\$env:WILLARD_SKIP_BROWSER = "1"/);
+  assert.match(startupSmoke, /\$env:WILLARD_CI_BACKUP_PASSPHRASE = /);
+  assert.match(
+    launcherCommon,
+    /\$env:CI -eq "true" -and \$env:WILLARD_CI_BACKUP_PASSPHRASE/,
+  );
+  assert.match(developerLauncher, /\$env:WILLARD_SKIP_BROWSER -ne "1"/);
+  assert.match(
+    startupSmoke,
+    /\$env:WILLARD_RECOVERY_EXPORT_PATH = Join-Path \$env:RUNNER_TEMP/,
+  );
+  assert.match(startupSmoke, /\$env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = /);
+  assert.match(
+    startupSmoke,
+    /\$launcherArguments = @\([^)]*\) \+ @\(\$arguments\)/,
+  );
+  assert.match(startupSmoke, /\$powershell = \(Get-Process -Id \$PID\)\.Path/);
+  assert.match(startupSmoke, /-ArgumentList \$launcherArguments/);
+  assert.match(startupSmoke, /\$process\.WaitForExit\(240000\)/);
+  assert.doesNotMatch(startupSmoke, /-PassThru -Wait/);
+  assert.match(
+    startupSmoke,
+    /Launcher process did not exit within 240 seconds[\s\S]*Read-Text \$outputPath[\s\S]*Read-Text \(\$outputPath \+ "\.err"\)/,
+  );
+  assert.match(
+    startupSmoke,
+    /Invoke-Launcher @\("-File", \$Start\) \$SmokeOutput/,
+  );
+  assert.doesNotMatch(startupSmoke, /Invoke-Launcher @\("-File", \$Batch\)/);
+  assert.match(
+    startupSmoke,
+    /echo deliberate web startup failure\r?\nexit \/b 1/,
+  );
+  assert.match(
+    workflow,
+    /25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e/,
+  );
+  assert.match(workflow, /pg_ctl\.exe/);
+  assert.match(workflow, /pg_isready\.exe/);
+  assert.doesNotMatch(workflow, /choco install postgresql/);
+  assert.match(startupSmoke, /Start Willard AI\.bat/);
+  assert.match(startupSmoke, /127\.0\.0\.1:8080\/api\/healthz/);
+  assert.match(startupSmoke, /127\.0\.0\.1:5000/);
+  assert.match(startupSmoke, /Get-CimInstance Win32_Process/);
+  assert.match(startupSmoke, /deliberate web startup failure/);
+  assert.match(startupSmoke, /web\.log/);
+  assert.match(startupSmoke, /scripts\\launcher\\stop\.ps1/);
+  assert.doesNotMatch(startupSmoke, /desktop\\WillardMediaCenter\.ps1/);
+  assert.match(config, /WillardMediaCenter\.ps1/);
+});
+
+test("Windows release runs replacement recovery from the packaged payload", () => {
+  assert.match(workflow, /replacement-recovery-smoke\.ps1/);
+  assert.match(replacementRecoverySmoke, /source checkout, package manager/);
+  assert.match(replacementRecoverySmoke, /runtime\\node\.exe/);
+  assert.match(replacementRecoverySmoke, /desktop\\database-backup\.mjs/);
+  assert.match(replacementRecoverySmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
+  assert.match(replacementRecoverySmoke, /wrong-passphrase/);
+  assert.match(replacementRecoverySmoke, /missing-nas/);
+  assert.match(replacementRecoverySmoke, /partial-backup/);
+  assert.match(replacementRecoverySmoke, /recovery-attempts/);
+  assert.match(replacementRecoverySmoke, /"COMPLETE"/);
+  assert.match(replacementRecoverySmoke, /\/api\/healthz/);
+  assert.match(replacementRecoverySmoke, /New-LocalUser/);
+  assert.match(replacementRecoverySmoke, /-Credential \$Credential -LoadUserProfile/);
+});
+
+test("installer coordinates upgrades and repair reports failures", async () => {
+  const repair = await readFile(
+    new URL("../launcher/repair.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(config, /PrepareToInstall/);
+  assert.match(config, /WillardMediaCenter\.ps1[\s\S]*-Stop/);
+  assert.match(repair, /\$problems\.Count -gt 0\) \{ exit 1 \}/);
+});
+
+test("developer fallback stages a complete source archive", async () => {
+  const updater = await readFile(
+    new URL("../launcher/update.ps1", import.meta.url),
+    "utf8",
+  );
+  assert.match(updater, /sourceArtifactUrl/);
+  assert.match(updater, /sourceSha256/);
+  assert.match(updater, /Expand-Archive/);
+  assert.match(updater, /The developer-source archive was empty or malformed/);
+  assert.match(updater, /failed checksum verification/);
+  assert.match(updater, /robocopy/);
+  assert.match(updater, /Copy-PreservedDeveloperState/);
+  assert.match(updater, /Complete-DeveloperUpdate/);
+  assert.match(launcherCommon, /Invoke-DeveloperVersionSwap/);
+  assert.match(launcherCommon, /Write-DeveloperUpdateJournal/);
+});
+
+test("developer updater preserves full runnable versions and rolls back failed candidate updates", () => {
+  assert.match(updater, /status --porcelain/);
+  assert.match(updater, /Detected:/);
+  assert.match(updater, /New-CandidateDirectory/);
+  assert.match(updater, /clone --quiet --no-hardlinks/);
+  assert.match(updater, /--branch \$GithubBranch --single-branch \$GithubRepo/);
+  assert.match(
+    updater,
+    /New-Item -ItemType Directory -Force \(Join-Path \$candidate "logs"\)/,
+  );
+  assert.match(
+    updater,
+    /Copy-PreservedDeveloperState \$candidate -IncludeLogs/,
+  );
+  assert.match(updater, /Exclude @\("update\.log"\)/);
+  assert.match(updater, /Copy-PreservedDeveloperState \$candidate/);
+  assert.match(updater, /Start-ExternalDeveloperVersionSwap/);
+  assert.match(updater, /Get-Process -Id \$UpdaterPid/);
+  assert.match(updater, /Start-Process -FilePath "powershell\.exe"/);
+  assert.match(updater, /WILLARD_UPDATE_FAIL_AT/);
+  assert.match(updater, /--ignore-scripts/);
+  assert.match(updater, /api-server run build/);
+  assert.match(updater, /Test-FileLockFailure/);
+  assert.match(updater, /Stopping Willard-owned services and retrying/);
+  assert.match(updater, /Start-Sleep -Seconds 2/);
+  assert.match(launcherCommon, /Restore-PendingDeveloperUpdate/);
+  assert.match(launcherCommon, /Recover-InterruptedDeveloperUpdate/);
+  assert.match(launcherCommon, /Confirm-DeveloperUpdateHealth/);
+  assert.match(
+    developerLauncher,
+    /Verifying the updated version before removing its rollback copy/,
+  );
+  assert.match(
+    developerLauncher,
+    /previous runnable version was restored after the update did not become healthy/,
+  );
+});
+
+test("local developer launch clears stale Willard service workers before loading Vite", () => {
+  assert.match(webIndex, /navigator\.serviceWorker\.controller/);
+  assert.match(webIndex, /fetch\("\/@vite\/client"/);
+  assert.match(webIndex, /willard-shell-/);
+  assert.match(webIndex, /registration\.unregister\(\)/);
+  assert.match(webIndex, /location\.reload\(\)/);
+});
+
+test("Windows update swaps are journaled and recoverable across copied, locked, or interrupted versions", () => {
+  assert.match(updater, /candidate-copy/);
+  assert.match(updater, /install/);
+  assert.match(updater, /build/);
+  assert.match(launcherCommon, /swap-after-backup/);
+  assert.match(launcher, /WILLARD_PACKAGED_UPDATE_FAIL_AT/);
+  assert.match(launcher, /candidate-copy/);
+  assert.match(launcher, /swap-after-backup/);
+  assert.match(launcher, /backup-created/);
+  assert.match(launcher, /Remove-UpdateJournal/);
+});
+
+test("updater smoke can create its temporary branch from a detached source checkout", () => {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "willard-detached-update-smoke-"));
+  const source = join(temporaryRoot, "source");
+  const remote = join(temporaryRoot, "remote");
+  const runGit = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+  try {
+    mkdirSync(source, { recursive: true });
+    runGit(["init", "--quiet", source]);
+    runGit(["-C", source, "config", "user.email", "smoke@example.invalid"]);
+    runGit(["-C", source, "config", "user.name", "Detached checkout regression"]);
+    writeFileSync(join(source, "README.md"), "source\n");
+    runGit(["-C", source, "add", "README.md"]);
+    runGit(["-C", source, "commit", "--quiet", "-m", "initial"]);
+    const sourceHead = runGit(["-C", source, "rev-parse", "HEAD"]).trim();
+    const sourceBranch = runGit(["-C", source, "branch", "--show-current"]).trim();
+    runGit(["-C", source, "checkout", "--quiet", "--detach", sourceHead]);
+    runGit(["-C", source, "update-ref", "-d", `refs/heads/${sourceBranch}`]);
+    runGit(["clone", "--quiet", source, remote]);
+
+    assert.equal(
+      runGit(["-C", remote, "branch", "--show-current"]).trim(),
+      "",
+      "the cloned source should reproduce a detached CI checkout",
+    );
+
+    const branch = "smoke-update-regression";
+    runGit(["-C", remote, "checkout", "--quiet", "-b", branch]);
+    assert.equal(runGit(["-C", remote, "branch", "--show-current"]).trim(), branch);
+    assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Fast Validation updater smoke checks out complete Git history for its local remote", () => {
+  const jobStart = fastValidationWorkflow.indexOf("windows-archive-and-updater-smoke:");
+  assert.ok(jobStart >= 0, "Fast Validation must contain the Windows updater smoke job");
+  const checkoutStart = fastValidationWorkflow.indexOf("uses: actions/checkout@", jobStart);
+  const checkoutEnd = fastValidationWorkflow.indexOf("\n\n", checkoutStart);
+  assert.ok(checkoutStart > jobStart && checkoutEnd > checkoutStart);
+  assert.match(fastValidationWorkflow.slice(checkoutStart, checkoutEnd), /fetch-depth:\s*0/);
+});
+
+test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
+  assert.match(updateSmoke, /git clone/);
+  assert.match(updateSmoke, /\$remoteBranch = "smoke-update-\$\(\[guid\]::NewGuid\(\)\.ToString\('N'\)\)"/);
+  assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
+  assert.doesNotMatch(updateSmoke, /git -C \$Remote branch --show-current/);
+  assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
+  assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
+  assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
+  assert.match(
+    updater,
+    /Injected update failure after creating the rollback version/,
+  );
+  assert.match(updateSmoke, /WILLARD_UPDATE_REPO/);
+  assert.match(updateSmoke, /Local changes were not protected/);
+  assert.match(updateSmoke, /unreachable\/willard-ai/);
+  assert.match(updateSmoke, /failed rebuild did not restore/);
+  assert.match(updateSmoke, /postgres-data\.marker/);
+  assert.match(updateSmoke, /media-path\.txt/);
+  assert.match(updateSmoke, /New-WillardShortcut/);
+  assert.match(updateSmoke, /WScript\.Shell/);
+  assert.match(updateSmoke, /node_modules/);
+  assert.match(updateSmoke, /dist\\index\.mjs/);
+});
+
+test("developer setup creates identity shortcuts for the batch launcher", () => {
+  assert.match(setupLauncher, /New-WillardShortcut/);
+  assert.match(setupLauncher, /GetFolderPath\("Desktop"\)/);
+  assert.match(setupLauncher, /GetFolderPath\("Programs"\)/);
+  assert.match(setupLauncher, /Start Willard AI\.bat/);
+  assert.match(setupLauncher, /Update Willard AI\.bat/);
+  assert.match(setupLauncher, /Update Willard AI from GitHub/);
+  assert.match(launcherCommon, /WScript\.Shell/);
+  assert.match(launcherCommon, /WorkingDirectory/);
+  assert.match(launcherCommon, /IconLocation/);
+  assert.match(releaseStager, /icons\/willard\.ico/);
+});
+
+test("Windows release stages only hash-verified official 7-Zip binaries", () => {
+  assert.match(releaseStager, /prepare-official-7zip\.ps1/);
+  assert.match(releaseStager, /vendor", "7zip"/);
+  assert.match(launcher, /api-runtime\\vendor\\7zip\\7z\.exe/);
+  assert.match(launcher, /WILLARD_7ZIP_PATH/);
+  assert.match(officialSevenZipBootstrap, /Get-FileHash .*SHA256/);
+  assert.match(officialSevenZipBootstrap, /9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7/);
+  assert.match(officialSevenZipBootstrap, /f27a8f103c84785026edcba1f67faf1357225df9d19ddb0b7760d55947141bc7/);
+  assert.match(officialSevenZipBootstrap, /fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0/);
+});
+, "SESSION_SECRET=$secret" | Set-Content $envPath`),
+    "Ensure-EnvFile must persist the generated secret inside its own function body",
+  );
 
   assert.match(launcher, /RandomNumberGenerator\]::Create\(\)/);
   assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
