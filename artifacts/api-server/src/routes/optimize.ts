@@ -372,7 +372,6 @@ function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
 // `paths` holds ALL file paths for formats requiring per-file analysis (JPEG, container video).
 // `samples` holds the top-3 by size for UI display only.
 const PER_FILE_EXTS = new Set(["jpg","jpeg","png","mp4","m4v","mov","mkv"]);
-const MAX_PER_FILE_PATHS = 5_000; // cap to avoid memory blowout on huge libraries
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
 
