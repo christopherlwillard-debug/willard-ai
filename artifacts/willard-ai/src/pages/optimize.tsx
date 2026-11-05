@@ -1301,7 +1301,7 @@ export default function Optimize() {
   // ── Scan ──────────────────────────────────────────────────────────────────
   const scanMutation = useMutation<ScanResult, Error, boolean>({
     mutationFn: async (force: boolean) => {
-      const url = force ? "/api/optimize/scan?force=true" : "/api/optimize/scan";
+      const url = apiUrl(force ? "/optimize/scan?force=true" : "/optimize/scan");
       const resp = await fetch(url);
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
