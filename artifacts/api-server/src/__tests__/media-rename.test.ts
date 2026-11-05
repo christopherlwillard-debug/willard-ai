@@ -4,9 +4,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  isPortableMediaFileName,
   MediaRenameConflictError,
   renameFileWithPersistence,
 } from "../lib/media-rename.ts";
+import { moveFileNoReplace } from "../lib/organize-helpers.ts";
 
 function withTempFiles(run: (directory: string, source: string, destination: string) => Promise<void>) {
   return async () => {
@@ -100,3 +102,55 @@ test("preserves both failures if filesystem rollback also fails", withTempFiles(
   );
   assert.equal(fs.existsSync(destination), true);
 }));
+
+
+test("media rename refuses to overwrite a destination created after the route preflight", withTempFiles(async (_dir, source, destination) => {
+  fs.writeFileSync(destination, "independent destination");
+  await assert.rejects(
+    renameFileWithPersistence(
+      source,
+      destination,
+      async () => ({ id: 7 }),
+      moveFileNoReplace,
+    ),
+    /EEXIST/,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "media-bytes");
+  assert.equal(fs.readFileSync(destination, "utf8"), "independent destination");
+}));
+
+test("portable media filenames reject Windows device names and invalid components", () => {
+  for (const name of [
+    "CON", "con.txt", "PRN.jpg", "AUX", "NUL.tar", "CONIN$", "CONOUT$.log",
+    "COM1", "com9.mp4", "COM¹.txt", "LPT1", "lpt³.zip",
+    "trailing.", "trailing ", "bad:name", "bad/name", "bad\\\\name",
+    "bad?name", "bad*name", "line\\nbreak", ".", "..",
+  ]) {
+    assert.equal(isPortableMediaFileName(name), false, name);
+  }
+  assert.equal(isPortableMediaFileName("x".repeat(256)), false);
+});
+
+test("portable media filename validation accepts ordinary cross-platform names", () => {
+  for (const name of [
+    "family photo 2026.jpg",
+    "résumé (final).pdf",
+    ".hidden-file",
+    "holiday_100%.mp4",
+    "COM10.txt",
+  ]) {
+    assert.equal(isPortableMediaFileName(name), true, name);
+  }
+  for (const value of [undefined, null, 42, true, {}, ["photo.jpg"], ""]) {
+    assert.equal(isPortableMediaFileName(value), false);
+  }
+});
+
+test("media rename route validates JSON name type and uses no-replace moves", () => {
+  const route = fs.readFileSync("artifacts/api-server/src/routes/media.ts", "utf8");
+  assert.match(route, /const requestedName = req\\.body\\?\\.name;/);
+  assert.match(route, /typeof requestedName === "string"/);
+  assert.match(route, /isPortableMediaFileName\\(newName\\)/);
+  assert.match(route, /\\(from, to\\) => moveFileNoReplace\\(from, to\\)/);
+  assert.match(route, /if \\(newRelPath === file\\.relativePath\\)/);
+});

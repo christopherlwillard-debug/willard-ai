@@ -15,7 +15,8 @@ import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandl
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
-import { renameFileWithPersistence } from "../lib/media-rename.ts";
+import { isPortableMediaFileName, renameFileWithPersistence } from "../lib/media-rename.ts";
+import { moveFileNoReplace } from "../lib/organize-helpers.ts";
 
 const router = Router();
 
@@ -352,8 +353,9 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
   
 
-  const newName: string = (req.body?.name ?? "").trim();
-  if (!newName || newName.length > 255 || /[/\\<>:"|?*]/.test(newName)) {
+  const requestedName = req.body?.name;
+  const newName = typeof requestedName === "string" ? requestedName.trim() : "";
+  if (!isPortableMediaFileName(newName)) {
     res.status(400).json({ error: "Invalid file name" }); return;
   }
 
@@ -376,6 +378,10 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   }
   const dir = path.dirname(file.relativePath);
   const newRelPath = dir === "." ? newName : `${dir}/${newName}`;
+  if (newRelPath === file.relativePath) {
+    res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
+    return;
+  }
   let newAbs: string;
   try {
     newAbs = resolveLibraryPath(nasPath, newRelPath);
@@ -398,7 +404,7 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
         .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
       return row;
     },
-    (from, to) => fs.renameSync(from, to),
+    (from, to) => moveFileNoReplace(from, to),
   );
 
   res.json(updated);

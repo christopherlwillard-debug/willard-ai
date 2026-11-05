@@ -1775,3 +1775,29 @@ The current organize execute and resume paths still unlink an existing destinati
 6. Keep the check in the shared release/update contract where possible so validation, updater, and tests cannot drift.
 
 **Risk classification:** Medium (availability / failed update), elevated because the update path can replace a previously working installation. The signed metadata is not currently an enforced compatibility boundary.
+
+
+## 2026-11-05 follow-up — media rename input and no-overwrite safety
+
+### Finding: media rename could throw on non-string JSON and overwrite a racing destination
+
+**Severity:** Medium (data integrity and cross-platform correctness).
+**Affected workflow:** Media Explorer → rename file.
+**Source inspection:** \`artifacts/api-server/src/routes/media.ts\`, \`artifacts/api-server/src/lib/media-rename.ts\`, and existing \`moveFileNoReplace\` in \`organize-helpers.ts\`.
+
+The rename route called \`.trim()\` on \`req.body.name\` before checking its JSON type, so an array/number/object could throw rather than return HTTP 400. It also performed an \`existsSync(newAbs)\` preflight and then used \`fs.renameSync\`; another process could create the destination between those operations, and POSIX rename semantics can replace that file. The route also accepted Windows-reserved device basenames and Windows-invalid trailing dots/characters, making names non-portable when a library is moved between supported operating systems.
+
+**Fix in this batch:**
+- Added \`isPortableMediaFileName\` to validate a single portable filename component, including reserved device names with extensions, COM/LPT superscript variants, control characters, invalid Windows characters, trailing dots/spaces, dot components, and the 255-character component limit.
+- Non-string JSON values now produce the existing HTTP 400 validation response.
+- Reused the existing \`moveFileNoReplace\` helper for both the forward rename and rollback so a destination created after preflight is not overwritten.
+- Renaming a file to its existing relative path is now a successful no-op rather than a false destination-conflict response.
+- Added focused regression tests for the filename matrix, malformed JSON value types, no-replace destination races, and route wiring.
+
+**Status:** fixed; focused regression tests added; pending the matching Fast Validation run.
+**Commit:** recorded by the current audit batch commit.
+**Remaining risk:** The no-replace helper's cross-device fallback uses an exclusive copy; this batch does not claim to preserve all platform-specific extended metadata on every NAS implementation. A full live HTTP/filesystem test on Windows and SMB remains part of the next integration milestone.
+
+### Validation baseline
+
+Fast Validation #826 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121215284)) is validating the preceding documentation-only commit \`b842925b355d108d8a703d030536ef0ee19cf744\`; it does not include these media rename changes. A new run is required for this batch.
