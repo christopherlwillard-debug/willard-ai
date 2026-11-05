@@ -118,7 +118,8 @@ jobs:
             artifacts/api-server/src/__tests__/install-auth-reliability.test.ts \
             artifacts/api-server/src/__tests__/empty-folder-scan.test.ts \\
             artifacts/api-server/src/__tests__/ai-library-context.test.ts \\
-            artifacts/api-server/src/__tests__/media-health-scan.test.ts
+            artifacts/api-server/src/__tests__/media-health-scan.test.ts \\
+            artifacts/api-server/src/__tests__/active-library-cache.test.ts
 
   windows-archive-and-updater-smoke:
     needs: validate
