@@ -902,3 +902,12 @@ Remaining archive hardening:
 - **Desktop web server, updater, and installer:** request-target/path handling and updater journal/rollback checks are covered. Clean-machine installer lifecycle, browser SVG CSP, and full Windows malicious-archive route validation remain outstanding.
 
 - Scope limitation: this is a broad source-level and targeted-regression audit of the major API, storage, AI, desktop, updater, and installer feature families. It is not a complete end-to-end browser test of every UI workflow or a destructive test against a live NAS/production database.
+
+## Windows updater smoke test now supports detached CI checkouts (2026-11-05)
+
+- Fast Validation #646 passed its complete Linux job, including typecheck/generated contracts, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 compatibility, and the targeted backend regression suite. The Windows archive/updater job completed its storage-migration, NAS temp-path, official 7-Zip, symlink-metadata, and updater-journal steps successfully, then failed in `scripts/windows/update-smoke.ps1:69`: a pull-request checkout was detached, so `git branch --show-current` returned an empty value and PowerShell threw when calling `.Trim()`.
+- Fixed the smoke harness to create a unique `smoke-update-<guid>` branch from the temporary clone's current commit before creating its update commit (script line 71). This keeps the test independent of whether GitHub Actions checked out a named branch or detached PR merge commit.
+- Added regression assertions to `scripts/windows/installer-config.test.mjs` (test line 1180) for explicit branch creation and the absence of the unsafe `branch --show-current` assumption. This file is already included in `pnpm run test:release-contracts`, which Fast Validation runs.
+- Commits: updater smoke fix `ee3078a110701dbd202bfb966ffde61268f1ec70`; regression test `21b409fb1c2fefda026a013027668906190193f8`.
+- Validation: the failure is confirmed by the Windows log for Fast Validation #646. The new regression and corrected Windows smoke script have not yet run in CI; no fix-validation claim is made.
+- Scope: test harness only. No application runtime, installer payload, credentials, production data, main branch, or release artifacts were changed.
