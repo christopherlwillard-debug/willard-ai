@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 
 test("parsePositiveIntegerParam accepts canonical positive safe integer identifiers", () => {
   assert.equal(parsePositiveIntegerParam("1"), 1);
@@ -59,4 +59,47 @@ test("numeric route handlers use strict path parsing and body ID validation", ()
   const cleanupSource = readFileSync("artifacts/api-server/src/routes/cleanup.ts", "utf8");
   assert.ok(cleanupSource.includes("parseBoundedInteger"));
   assert.doesNotMatch(cleanupSource, /Number\.parseInt\(String\(req\.query\.(?:limit|offset)/);
+});
+
+
+test("archive list filter inputs reject malformed sizes and repeated scalar parameters", () => {
+  const sizeOptions = { name: "minSize", min: 0, max: Number.MAX_SAFE_INTEGER };
+  assert.equal(parseBoundedInteger("0", sizeOptions), 0);
+  assert.equal(parseBoundedInteger("9007199254740991", sizeOptions), Number.MAX_SAFE_INTEGER);
+  for (const value of ["", "01", "-1", "1.5", "12garbage", "1e3", "9007199254740992", ["12"], null]) {
+    assert.throws(() => parseBoundedInteger(value, sizeOptions), /Invalid minSize/);
+  }
+  assert.equal(parseOptionalQueryString(undefined, "category"), undefined);
+  assert.equal(parseOptionalQueryString("Photo Archive", "category"), "Photo Archive");
+  assert.equal(parseOptionalQueryString("", "category"), undefined);
+  assert.throws(() => parseOptionalQueryString(["Photo Archive", "Software"], "category"), /Invalid category/);
+});
+
+test("archive date-only ranges validate calendar dates and include the entire end date", () => {
+  const sameDay = parseOptionalDateOnlyRange("2026-11-05", "2026-11-05");
+  assert.equal(sameDay.from?.toISOString(), "2026-11-05T00:00:00.000Z");
+  assert.equal(sameDay.toExclusive?.toISOString(), "2026-11-06T00:00:00.000Z");
+  assert.deepEqual(parseOptionalDateOnlyRange(undefined, undefined), { from: undefined, toExclusive: undefined });
+  assert.throws(() => parseOptionalDateOnlyRange("2026-02-30", undefined), /Invalid dateFrom/);
+  assert.throws(() => parseOptionalDateOnlyRange("2026-11-06", "2026-11-05"), /Invalid date range/);
+  assert.throws(() => parseOptionalDateOnlyRange("2026-11-05T00:00:00Z", undefined), /Invalid dateFrom/);
+});
+
+test("archive route validates filters and treats the selected end date as inclusive", () => {
+  const route = readFileSync("artifacts/api-server/src/routes/archives.ts", "utf8");
+  assert.ok(route.includes("parseOptionalQueryString(req.query.category, \"category\")"));
+  assert.ok(route.includes("parseBoundedInteger(req.query.minSize"));
+  assert.ok(route.includes("parseBoundedInteger(req.query.maxSize"));
+  assert.ok(route.includes("parseOptionalDateOnlyRange(req.query.dateFrom, req.query.dateTo)"));
+  assert.ok(route.includes("lt(archivesTable.modifiedAt, dateToExclusive)"));
+  assert.doesNotMatch(route, /parseInt\\((?:minSize|maxSize)/);
+
+  const spec = readFileSync("lib/api-spec/openapi.yaml", "utf8");
+  assert.match(spec, /name: dateFrom[\\s\\S]{0,120}format: date/);
+  assert.match(spec, /name: dateTo[\\s\\S]{0,120}format: date/);
+
+  const page = readFileSync("artifacts/willard-ai/src/pages/archives.tsx", "utf8");
+  assert.ok(page.includes("const params: ListArchivesParams ="));
+  assert.ok(page.includes("minSizeMb !== \"\""));
+  assert.ok(page.includes("maxSizeMb !== \"\""));
 });
