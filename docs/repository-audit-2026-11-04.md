@@ -736,3 +736,12 @@ Remaining archive hardening:
 - Recovery parsing accepts well-formed pending intents, rollback treats an intact source as a move that never completed (preserving any independently created destination), and resume refuses pending intents until rollback is completed. This avoids silently treating an uncheckpointed move as completed.
 - Added regression coverage for crashes before/after the filesystem move, destination races, source changes after intent, and route checkpoint ordering. Fast Validation is pending on the current audit branch.
 - Scope limitation: the separate `conflictPolicy = "replace"` path still deletes an existing destination before the new source move is journaled. It remains intentionally unresolved pending a durable replacement-backup state machine; this intent fix does not claim to make replacement safe.
+
+## Active-library switch invalidates the media NAS-path cache (2026-11-05)
+
+- Feature review found that the media router cached the active NAS path for 60 seconds, while Settings allows the user to change the active library during the same process. The existing `invalidateNasPathCache` function was exported but never called by the Settings update route. Media requests made immediately after a successful library switch could therefore continue querying the previous library until the TTL expired.
+- The Settings route now invalidates the existing media path cache immediately after the settings row is successfully persisted and only when a non-empty NAS path changes. Failed settings updates do not invalidate or change the active cache.
+- Added a regression asserting the Settings route imports and calls the invalidator after persistence. Added it to the Fast Validation targeted backend suite.
+- Commits: Settings integration `80a05c46722273badf993022d6ceb23b366ee030`; regression test `fd3fd58daf4a8dcf5538753b2ba2325231011568`; workflow inclusion `5a59a34a078cc9c9c6feee585208ca74ca90a9c3`.
+- Validation: the focused source regression passed **1/1** with `node --experimental-strip-types --test` against a staged copy. GitHub Fast Validation has not yet been observed for the latest branch head; no live API library-switch integration test has been run.
+- Remaining limitation: the in-memory thumbnail cache is keyed with the NAS path and checks that path before serving, so old-library thumbnails are not served for a newly selected path. This change invalidates the active path lookup; it does not clear old entries, which are harmless stale cache entries until replaced/evicted.
