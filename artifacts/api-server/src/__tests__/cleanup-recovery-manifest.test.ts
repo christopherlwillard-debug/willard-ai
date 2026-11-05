@@ -130,6 +130,28 @@ test("trash root refuses a symlink outside the configured library during manifes
   }
 });
 
+test("trash manifest removal refuses symlinked entries inside the trash root", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
+  const target = path.join(trashRoot, "keep.jpg");
+  const link = path.join(trashRoot, "expired.jpg");
+  try {
+    fs.mkdirSync(trashRoot, { recursive: true });
+    fs.writeFileSync(target, "preserve target");
+    fs.symlinkSync(target, link, "file");
+    fs.appendFileSync(manifestPath(nasPath), JSON.stringify({
+      originalPath: path.join(nasPath, "original.jpg"),
+      trashPath: link,
+      sizeBytes: 15,
+    }) + "\n");
+    assert.throws(() => removeTrashManifestEntry(nasPath, link, "remove-symlink"), /symlink/);
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
 test("removing one manifest entry is idempotent and preserves unknown lines", () => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
