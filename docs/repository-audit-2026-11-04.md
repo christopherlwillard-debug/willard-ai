@@ -830,3 +830,10 @@ Remaining archive hardening:
 - Commits: implementation `93209c3a21f699a9fd6ab68a541d0a5988070716`; regression `eb7c9b9a83006440835c98bc1697d0549bb125fc`.
 - Validation: pending GitHub Fast Validation. No disposable PostgreSQL fixture with duplicate settings rows was run in this turn.
 - Remaining limitation: the backup manifest still represents one NAS library identity while the database dump contains the full database. Databases containing media rows for multiple distinct NAS roots need an explicit multi-library manifest/restore design or a fail-closed preflight; this review did not change that behavior.
+
+## Correct missing import exposed by Fast Validation (2026-11-05)
+
+- Fast Validation #637 reached TypeScript checking and failed at `artifacts/api-server/src/routes/organize.ts:2098`: the recovery query referenced Drizzle's `isNotNull` without importing it.
+- Added the missing named import. No runtime behavior changed.
+- Commit: `e548582021ad29edb5a97162935229ed4e41a342`.
+- Validation: the failure is confirmed by Fast Validation #637. The correction itself is not yet validated; a new Fast Validation run is required before proceeding to the regression suite.
