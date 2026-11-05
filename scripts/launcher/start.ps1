@@ -223,6 +223,8 @@ foreach ($port in 8080, 5000) {
 function Start-WillardServices {
     Write-Info "Opening the library service and Media Center..."
     $env:PORT = "8080"
+    # This launcher is for a local Windows desktop; do not expose the API to the LAN.
+    $env:HOST = "127.0.0.1"
     $envFile = Join-Path $Root ".env"
     $apiProc = $null
     try {
