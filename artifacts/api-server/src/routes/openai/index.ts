@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { conversations, messages, mediaFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
+import { conversations, messages, mediaFilesTable, archivesTable } from "@workspace/db";
 import { eq, desc, count, sql, ilike, and } from "drizzle-orm";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import {
@@ -10,6 +10,7 @@ import {
 import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider, isMediaExcluded } from "../../lib/ai-privacy";
 import { archiveScope } from "../../lib/archive-scope.ts";
 import { buildAiMediaExclusionCondition } from "../../lib/ai-media-scope.ts";
+import { getActiveAppSettings } from "../../lib/active-library.ts";
 
 const router: IRouter = Router();
 
@@ -290,8 +291,7 @@ router.post("/openai/conversations/:id/messages", async (req, res) => {
     const { content } = SendOpenaiMessageBody.parse(req.body);
 
     // Run structured query against NAS data before calling the LLM
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0];
+    const settings = await getActiveAppSettings();
     const { text: queryContextText, matchedFiles } = await buildQueryContext(content, settings);
 
     // Store user message (original, without the injected context)
