@@ -497,3 +497,13 @@ test("rollbackMoves: does not count or restore a destination whose bytes changed
   assert.equal(fs.readFileSync(destinationPath, "utf8"), "tampered destination bytes", "the only remaining copy must be preserved");
   assert.ok(logs.some(message => message.includes("ROLLBACK_VERIFY_FAIL") && message.includes("destination preserved")));
 });
+
+
+test("organization execute does not claim success when rollback is incomplete", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.ok(source.includes("const rollbackComplete = rolledBack === fileMoves.length"));
+  assert.ok(source.includes('status: rollbackComplete ? "rolled_back" : "failed"'));
+  assert.ok(source.includes("Rollback incomplete:"));
+  assert.ok(source.includes("File-move recovery checkpoint failed:"));
+});
