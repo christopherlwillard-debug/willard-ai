@@ -111,6 +111,7 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
             NOT_DELETED,
             eq(mediaFilesTable.nasPath, settings.nasPath),
             ilike(mediaFilesTable.name, `%${keyword}%`),
+            buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings),
           ))
           .orderBy(desc(mediaFilesTable.sizeBytes))
           .limit(10);
