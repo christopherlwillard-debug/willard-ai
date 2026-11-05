@@ -629,3 +629,10 @@ Remaining archive hardening:
 - The Recovery Center reset endpoint accepted failed or stale-executing jobs and set `fileMoves` to null. If a prior move or rollback was incomplete, this erased the only durable list of source/destination paths and checksums needed to recover the files. A reset could then re-run the plan without acknowledging files still moved or modified.
 - Reset now refuses jobs with any non-empty or malformed move journal and directs the user to resume or complete rollback first. The SQL update also compare-and-swaps the journal to null or an empty JSON array, so a concurrent worker cannot add move records between the route's read and the reset update and have them silently cleared.
 - Added a regression test for both the user-facing guard and database-side empty-journal predicate. Validation is pending on the current audit branch.
+
+
+## Recovery routes validate persisted move journals (2026-11-05)
+
+- A second pass through Recovery Center found that rollback and resume treated any non-array `fileMoves` value as an empty list. Rollback could therefore report success without restoring anything; resume could proceed without the prior move history. Persisted journal entries were also cast directly to `FileMoveRecord[]` without checking path scope or integrity fields.
+- Added `parseOrganizationMoveJournal` before rollback and resume claim filesystem work. It rejects malformed journals, non-absolute paths, paths outside the configured NAS, missing/invalid SHA-256 values, mismatched source/destination hashes, and records not marked verified. It returns typed records only after validation.
+- Added regression assertions that both recovery routes use the validator and that its path/hash checks remain in place. Fast Validation is pending for this change.
