@@ -339,7 +339,13 @@ export async function recoverConversionFinalizationMoves(
     // or changed. Do not discard an entry merely because one rollback threw.
   }
 
-  unresolvedMoves.push(...await findUnrestoredMoves(safeMoves));
+  const unresolvedSafeMoves = await findUnrestoredMoves(safeMoves);
+  unresolvedMoves.push(...unresolvedSafeMoves);
+  if (rollbackCount !== safeMoves.length && unresolvedSafeMoves.length === 0) {
+    // A count mismatch is itself a failed recovery invariant. Retain every
+    // involved record rather than clearing a journal on an ambiguous result.
+    unresolvedMoves.push(...safeMoves);
+  }
   const complete = unresolvedMoves.length === 0 && rollbackCount === safeMoves.length;
   return { complete, rollbackCount, unresolvedMoves };
 }
