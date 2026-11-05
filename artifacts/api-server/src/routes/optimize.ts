@@ -327,7 +327,8 @@ function getFormatRules(profile: OptimizeProfile, rawConversionEnabled = false):
 
 // ── Optimize scan cache ────────────────────────────────────────────────────────
 
-const CACHE_VERSION    = 7; // bump when scan result shape or safety classification changes
+const CACHE_VERSION    = 8; // bump when scan result shape or safety classification changes
+const OPTIMIZE_SCAN_MAX_FILES = 500_000;
 const CACHE_TTL_MS     = 24 * 60 * 60 * 1000; // 24 hours
 const CACHE_FILENAME   = "optimize-scan.json";
 
@@ -872,6 +873,7 @@ router.get("/optimize/status", async (_req, res) => {
     const recommendationKey = [
       profile,
       rawConversionEnabled ? "raw-on" : "raw-off",
+      cached.scanLimitReached ? "scan-limit-reached" : "scan-complete",
       ...safeGroups
         .map(group => `${group.extension ?? "unknown"}:${Number(group.fileCount ?? 0)}:${Number(group.estimatedSavingsBytes ?? 0)}`)
         .sort(),
@@ -884,6 +886,8 @@ router.get("/optimize/status", async (_req, res) => {
       formatCount: safeGroups.length,
       recommendationKey,
       scannedAt: cached.scannedAt,
+      scanLimitReached: Boolean(cached.scanLimitReached),
+      scanLimit: Number(cached.scanLimit) || OPTIMIZE_SCAN_MAX_FILES,
       profile,
     });
   } catch (e: any) {
@@ -915,8 +919,8 @@ router.get("/optimize/scan", async (req, res) => {
 
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
     const groups = new Map<string, ExtGroup>();
-    const counter = { total: 0 };
-    walkForOptimize(nasPath, groups, 500_000, counter, SKIP_DIRS);
+    const counter = { total: 0, limitReached: false };
+    walkForOptimize(nasPath, groups, OPTIMIZE_SCAN_MAX_FILES, counter, SKIP_DIRS);
 
     const result = [];
     let totalSavingsBytes = 0;
@@ -1098,6 +1102,8 @@ router.get("/optimize/scan", async (req, res) => {
       profile,
       rawConversionEnabled,
       totalFiles: counter.total,
+      scanLimitReached: counter.limitReached,
+      scanLimit: OPTIMIZE_SCAN_MAX_FILES,
       totalBytes: result.reduce((s, g) => s + g.totalBytes, 0),
       totalSavingsBytes,
       groups: result,
