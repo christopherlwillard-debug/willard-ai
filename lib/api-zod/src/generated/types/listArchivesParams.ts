@@ -19,8 +19,8 @@ minSize?: number;
  * @maximum 9007199254740991
  */
 maxSize?: number;
-dateFrom?: string;
-dateTo?: string;
+dateFrom?: Date;
+dateTo?: Date;
 limit?: number;
 offset?: number;
 };
