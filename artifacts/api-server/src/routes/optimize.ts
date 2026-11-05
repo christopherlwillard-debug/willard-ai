@@ -7,7 +7,7 @@ import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
 import { and, desc, eq } from "drizzle-orm";
-import { assertWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
+import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
@@ -1362,6 +1362,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     if (!resultData) { res.status(500).json({ error: "Job result data is missing" }); return; }
 
     const nasPath = job.nasPath;
+    assertWithinRoot(resultData.stagingDir, nasPath);
     const capacity = await evaluateCapacity({
       nasPath,
       operation: `Finalize conversion #${id}`,
@@ -1383,10 +1384,12 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
 
     for (const file of resultData.files) {
       if (file.status !== "success" || !file.stagedPath) continue;
-      if (!fs.existsSync(file.stagedPath)) continue;
 
       const originalPath  = file.filePath;
       const stagedPath    = file.stagedPath;
+      assertWithinRoot(originalPath, nasPath);
+      assertWithinRoot(stagedPath, nasPath);
+      if (!fs.existsSync(stagedPath)) continue;
       const originalExt   = path.extname(originalPath).slice(1).toLowerCase();
       const convertedExt  = path.extname(stagedPath).slice(1).toLowerCase();
       const isCrossFormat = convertedExt !== originalExt;
@@ -1399,6 +1402,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       const convertedPath = isCrossFormat
         ? path.join(dir, `${stem}.${convertedExt}`)
         : originalPath;
+      assertWithinRoot(convertedPath, nasPath);
       const convertedRelPath = isCrossFormat
         ? path.relative(path.resolve(nasPath), path.resolve(convertedPath))
         : relPath;
@@ -1424,6 +1428,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
           } else {
             // Linux/macOS/Replit: move original to WillardAI/.Trash/<timestamp>/ (reversible)
             const trashPath = path.join(trashBase, relPath);
+            assertWithinRoot(trashPath, nasPath);
             fs.mkdirSync(path.dirname(trashPath), { recursive: true });
             if (fs.existsSync(originalPath)) fs.renameSync(originalPath, trashPath);
           }
@@ -1433,11 +1438,13 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         } else if (action === "keep-both") {
           // Original stays in place; converted gets _optimized suffix with converted extension
           const keepBothPath = path.join(dir, `${stem}_optimized.${convertedExt}`);
+          assertWithinRoot(keepBothPath, nasPath);
           fs.renameSync(stagedPath, keepBothPath);
           outputPath = keepBothPath;
         } else if (action === "archive") {
           // Archive original at WillardAI/archive/; converted placed at correct path
           const archivePath = path.join(archiveBase, relPath);
+          assertWithinRoot(archivePath, nasPath);
           fs.mkdirSync(path.dirname(archivePath), { recursive: true });
           if (fs.existsSync(originalPath)) fs.renameSync(originalPath, archivePath);
           fs.renameSync(stagedPath, convertedPath);
@@ -1466,6 +1473,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // Clean up staging dir
     try {
       if (resultData.stagingDir && fs.existsSync(resultData.stagingDir)) {
+        assertWithinRoot(resultData.stagingDir, nasPath);
         fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
       }
     } catch { /* best effort */ }
@@ -1620,8 +1628,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("status", { stage: "converting", message: `Found ${totalFiles} file${totalFiles !== 1 ? "s" : ""} to convert`, progress: 5, totalFiles });
 
     // Stage 2: Convert files to a protected staging area — originals are NEVER touched here.
-    const stagingDir = path.join(getWillardAIDir(nasPath), "conversions", String(id));
-    fs.mkdirSync(stagingDir, { recursive: true });
+    const stagingDir = ensureDirectoryWithinRoot(
+      path.join(getWillardAIDir(nasPath), "conversions", String(id)),
+      nasPath,
+    );
 
     let succeeded = 0, failed = 0, skipped = 0;
     const results: Array<{
@@ -1755,7 +1765,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const stagedDir  = path.join(stagingDir, path.dirname(relPath));
       const stagedPath = path.join(stagedDir, `${stem}.${targetExt}`);
 
-      fs.mkdirSync(stagedDir, { recursive: true });
+      ensureDirectoryWithinRoot(stagedDir, nasPath);
 
       // ── Convert to staging area (original untouched) ─────────────────────────
       let convertError: string | null = null;
