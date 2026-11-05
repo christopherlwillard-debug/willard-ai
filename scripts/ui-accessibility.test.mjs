@@ -38,6 +38,14 @@ const cleanupPage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/cleanup.tsx", import.meta.url),
   "utf8",
 );
+const mediaDetailPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/media-detail.tsx", import.meta.url),
+  "utf8",
+);
+const optimizePage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/optimize.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -239,4 +247,11 @@ test("cleanup thumbnails honor the configured application base path", () => {
   assert.ok(cleanupPage.includes('import { apiUrl } from "@/lib/api";'));
   assert.ok(cleanupPage.includes('const thumbUrl = file.mediaId ? apiUrl(`/media/thumbnail/${file.mediaId}`) : null;'));
   assert.equal(cleanupPage.includes('const thumbUrl = file.mediaId ? `/api/media/thumbnail/${file.mediaId}` : null;'), false);
+});
+
+test("media detail streaming and optimize scans honor the configured application base path", () => {
+  assert.ok(mediaDetailPage.includes('const streamUrl = apiUrl(`/media/file/${file.id}/stream`);'));
+  assert.equal(mediaDetailPage.includes('const streamUrl = `/api/media/file/${file.id}/stream`;'), false);
+  assert.ok(optimizePage.includes('const url = apiUrl(force ? "/optimize/scan?force=true" : "/optimize/scan");'));
+  assert.equal(optimizePage.includes('const url = force ? "/api/optimize/scan?force=true" : "/api/optimize/scan";'), false);
 });
