@@ -103,3 +103,40 @@ test("conversion staging and finalization paths stay inside the active NAS root"
   assert.match(finalizeSource, /assertWithinRoot\(keepBothPath, nasPath\)/);
   assert.match(finalizeSource, /assertWithinRoot\(archivePath, nasPath\)/);
 });
+
+
+const scanStart = source.indexOf('router.get("/optimize/scan"');
+const pngScanStart = source.indexOf('      if (ext === "png") {', scanStart);
+const pngScanEnd = source.indexOf('      if (ext === "mov" || ext === "mkv"', pngScanStart);
+const pngScan = source.slice(pngScanStart, pngScanEnd);
+
+test("PNG scan analyzes every tracked file in bounded batches and protects unknown entries", () => {
+  assert.ok(pngScanStart >= 0 && pngScanEnd > pngScanStart, "PNG scan analysis should be present");
+  assert.match(pngScan, /PNG_ANALYZE_BATCH_SIZE = 16/);
+  assert.match(pngScan, /paths\.slice\(offset, offset \+ PNG_ANALYZE_BATCH_SIZE\)/);
+  assert.doesNotMatch(pngScan, /paths\.slice\(0, JPEG_ANALYZE_LIMIT\)/);
+  assert.match(pngScan, /fileDecisions\[p\] = \{ convert: decision\.convert, targetExt: "jpg", reasons: \[decision\.reason\] \}/);
+  assert.match(pngScan, /count > paths\.length/);
+  assert.match(pngScan, /convert: false/);
+});
+
+test("PNG conversion rechecks metadata immediately before encoding and fails closed", () => {
+  const pngCheckStart = executeRoute.indexOf('if (ext === "png")');
+  const pngCheckEnd = executeRoute.indexOf("// Resolve target extension", pngCheckStart);
+  const pngCheck = executeRoute.slice(pngCheckStart, pngCheckEnd);
+  assert.ok(pngCheckStart >= 0 && pngCheckEnd > pngCheckStart, "PNG execute-time check should be present");
+  assert.match(pngCheck, /analyzePngFile\(fullPath\)/);
+  assert.match(pngCheck, /catch \(error\)/);
+  assert.match(pngCheck, /status: "failed"/);
+  assert.match(pngCheck, /if \(!pngDecision\.convert\)/);
+  assert.match(pngCheck, /status: "skipped"/);
+});
+
+test("PNG cache is invalidated and the UI does not describe JPEG conversion as lossless", () => {
+  assert.match(source, /const CACHE_VERSION\s*=\s*7/);
+  const explainerStart = source.indexOf('if (ext === "png") {', source.indexOf("function buildExplainerText"));
+  const explainerEnd = source.indexOf("\n  }", explainerStart);
+  const explainer = source.slice(explainerStart, explainerEnd);
+  assert.match(explainer, /JPEG is lossy/);
+  assert.doesNotMatch(explainer, /losslessly|pixel data is identical/i);
+});
