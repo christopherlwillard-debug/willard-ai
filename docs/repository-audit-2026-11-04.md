@@ -596,3 +596,12 @@ Remaining archive hardening:
 - Added source regression coverage for conditional rollback status and fail-closed checkpoint behavior.
 - Commits: route fix `f4903220b3af5725231fbf26371a980834c06e61`; regression `3779ca4f331cb511bab6c7d539609e31b5fb955b`.
 - Validation pending. The pre-move journaling window and stale-worker fencing still require a separate durable ownership/journal design; this correction prevents continued unjournaled moves after a detected checkpoint failure but does not eliminate a process crash between filesystem mutation and its post-move journal write.
+
+
+## Resume recovery journal retention (2026-11-05)
+
+- Extended the fail-closed checkpoint behavior to the resume route. A failed per-file journal write now aborts the resume pass and enters its rollback path instead of continuing to mutate files.
+- Found that the resume failure handler unconditionally reset the persisted journal to the pre-resume `existingMoves`, even if one or more new moves could not be restored. It now discards the resume-pass entries only when every new move was checksum-verified as restored; otherwise it retains the complete journal and explicitly reports that manual recovery is required.
+- Added regression coverage for incomplete-resume journal retention and fail-closed resume checkpointing.
+- Commits: route `00bac4bf1946d4237a172d6b5f1c6efad2a88d4c`; regression `c2132abae83f8e62eb2f7a824e60a6f5edbe8fab`.
+- Validation pending. The broader pre-move journal-intent and worker-fencing gaps remain open.
