@@ -2522,20 +2522,41 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
 
       fs.mkdirSync(destDir, { recursive: true });
+      const sourceHash = await sha256File(sf.fullPath);
+      const intent: FileMoveRecord = {
+        from: sf.fullPath,
+        to: destFile,
+        sourceHash,
+        destHash: sourceHash,
+        verified: false,
+        sourceRelPath: sf.relativePath,
+      };
+      newMoves.push(intent);
+
+      // Persist the intent before moving so a crash between filesystem mutation
+      // and the verified checkpoint still leaves a recoverable journal entry.
+      const intentJournal = [...existingMoves, ...newMoves];
+      try {
+        await db.update(organizationJobsTable)
+          .set({ fileMoves: intentJournal as any })
+          .where(eq(organizationJobsTable.id, id));
+      } catch (e: any) {
+        newMoves.pop();
+        throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
+      }
+
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath });
-      newMoves.push(record);
+      newMoves[newMoves.length - 1] = record;
       moved++;
 
-      // Checkpoint after every new move so rollback always has a complete record
+      // Replace the durable intent with the checksum-verified move record.
       const merged = [...existingMoves, ...newMoves];
       try {
         await db.update(organizationJobsTable)
           .set({ fileMoves: merged as any })
           .where(eq(organizationJobsTable.id, id));
       } catch (e: any) {
-        // A resume pass must not continue after losing its durable move journal.
-        // The catch path rolls back this pass and preserves its journal if that
-        // rollback is incomplete.
+        // The persisted intent remains sufficient for Recovery Center rollback.
         throw new Error(`Resume file-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
