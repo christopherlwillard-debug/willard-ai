@@ -202,7 +202,7 @@ async function main() {
     ],
     { cwd: root },
   );
-  const bundledSevenZip = path.join(deployOutput, "vendor", "7zip");
+  const bundledSevenZip = path.join(deployOutput, "dist", "vendor", "7zip");
   await runPowerShell(
     path.join(root, "scripts", "windows", "prepare-official-7zip.ps1"),
     ["-Destination", bundledSevenZip],
