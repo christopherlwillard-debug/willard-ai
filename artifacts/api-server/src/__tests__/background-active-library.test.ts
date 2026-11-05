@@ -8,11 +8,13 @@ const read = (name: string) => readFileSync(fileURLToPath(new URL(name, root)), 
 const monitor = read("library-monitor.ts");
 const watcher = read("library-watcher.ts");
 const faces = read("face-recognition.ts");
+const scanner = read("media-scanner.ts");
+const enrichment = read("ai-enrichment.ts");
 const catalog = read("catalog-reconciliation.ts");
 const recovery = read("cleanup-recovery.ts");
 
 test("background services load the same canonical settings row", () => {
-  for (const [name, source] of Object.entries({ monitor, watcher, faces })) {
+  for (const [name, source] of Object.entries({ monitor, watcher, faces, scanner, enrichment })) {
     assert.match(source, /getActiveAppSettings/, name);
     assert.doesNotMatch(source, /appSettingsTable|\.from\(appSettingsTable\)/, name);
   }
@@ -30,4 +32,9 @@ test("startup recovery and NAS logging use the canonical active library", () => 
   assert.match(index, /getActiveNasPath\(\)/);
   assert.doesNotMatch(index, /appSettingsTable.*nasPath|SELECT nas_path FROM app_settings/);
   assert.match(app, /getActiveNasPath\(\)\.then/);
+});
+
+test("AI embedding recomputation is constrained to the active library", () => {
+  assert.match(enrichment, /AND f\.nas_path = \$2/);
+  assert.match(enrichment, /\[fileId, await getActiveNasPath\(\)\]/);
 });
