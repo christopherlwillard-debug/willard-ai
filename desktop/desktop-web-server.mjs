@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveApiProxyTarget, resolveStaticFile } from "./web-server-safety.mjs";
+import { parseDesktopRequestUrl, resolveApiProxyTarget, resolveStaticFile, staticFileReadErrorStatus } from "./web-server-safety.mjs";
 import { URL } from "node:url";
 
 const args = new Map();
@@ -60,14 +60,21 @@ function proxyApi(request, response) {
 
 const server = http.createServer((request, response) => {
   if (!request.url) return sendError(response, 400, "Bad request.");
-  if (new URL(request.url, "http://localhost").pathname.startsWith("/api/")) return proxyApi(request, response);
-  let pathname;
-  try { pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname); }
+  let parsedRequest;
+  try { parsedRequest = parseDesktopRequestUrl(request.url); }
   catch { return sendError(response, 400, "Invalid request path."); }
-  const file = resolveStaticFile(root, pathname);
+  if (parsedRequest.pathname.startsWith("/api/")) return proxyApi(request, response);
+  let file;
+  try { file = resolveStaticFile(root, parsedRequest.pathname); }
+  catch { return sendError(response, 500, "Media Center could not access its installed files."); }
   if (!file) return sendError(response, 403, "Forbidden.");
   fs.readFile(file, (readError, data) => {
-    if (readError) return sendError(response, 404, "Media Center is not installed correctly.");
+    if (readError) {
+      const status = staticFileReadErrorStatus(readError);
+      return sendError(response, status, status === 404
+        ? "Media Center is not installed correctly."
+        : "Media Center could not read an installed file.");
+    }
     response.writeHead(200, {
       "cache-control": file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
       "content-type": mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream",
