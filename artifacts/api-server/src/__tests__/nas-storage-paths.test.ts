@@ -211,3 +211,11 @@ test("ensureDirectoryWithinRoot rejects symlinked operational cache directories"
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test("organize logs, reports, and startup cache use root-checked directory creation", () => {
+  const organizeRoute = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const jobEngine = fs.readFileSync(new URL("../lib/library-engine/job-engine.ts", import.meta.url), "utf8");
+  assert.match(organizeRoute, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "logs"\), nasPath\)/);
+  assert.match(organizeRoute, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "reports"\), nasPath\)/);
+  assert.match(jobEngine, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "cache"\), nasPath\)/);
+});
