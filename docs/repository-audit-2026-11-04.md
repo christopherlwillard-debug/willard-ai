@@ -1700,3 +1700,51 @@ No production data, credentials, or published releases were changed.
 **Validation correction:** Fast Validation #821 failed because the first launcher source replacement duplicated the script body; the existing launcher-flow source contract caught it. Commit `83b9cf1` restored the original single launcher body and reapplied the journal changes. The matching latest Fast Validation #822 then passed. Superseded runs #817–#819 were cancelled and are not counted as passes.
 
 **Remaining risk / design work:** This batch is Windows integration-tested at the helper level, not a complete installed-product lifecycle. The Start Menu/Desktop shortcuts point to a script inside `{app}`, while the swap temporarily renames that directory; a process crash in that window can leave no launcher available to run recovery. A stable bootstrapper outside the swap root or a versioned-directory design is required. Journal cleanup also suppresses deletion errors, and there are no durable `committed`/`restored` terminal phases yet; a failed journal deletion after backup cleanup can leave a stale phase. Both require an idempotent state-machine design and crash-injection tests. No installer was published, no release was created, and the validation-only release workflow was not dispatched.
+
+
+## 2026-11-05 follow-up — organization worker lease fencing and current validation
+
+### Validation confirmation
+
+- [Fast Validation #824](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42115395491) completed successfully on the current PR head `2969ca26638a2a75db2438b9f8f8d812c53105e5`.
+- Linux job passed workspace typecheck/generated API contracts, Expo CLI configuration smoke, desktop web-server safety, release/storage contracts, official 7-Zip download retry and binary compatibility, PostgreSQL media wildcard integration, PostgreSQL conversion advisory-lock and finalization-recovery integration, and targeted backend regressions.
+- Windows job passed PowerShell parsing, concurrent launcher serialization, fresh environment-file encoding, storage migration concurrency/no-overwrite, NAS temp-path cleanup, conversion finalization rollback, official 7-Zip staging and symlink metadata preservation, packaged updater journal writes, and developer updater preservation/rollback.
+- [Dependency Review #587](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42115395467) passed.
+- These are Fast Validation and Dependency Review results, not full CI, a complete installed-product lifecycle, or full malicious-archive organize-route integration on Windows.
+
+### Newly confirmed high-priority finding — organization worker lease is not a filesystem fencing mechanism
+
+**Affected workflow:** Organize → execute/resume/rollback and Recovery Center.
+
+**Source inspection:** `artifacts/api-server/src/routes/organize.ts`.
+
+- `startOrganizationJobHeartbeat` renews `stageUpdatedAt` every 30 seconds, but catches database errors, logs a warning, and lets the worker continue.
+- The heartbeat update is conditional on job ID, library path, and status, but does not use `RETURNING` or inspect whether any row was actually updated. A zero-row update after another actor changes the status is therefore indistinguishable from a successful lease renewal.
+- The execute and resume stage-checkpoint helpers also catch and suppress checkpoint failures. Their updates are scoped by job ID only, rather than by the worker's ownership generation and expected status.
+- Recovery Center considers an executing/rolling-back job reclaimable after the five-minute heartbeat lease becomes stale. A worker that is still performing filesystem operations can therefore outlive its database lease after a prolonged database outage or ownership transition. A stale worker's stage checkpoint can also update `stageUpdatedAt` after another actor has changed the status.
+
+**Status:** found; critical concurrency/data-integrity risk; blocked pending fencing design. No partial heartbeat-only workaround applied.
+
+**Required safe design:**
+1. Give every claimed execution/resume/rollback attempt a unique owner generation/token persisted by the atomic claim.
+2. Make heartbeat renewal return and verify the claimed generation and expected status; a failed or zero-row renewal must transition the worker to a no-more-mutations state.
+3. Require the same owner generation at every durable journal update and before each filesystem mutation. A process-local abort signal alone is insufficient if a mutation is already in flight or if another process can reclaim ownership.
+4. Add a filesystem mutation gate/fencing mechanism that prevents a stale process from writing after a newer owner is admitted. Validate its semantics on Windows, local filesystems, SMB, and supported NAS configurations.
+5. Add PostgreSQL-backed race tests: lost DB connection, zero-row heartbeat renewal after ownership changes, slow/in-flight copy, stale worker resumption, and concurrent Recovery Center rollback/resume. Assert that no two generations can mutate the same job's paths.
+6. Preserve the existing move journal and never clear recovery records when ownership or rollback completion is ambiguous.
+
+**Remaining risk:** Current five-minute timestamp lease is a liveness heuristic, not proof that the previous process has stopped. The existing conversion-worker advisory-lock concern has the same class of problem. Both need filesystem-level fencing, not just a database recheck.
+
+### Replacement-policy source confirmation
+
+The current organize execute and resume paths still unlink an existing destination for `conflictPolicy === "replace"` before calculating/persisting the incoming file's move intent. The pre-move intent journal protects the incoming move, but does not preserve the displaced destination. This remains critical and blocked; replacement backup/recovery must be designed as part of the durable journal rather than patched by adding an untracked rename.
+
+### Current PR/branch snapshot
+
+- PR #2 remains open, draft, unmerged, and reported mergeable.
+- Head branch: `audit/full-repository-review-2026-11`.
+- Head SHA: `2969ca26638a2a75db2438b9f8f8d812c53105e5`.
+- Base: `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`.
+- GitHub reports 842 commits and 141 changed files in the PR.
+- No merge, close, rebase, force-push, or main-branch modification was performed.
+- No production data, credentials, or release artifacts were changed.
