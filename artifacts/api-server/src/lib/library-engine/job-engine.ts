@@ -1288,17 +1288,7 @@ async function runScanJob(
     // Load scanner settings (user-configured exclusion rules)
     let scannerSettings: ScannerSettings = DEFAULT_SCANNER_SETTINGS;
     try {
-      const [settingsRow] = await db.select({
-        ignoredFolders:    appSettingsTable.ignoredFolders,
-        ignoredExtensions: appSettingsTable.ignoredExtensions,
-        ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
-        ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
-        ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
-        ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
-        ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
-        followSymlinks:     appSettingsTable.followSymlinks,
-        indexOtherFiles:    appSettingsTable.indexOtherFiles,
-      }).from(appSettingsTable).limit(1);
+      const settingsRow = await getActiveAppSettings();
       if (settingsRow) scannerSettings = {
         ignoredFolders:    settingsRow.ignoredFolders ?? [],
         ignoredExtensions: settingsRow.ignoredExtensions ?? [],
@@ -2475,9 +2465,12 @@ async function runScanJob(
       summary,
       diagnostics:    { ...(diagnostics as unknown as Record<string, unknown>), checkpoints: lifecycleCheckpoints },
     }).where(eq(libraryJobsTable.id, jobId));
-    await db.update(appSettingsTable).set({
-      lastScanAt: completedAt,
-    }).where(eq(appSettingsTable.nasPath, state.nasPath));
+    const activeSettings = await getActiveAppSettings();
+    if (activeSettings?.nasPath === state.nasPath) {
+      await db.update(appSettingsTable).set({
+        lastScanAt: completedAt,
+      }).where(eq(appSettingsTable.id, activeSettings.id));
+    }
 
     // Thumbnail generation remains lazy after a scan. A user can request an
     // explicitly bounded backfill, while normal browsing generates only the
