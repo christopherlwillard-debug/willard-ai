@@ -9,6 +9,7 @@ $Destination = [IO.Path]::GetFullPath($Destination)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $ReleaseBase = "https://github.com/ip7z/7zip/releases/download/26.05"
+$SourceForgeBase = "https://sourceforge.net/projects/sevenzip/files/7-Zip/26.05"
 $ExtractorName = "7zr.exe"
 $ExtractorSha256 = "9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7"
 $ArchiveName = "7z2605-extra.7z"
@@ -23,31 +24,42 @@ $ArchivePath = Join-Path $TempRoot $ArchiveName
 $InstallerPath = Join-Path $TempRoot $InstallerName
 
 function Download-And-Verify([string]$Name, [string]$ExpectedHash, [string]$Path) {
-  $MaxAttempts = 4
+  $Sources = @(
+    @{ Name = "GitHub"; Url = "$ReleaseBase/$Name" },
+    @{ Name = "SourceForge"; Url = "$SourceForgeBase/$Name/download" }
+  )
+  $MaxAttemptsPerSource = 2
   $Downloaded = $false
   $LastDownloadError = $null
 
-  for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-    try {
-      if (Test-Path -LiteralPath $Path) {
-        Remove-Item -LiteralPath $Path -Force
+  foreach ($Source in $Sources) {
+    for ($Attempt = 1; $Attempt -le $MaxAttemptsPerSource; $Attempt++) {
+      try {
+        if (Test-Path -LiteralPath $Path) {
+          Remove-Item -LiteralPath $Path -Force
+        }
+        Invoke-WebRequest -UseBasicParsing -Uri $Source.Url -OutFile $Path
+        $Downloaded = $true
+        break
+      } catch {
+        $LastDownloadError = $_
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        if ($Attempt -lt $MaxAttemptsPerSource) {
+          $DelaySeconds = [int][Math]::Min(2 * [Math]::Pow(2, $Attempt - 1), 8)
+          Write-Warning "$($Source.Name) download of $Name failed on attempt $Attempt/$MaxAttemptsPerSource; retrying in $DelaySeconds seconds. $($_.Exception.Message)"
+          Start-Sleep -Seconds $DelaySeconds
+        }
       }
-      Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/$Name" -OutFile $Path
-      $Downloaded = $true
-      break
-    } catch {
-      $LastDownloadError = $_
-      Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-      if ($Attempt -lt $MaxAttempts) {
-        $DelaySeconds = [int][Math]::Min(2 * [Math]::Pow(2, $Attempt - 1), 16)
-        Write-Warning "Download of $Name failed on attempt $Attempt/$MaxAttempts; retrying in $DelaySeconds seconds. $($_.Exception.Message)"
-        Start-Sleep -Seconds $DelaySeconds
-      }
+    }
+
+    if ($Downloaded) { break }
+    if ($Source.Name -eq "GitHub") {
+      Write-Warning "GitHub release asset unavailable; falling back to the official 7-Zip SourceForge mirror."
     }
   }
 
   if (-not $Downloaded) {
-    throw "Unable to download $Name after $MaxAttempts attempts: $($LastDownloadError.Exception.Message)"
+    throw "Unable to download $Name from the pinned GitHub release or SourceForge mirror: $($LastDownloadError.Exception.Message)"
   }
 
   # A checksum mismatch is an integrity failure, not a transient transport
