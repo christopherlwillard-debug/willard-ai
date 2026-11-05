@@ -450,3 +450,10 @@ Remaining archive hardening:
 - The Windows compatibility test lists the fixture only; it does not extract the link-bearing archive. The existing application preflight remains responsible for rejecting links before extraction.
 - Validation status: pending for code/workflow commit `3becd96194b2c15a744fa927eb34093d313472f9`. The preceding audit head's Fast Validation and dependency review passed, but those results do not validate this new Windows path.
 - Remaining limitation: this closes the cross-platform link-metadata test gap only. It does not yet exercise the complete organize route against a malicious Windows reparse-point archive or validate malformed archive behavior on a packaged Windows installation.
+
+
+## Temporary job identifier sanitization collisions (2026-11-05)
+
+- `getTempDir` sanitized job IDs by replacing unsupported characters with `_` and truncating to 120 characters. Distinct IDs such as `job/one` and `job?one`, or long IDs with the same first 120 characters, therefore mapped to the same per-job staging directory. Concurrent jobs could collide or access each other's temporary files.
+- Preserve the readable sanitized prefix but append a deterministic 12-hex SHA-256 suffix whenever the raw ID was changed or truncated. Valid existing IDs retain their previous directory naming. Empty and dot-segment IDs continue to receive unique generated children.
+- Added regression tests for punctuation-sanitization collisions and long common-prefix IDs. Fast Validation is pending for this change.
