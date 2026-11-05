@@ -80,7 +80,7 @@ test("private media stream failures return 404 before headers and destroy after 
     },
     destroy(error?: Error) { destroyedWith = error; },
   };
-  const missing = new Error("file disappeared");
+  const missing = Object.assign(new Error("file disappeared"), { code: "ENOENT" });
   handlePrivateMediaStreamError(response, missing);
   assert.equal(statusCode, 404);
   assert.deepEqual(body, { error: "Media file not found" });
@@ -90,6 +90,12 @@ test("private media stream failures return 404 before headers and destroy after 
   handlePrivateMediaStreamError(response, missing, "Logo file not found");
   assert.equal(statusCode, 404);
   assert.deepEqual(body, { error: "Logo file not found" });
+
+  response.headersSent = false;
+  const unreadable = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  handlePrivateMediaStreamError(response, unreadable);
+  assert.equal(statusCode, 500);
+  assert.deepEqual(body, { error: "File stream failed" });
 
   response.headersSent = true;
   handlePrivateMediaStreamError(response, missing);
