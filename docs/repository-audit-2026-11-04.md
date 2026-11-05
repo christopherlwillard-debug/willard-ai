@@ -477,3 +477,11 @@ Remaining archive hardening:
 - Added regression coverage for the route's error listener and the helper's logo-specific not-found response.
 - Validation status: pending on the next Fast Validation run. No test pass is claimed yet.
 - Remaining limitation: this covers the asynchronous stream lifecycle, not a race-free file-handle guarantee against a hostile process replacing a branding path after the realpath check. Browser-level SVG CSP verification remains separate.
+
+
+## Distinguish missing media from unreadable media (2026-11-05)
+
+- Review of the shared stream-error handler found that every pre-header stream failure was being returned as HTTP 404, including permission errors and I/O failures. That incorrectly represented server-side failures as missing files and could hide storage/ACL problems from monitoring and clients.
+- Updated the shared handler to return 404 only for filesystem `ENOENT` and `ENOTDIR`; other pre-header errors return a generic 500. Once headers are sent, the response is still destroyed with the original error to avoid a second response or truncated successful-looking payload.
+- Added regression coverage for missing files, logo-specific not-found messaging, permission-denied errors, and post-header stream failure.
+- Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. Validation is pending.
