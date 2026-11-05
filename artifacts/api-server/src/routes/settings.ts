@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream, normalizeNasPath } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
+import { handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
@@ -326,7 +327,12 @@ router.get("/settings/logo", async (_req, res) => {
       res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     }
     res.setHeader("Cache-Control", "no-cache");
-    fs.createReadStream(settings.logoPath).pipe(res);
+    const stream = fs.createReadStream(settings.logoPath);
+    stream.on("error", (streamError) => {
+      logger.error({ err: streamError }, "Branding logo stream failed");
+      handlePrivateMediaStreamError(res, streamError, "Logo file not found");
+    });
+    stream.pipe(res);
   } catch (err) {
     res.status(500).json({ error: "Failed to load logo" });
   }

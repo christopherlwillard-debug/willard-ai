@@ -468,3 +468,12 @@ Remaining archive hardening:
 - Added focused regressions for both conflicting entry orders and the valid child-before-explicit-directory case. Implementation commit: `a07169f875d3616c5a8035ae456e276d4d9eaba8`; regression-test commit: `4a53b35c51c479c4066d35f8b910bb6422daf808`. Validation for these two commits is pending; no pass is claimed yet.
 - Dependency Review run [#249](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41945225196) passed on `f3a8ee5dd0883e9169160356f461d327cf189f3d`. The new archive prefix-collision changes do not modify dependencies.
 - Remaining priorities: execute the new prefix-collision regression in Fast Validation; retain the outstanding browser/runtime SVG CSP verification, NAS share ACL confirmation, full Windows organize-route malicious-archive test, and clean-machine installer lifecycle validation.
+
+
+## Branding logo stream error handling (2026-11-05)
+
+- Confirmed a reliability gap in `GET /settings/logo`: the route piped `fs.createReadStream(settings.logoPath)` directly to the response without an asynchronous error listener. A concurrent logo replacement/deletion or filesystem read failure after the existence check could emit an unhandled stream error; the surrounding route `try/catch` cannot catch that later event.
+- Reused the existing private-media stream failure handler. Before response headers are sent, the route returns a specific 404; after headers are sent, it destroys the response with the stream error. The error is also logged.
+- Added regression coverage for the route's error listener and the helper's logo-specific not-found response.
+- Validation status: pending on the next Fast Validation run. No test pass is claimed yet.
+- Remaining limitation: this covers the asynchronous stream lifecycle, not a race-free file-handle guarantee against a hostile process replacing a branding path after the realpath check. Browser-level SVG CSP verification remains separate.

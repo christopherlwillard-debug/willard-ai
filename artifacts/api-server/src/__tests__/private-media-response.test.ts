@@ -57,6 +57,17 @@ test("face crop responses use private no-store headers and handle stream failure
   assert.match(routeSource, /handlePrivateMediaStreamError\(res, streamError\)/);
 });
 
+test("branding logo stream failures are handled without an unhandled error", () => {
+  const routePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../routes/settings.ts",
+  );
+  const routeSource = fs.readFileSync(routePath, "utf8");
+  assert.match(routeSource, /const stream = fs\.createReadStream\(settings\.logoPath\)/);
+  assert.match(routeSource, /stream\.on\("error", \(streamError\) =>/);
+  assert.match(routeSource, /handlePrivateMediaStreamError\(res, streamError, "Logo file not found"\)/);
+});
+
 test("private media stream failures return 404 before headers and destroy after headers", () => {
   let statusCode = 0;
   let body: unknown;
@@ -74,6 +85,11 @@ test("private media stream failures return 404 before headers and destroy after 
   assert.equal(statusCode, 404);
   assert.deepEqual(body, { error: "Media file not found" });
   assert.equal(destroyedWith, undefined);
+
+  response.headersSent = false;
+  handlePrivateMediaStreamError(response, missing, "Logo file not found");
+  assert.equal(statusCode, 404);
+  assert.deepEqual(body, { error: "Logo file not found" });
 
   response.headersSent = true;
   handlePrivateMediaStreamError(response, missing);

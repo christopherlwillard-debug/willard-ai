@@ -37,9 +37,10 @@ export function handlePrivateMediaStreamError(
     destroy(error?: Error): unknown;
   },
   error: unknown,
+  notFoundMessage = "Media file not found",
 ): void {
   if (!response.headersSent) {
-    response.status(404).json({ error: "Media file not found" });
+    response.status(404).json({ error: notFoundMessage });
     return;
   }
   response.destroy(error instanceof Error ? error : undefined);
