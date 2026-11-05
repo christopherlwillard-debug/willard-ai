@@ -32,6 +32,7 @@ import {
   moveFileNoReplace,
   walkDirectoryFiles,
   verifiedMove,
+  verifiedReplace,
   rollbackMoves,
   canDeleteOrganizationJob,
   type FileMoveRecord,
@@ -253,6 +254,127 @@ test("verifiedMove: never overwrites a destination created after conflict checki
 
   assert.equal(fs.readFileSync(src, "utf8"), "source media");
   assert.equal(fs.readFileSync(dest, "utf8"), "independent concurrent file");
+});
+
+test("verifiedReplace: a failure before publication restores both originals", async () => {
+  const source = writeFile(path.join(mkTmp("replace-before"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-before"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const previousHash = await sha256File(destination);
+
+  await assert.rejects(
+    () => verifiedReplace(source, destination, {
+      backupPath,
+      expectedPreviousHash: previousHash,
+      afterBackupHook: () => { throw new Error("injected before publication"); },
+    }),
+    /injected before publication/,
+  );
+
+  assert.equal(fs.readFileSync(source, "utf8"), "incoming-original");
+  assert.equal(fs.readFileSync(destination, "utf8"), "prior-destination");
+  assert.equal(fs.existsSync(backupPath), false);
+});
+
+test("verifiedReplace: a publication verification failure restores the prior destination", async () => {
+  const source = writeFile(path.join(mkTmp("replace-during"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-during"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const previousHash = await sha256File(destination);
+
+  await assert.rejects(
+    () => verifiedReplace(source, destination, {
+      backupPath,
+      expectedPreviousHash: previousHash,
+      afterMoveHook: to => fs.writeFileSync(to, "injected publication corruption"),
+    }),
+    /SHA-256 mismatch/,
+  );
+
+  assert.equal(fs.readFileSync(destination, "utf8"), "prior-destination");
+  assert.equal(fs.existsSync(backupPath), false);
+});
+
+test("verifiedReplace: a failure after publication returns the incoming file and prior destination", async () => {
+  const source = writeFile(path.join(mkTmp("replace-after"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-after"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const previousHash = await sha256File(destination);
+
+  await assert.rejects(
+    () => verifiedReplace(source, destination, {
+      backupPath,
+      expectedPreviousHash: previousHash,
+      afterPublishHook: () => { throw new Error("injected after publication"); },
+    }),
+    /injected after publication/,
+  );
+
+  assert.equal(fs.readFileSync(source, "utf8"), "incoming-original");
+  assert.equal(fs.readFileSync(destination, "utf8"), "prior-destination");
+  assert.equal(fs.existsSync(backupPath), false);
+});
+
+test("verifiedReplace: failed rollback preserves the prior copy and reports manual recovery", async () => {
+  const source = writeFile(path.join(mkTmp("replace-rollback-failure"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-rollback-failure"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const previousHash = await sha256File(destination);
+
+  await assert.rejects(
+    () => verifiedReplace(source, destination, {
+      backupPath,
+      expectedPreviousHash: previousHash,
+      afterPublishHook: () => {
+        writeFile(source, "independent source conflict");
+        throw new Error("injected post-publication failure");
+      },
+    }),
+    /manual recovery is required/,
+  );
+
+  assert.equal(fs.readFileSync(source, "utf8"), "independent source conflict");
+  assert.equal(fs.readFileSync(destination, "utf8"), "incoming-original");
+  assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-destination");
+});
+
+test("rollbackMoves: replacement rollback restores incoming source and prior destination", async () => {
+  const source = writeFile(path.join(mkTmp("replace-rollback"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-rollback"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const record = await verifiedReplace(source, destination, {
+    backupPath,
+    expectedPreviousHash: await sha256File(destination),
+  });
+  const logs: string[] = [];
+
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "incoming-original");
+  assert.equal(fs.readFileSync(destination, "utf8"), "prior-destination");
+  assert.equal(fs.existsSync(backupPath), false);
+  assert.ok(logs.some(message => message.includes("ROLLBACK_REPLACEMENT_OK")));
+});
+
+test("rollbackMoves: replacement conflict reports manual recovery and preserves the prior copy", async () => {
+  const source = writeFile(path.join(mkTmp("replace-rollback-conflict"), "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-rollback-conflict"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const record = await verifiedReplace(source, destination, {
+    backupPath,
+    expectedPreviousHash: await sha256File(destination),
+  });
+  writeFile(source, "independent source conflict");
+  const logs: string[] = [];
+
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0);
+  assert.equal(fs.readFileSync(source, "utf8"), "independent source conflict");
+  assert.equal(fs.readFileSync(destination, "utf8"), "incoming-original");
+  assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-destination");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_REPLACEMENT_MANUAL")));
 });
 
 // ── 6. verifiedMove — unreadable source ──────────────────────────────────────
@@ -566,6 +688,8 @@ test("recovery routes validate persisted move journals before touching files", (
   assert.match(validator, /typeof move\.verified !== "boolean"/);
   assert.match(validator, /resolveWithinRoot\(move\.from, nasPath\)/);
   assert.match(validator, /resolveWithinRoot\(move\.to, nasPath\)/);
+  assert.match(validator, /replacementRecord\.backupPath/);
+  assert.match(validator, /resolveWithinRoot\(replacementRecord\.backupPath as string, nasPath\)/);
 
   const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
   const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
@@ -721,4 +845,13 @@ test("execute and resume persist move intents before invoking filesystem moves",
     assert.ok(intentIndex >= 0 && checkpointIndex > intentIndex && moveIndex > checkpointIndex);
     assert.match(route.slice(moveIndex, moveIndex + 250), /expectedSourceHash: sourceHash/);
   }
+});
+
+test("replace policy journals the prior destination and never unlinks it before publication", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  assert.equal((source.match(/verifiedReplace\(sf\.fullPath, destFile/g) ?? []).length, 2);
+  assert.equal((source.match(/replacement = await describeReplacementDestination\(destFile, id\)/g) ?? []).length, 2);
+  assert.doesNotMatch(source, /if \(conflictPolicy === "replace"\) \{\s*fs\.unlinkSync\(destFile\)/);
+  assert.match(source, /cleanupCommittedReplacementBackups\(fileMoves/);
+  assert.match(source, /cleanupCommittedReplacementBackups\(allMoves/);
 });

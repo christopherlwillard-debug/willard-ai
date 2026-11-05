@@ -68,7 +68,14 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
     assert.ok(settings?.nasPath, "A configured library is required");
     originalSettings = settings;
 
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-optimize-cycle-"));
+    const tempParents = [...new Set([os.tmpdir(), process.cwd()])];
+    const tempParent = tempParents
+      .map((candidate) => {
+        const stats = fs.statfsSync(candidate);
+        return { path: candidate, availableBytes: stats.bavail * stats.bsize };
+      })
+      .sort((a, b) => b.availableBytes - a.availableBytes)[0]?.path ?? os.tmpdir();
+    root = fs.mkdtempSync(path.join(tempParent, "willard-optimize-cycle-"));
     fs.mkdirSync(path.join(root, "WillardAI"), { recursive: true });
     await createPng(path.join(root, "large.png"), 900, 700);
     await createPng(path.join(root, "tiny.png"), 1, 1);

@@ -24,6 +24,7 @@ import { eq } from "drizzle-orm";
 import {
   sha256File,
   verifiedMove,
+  verifiedReplace,
   type FileMoveRecord,
 } from "../lib/organize-helpers.ts";
 
@@ -203,6 +204,51 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
       .from(organizationJobsTable)
       .where(eq(organizationJobsTable.id, jobId));
     assert.equal(updated?.status, "rolled_back");
+  });
+
+  test("POST rollback reports manual recovery and retains a replacement backup on conflict", async () => {
+    const source = path.join(testRoot, "replace-recovery-source", "incoming.txt");
+    const destination = path.join(testRoot, "replace-recovery-destination", "incoming.txt");
+    const backupPath = path.join(path.dirname(destination), ".prior-destination-backup");
+    writeFile(source, "incoming-original");
+    writeFile(destination, "prior-destination");
+    const move = await verifiedReplace(source, destination, {
+      backupPath,
+      expectedPreviousHash: await sha256File(destination),
+      sourceRelPath: "incoming.txt",
+    });
+    const jobId = await createRecoveryJob(
+      path.dirname(source),
+      [{ relativePath: "incoming.txt", destination: path.dirname(destination) }],
+      [move],
+    );
+    writeFile(source, "independent source conflict");
+
+    const response = await post(`/organize/jobs/${jobId}/rollback`, {});
+    const body = await response.json() as {
+      ok: boolean;
+      rolledBack: number;
+      total: number;
+      partial: boolean;
+      logs: string[];
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, false);
+    assert.equal(body.rolledBack, 0);
+    assert.equal(body.total, 1);
+    assert.equal(body.partial, true);
+    assert.ok(body.logs.some(log => log.includes("ROLLBACK_REPLACEMENT_MANUAL")));
+    assert.equal(fs.readFileSync(source, "utf8"), "independent source conflict");
+    assert.equal(fs.readFileSync(destination, "utf8"), "incoming-original");
+    assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-destination");
+
+    const [updated] = await db
+      .select({ status: organizationJobsTable.status, error: organizationJobsTable.error })
+      .from(organizationJobsTable)
+      .where(eq(organizationJobsTable.id, jobId));
+    assert.equal(updated?.status, "failed");
+    assert.match(updated?.error ?? "", /manual intervention may be required/);
   });
 
   test("GET resume SSE moves remaining files and persists existing plus new moves", async () => {

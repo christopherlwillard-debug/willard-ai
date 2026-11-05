@@ -1221,7 +1221,18 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
       const resp = await fetch(apiUrl(`/organize/jobs/${jobId}/rollback`), { method: "POST" });
       const body = await resp.json();
       if (!resp.ok) throw new Error(body.error ?? "Rollback failed");
-      toast({ title: "Rolled back", description: `${body.rolledBack}/${body.total} move(s) reversed.` });
+      if (body.partial || body.ok === false) {
+        const details = Array.isArray(body.logs)
+          ? body.logs.filter((line: unknown) => typeof line === "string" && /MANUAL|ROLLBACK_FAIL|VERIFY_FAIL/.test(line)).join(" ")
+          : "";
+        toast({
+          title: "Manual recovery required",
+          description: details || `Only ${body.rolledBack}/${body.total} move(s) were safely reversed. Files were preserved where recovery was uncertain.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Rolled back", description: `${body.rolledBack}/${body.total} move(s) reversed.` });
+      }
       refetch();
       queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
       onJobRecovered();

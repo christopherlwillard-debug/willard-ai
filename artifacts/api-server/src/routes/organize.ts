@@ -31,7 +31,7 @@ import {
   validateArchiveEntry,
   writeArchiveFileAtomically,
 } from "../lib/archive-safety.ts";
-import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, walkDirectoryFiles, canDeleteOrganizationJob, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, verifiedReplace, rollbackMoves, walkDirectoryFiles, canDeleteOrganizationJob, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
@@ -74,19 +74,34 @@ function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMove
       throw new Error(`Recovery journal entry ${index + 1} is invalid`);
     }
     const move = entry as Record<string, unknown>;
+    const replacement = move.replacement;
     if (
       typeof move.from !== "string" || !path.isAbsolute(move.from) ||
       typeof move.to !== "string" || !path.isAbsolute(move.to) ||
       typeof move.sourceHash !== "string" || !/^[a-f0-9]{64}$/i.test(move.sourceHash) ||
       typeof move.destHash !== "string" || move.destHash !== move.sourceHash ||
       typeof move.verified !== "boolean" ||
-      (move.sourceRelPath !== undefined && typeof move.sourceRelPath !== "string")
+      (move.sourceRelPath !== undefined && typeof move.sourceRelPath !== "string") ||
+      (replacement !== undefined && (
+        !replacement || typeof replacement !== "object" || Array.isArray(replacement) ||
+        typeof (replacement as Record<string, unknown>).backupPath !== "string" ||
+        !path.isAbsolute((replacement as Record<string, unknown>).backupPath as string) ||
+        typeof (replacement as Record<string, unknown>).previousHash !== "string" ||
+        !/^[a-f0-9]{64}$/i.test((replacement as Record<string, unknown>).previousHash as string)
+      ))
     ) {
       throw new Error(`Recovery journal entry ${index + 1} is incomplete or unverified`);
     }
     try {
       resolveWithinRoot(move.from, nasPath);
       resolveWithinRoot(move.to, nasPath);
+      if (replacement !== undefined) {
+        const replacementRecord = replacement as Record<string, unknown>;
+        resolveWithinRoot(replacementRecord.backupPath as string, nasPath);
+        const normalizedPaths = [move.from, move.to, replacementRecord.backupPath as string]
+          .map(value => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value));
+        if (new Set(normalizedPaths).size !== normalizedPaths.length) throw new Error("Replacement paths overlap");
+      }
     } catch {
       throw new Error(`Recovery journal entry ${index + 1} references a path outside the configured library`);
     }
@@ -97,8 +112,56 @@ function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMove
       destHash: move.destHash,
       verified: move.verified as boolean,
       sourceRelPath: move.sourceRelPath as string | undefined,
+      replacement: replacement === undefined ? undefined : {
+        backupPath: (replacement as Record<string, unknown>).backupPath as string,
+        previousHash: (replacement as Record<string, unknown>).previousHash as string,
+      },
     };
   });
+}
+
+async function describeReplacementDestination(
+  destinationPath: string,
+  jobId: number,
+): Promise<NonNullable<FileMoveRecord["replacement"]>> {
+  const stat = fs.lstatSync(destinationPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`Cannot replace a destination that is not a regular file: ${path.basename(destinationPath)}`);
+  }
+  return {
+    backupPath: path.join(
+      path.dirname(destinationPath),
+      `.${path.basename(destinationPath)}.willard-${jobId}-${crypto.randomUUID()}.replace-backup`,
+    ),
+    previousHash: await sha256File(destinationPath),
+  };
+}
+
+async function cleanupCommittedReplacementBackups(
+  moves: FileMoveRecord[],
+  log: (message: string) => void,
+): Promise<void> {
+  for (const move of moves) {
+    if (!move.replacement) continue;
+    try {
+      const destinationStat = fs.lstatSync(move.to);
+      const backupStat = fs.lstatSync(move.replacement.backupPath);
+      if (
+        !destinationStat.isFile() || destinationStat.isSymbolicLink() ||
+        !backupStat.isFile() || backupStat.isSymbolicLink() ||
+        await sha256File(move.to) !== move.sourceHash ||
+        await sha256File(move.replacement.backupPath) !== move.replacement.previousHash
+      ) {
+        log(`REPLACE_BACKUP_RETAINED: verified replacement copy was not safe to remove; inspect ${move.replacement.backupPath}`);
+        continue;
+      }
+      fs.unlinkSync(move.replacement.backupPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        log(`REPLACE_BACKUP_RETAINED: could not remove prior destination copy at ${move.replacement.backupPath}`);
+      }
+    }
+  }
 }
 
 const ORGANIZATION_EXECUTION_LEASE_MS = 5 * 60 * 1000;
@@ -1773,6 +1836,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       }
       const destDir  = planDest;
       let destFile   = path.join(destDir, path.basename(sf.relativePath));
+      let replacement: FileMoveRecord["replacement"];
 
       // Enforce NAS root boundary — destination must be within configured nasPath
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
@@ -1781,8 +1845,8 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       if (fs.existsSync(destFile)) {
         const filename = path.basename(sf.relativePath);
         if (conflictPolicy === "replace") {
-          fs.unlinkSync(destFile);
-          opLog("CONFLICT_REPLACE: existing destination overwritten");
+          replacement = await describeReplacementDestination(destFile, id);
+          opLog("CONFLICT_REPLACE: existing destination preserved until the replacement is verified and committed");
           conflictResolutions.push({ filename, destDir, action: "replace" });
           // fall through to move normally
         } else if (conflictPolicy === "rename") {
@@ -1820,6 +1884,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         destHash: sourceHash,
         verified: false,
         sourceRelPath: sf.relativePath,
+        replacement,
       };
       fileMoves.push(intent);
       try {
@@ -1833,7 +1898,14 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      const record = replacement
+        ? await verifiedReplace(sf.fullPath, destFile, {
+            backupPath: replacement.backupPath,
+            expectedPreviousHash: replacement.previousHash,
+            sourceRelPath: sf.relativePath,
+            expectedSourceHash: sourceHash,
+          })
+        : await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
 
@@ -2016,6 +2088,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       reportPath: reportPath || null,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
+    await cleanupCommittedReplacementBackups(fileMoves, message => opLog(message));
     void requestLibraryBackup("completed organization job");
 
     send("complete", { ...safeReport, progress: 100 });
@@ -2584,6 +2657,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
       const destDir = planDest;
       let destFile  = path.join(destDir, path.basename(sf.relativePath));
+      let replacement: FileMoveRecord["replacement"];
 
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
 
@@ -2603,7 +2677,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // Conflict handling for files not yet moved
       if (fs.existsSync(destFile)) {
         if (conflictPolicy === "replace") {
-          fs.unlinkSync(destFile);
+          replacement = await describeReplacementDestination(destFile, id);
         } else if (conflictPolicy === "rename") {
           const ext  = path.extname(path.basename(sf.relativePath));
           const base = path.basename(sf.relativePath).slice(0, path.basename(sf.relativePath).length - ext.length);
@@ -2627,6 +2701,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         destHash: sourceHash,
         verified: false,
         sourceRelPath: sf.relativePath,
+        replacement,
       };
       newMoves.push(intent);
 
@@ -2642,7 +2717,14 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      const record = replacement
+        ? await verifiedReplace(sf.fullPath, destFile, {
+            backupPath: replacement.backupPath,
+            expectedPreviousHash: replacement.previousHash,
+            sourceRelPath: sf.relativePath,
+            expectedSourceHash: sourceHash,
+          })
+        : await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       newMoves[newMoves.length - 1] = record;
       moved++;
 
@@ -2713,6 +2795,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       reportJson: report as any,
       completedAt,
     }).where(eq(organizationJobsTable.id, id));
+    await cleanupCommittedReplacementBackups(allMoves, message => logger.warn({ jobId: id, message }, "Organization replacement backup cleanup warning"));
     void requestLibraryBackup("completed organization recovery");
 
     send("complete", { ...report, progress: 100 });

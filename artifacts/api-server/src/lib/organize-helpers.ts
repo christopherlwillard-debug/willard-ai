@@ -170,6 +170,11 @@ export interface FileMoveRecord {
   sourceHash:    string;
   destHash:      string;
   verified:      boolean;
+  /** Existing destination held aside until the organization job commits. */
+  replacement?: {
+    backupPath: string;
+    previousHash: string;
+  };
   /** Relative path of the source file within the staging area / source folder.
    *  Stored so resume can identify already-moved files by source identity,
    *  not by recomputed destination filename (which differs under rename-conflict policy). */
@@ -245,6 +250,109 @@ export async function verifiedMove(
   }
 }
 
+/**
+ * Replace an existing regular file without discarding it before the incoming
+ * file has been published and verified. The caller persists the replacement
+ * metadata in its move intent before calling this function.
+ */
+export async function verifiedReplace(
+  from: string,
+  to: string,
+  opts: {
+    backupPath: string;
+    expectedPreviousHash: string;
+    expectedSourceHash?: string;
+    sourceRelPath?: string;
+    afterBackupHook?: (backupPath: string) => void | Promise<void>;
+    afterMoveHook?: (to: string) => void | Promise<void>;
+    afterPublishHook?: (to: string) => void | Promise<void>;
+  },
+): Promise<FileMoveRecord> {
+  const destinationStat = fs.lstatSync(to);
+  if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+    throw new Error(`Replacement destination is not a regular file: ${path.basename(to)}`);
+  }
+  const previousHash = await sha256File(to);
+  if (previousHash !== opts.expectedPreviousHash) {
+    throw new Error(`Replacement destination changed after its recovery intent was recorded: ${path.basename(to)}`);
+  }
+
+  let backupMoved = false;
+  let publishedRecord: FileMoveRecord | null = null;
+  try {
+    moveFileNoReplace(to, opts.backupPath);
+    backupMoved = true;
+    const backupStat = fs.lstatSync(opts.backupPath);
+    if (!backupStat.isFile() || backupStat.isSymbolicLink()) {
+      throw new Error(`Replacement backup is not a regular file: ${path.basename(opts.backupPath)}`);
+    }
+    const backupHash = await sha256File(opts.backupPath);
+    if (backupHash !== opts.expectedPreviousHash) {
+      throw new Error(`Replacement backup verification failed for ${path.basename(to)}`);
+    }
+    if (opts.afterBackupHook) await opts.afterBackupHook(opts.backupPath);
+
+    publishedRecord = await verifiedMove(from, to, {
+      expectedSourceHash: opts.expectedSourceHash,
+      sourceRelPath: opts.sourceRelPath,
+      afterMoveHook: opts.afterMoveHook,
+    });
+    if (opts.afterPublishHook) await opts.afterPublishHook(to);
+
+    return {
+      ...publishedRecord,
+      replacement: {
+        backupPath: opts.backupPath,
+        previousHash: opts.expectedPreviousHash,
+      },
+    };
+  } catch (error) {
+    // If publication completed but a later checkpoint hook failed, put the
+    // incoming file back only when it is still the verified payload and the
+    // source path is free. Never overwrite a competing source or destination.
+    if (publishedRecord && !fs.existsSync(from) && fs.existsSync(to)) {
+      try {
+        const publishedHash = await regularFileHash(to);
+        if (publishedHash !== publishedRecord.sourceHash) {
+          throw new Error("Published destination changed before it could be restored");
+        }
+        moveFileNoReplace(to, from);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `Replacement failed and the verified incoming file could not be restored; preserve ${to} and ${opts.backupPath} for manual recovery`,
+        );
+      }
+    }
+
+    if (backupMoved && fs.existsSync(opts.backupPath)) {
+      if (fs.existsSync(to)) {
+        throw new AggregateError(
+          [error],
+          `Replacement failed and the prior destination remains preserved at ${opts.backupPath}; ${to} is occupied, so manual recovery is required`,
+        );
+      }
+      try {
+        const backupHash = await regularFileHash(opts.backupPath);
+        if (backupHash !== opts.expectedPreviousHash) {
+          throw new Error("Prior destination backup no longer matches its recorded checksum");
+        }
+        moveFileNoReplace(opts.backupPath, to);
+        const restoredHash = await regularFileHash(to);
+        if (restoredHash !== opts.expectedPreviousHash) {
+          throw new Error("Restored prior destination failed checksum verification");
+        }
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `Replacement failed and the prior destination could not be restored; its copy remains at ${opts.backupPath} for manual recovery`,
+        );
+      }
+    }
+    throw error;
+  }
+}
+
 // ── Rollback ─────────────────────────────────────────────────────────────────
 
 /**
@@ -266,6 +374,12 @@ export async function rollbackMoves(
 
   for (const mv of [...moves].reverse()) {
     try {
+      if (mv.replacement) {
+        const replacementResult = await rollbackReplacementMove(mv, log);
+        if (replacementResult) rolledBack++;
+        continue;
+      }
+
       // A malformed or stale journal must never be allowed to unlink a file
       // when both sides resolve to the same path. On Windows, compare paths
       // case-insensitively because differently-cased paths can name one file.
@@ -395,4 +509,85 @@ export async function rollbackMoves(
   }
 
   return rolledBack;
+}
+
+async function regularFileHash(filePath: string): Promise<string | null> {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    return await sha256File(filePath);
+  } catch {
+    return null;
+  }
+}
+
+async function rollbackReplacementMove(
+  mv: FileMoveRecord,
+  log: (message: string) => void,
+): Promise<boolean> {
+  const replacement = mv.replacement!;
+  const sourceHash = await regularFileHash(mv.from);
+  let destinationHash = await regularFileHash(mv.to);
+
+  // If the incoming file reached the final path, move it back only when the
+  // original source path is free. A competing source is never overwritten.
+  if (destinationHash === mv.sourceHash && sourceHash === null) {
+    moveFileNoReplace(mv.to, mv.from);
+    const restoredSourceHash = await regularFileHash(mv.from);
+    if (restoredSourceHash !== mv.sourceHash) {
+      log(`ROLLBACK_REPLACEMENT_MANUAL: incoming file did not verify at source; preserved ${mv.from} and ${replacement.backupPath}`);
+      return false;
+    }
+    destinationHash = null;
+  } else if (
+    destinationHash === mv.sourceHash && sourceHash === mv.sourceHash &&
+    fs.existsSync(mv.to) && fs.existsSync(mv.from)
+  ) {
+    try {
+      const sourceStat = fs.lstatSync(mv.from);
+      const destinationStat = fs.lstatSync(mv.to);
+      if (sourceStat.dev === destinationStat.dev && sourceStat.ino === destinationStat.ino) {
+        fs.unlinkSync(mv.to);
+        destinationHash = null;
+      }
+    } catch {
+      // Leave both paths intact and report a manual recovery requirement below.
+    }
+  }
+
+  const currentSourceHash = await regularFileHash(mv.from);
+  if (currentSourceHash !== mv.sourceHash) {
+    log(`ROLLBACK_REPLACEMENT_MANUAL: incoming source is missing or changed; preserve ${mv.to} and ${replacement.backupPath}`);
+    return false;
+  }
+
+  const backupHash = await regularFileHash(replacement.backupPath);
+  if (backupHash !== null) {
+    if (backupHash !== replacement.previousHash) {
+      log(`ROLLBACK_REPLACEMENT_MANUAL: prior destination backup checksum mismatch; preserved ${replacement.backupPath}`);
+      return false;
+    }
+    destinationHash = await regularFileHash(mv.to);
+    if (destinationHash === null) {
+      moveFileNoReplace(replacement.backupPath, mv.to);
+      destinationHash = await regularFileHash(mv.to);
+      if (destinationHash !== replacement.previousHash) {
+        log(`ROLLBACK_REPLACEMENT_MANUAL: restored prior destination failed verification; preserved ${mv.to}`);
+        return false;
+      }
+    } else if (destinationHash === replacement.previousHash) {
+      // Both copies are verified old bytes; removing only the redundant backup
+      // cannot remove the last remaining copy.
+      try { fs.unlinkSync(replacement.backupPath); } catch { /* a harmless duplicate remains */ }
+    } else {
+      log(`ROLLBACK_REPLACEMENT_MANUAL: destination is occupied by different data; preserved ${mv.to} and ${replacement.backupPath}`);
+      return false;
+    }
+  } else if (destinationHash !== replacement.previousHash) {
+    log(`ROLLBACK_REPLACEMENT_MANUAL: prior destination is unavailable; inspect ${mv.to} and ${replacement.backupPath}`);
+    return false;
+  }
+
+  log(`ROLLBACK_REPLACEMENT_OK: ${path.basename(mv.to)} source and prior destination verified`);
+  return true;
 }
