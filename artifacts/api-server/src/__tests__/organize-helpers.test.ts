@@ -507,3 +507,13 @@ test("organization execute does not claim success when rollback is incomplete", 
   assert.ok(source.includes("Rollback incomplete:"));
   assert.ok(source.includes("File-move recovery checkpoint failed:"));
 });
+
+
+test("organization resume retains its journal when rollback is incomplete", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.ok(source.includes("const resumeRollbackComplete = rolledBack === newMoves.length"));
+  assert.ok(source.includes("const retainedMoves = resumeRollbackComplete ? existingMoves : [...existingMoves, ...newMoves]"));
+  assert.ok(source.includes("Resume file-move recovery checkpoint failed:"));
+  assert.ok(source.includes("the full move journal was retained for manual recovery"));
+});
