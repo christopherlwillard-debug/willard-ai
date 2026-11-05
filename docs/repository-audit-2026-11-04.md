@@ -1617,7 +1617,7 @@ Fast Validation #811 is recorded as **failed**, not passed. The correction is aw
 
 **Corrections:**
 - Release selection now validates the signed manifest first and uses strict SemVer identifier ordering, including numeric prerelease components.
-- A per-user Windows mutex serializes cold starts. Concurrent launches wait up to three minutes, then inspect the running service pair.
+- A per-Windows-session named mutex serializes the launcher before service checks or updater work. A second launch waits up to five minutes, then opens the already-running app without another update check.
 - Update downloads use a partial file, reject a HEAD size above 1 GiB, compare the downloaded size, verify the signed manifest-bound SHA-256, and clean partial files after errors or on the next start.
 - Update failures now produce a bounded `update.log` with stage, outcome, exception type, and HTTP status; the shortcut warning is generic. The timestamp is written only after both local services pass readiness checks.
 - The loading window starts before update work and has a five-minute attention threshold.
@@ -1625,13 +1625,89 @@ Fast Validation #811 is recorded as **failed**, not passed. The correction is aw
 
 ### Validation-only installer path
 
-The supplied Windows build output showed that installer compilation completed but the workflow then stopped because `WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64` was missing. The release workflow now permits an unsigned installer only for manual validation-only runs, skips installer trust metadata in that mode, and keeps Authenticode mandatory whenever a release can be published. Validation-only remains the default, and no release is published by this change.
+The supplied Windows build output showed that installer compilation completed but the workflow then stopped because `WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64` was missing. The release workflow now permits an unsigned installer only for manual validation-only runs, skips installer trust metadata in that mode, and keeps Authenticode mandatory whenever a release can be published. Validation-only remains the default, and no release is published by this change. This does **not** isolate the validation workflow from the production manifest-signing secret or its `contents: write` permission; that remains a high, unresolved finding. Do not dispatch this workflow with untrusted code until validation and publication are split into separate jobs.
 
 The release-validation guide now records the pinned Ed25519 public-key fingerprint, private-key rotation constraint, required Authenticode secret names, and the rule that unsigned validation installers must not be distributed.
 
 ### Validation boundary
 
-- `pnpm run test:release-contracts`: **63 passed, 0 failed**.
+- `pnpm run test:release-contracts`: **66 passed, 0 failed** after reconciling the local updater work with the latest PR commits.
+- The standalone installer-configuration suite also passed: **47 passed, 0 failed**.
 - `node --check` passed for the changed release-contract and release-builder modules; `git diff --check` passed.
 - The Linux workspace has no PowerShell runtime, so the updated packaged launcher and standard-user Windows lifecycle smoke have **not** run here. The concurrent-start integration check is registered in the existing Windows lifecycle smoke and still needs a Windows workflow run.
 - The new workflow condition has not yet been exercised on GitHub. The reported failed workflow did not pass its Authenticode trust step and did not publish a release.
+
+## 2026-11-05 — Windows launcher serialization and signed-update version correctness
+
+### Confirmed fixes
+
+**Packaged launcher startup race — fixed.**
+
+Source inspection found that two fresh shortcut launches could both read an empty or stale services.json, then independently run the GitHub update check, stage/swap the same installation, and start competing service processes. The existing-instance check was correct for sequential clicks, but it did not serialize simultaneous launches.
+
+Commit [6c29894e7d9f533c43b92d463da9a2238cd40f99](https://github.com/christopherlwillard-debug/willard-ai/commit/6c29894e7d9f533c43b92d463da9a2238cd40f99):
+
+- Adds a per-Windows-session named mutex around the complete launcher startup decision.
+- Acquires the lock before checking existing service processes or calling the update routine.
+- A second shortcut launch waits for the first startup to finish, then detects the running services, opens the UI, and exits without another update check.
+- Treats an abandoned mutex as recoverable ownership after a launcher crash.
+- Uses a bounded five-minute wait and reports a clear startup-lock error on timeout.
+- Releases the lock on stop, existing-instance, success, and caught-failure paths.
+- Adds the helper to the packaged release payload.
+- Adds a Windows multi-process smoke test for lock contention, normal release, and abandoned-owner recovery.
+- Adds source-contract assertions that the running-instance branch precedes the update call.
+
+The new helper is tested on Windows, but this is not yet a complete installed-shortcut lifecycle test.
+
+**Updater SemVer handling — fixed.**
+
+Commit [21d3b19f47526f8cfa0afb02a2082f6decc8c3cf](https://github.com/christopherlwillard-debug/willard-ai/commit/21d3b19f47526f8cfa0afb02a2082f6decc8c3cf):
+
+- Replaces the launcher's version comparison after stripping prerelease suffixes. That old logic treated 1.2.0-beta.1, 1.2.0-beta.2, and 1.2.0 as the same version.
+- Uses the existing release-contract module's semantic-version comparator through a small --compare CLI mode.
+- Correctly orders numeric prerelease identifiers (beta.10 after beta.2), numeric versus nonnumeric identifiers, and shorter versus longer identifier sequences.
+- Rejects invalid SemVer core leading zeroes, empty prerelease identifiers, and numeric prerelease leading zeroes; compares large numeric core and prerelease values without JavaScript safe-integer rounding.
+- Verifies the signed release manifest before using its version to decide whether an update is needed.
+- Adds direct comparator, CLI, invalid-version, stable-versus-prerelease, and launcher call-order regression tests.
+
+The launcher still falls back to the installed version when manifest retrieval or verification fails; this batch did not change that fallback policy.
+
+**Validation-contract correction.**
+
+Fast Validation #813 (run 42089895124) failed because scripts/windows/installer-config.test.mjs still expected the old workflow text "Release URL:" while the workflow now correctly says "Potential release URL (only if published):". This was a stale assertion, not a product failure. Commit 6c29894e7d9f533c43b92d463da9a2238cd40f99 updates the assertion and adds explicit checks that validate_only defaults to true and gates the publish action.
+
+### Validation evidence
+
+- [Fast Validation #814](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42101572293) — **passed on Linux and Windows**.
+  - Linux typecheck/generated-contract validation and targeted backend regressions passed.
+  - Windows PowerShell parsing, launcher mutex smoke, environment-file encoding, storage migration/no-overwrite, NAS temporary-path cleanup, conversion rollback, official 7-Zip verification, symlink metadata preservation, packaged updater journal, and developer updater preservation/rollback all passed.
+- [Dependency Review #577](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42101572210) — **passed**.
+- [Fast Validation #815](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42102458214) — **passed on Linux and Windows**.
+  - Release-contract tests: 65/65 passed, including the new SemVer and CLI cases.
+  - Installer configuration/source-contract tests: 19/19 passed.
+  - UI contract/accessibility tests: 6/6 passed.
+  - Targeted backend regressions: 255 passed, 0 failed, 3 skipped.
+  - Typecheck, generated API contracts, PostgreSQL media wildcard integration, PostgreSQL conversion-lock/recovery tests, and release/storage contracts passed.
+  - Windows PowerShell parsing and the new launcher mutex smoke passed; Windows storage/NAS/conversion, 7-Zip/symlink, packaged updater journal, and developer updater preservation/rollback checks also passed.
+- [Dependency Review #578](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42102458109) — **passed**.
+
+These are Fast Validation and Dependency Review results, not full CI or release validation. The Windows release workflow was not dispatched, no installer was published, and no release was created. The full installed-product lifecycle remains unverified because the Authenticode signing certificate has not been configured, as previously reported.
+
+### Updated prioritized findings ledger
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk / next action |
+|---|---|---|---|---|
+| Critical | Organize → replace can remove the destination before durable displaced-original recovery intent exists | **blocked** | — | Design a durable replacement journal and verified recovery copy; add crash-injection tests before changing destructive operations. |
+| Critical | Conversion worker can continue filesystem writes after losing its PostgreSQL advisory-lock connection | **blocked** | — | Design process-lifetime filesystem mutation fencing and validate on Windows, local disks, SMB, and supported NAS filesystems. |
+| High | Packaged updater → malformed or unreadable update journal is silently treated as absent (Read-UpdateJournal catches and returns null) | **found / blocked** | — | A corrupt journal can prevent recovery from discovering the displaced installation backup. Design explicit absent/valid/corrupt states, preserve ambiguous backups, and add crash/corruption recovery tests; do not blindly select a backup. |
+| High | Windows release workflow → manual validate_only still runs with workflow-level contents: write and receives production manifest-signing and Authenticode secrets | **found / blocked** | — | Split validation and publication into separate jobs. Give validation read-only permissions and ephemeral test signing identities; expose production signing secrets and write permission only to the protected publish job. No workflow dispatch was run. |
+| High | Windows installer → complete standard-user install/upgrade/interruption/rollback/uninstall lifecycle | **blocked** | — | Requires a non-publishing test-signing path; current release workflow requires Authenticode secrets. |
+| Medium | Release minimumWindowsVersion metadata is informational only | **found** | — | make-release.ps1 writes "10", but the installed launcher does not enforce it and the Inno Setup script has no explicit MinVersion. Align the installer and updater with the signed minimum before declaring OS compatibility complete. |
+| High | Packaged launcher → concurrent fresh starts can race update and service startup | **integration-tested** | 6c29894e7d9f533c43b92d463da9a2238cd40f99 | Windows mutex contention and abandoned-owner smoke passed. Full installed-shortcut lifecycle and browser behavior remain unverified. |
+| Medium | Packaged updater → prerelease comparison and signed-manifest decision ordering | **target-tested** | 21d3b19f47526f8cfa0afb02a2082f6decc8c3cf | Linux release-contract/CLI tests passed. Add a Windows PowerShell-to-Node CLI smoke to verify argument handling on the packaged Windows runtime. |
+
+### Branch and PR preservation
+
+The latest fetched remote audit branch was `f44f1c6629bc8f9382f7b1291a46bfe85d1de6ac`, the then-current head of open, unmerged PR #2 targeting `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`. At that check it was 833 commits ahead and 1 behind. The local Replit workspace had no audit branch and was on `main`; the existing remote PR branch was recovered, and the local audit commits were joined with the three subsequently fetched PR commits using a local non-fast-forward merge. This does not merge the GitHub PR or change `main`. No force-push or history rewrite was performed; the local merge remains unpushed.
+
+No production data, credentials, or published releases were changed.

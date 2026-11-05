@@ -30,8 +30,7 @@ $script:UpdateCandidate = $null
 $UpdateJournal = Join-Path $DataRoot "updates\swap-journal.json"
 $script:UpdateStage = "startup"
 $script:UpdateCheckSucceeded = $false
-$script:StartupMutex = $null
-$script:StartupMutexOwned = $false
+$script:LauncherMutex = $null
 $script:StartupExitCode = 0
 $script:LoadingProcess = $null
 
@@ -488,6 +487,7 @@ function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
   $remoteManifestFile = $null
   $partialZip = $null
+  $candidate = $null
   try {
     $updatesDirectory = Join-Path $DataRoot "updates"
     New-Item -ItemType Directory -Force -Path $updatesDirectory | Out-Null
@@ -501,20 +501,24 @@ function Try-Update {
     $local = Read-Version
     $remoteManifestFile = Join-Path $updatesDirectory ("release-manifest-" + [guid]::NewGuid().ToString("N") + ".json")
     $remote | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $remoteManifestFile -Encoding UTF8
-    Set-UpdateStage "manifest signature and version verification"
-    $decisionOutput = & $Node $ReleaseContract "--update-decision" $local $remoteManifestFile 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "The release manifest failed signature verification or version comparison." }
-    $decision = ($decisionOutput -join [Environment]::NewLine) | ConvertFrom-Json
-    if (-not $decision -or $decision.version -ne $remote.version) {
-      throw "The release manifest returned an invalid update decision."
+    Set-UpdateStage "manifest signature verification"
+    & $Node $ReleaseContract "--verify" $remoteManifestFile 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "The release description failed signature verification." }
+
+    Set-UpdateStage "version comparison"
+    $comparisonOutput = & $Node $ReleaseContract "--compare" $remote.version $local 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "The release version could not be compared safely." }
+    $comparison = 0
+    if (-not [int]::TryParse(($comparisonOutput -join "").Trim(), [ref]$comparison)) {
+      throw "The release version comparison returned an invalid result."
     }
-    if (-not $decision.available) {
+    if ($comparison -le 0) {
       Good "Willard Media Center $local is current."
       $script:UpdateCheckSucceeded = $true
       Write-UpdateDiagnostic "version check" "up-to-date" ("version=" + $local)
       return
     }
-    $remoteVersion = [string]$decision.version
+    $remoteVersion = [string]$remote.version
     $stage = Join-Path $updatesDirectory $remoteVersion
     $zip = Join-Path $updatesDirectory "release.zip"
     $maximumUpdateBytes = 1GB
@@ -548,6 +552,7 @@ function Try-Update {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
     $required = @("version.json", "payload-manifest.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
+      "desktop\launcher-instance-lock.ps1",
       "desktop\desktop-web-server.mjs", "desktop\database-backup.mjs", "desktop\backup-credentials.mjs",
       "desktop\library-recovery.mjs", "desktop\loading.html",
       "api-runtime\dist\index.mjs", "api-runtime\setup-db.cjs",
@@ -604,6 +609,14 @@ function Try-Update {
 }
 
 Ensure-Folders
+. (Join-Path $PSScriptRoot "launcher-instance-lock.ps1")
+$script:LauncherMutex = $null
+try {
+  $script:LauncherMutex = Enter-WillardLauncherMutex
+} catch {
+  Report-StartupFailure ("Willard could not obtain its startup lock: " + $_.Exception.Message)
+  exit 1
+}
 Write-Host ""
 Write-Host "  Willard Media Center" -ForegroundColor Cyan
 Write-Host "  Starting your local media library" -ForegroundColor Gray
@@ -611,26 +624,7 @@ try {
   if ($args -contains "-Stop") {
     Stop-Services
     Good "Willard Media Center services stopped."
-    exit 0
-  }
-  $script:StartupMutex = [System.Threading.Mutex]::new($false, "Local\WillardMediaCenter.Startup")
-  try {
-    $script:StartupMutexOwned = $script:StartupMutex.WaitOne(0)
-  } catch [System.Threading.AbandonedMutexException] {
-    $script:StartupMutexOwned = $true
-    Write-UpdateDiagnostic "startup lock" "recovered" "previous_launcher_abandoned=true"
-  }
-  if (-not $script:StartupMutexOwned) {
-    Say "Another Willard startup or update is in progress; waiting..."
-    try {
-      $script:StartupMutexOwned = $script:StartupMutex.WaitOne([TimeSpan]::FromMinutes(3))
-    } catch [System.Threading.AbandonedMutexException] {
-      $script:StartupMutexOwned = $true
-      Write-UpdateDiagnostic "startup lock" "recovered" "previous_launcher_abandoned=true"
-    }
-  }
-  if (-not $script:StartupMutexOwned) {
-    throw "Another Willard startup or update is still in progress. Wait briefly and try again."
+    return
   }
   $existing = Read-Pids
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
@@ -691,7 +685,7 @@ try {
   Close-LoadingScreen
   Start-Process $WebUrl
 } catch {
-  if ($script:StartupMutexOwned) {
+  if ($script:LauncherMutex) {
     Stop-Services
     try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
   }
@@ -699,13 +693,7 @@ try {
   Report-StartupFailure $_.Exception.Message
   $script:StartupExitCode = 1
 } finally {
-  if ($script:StartupMutexOwned) {
-    try { $script:StartupMutex.ReleaseMutex() } catch {}
-    $script:StartupMutexOwned = $false
-  }
-  if ($script:StartupMutex) {
-    $script:StartupMutex.Dispose()
-    $script:StartupMutex = $null
-  }
+  Exit-WillardLauncherMutex $script:LauncherMutex
+  $script:LauncherMutex = $null
 }
 if ($script:StartupExitCode -ne 0) { exit $script:StartupExitCode }

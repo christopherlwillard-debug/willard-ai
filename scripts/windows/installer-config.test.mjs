@@ -22,6 +22,10 @@ const launcher = await readFile(
   new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url),
   "utf8",
 );
+const launcherInstanceLock = await readFile(
+  new URL("../../desktop/launcher-instance-lock.ps1", import.meta.url),
+  "utf8",
+);
 const developerLauncher = await readFile(
   new URL("../launcher/start.ps1", import.meta.url),
   "utf8",
@@ -320,6 +324,14 @@ test("release helper produces a checksum-bearing update artifact", () => {
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(
+    workflow,
+    /validate_only:\s*\n\s+description:[^\n]*\n\s+required:\s*false\n\s+type:\s*boolean\n\s+default:\s*true/,
+  );
+  assert.match(
+    workflow,
+    /if:\s*\$\{\{\s*github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true\s*\}\}/,
+  );
   assert.match(workflow, /runs-on: windows-latest/);
   assert.match(
     workflow,
@@ -560,6 +572,41 @@ test("Windows release publication is preceded by every required quality gate", (
   assert.match(installerCompiler, /Get-FileHash \$setup -Algorithm SHA256/);
 });
 
+test("installed launcher serializes fresh starts and skips updates for an existing instance", () => {
+  assert.match(launcher, /launcher-instance-lock\.ps1/);
+  assert.match(launcherInstanceLock, /function Enter-WillardLauncherMutex/);
+  assert.match(launcherInstanceLock, /WaitOne\(\$TimeoutMilliseconds\)/);
+  assert.match(launcherInstanceLock, /AbandonedMutexException/);
+  assert.match(launcherInstanceLock, /function Exit-WillardLauncherMutex/);
+
+  const lockAcquire = launcher.indexOf("Enter-WillardLauncherMutex");
+  const existingCheck = launcher.indexOf("$existing = Read-Pids");
+  const updateCheck = launcher.lastIndexOf("  Try-Update\n");
+  assert.ok(lockAcquire >= 0 && lockAcquire < existingCheck && existingCheck < updateCheck,
+    "the startup lock must be acquired before the running-instance check and update check");
+
+  const existingFlow = launcher.slice(existingCheck, updateCheck);
+  assert.match(existingFlow, /Start-Process \$WebUrl/);
+  assert.match(existingFlow, /return/);
+  assert.doesNotMatch(existingFlow, /Try-Update/);
+
+  const releaseCalls = launcher.match(/Exit-WillardLauncherMutex \$script:LauncherMutex/g) ?? [];
+  assert.equal(releaseCalls.length, 1, "all launcher exits must release the lock through one finally block");
+  assert.match(launcher, /finally\s*\{\s*Exit-WillardLauncherMutex \$script:LauncherMutex/);
+
+  assert.match(releaseStager, /desktop\/launcher-instance-lock\.ps1/);
+  assert.match(fastValidationWorkflow, /Verify installed launcher serializes concurrent startup/);
+});
+
+test("installed updater verifies signed metadata before SemVer comparison", () => {
+  const verifyIndex = launcher.indexOf('"--verify" $remoteManifestFile');
+  const compareIndex = launcher.indexOf('"--compare" $remote.version $local');
+  assert.ok(verifyIndex >= 0 && compareIndex > verifyIndex,
+    "the signed release manifest must be verified before its version is used");
+  assert.match(launcher, /version comparison/);
+  assert.doesNotMatch(launcher, /\[version\]\(\$remote\.version -replace/);
+});
+
 test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
   assert.match(launcher, /function Start-LoadingScreen/);
   assert.match(launcher, /Start-Process -FilePath \$LoadingScreen -PassThru/);
@@ -603,11 +650,10 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
 });
 
 test("packaged updates use signed semantic decisions, serialize startup, and bound downloads", () => {
-  assert.match(launcher, /--update-decision/);
+  assert.match(launcher, /--compare/);
   assert.doesNotMatch(launcher, /\$remote\.version -replace/);
-  assert.match(launcher, /Local\\WillardMediaCenter\.Startup/);
-  assert.match(launcher, /WaitOne\(\[TimeSpan\]::FromMinutes\(3\)\)/);
-  assert.match(launcher, /ReleaseMutex\(\)/);
+  assert.match(launcher, /launcher-instance-lock\.ps1/);
+  assert.match(launcherInstanceLock, /TimeoutMilliseconds = 300000/);
   assert.match(launcher, /-Method Head/);
   assert.match(launcher, /maximumUpdateBytes = 1GB/);
   assert.match(launcher, /Content-Length/);

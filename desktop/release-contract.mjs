@@ -188,21 +188,25 @@ export function getUpdateDecision(currentVersion, manifest, options) {
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&
-    ["--verify", "--verify-artifact", "--update-decision"].includes(process.argv[2])) {
+    ["--verify", "--verify-artifact", "--compare", "--update-decision"].includes(process.argv[2])) {
   try {
-    const manifestPath = process.argv[2] === "--update-decision"
-      ? process.argv[4]
-      : process.argv[3];
-    const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""));
-    if (process.argv[2] === "--verify-artifact") {
-      await verifyReleaseArtifact(manifest, process.argv[4]);
-      console.log("Release signature, binding, and artifact checksum verified.");
-    } else if (process.argv[2] === "--update-decision") {
-      const decision = getUpdateDecision(process.argv[3], manifest);
-      console.log(JSON.stringify({ available: decision.available, version: decision.version }));
+    if (process.argv[2] === "--compare") {
+      console.log(compareVersions(process.argv[3], process.argv[4]));
     } else {
-      validateReleaseManifest(manifest);
-      console.log("Release signature and binding verified.");
+      const manifestPath = process.argv[2] === "--update-decision"
+        ? process.argv[4]
+        : process.argv[3];
+      const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""));
+      if (process.argv[2] === "--verify-artifact") {
+        await verifyReleaseArtifact(manifest, process.argv[4]);
+        console.log("Release signature, binding, and artifact checksum verified.");
+      } else if (process.argv[2] === "--update-decision") {
+        const decision = getUpdateDecision(process.argv[3], manifest);
+        console.log(JSON.stringify({ available: decision.available, version: decision.version }));
+      } else {
+        validateReleaseManifest(manifest);
+        console.log("Release signature and binding verified.");
+      }
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

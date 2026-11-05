@@ -108,6 +108,7 @@ export async function validateRelease() {
     "payload-manifest.json",
     "runtime/node.exe",
     "desktop/WillardMediaCenter.ps1",
+    "desktop/launcher-instance-lock.ps1",
     "Start Willard Media Center.bat",
     "desktop/desktop-web-server.mjs",
     "desktop/database-backup.mjs",
@@ -141,6 +142,7 @@ export async function validateRelease() {
     "api-runtime\\setup-db.cjs",
     "desktop\\desktop-web-server.mjs",
     "desktop\\loading.html",
+    "desktop\\launcher-instance-lock.ps1",
     "web",
   ]) {
     if (!launcher.includes(requiredReference)) {
