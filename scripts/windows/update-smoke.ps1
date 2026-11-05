@@ -212,7 +212,10 @@ try {
   $atomicJournal = Get-Content -LiteralPath $atomicJournalPath -Raw | ConvertFrom-Json
   Assert-True ($atomicJournal.phase -eq "backup-created") "Atomic developer journal replacement did not publish the new complete phase."
   $atomicArtifacts = @(Get-ChildItem -LiteralPath $TempRoot -File -Filter ".recovery-atomic.willard-update.json.*")
-  Assert-True ($atomicArtifacts.Count -eq 0) "Atomic developer journal replacement left temporary or backup files."
+  Assert-True ($atomicArtifacts.Count -eq 0) (
+    "Atomic developer journal replacement left temporary or backup files: " +
+    ($atomicArtifacts.Name -join ", ")
+  )
   Remove-DeveloperUpdateJournal
 
   # Exercise developer updater journal states independently of the installer

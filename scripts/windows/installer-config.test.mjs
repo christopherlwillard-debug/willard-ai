@@ -1174,6 +1174,14 @@ test("installer coordinates upgrades and repair reports failures", async () => {
   assert.match(repair, /\$problems\.Count -gt 0\) \{ exit 1 \}/);
 });
 
+test("developer updater journal replacement is atomic without backup artifacts", () => {
+  assert.match(
+    launcherCommon,
+    /\[System\.IO\.File\]::Replace\(\$temporary, \$journalPath, \$null\)/,
+  );
+  assert.doesNotMatch(launcherCommon, /\$journalBackup/);
+});
+
 test("developer fallback stages a complete source archive", async () => {
   const updater = await readFile(
     new URL("../launcher/update.ps1", import.meta.url),

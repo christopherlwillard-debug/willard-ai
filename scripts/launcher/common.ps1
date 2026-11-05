@@ -539,7 +539,6 @@ function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
     New-Item -ItemType Directory -Force -Path $journalDirectory | Out-Null
     $writeId = [guid]::NewGuid().ToString("N")
     $temporary = "$journalPath.$writeId.tmp"
-    $journalBackup = "$journalPath.$writeId.bak"
     $contents = @{
         version = 1
         phase = $phase
@@ -555,15 +554,14 @@ function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
             [System.Text.UTF8Encoding]::new($false)
         )
         if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
-            # Same-directory replacement keeps either the previous complete
-            # journal or the new complete journal if the process is interrupted.
-            [System.IO.File]::Replace($temporary, $journalPath, $journalBackup)
+            # Same-directory replacement is atomic. The old complete journal
+            # remains if replacement fails; no extra backup file is needed.
+            [System.IO.File]::Replace($temporary, $journalPath, $null)
         } else {
             [System.IO.File]::Move($temporary, $journalPath)
         }
     } finally {
         Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $journalBackup -Force -ErrorAction SilentlyContinue
     }
 }
 
