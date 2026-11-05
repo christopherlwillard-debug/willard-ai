@@ -106,6 +106,7 @@ test("authentication sessions are created under a lock on the current credential
 
 test("desktop API binds only to loopback behind the localhost web proxy", () => {
   assert.match(indexSource, /const host = process\.env\["HOST"\]\?\.trim\(\)\s*\|\|\s*\(process\.env\["REPL_ID"\]\s*===\s*undefined\s*\?\s*"127\.0\.0\.1"\s*:\s*undefined\)/);
+  assert.match(indexSource, /app\.listen\(\{\s*port,\s*\.\.\.\(host\s*\?\s*\{\s*host\s*\}\s*:\s*\{\}\)\s*\}/);
   assert.match(indexSource, /app\.listen\(\{ port, \.\.\.\(host \? \{ host \} : \{\}\) \}/);
   assert.match(desktopLauncherSource, /\$env:HOST = "127\.0\.0\.1"/);
 });
