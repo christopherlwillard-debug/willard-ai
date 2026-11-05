@@ -95,6 +95,7 @@ jobs:
             artifacts/api-server/src/__tests__/capacity-service.test.ts \
             artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
             artifacts/api-server/src/__tests__/cleanup-retention.test.ts \
+            artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts \
             artifacts/api-server/src/__tests__/organize-helpers.test.ts \
             artifacts/api-server/src/__tests__/sevenzip-path.test.ts \
             artifacts/api-server/src/__tests__/archive-safety.test.ts \
