@@ -83,7 +83,7 @@ export function resolveTrashPath(targetPath: string, root: string): string {
     if (canonicalRoot === lexicalRoot) {
       throw new Error("Trash path is outside the configured trash root");
     }
-    const canonicalTarget = canonicalizePath(targetPath);
+    const canonicalTarget = path.resolve(targetPath);
     relative = path.relative(canonicalRoot, canonicalTarget);
     if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
       throw new Error("Trash path is outside the configured trash root");
