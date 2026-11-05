@@ -6,9 +6,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
-import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
+import { resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
-import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
+import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry, resolveLibraryTrashPath } from "../lib/cleanup-recovery.ts";
 import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
@@ -601,13 +601,9 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Path constraint: trashPath must resolve under <nasPath>/WillardAI/.Trash ──
-    const trashDir = resolveWithinRoot(
-      path.join(nasPath, "WillardAI", ".Trash"),
-      getWillardAIDir(nasPath),
-    );
     let resolvedTrashPath: string;
     try {
-      resolvedTrashPath = resolveWithinRoot(trashPath, trashDir);
+      resolvedTrashPath = resolveLibraryTrashPath(trashPath, nasPath);
     } catch {
       res.status(400).json({ error: "Invalid trashPath — must be within the .Trash directory" });
       return;
@@ -624,7 +620,7 @@ router.post("/cleanup/restore", async (req, res) => {
     const entry = manifestEntries.find(e => {
       if (typeof e.nasPath === "string" && e.nasPath !== nasPath) return false;
       try {
-        return resolveWithinRoot(e.trashPath, trashDir) === resolvedTrashPath;
+        return resolveLibraryTrashPath(e.trashPath, nasPath) === resolvedTrashPath;
       } catch {
         return false;
       }
