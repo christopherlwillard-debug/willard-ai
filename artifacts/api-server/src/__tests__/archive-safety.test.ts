@@ -71,7 +71,7 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
     "CON .txt",
     "CONIN$",
     "COM¹.txt",
-    "control\\u0001char.txt",
+    "control\u0001char.txt",
     "nested/AUX",
     "trailing-dot./file.txt",
     "trailing-space /file.txt",
