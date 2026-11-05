@@ -244,7 +244,7 @@ function databaseConnection(options, restore = false) {
   return connectionEnvironment(connectionString);
 }
 
-export function runTool(command, args, environment, label, {
+export export function runTool(command, args, environment, label, {
   maxOutputBytes = 64 * 1024 * 1024,
   maxStderrBytes = 16 * 1024,
 } = {}) {
