@@ -140,3 +140,25 @@ test("PNG cache is invalidated and the UI does not describe JPEG conversion as l
   assert.match(explainer, /JPEG is lossy/);
   assert.doesNotMatch(explainer, /losslessly|pixel data is identical/i);
 });
+
+
+const recoveryPath = fileURLToPath(new URL("../lib/conversion-recovery.ts", import.meta.url));
+const recoverySource = readFileSync(recoveryPath, "utf8");
+
+test("conversion execution, finalization, and restart recovery share a per-job advisory lock", () => {
+  const executeLock = executeRoute.indexOf("acquireConversionJobLock(id");
+  const executeClaim = executeRoute.indexOf("const [claimedJob] = await db.update(conversionJobsTable)");
+  assert.ok(executeLock >= 0 && executeClaim > executeLock, "execution must own the job before its pending-to-running claim");
+  assert.match(executeRoute, /releaseConversionJobLock\(jobLockClient, id\)/);
+
+  assert.ok(finalizeStart >= 0 && finalizeSource.indexOf("acquireConversionJobLock(id") >= 0);
+  assert.ok(
+    finalizeSource.indexOf("acquireConversionJobLock(id") < finalizeSource.indexOf("getActiveConversionJob(id)"),
+    "finalization must acquire ownership before reading and mutating job state",
+  );
+  assert.match(finalizeSource, /releaseConversionJobLock\(jobLockClient, lockJobId\)/);
+
+  assert.match(recoverySource, /acquireConversionJobLock\(job\.id/);
+  assert.match(recoverySource, /eq\(conversionJobsTable\.status, "running"\)/);
+  assert.match(recoverySource, /releaseConversionJobLock\(lockClient, job\.id\)/);
+});

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
@@ -23,6 +23,11 @@ import {
 } from "../lib/capacity-service.ts";
 import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
 import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
+import {
+  acquireConversionJobLock,
+  releaseConversionJobLock,
+  type ConversionJobLockClient,
+} from "../lib/conversion-job-lock.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -1369,14 +1374,23 @@ router.post("/optimize/conversion/:jobId/action", async (req: any, res) => {
 });
 
 async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
+  let jobLockClient: ConversionJobLockClient | null = null;
+  let lockJobId: number | null = null;
   try {
     const id = parseInt(req.params.id);
+    lockJobId = id;
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
 
     const { action } = req.body as { action?: string };
     const VALID_ACTIONS = ["recycle", "replace", "keep-both", "archive"];
     if (!action || !VALID_ACTIONS.includes(action)) {
       res.status(400).json({ error: `Invalid action. Must be one of: ${VALID_ACTIONS.join(", ")}` });
+      return;
+    }
+
+    jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
+    if (!jobLockClient) {
+      res.status(409).json({ error: "Another request is already processing this conversion job." });
       return;
     }
 
@@ -1524,6 +1538,14 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     res.json({ action, filesProcessed: fileOutcomes.length, outcomes: fileOutcomes });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Finalize failed" });
+  } finally {
+    if (jobLockClient && lockJobId !== null && Number.isSafeInteger(lockJobId)) {
+      try {
+        await releaseConversionJobLock(jobLockClient, lockJobId);
+      } catch (error) {
+        logger.error({ err: error, jobId: lockJobId }, "Unable to release conversion finalization lock");
+      }
+    }
   }
 }
 
@@ -1581,7 +1603,15 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
   };
 
   let capacityReservation: CapacityReservation | null = null;
+  let jobLockClient: ConversionJobLockClient | null = null;
   try {
+    jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
+    if (!jobLockClient) {
+      send("error", { message: "This conversion job is already owned by another worker." });
+      res.end();
+      return;
+    }
+
     const job = await getActiveConversionJob(id);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
     if (job.status === "running") { send("error", { message: "Job is already running" }); res.end(); return; }
@@ -1923,6 +1953,13 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
+    if (jobLockClient) {
+      try {
+        await releaseConversionJobLock(jobLockClient, id);
+      } catch (error) {
+        logger.error({ err: error, jobId: id }, "Unable to release conversion execution lock");
+      }
+    }
     if (capacityReservation) releaseCapacity(capacityReservation.id);
   }
 });
