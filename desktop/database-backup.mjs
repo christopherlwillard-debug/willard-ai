@@ -1209,10 +1209,6 @@ async function restoreBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
   const secret = await passphrase(false, options);
-  const dump = decryptDump(encrypted, manifest, secret);
-  if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
-    fail("Decrypted database dump failed its SHA-256 integrity check.");
-  }
   const environment = databaseConnection(options, true);
   const targetRoot = options["library-root"];
   let targetLibrary = null;
@@ -1249,7 +1245,12 @@ async function restoreBackup(options) {
   }
   const restoreWorkRoot = await createPrivateBackupWorkDirectory();
   const temporaryDump = path.join(restoreWorkRoot, "database.dump");
+  let dump: Buffer | undefined;
   try {
+    dump = decryptDump(encrypted, manifest, secret);
+    if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
+      fail("Decrypted database dump failed its SHA-256 integrity check.");
+    }
     if (targetEmpty) {
       if (manifest.library && targetLibrary) {
         recoveryTargetIdentity = await createRecoveryTargetIdentity(environment, manifest);
@@ -1304,7 +1305,7 @@ async function restoreBackup(options) {
     }
     console.log(`Database restored and verified: ${backupDir}`);
   } finally {
-    dump.fill(0);
+    dump?.fill(0);
     await secureRemove(temporaryDump);
     await rm(restoreWorkRoot, { recursive: true, force: true }).catch(() => {});
   }
