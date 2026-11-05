@@ -1208,7 +1208,7 @@ test("updater smoke can create its temporary branch from a detached source check
     const branch = "smoke-update-regression";
     runGit(["-C", remote, "checkout", "--quiet", "-b", branch]);
     assert.equal(runGit(["-C", remote, "branch", "--show-current"]).trim(), branch);
-    assert.match(updateSmoke, /git -C \\$Remote checkout --quiet -b \\$remoteBranch/);
+    assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });
   }
