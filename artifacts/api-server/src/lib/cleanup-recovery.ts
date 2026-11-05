@@ -165,7 +165,7 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
   }
   const { entries } = readTrashManifest(nasPath);
   if (!entries.some((entry) => {
-    try { return samePath(resolveWithinRoot(entry.trashPath, root), resolvedTarget); }
+    try { return samePath(resolveTrashPath(entry.trashPath, root), resolvedTarget); }
     catch { return false; }
   })) return false;
 
