@@ -414,3 +414,9 @@ Remaining archive hardening:
 - Two distinct paths on a case-sensitive Linux filesystem can collide when the archive is later extracted on a typical case-insensitive Windows/macOS volume. Unicode-composed and decomposed names can also normalize to the same filename on some filesystems.
 - Archive path uniqueness now uses NFC normalization plus case folding, rejecting those collisions before extraction. Tests cover both case-only and Unicode-normalization-only collisions.
 - Portable filename checks were also tightened to reject ASCII control characters and additional Windows device aliases (`CONIN$`, `CONOUT$`, superscript COM/LPT names, and reserved names with spaces before extensions). Harmless leading `./` archive prefixes remain accepted after normalization. Fast Validation is pending for this follow-up.
+
+
+## Archive entries without a usable file path (2026-11-05)
+
+- Archive path validation normalized empty, `.` and `./` names to the extraction root. A non-directory entry with no usable filename should never be passed to an extractor because it does not identify a file destination.
+- Empty raw names are now rejected, and normalized root-only entries are accepted only when explicitly marked as directories (a common harmless TAR root marker). Added regression coverage for empty/dot file entries and the root-directory case. Fast Validation is pending.
