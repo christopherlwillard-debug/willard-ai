@@ -22,7 +22,7 @@ test("generated API modules do not redeclare exported symbols", async () => {
   for (const relativePath of GENERATED_API_FILES) {
     const source = await readFile(path.join(ROOT, relativePath), "utf8");
     const declarations = exportedDeclarations(source);
-    assert.ok(declarations.length > 0, \`\${relativePath} contains no exported declarations\`);
+    assert.ok(declarations.length > 0, relativePath + " contains no exported declarations");
 
     const byName = new Map();
     for (const declaration of declarations) {
@@ -38,7 +38,7 @@ test("generated API modules do not redeclare exported symbols", async () => {
     assert.deepEqual(
       duplicates,
       [],
-      \`\${relativePath} contains duplicate generated exports\`,
+      relativePath + " contains duplicate generated exports",
     );
   }
 });
