@@ -161,7 +161,7 @@ async function compactWindowsDependencies(payloadRoot) {
 }
 
 async function assertPackagedSevenZip(apiOutput) {
-  const binaryDirectory = path.join(apiOutput, "dist", "vendor", "7zip");
+  const binaryDirectory = path.join(apiOutput, "vendor", "7zip");
   for (const filename of ["7z.exe", "7z.dll", "License.txt"]) {
     const filePath = path.join(binaryDirectory, filename);
     const info = await lstat(filePath).catch(() => null);
