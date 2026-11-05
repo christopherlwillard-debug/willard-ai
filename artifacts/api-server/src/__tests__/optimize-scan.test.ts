@@ -36,10 +36,10 @@ test("optimization scan groups regular files and records their actual sizes", ()
     assert.equal(counter.total, 2);
     assert.equal(groups.get("jpg")?.count, 2);
     assert.equal(groups.get("jpg")?.bytes, 10);
-    assert.deepEqual(groups.get("jpg")?.paths, [
-      path.join(f.root, "one.jpg"),
-      path.join(f.root, "nested", "two.jpg"),
-    ]);
+    assert.deepEqual(
+      [...(groups.get("jpg")?.paths ?? [])].sort(),
+      [path.join(f.root, "one.jpg"), path.join(f.root, "nested", "two.jpg")].sort(),
+    );
   } finally {
     f.cleanup();
   }
