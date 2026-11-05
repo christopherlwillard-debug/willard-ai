@@ -7,6 +7,7 @@ $ReleaseContract = Join-Path $Root "desktop\release-contract.mjs"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-update-journal-$([guid]::NewGuid().ToString('N'))"
 $UpdateJournal = Join-Path $TempRoot "updates\\swap-journal.json"
 $InstallRoot = Join-Path $TempRoot "install"
+$PidFile = Join-Path $TempRoot "services.json"
 $candidate = Join-Path $TempRoot (".install.candidate-" + [guid]::NewGuid().ToString())
 $backup = Join-Path $TempRoot (".install.previous-1.2.0-" + (Get-Date -Format "yyyyMMddHHmmss"))
 
@@ -43,6 +44,7 @@ try {
     "Remove-UpdateJournal",
     "Restore-UpdateBackup",
     "Recover-InterruptedUpdateSwap",
+    "Read-Pids",
     "Get-InstalledWindowsVersion",
     "Test-WindowsVersionRequirement"
   )) {
@@ -56,6 +58,42 @@ try {
   }
   $script:UpdateBackup = $null
   $script:UpdateCandidate = $null
+
+  New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+  @{
+    version = 2
+    runToken = "process-state-smoke"
+    api = @{
+      pid = 12345
+      path = "C:\\Willard\\runtime\\node.exe"
+      commandLine = "node.exe --smoke-api"
+      creationDate = "2026-11-05T00:00:00Z"
+    }
+    web = $null
+  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $PidFile -Encoding UTF8
+  $validProcessState = Read-Pids
+  Assert-True ($validProcessState.api.pid -eq 12345) "A valid process state record was rejected."
+
+  Set-Content -LiteralPath $PidFile -Value "{not-json" -Encoding UTF8
+  $corruptProcessStateRejected = $false
+  try { Read-Pids | Out-Null } catch {
+    $corruptProcessStateRejected = $_.Exception.Message -match "services state file is unreadable or invalid"
+  }
+  Assert-True $corruptProcessStateRejected "A corrupt services state file was treated as if no services were running."
+  Assert-True (Test-Path -LiteralPath $PidFile -PathType Leaf) "The corrupt services state was deleted instead of being preserved for recovery."
+
+  @{
+    version = 2
+    runToken = "process-state-smoke"
+    api = @{ pid = 12345; path = ""; commandLine = "node.exe --smoke-api" }
+    web = $null
+  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $PidFile -Encoding UTF8
+  $incompleteProcessStateRejected = $false
+  try { Read-Pids | Out-Null } catch {
+    $incompleteProcessStateRejected = $_.Exception.Message -match "services state file is unreadable or invalid"
+  }
+  Assert-True $incompleteProcessStateRejected "A process state record without executable identity was accepted."
+  Remove-Item -LiteralPath $PidFile -Force
 
   $actualWindowsVersion = Get-InstalledWindowsVersion
   Assert-True ($actualWindowsVersion -match '^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$') "CIM did not return a supported Windows NT version."

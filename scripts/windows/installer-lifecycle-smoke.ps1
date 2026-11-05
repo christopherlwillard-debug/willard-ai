@@ -53,6 +53,30 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
   throw "Timed out waiting for $url"
 }
 
+function Wait-PortClosed($port, $timeoutSeconds = 30) {
+  $until = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $until) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $connected = $false
+    $pending = $null
+    try {
+      $pending = $client.BeginConnect("127.0.0.1", $port, $null, $null)
+      if ($pending.AsyncWaitHandle.WaitOne(500)) {
+        try {
+          $client.EndConnect($pending)
+          $connected = $client.Connected
+        } catch {}
+      }
+    } catch {} finally {
+      if ($pending -and $pending.AsyncWaitHandle) { $pending.AsyncWaitHandle.Close() }
+      $client.Close()
+    }
+    if (-not $connected) { return }
+    Start-Sleep -Seconds 1
+  }
+  throw "Willard still accepts connections on port $port after uninstall."
+}
+
 function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
   $stdout = Join-Path $TempRoot "$label.out.log"
   $stderr = Join-Path $TempRoot "$label.err.log"
@@ -280,11 +304,20 @@ exit $LASTEXITCODE
   Move-Item ($envFile + ".good") $envFile -Force
   Assert-ExternalState
 
+  Write-Host "Lifecycle: uninstall stops active services"
+  $uninstallStart = Invoke-InstalledLauncher "start" "uninstall-running-start"
+  Assert-True ($uninstallStart.exitCode -eq 0) ("Could not start Willard before uninstall:`n" + $uninstallStart.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($body) $body -match '"status"\s*:\s*"ok"' }
+  Wait-Http "http://127.0.0.1:5000/" { param($body) $body -match "<html|<!doctype html" }
+
   Write-Host "Lifecycle: uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
   Assert-True (Test-Path $uninstaller) "Installed copy did not contain Inno Setup uninstaller."
   $uninstallResult = Invoke-AsLifecycleUser $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" "uninstall"
   Assert-True ($uninstallResult.exitCode -eq 0) ("Setup.exe uninstall failed:`n" + $uninstallResult.output)
+  Wait-PortClosed 8080
+  Wait-PortClosed 5000
+  Assert-True (-not (Test-Path (Join-Path $script:DataRoot "services.json"))) "Uninstall did not clear the stopped services state."
   Assert-True (-not (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"))) "Uninstall left packaged launcher files behind."
   Assert-True (-not (Test-Path $desktopShortcut)) "Uninstall left the desktop shortcut behind."
   $remainingStartMenuShortcuts = @()

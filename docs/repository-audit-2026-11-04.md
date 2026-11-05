@@ -1925,6 +1925,33 @@ Expanded `scripts/ui-accessibility.test.mjs` with source-contract checks for Sea
 
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
-| Medium | Packaged updater ignores signed minimum Windows version | fixed / target-tested pending CI | this batch | Windows CI and actual Windows 10/11 host verification pending; the CIM probe is exercised on the Windows runner |
+| Medium | Packaged updater ignores signed minimum Windows version | integration-tested | `6c0518f5`; Fast Validation #858 and Dependency Review #621 | Actual Windows 10/11 machine update and full installer lifecycle were not run |
 
-**Validation classification:** source inspection and regression-test implementation complete. No test or CI pass is claimed until the matching branch-head runs complete. This is not a complete installer lifecycle or release-readiness validation.
+**Validation classification:** Fast Validation #858 passed on code head `6c0518f59ff723e7098cb19b60d0af27e682dbba`; both Linux validation and the Windows archive/updater smoke job succeeded. Dependency Review #621 passed. The Windows smoke exercised the CIM version probe and production comparison helper, and the Linux job ran the signed-manifest and version-comparison regressions. This is integration coverage for the compatibility helper, not an end-to-end signed release update on Windows 10 and Windows 11, a full installer lifecycle, or release-readiness validation.
+
+
+## 2026-11-05 follow-up — safe Windows uninstall and fail-closed service tracking
+
+### Findings
+
+**Medium — The Inno Setup installer stopped services before an upgrade but did not stop them before uninstall.** The only shutdown event was `PrepareToInstall`; the uninstaller could begin deleting the bundled Node runtime while the packaged API and web server were still running. The existing installed-lifecycle smoke reached uninstall only after an injected database-startup failure had already left the services stopped, so it did not exercise this real-user path.
+
+**Medium — Corrupt process state and WMI errors could be mistaken for no running services.** `Read-Pids` returned `$null` for malformed JSON, and `Get-ProcessIdentity` returned `$null` for every CIM query error. `Stop-Services` could therefore delete the state file and report success without proving that tracked processes were gone. That behavior was unsafe for both installer shutdown and packaged updates.
+
+### Fixes
+
+- Added one shared Inno Setup shutdown helper for upgrades and uninstall.
+- Added `CurUninstallStepChanged(usUninstall)` so the uninstaller stops Willard after the user confirms uninstall and before payload deletion. If the shutdown helper cannot run or returns a failure code, the uninstaller logs the error, displays an actionable message when interactive, and aborts instead of deleting files.
+- `Read-Pids` now validates the JSON structure, supported journal versions, run token, process IDs, and executable identity fields. A corrupt or incomplete file is preserved and raises an actionable error rather than being treated as an empty process list.
+- `Get-ProcessIdentity` now distinguishes a process that no longer exists from a failed CIM query. Query failures and incomplete executable identity information abort shutdown rather than silently allowing installation changes.
+- The startup failure handler now preserves the original startup error while separately reporting any failure to stop services safely.
+- Expanded the Windows updater smoke with corrupt/incomplete process-journal regressions. Expanded the installed-lifecycle smoke to start both services immediately before uninstall and assert both listening ports close and the external media, settings, and PostgreSQL markers remain intact.
+
+### Prioritized findings ledger — current batch
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Inno Setup uninstall while Willard services are running | fixed / target-tested pending CI | this batch | The installed-lifecycle smoke is source-updated but has not run on this PR branch; Inno compile/runtime uninstall validation remains pending |
+| High | Corrupt or unreadable packaged service process journal treated as no services | fixed / target-tested pending CI | this batch | Windows smoke and real stop/uninstall integration pending; stale PID reuse is still intentionally handled by refusing to kill a process whose identity does not match |
+
+**Validation classification:** source inspection and focused regression-test changes complete. The Windows updater smoke is expected to exercise the process-state parser; the actual Inno uninstall-while-running lifecycle is covered by the updated lifecycle script but is not part of ordinary Fast Validation. No new test or CI pass is claimed until the matching branch-head run completes.

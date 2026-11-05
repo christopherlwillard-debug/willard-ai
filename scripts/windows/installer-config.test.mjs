@@ -234,11 +234,15 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
 });
 
 test("installer refuses payload replacement when the running application cannot stop", () => {
-  const prepareStart = config.indexOf("function PrepareToInstall");
-  const prepare = config.slice(prepareStart);
-  assert.match(prepare, /if not Exec\(/);
-  assert.match(prepare, /ResultCode <> 0/);
-  assert.match(prepare, /existing installation was left unchanged/);
+  const stopStart = config.indexOf("function StopWillardServices");
+  const prepareStart = config.indexOf("function PrepareToInstall", stopStart);
+  const prepareEnd = config.indexOf("\nprocedure CurUninstallStepChanged", prepareStart);
+  const stopHelper = config.slice(stopStart, prepareStart);
+  const prepare = config.slice(prepareStart, prepareEnd);
+  assert.match(stopHelper, /if not Exec\(/);
+  assert.match(stopHelper, /ResultCode <> 0/);
+  assert.match(stopHelper, /existing installation was left unchanged/);
+  assert.match(prepare, /StopWillardServices/);
 
   const packagedStopStart = launcher.indexOf("function Stop-Services {");
   const packagedStopEnd = launcher.indexOf("\nfunction Save-Services", packagedStopStart);
@@ -1426,4 +1430,40 @@ test("packaged updater enforces its signed minimum Windows requirement before do
   assert.match(launcher, /Get-CimInstance -ClassName Win32_OperatingSystem/);
   assert.match(launcher, /--compare-windows/);
   assert.match(launcher, /minimumWindowsVersion/);
+});
+
+test("uninstaller stops the application after confirmation and aborts if shutdown fails", () => {
+  const uninstallStart = config.indexOf("procedure CurUninstallStepChanged");
+  const uninstall = config.slice(uninstallStart);
+  assert.match(uninstall, /CurUninstallStep = usUninstall/);
+  assert.match(uninstall, /StopWillardServices/);
+  assert.match(uninstall, /SuppressibleMsgBox/);
+  assert.match(uninstall, /Abort/);
+  assert.match(uninstall, /could not start its shutdown helper/);
+});
+
+test("packaged process-state and WMI failures fail closed instead of hiding running services", () => {
+  const pidStart = launcher.indexOf("function Read-Pids {");
+  const pidEnd = launcher.indexOf("\nfunction Get-ProcessIdentity", pidStart);
+  const pidReader = launcher.slice(pidStart, pidEnd);
+  assert.match(pidReader, /ConvertFrom-Json -ErrorAction Stop/);
+  assert.match(pidReader, /services state file is unreadable or invalid/);
+  assert.match(pidReader, /executable identity information/);
+  assert.doesNotMatch(pidReader, /catch \{ return \$null \}/);
+
+  const identityStart = launcher.indexOf("function Get-ProcessIdentity");
+  const identityEnd = launcher.indexOf("\nfunction Test-ProcessIdentity", identityStart);
+  const identityReader = launcher.slice(identityStart, identityEnd);
+  assert.match(identityReader, /could not verify the identity of Willard process/);
+  assert.match(identityReader, /did not return enough identity information/);
+  assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
+});
+
+test("installed lifecycle smoke uninstalls while both packaged services are running", () => {
+  const start = installedLifecycleSmoke.indexOf('Invoke-InstalledLauncher "start" "uninstall-running-start"');
+  const uninstall = installedLifecycleSmoke.indexOf('Invoke-AsLifecycleUser $uninstaller');
+  assert.ok(start >= 0 && uninstall > start, "The lifecycle must start Willard before uninstalling.");
+  assert.match(installedLifecycleSmoke, /Wait-PortClosed 8080/);
+  assert.match(installedLifecycleSmoke, /Wait-PortClosed 5000/);
+  assert.match(installedLifecycleSmoke, /services\.json/);
 });
