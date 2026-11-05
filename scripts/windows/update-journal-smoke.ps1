@@ -104,7 +104,11 @@ try {
   # A swapped phase without its previous-version backup is ambiguous. Keep the
   # candidate, current install, and journal rather than deleting recovery data.
   Remove-Item -LiteralPath $UpdateJournal -Force
-  Remove-Item -LiteralPath $InstallRoot, $candidate, $backup -Recurse -Force
+  foreach ($pathToClear in @($InstallRoot, $candidate, $backup)) {
+    if (Test-Path -LiteralPath $pathToClear) {
+      Remove-Item -LiteralPath $pathToClear -Recurse -Force
+    }
+  }
   New-Item -ItemType Directory -Force -Path $InstallRoot, $candidate | Out-Null
   Set-Content -LiteralPath (Join-Path $InstallRoot "install.marker") "current version" -NoNewline
   Set-Content -LiteralPath (Join-Path $candidate "candidate.marker") "candidate version" -NoNewline
