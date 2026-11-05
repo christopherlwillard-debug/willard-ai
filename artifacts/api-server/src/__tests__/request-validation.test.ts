@@ -90,7 +90,10 @@ test("archive route validates filters and treats the selected end date as inclus
   assert.ok(route.includes('parseOptionalQueryString(req.query.category, "category")'));
   assert.ok(route.includes("parseBoundedInteger(req.query.minSize"));
   assert.ok(route.includes("parseBoundedInteger(req.query.maxSize"));
-  assert.ok(route.includes("parseOptionalDateOnlyRange(req.query.dateFrom, req.query.dateTo)"));
+  assert.ok(route.includes("parseOptionalDateOnlyRange("));
+  assert.ok(route.includes("req.query.dateFrom"));
+  assert.ok(route.includes("req.query.dateTo"));
+  assert.ok(route.includes("minSizeBytes > maxSizeBytes"));
   assert.ok(route.includes("lt(archivesTable.modifiedAt, dateToExclusive)"));
   assert.ok(!route.includes("parseInt(minSize") && !route.includes("parseInt(maxSize"));
 
