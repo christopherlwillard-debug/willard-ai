@@ -481,3 +481,19 @@ test("processed archive dispositions never overwrite an existing archive", () =>
   assert.equal(noReplaceMoves.length, 2, "both automatic and manual dispositions must use no-replace moves");
   assert.doesNotMatch(routeSource, /moveFile\(job\.sourcePath,\s*dest\)/);
 });
+
+
+test("rollbackMoves: does not count or restore a destination whose bytes changed after the forward move", async () => {
+  const sourcePath = writeFile(path.join(mkTmp("rb-tampered-src"), "important.bin"), "original verified bytes");
+  const destinationPath = path.join(mkTmp("rb-tampered-dest"), "important.bin");
+  const record = await verifiedMove(sourcePath, destinationPath);
+
+  fs.writeFileSync(destinationPath, "tampered destination bytes");
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a checksum-mismatched file is not a successful rollback");
+  assert.equal(fs.existsSync(sourcePath), false, "the unverified file must not be written over the source path");
+  assert.equal(fs.readFileSync(destinationPath, "utf8"), "tampered destination bytes", "the only remaining copy must be preserved");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_VERIFY_FAIL") && message.includes("destination preserved")));
+});
