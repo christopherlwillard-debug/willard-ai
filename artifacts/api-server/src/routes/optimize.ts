@@ -1544,6 +1544,23 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       send("error", { message: `Job already ${job.status}` }); res.end(); return;
     }
 
+    // Multiple one-time tokens can be issued while a job is pending. Claim the
+    // job with a database compare-and-swap before any worker starts scanning or
+    // writing staging files; only one request can transition pending -> running.
+    const [claimedJob] = await db.update(conversionJobsTable)
+      .set({ status: "running", cancelledAt: null, error: null })
+      .where(and(
+        eq(conversionJobsTable.id, id),
+        eq(conversionJobsTable.nasPath, job.nasPath),
+        eq(conversionJobsTable.status, "pending"),
+      ))
+      .returning({ id: conversionJobsTable.id });
+    if (!claimedJob) {
+      send("error", { message: "This conversion job has already been claimed or is no longer pending." });
+      res.end();
+      return;
+    }
+
     // Read current profile from settings for this run
     const settings = await getActiveAppSettings();
     const profile: OptimizeProfile = (settings?.optimizeProfile ?? "ARCHIVE") as OptimizeProfile;
@@ -1560,7 +1577,6 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     const execFileDecisions = (execCachedScan?.fileDecisions as
       Record<string, { convert: boolean; targetExt: string; reasons: string[] }> | undefined) ?? {};
 
-    await db.update(conversionJobsTable).set({ status: "running", cancelledAt: null, error: null }).where(eq(conversionJobsTable.id, id));
     send("status", { stage: "scanning", message: "Scanning NAS for files to convert…", progress: 2 });
 
     const skipDirs = new Set<string>([
