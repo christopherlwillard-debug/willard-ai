@@ -611,11 +611,15 @@ function encryptDump(dump, manifest, secret) {
     p: SCRYPT.p,
     maxmem: 64 * 1024 * 1024,
   });
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  cipher.setAAD(manifestAad(manifest));
-  const encrypted = Buffer.concat([cipher.update(dump), cipher.final()]);
-  manifest.integrity.authTag = cipher.getAuthTag().toString("base64");
-  return encrypted;
+  try {
+    const cipher = createCipheriv(ALGORITHM, key, iv);
+    cipher.setAAD(manifestAad(manifest));
+    const encrypted = Buffer.concat([cipher.update(dump), cipher.final()]);
+    manifest.integrity.authTag = cipher.getAuthTag().toString("base64");
+    return encrypted;
+  } finally {
+    key.fill(0);
+  }
 }
 
 function decryptDump(encrypted, manifest, secret) {
@@ -635,6 +639,8 @@ function decryptDump(encrypted, manifest, secret) {
     return Buffer.concat([decipher.update(encrypted), decipher.final()]);
   } catch {
     fail("The passphrase or authenticated backup metadata is incorrect.");
+  } finally {
+    key.fill(0);
   }
 }
 
