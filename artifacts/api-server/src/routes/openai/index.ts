@@ -9,6 +9,7 @@ import {
 } from "@workspace/api-zod";
 import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider, isMediaExcluded } from "../../lib/ai-privacy";
 import { archiveScope } from "../../lib/archive-scope.ts";
+import { buildAiMediaExclusionCondition } from "../../lib/ai-media-scope.ts";
 
 const router: IRouter = Router();
 
@@ -16,13 +17,14 @@ const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELE
   AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
 
 /** Query storage breakdown for context. */
-async function getStorageContext(nasPath: string | null): Promise<string> {
+async function getStorageContext(settings: any): Promise<string> {
+  const nasPath = settings?.nasPath;
   if (!nasPath) return "";
   const breakdown = await db.select({
     fileType:   mediaFilesTable.mediaType,
     fileCount:  count(),
     totalBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
-  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath))).groupBy(mediaFilesTable.mediaType).orderBy(desc(sql`SUM(${mediaFilesTable.sizeBytes})`));
+  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))).groupBy(mediaFilesTable.mediaType).orderBy(desc(sql`SUM(${mediaFilesTable.sizeBytes})`));
 
   if (breakdown.length === 0) return "";
   return "Storage by type:\n" + breakdown.map(r =>
@@ -31,13 +33,14 @@ async function getStorageContext(nasPath: string | null): Promise<string> {
 }
 
 /** Query top large files. */
-async function getLargeFilesContext(nasPath: string | null): Promise<string> {
+async function getLargeFilesContext(settings: any): Promise<string> {
+  const nasPath = settings?.nasPath;
   if (!nasPath) return "";
   const large = await db.select({
     filename:  mediaFilesTable.name,
     sizeBytes: mediaFilesTable.sizeBytes,
     folder:    mediaFilesTable.relativePath,
-  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath))).orderBy(desc(mediaFilesTable.sizeBytes)).limit(5);
+  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))).orderBy(desc(mediaFilesTable.sizeBytes)).limit(5);
 
   if (large.length === 0) return "";
   return "Top 5 largest files:\n" + large.map(f =>
@@ -146,8 +149,8 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
   // Storage / breakdown intent
   if (msg.includes("storage") || msg.includes("breakdown") || msg.includes("how much") || msg.includes("space")) {
     const [storageCtx, largeCtx] = await Promise.all([
-      getStorageContext(settings?.nasPath ?? null),
-      getLargeFilesContext(settings?.nasPath ?? null),
+      getStorageContext(settings),
+      getLargeFilesContext(settings),
     ]);
     if (storageCtx) parts.push(storageCtx);
     if (largeCtx) parts.push(largeCtx);
@@ -167,6 +170,7 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
          WHERE content_hash IS NOT NULL
            AND ${NOT_DELETED}
            AND nas_path = ${settings?.nasPath ?? ""}
+           AND ${buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings)}
         GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
@@ -183,7 +187,9 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 }
 
 async function buildSystemPrompt(settings: any): Promise<string> {
-  const nasCondition = settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`;
+  const nasCondition = settings?.nasPath
+    ? and(eq(mediaFilesTable.nasPath, settings.nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))
+    : sql`FALSE`;
   const [{ totalFiles }] = await db.select({ totalFiles: count() }).from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
   const [archiveCountRow] = await db.select({ archiveCount: count() })
     .from(archivesTable)
