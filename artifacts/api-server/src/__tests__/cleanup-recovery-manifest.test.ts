@@ -121,6 +121,7 @@ test("trash root refuses a symlink outside the configured library during manifes
       sizeBytes: 1,
     });
     fs.writeFileSync(path.join(outside, "preserve.txt"), "preserve");
+    fs.rmSync(path.join(nasPath, "WillardAI", ".Trash"), { recursive: true, force: true });
     fs.symlinkSync(outside, path.join(nasPath, "WillardAI", ".Trash"), process.platform === "win32" ? "junction" : "dir");
     assert.throws(
       () => removeTrashManifestEntry(nasPath, path.join(outside, "preserve.txt"), "restore-outside"),
@@ -248,12 +249,12 @@ test("manifest removal cannot target a path outside the active trash root", () =
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const outsidePath = path.join(nasPath, "outside.txt");
   try {
-    appendTrashManifestEntry(nasPath, {
+    fs.writeFileSync(manifestPath(nasPath), JSON.stringify({
       nasPath,
       originalPath: path.join(nasPath, "photo.jpg"),
       trashPath: outsidePath,
       sizeBytes: 1,
-    });
+    }) + "\n");
 
     assert.equal(removeTrashManifestEntry(nasPath, outsidePath, "restore-outside"), false);
     assert.match(fs.readFileSync(manifestPath(nasPath), "utf8"), /outside\.txt/);
