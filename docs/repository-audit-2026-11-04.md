@@ -1602,3 +1602,36 @@ Fast Validation #811 (run 42089569389) failed during workspace TypeScript valida
 **Correction (commit 8a7f00ef6d6ec2cd240e336562b732f4dde96ea8):** The test now lazily imports the repository's existing `@workspace/db` shared pool only when `DATABASE_URL` is present. This reuses the existing database dependency and avoids adding a package or opening a connection during the ordinary targeted test invocation without a database URL.
 
 Fast Validation #811 is recorded as **failed**, not passed. The correction is awaiting its matching latest-head Fast Validation run. No database schema, production data, credentials, or dependencies were changed.
+
+## 2026-11-05 audit batch — packaged Windows updater and validation-only signing
+
+### Packaged updater findings and corrections
+
+**Confirmed findings:**
+- The installed launcher stripped prerelease text and compared the remaining version with PowerShell's `[version]` type. That treated versions such as `1.3.0-alpha.10` and `1.3.0-alpha.2` incorrectly.
+- Concurrent cold starts could both pass the service check and enter update installation.
+- The release ZIP was written directly to its final cache path without a declared size limit or partial-download cleanup.
+- Update failures only warned to the launch console with raw exception text, which may not be visible from a shortcut and can expose local paths.
+- The update-check timestamp was written before startup health checks on the no-update path.
+- Starting the loading window after the update attempt left downloads without visible startup feedback.
+
+**Corrections:**
+- Release selection now validates the signed manifest first and uses strict SemVer identifier ordering, including numeric prerelease components.
+- A per-user Windows mutex serializes cold starts. Concurrent launches wait up to three minutes, then inspect the running service pair.
+- Update downloads use a partial file, reject a HEAD size above 1 GiB, compare the downloaded size, verify the signed manifest-bound SHA-256, and clean partial files after errors or on the next start.
+- Update failures now produce a bounded `update.log` with stage, outcome, exception type, and HTTP status; the shortcut warning is generic. The timestamp is written only after both local services pass readiness checks.
+- The loading window starts before update work and has a five-minute attention threshold.
+- The Windows lifecycle smoke now launches two packaged instances concurrently and checks that only one API and web service pair starts.
+
+### Validation-only installer path
+
+The supplied Windows build output showed that installer compilation completed but the workflow then stopped because `WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64` was missing. The release workflow now permits an unsigned installer only for manual validation-only runs, skips installer trust metadata in that mode, and keeps Authenticode mandatory whenever a release can be published. Validation-only remains the default, and no release is published by this change.
+
+The release-validation guide now records the pinned Ed25519 public-key fingerprint, private-key rotation constraint, required Authenticode secret names, and the rule that unsigned validation installers must not be distributed.
+
+### Validation boundary
+
+- `pnpm run test:release-contracts`: **63 passed, 0 failed**.
+- `node --check` passed for the changed release-contract and release-builder modules; `git diff --check` passed.
+- The Linux workspace has no PowerShell runtime, so the updated packaged launcher and standard-user Windows lifecycle smoke have **not** run here. The concurrent-start integration check is registered in the existing Windows lifecycle smoke and still needs a Windows workflow run.
+- The new workflow condition has not yet been exercised on GitHub. The reported failed workflow did not pass its Authenticode trust step and did not publish a release.

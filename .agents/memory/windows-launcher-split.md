@@ -38,3 +38,9 @@ The packaged loading window must be owned by the launcher and startup branches a
 **Why:** An early launcher exit can leave the browser-based loading page polling forever, hiding database, API, web, or post-update failures from the person who launched the app.
 
 **How to apply:** Start the loader with a process handle, close it before reporting a startup failure, persist actionable diagnostics, and keep a bounded error state in the loader page for launcher crashes that cannot report normally.
+
+The installed Windows app checks for updates on cold start only. If its service pair is already healthy, a second launcher click opens the app without checking again.
+
+**Why:** The user explicitly chose not to run another update check while Willard is already open.
+
+**How to apply:** Preserve this behavior in the packaged launcher; do not add update polling to the already-running shortcut path.

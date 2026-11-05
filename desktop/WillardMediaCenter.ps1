@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $InstallRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $DataRoot = Join-Path $env:LOCALAPPDATA "Willard Media Center"
 $LogRoot = Join-Path $DataRoot "logs"
+$UpdateLog = Join-Path $LogRoot "update.log"
 $PidFile = Join-Path $DataRoot "services.json"
 $SchemaMarker = Join-Path $DataRoot "schema-ready.json"
 $UpdateCheckFile = Join-Path $DataRoot "last-update-check.txt"
@@ -28,6 +29,10 @@ $script:UpdateBackup = $null
 $script:UpdateCandidate = $null
 $UpdateJournal = Join-Path $DataRoot "updates\swap-journal.json"
 $script:UpdateStage = "startup"
+$script:UpdateCheckSucceeded = $false
+$script:StartupMutex = $null
+$script:StartupMutexOwned = $false
+$script:StartupExitCode = 0
 $script:LoadingProcess = $null
 
 try {
@@ -41,6 +46,22 @@ function Good($message) { Write-Host "  [OK] $message" -ForegroundColor Green }
 function Warn($message) { Write-Host "  [!]  $message" -ForegroundColor Yellow }
 function Fail($message) { Write-Host "  [X]  $message" -ForegroundColor Red }
 function Ensure-Folders { New-Item -ItemType Directory -Force -Path $DataRoot, $LogRoot | Out-Null }
+function Write-UpdateDiagnostic($stage, $status, $detail) {
+  try {
+    $line = "{0} stage={1} status={2} detail={3}" -f (Get-Date).ToString("o"), ([string]$stage -replace "[\r\n]+", " "), ([string]$status -replace "[\r\n]+", " "), ([string]$detail -replace "[\r\n]+", " ")
+    $lineBytes = [Text.Encoding]::UTF8.GetByteCount($line) + 2
+    if ((Test-Path -LiteralPath $UpdateLog) -and
+      ((Get-Item -LiteralPath $UpdateLog).Length + $lineBytes) -gt 262144) {
+      Remove-Item -LiteralPath ($UpdateLog + ".1") -Force -ErrorAction SilentlyContinue
+      Move-Item -LiteralPath $UpdateLog -Destination ($UpdateLog + ".1") -Force
+    }
+    Add-Content -LiteralPath $UpdateLog -Value $line -Encoding UTF8
+  } catch {}
+}
+function Set-UpdateStage($stage) {
+  $script:UpdateStage = $stage
+  Write-UpdateDiagnostic $script:UpdateStage "started" "attempt=true"
+}
 function ConvertFrom-WillardSecureString($secureValue) {
   $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureValue)
   try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
@@ -161,7 +182,7 @@ function Report-StartupFailure($message) {
     "Time: $((Get-Date).ToString("o"))",
     "Reason: $message",
     "Logs: $LogRoot",
-    "Next: Check database.log, api-error.log, and web-error.log; then launch Willard again."
+    "Next: Check update.log, database.log, api-error.log, and web-error.log; then launch Willard again."
   )
   try { $details | Set-Content $failureLog -Encoding UTF8 } catch {}
   Fail $message
@@ -182,7 +203,7 @@ function Read-Version {
   if (-not (Test-Path $VersionFile)) { return "0.0.0" }
   try {
     $version = [string]((Get-Content $VersionFile -Raw | ConvertFrom-Json).version).Trim()
-    if ($version -match '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') { return $version }
+    if ($version -match '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$') { return $version }
   } catch {}
   return "0.0.0"
 }
@@ -465,52 +486,65 @@ function Test-Dependencies {
 }
 function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
+  $remoteManifestFile = $null
+  $partialZip = $null
   try {
-    $script:UpdateStage = "manifest check"
+    $updatesDirectory = Join-Path $DataRoot "updates"
+    New-Item -ItemType Directory -Force -Path $updatesDirectory | Out-Null
+    $partialZip = Join-Path $updatesDirectory "release.zip.partial"
+    Remove-Item -LiteralPath $partialZip -Force -ErrorAction SilentlyContinue
+    Set-UpdateStage "manifest check"
     Say "Checking for a newer Willard release..."
     $manifestResponse = Invoke-WebRequest -Uri $UpdateManifest -UseBasicParsing -TimeoutSec 8
     Assert-TrustedDownloadResponse $manifestResponse
     $remote = $manifestResponse.Content | ConvertFrom-Json
     $local = Read-Version
-    $remoteVersion = [version]($remote.version -replace "-.*$", "")
-    if ($remoteVersion -le [version]($local -replace "-.*$", "")) {
+    $remoteManifestFile = Join-Path $updatesDirectory ("release-manifest-" + [guid]::NewGuid().ToString("N") + ".json")
+    $remote | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $remoteManifestFile -Encoding UTF8
+    Set-UpdateStage "manifest signature and version verification"
+    $decisionOutput = & $Node $ReleaseContract "--update-decision" $local $remoteManifestFile 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "The release manifest failed signature verification or version comparison." }
+    $decision = ($decisionOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    if (-not $decision -or $decision.version -ne $remote.version) {
+      throw "The release manifest returned an invalid update decision."
+    }
+    if (-not $decision.available) {
       Good "Willard Media Center $local is current."
-      Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+      $script:UpdateCheckSucceeded = $true
+      Write-UpdateDiagnostic "version check" "up-to-date" ("version=" + $local)
       return
     }
-    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
-      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
-      throw "The release description is incomplete or unsafe."
+    $remoteVersion = [string]$decision.version
+    $stage = Join-Path $updatesDirectory $remoteVersion
+    $zip = Join-Path $updatesDirectory "release.zip"
+    $maximumUpdateBytes = 1GB
+    Set-UpdateStage "release size check"
+    $sizeResponse = Invoke-WebRequest -Uri $remote.artifactUrl -Method Head -UseBasicParsing -TimeoutSec 20
+    Assert-TrustedDownloadResponse $sizeResponse
+    $contentLength = [string]$sizeResponse.Headers["Content-Length"]
+    $expectedBytes = 0L
+    if (-not [long]::TryParse($contentLength, [ref]$expectedBytes) -or
+      $expectedBytes -le 0 -or $expectedBytes -gt $maximumUpdateBytes) {
+      throw "The release server returned an invalid or oversized package."
     }
-    $remoteManifestFile = Join-Path $DataRoot "updates\release-manifest.json"
-    New-Item -ItemType Directory -Force (Split-Path $remoteManifestFile) | Out-Null
-    $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
-    try {
-      $script:UpdateStage = "manifest signature verification"
-      & $Node $ReleaseContract "--verify" $remoteManifestFile
-      if ($LASTEXITCODE -ne 0) { throw "The release description failed signature verification." }
-    } finally {
-      Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
-    }
-    $stage = Join-Path $DataRoot "updates\$($remote.version)"
-    $zip = Join-Path $DataRoot "updates\release.zip"
-    New-Item -ItemType Directory -Force (Split-Path $zip) | Out-Null
-    $script:UpdateStage = "release download"
-    Say "Downloading Willard Media Center $($remote.version)..."
-    $artifactResponse = Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $zip -PassThru -TimeoutSec 120
+    Set-UpdateStage "release download"
+    Say "Downloading Willard Media Center $remoteVersion..."
+    $artifactResponse = Invoke-WebRequest -Uri $remote.artifactUrl -OutFile $partialZip -PassThru -TimeoutSec 120
     Assert-TrustedDownloadResponse $artifactResponse
-    $script:UpdateStage = "checksum verification"
-    $hash = (Get-WillardSha256 $zip).ToLowerInvariant()
-    if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
-    $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
-    try {
-      $script:UpdateStage = "signed artifact verification"
-      & $Node $ReleaseContract "--verify-artifact" $remoteManifestFile $zip
-      if ($LASTEXITCODE -ne 0) { throw "The downloaded release failed signed artifact verification." }
-    } finally {
-      Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    $actualBytes = (Get-Item -LiteralPath $partialZip).Length
+    if ($actualBytes -ne $expectedBytes -or $actualBytes -gt $maximumUpdateBytes) {
+      throw "The downloaded package size did not match the release server."
     }
-    $script:UpdateStage = "release validation"
+    Set-UpdateStage "checksum verification"
+    $hash = (Get-WillardSha256 $partialZip).ToLowerInvariant()
+    if ($hash -ne $remote.sha256.ToLowerInvariant()) { throw "The downloaded release did not pass its safety check." }
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    Move-Item -LiteralPath $partialZip -Destination $zip -Force
+    $partialZip = $null
+    Set-UpdateStage "signed artifact verification"
+    & $Node $ReleaseContract "--verify-artifact" $remoteManifestFile $zip 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "The downloaded release failed signed artifact verification." }
+    Set-UpdateStage "release validation"
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     Expand-Archive -Path $zip -DestinationPath $stage -Force
     $required = @("version.json", "payload-manifest.json", "runtime\node.exe", "desktop\WillardMediaCenter.ps1",
@@ -523,7 +557,7 @@ function Try-Update {
     }
     $stagedVersion = (Get-Content (Join-Path $stage "version.json") -Raw | ConvertFrom-Json).version
     if ($stagedVersion -ne $remote.version) { throw "The downloaded release version does not match its manifest." }
-    $script:UpdateStage = "candidate preparation"
+    Set-UpdateStage "candidate preparation"
     $installParent = Split-Path -Parent $InstallRoot
     $installLeaf = Split-Path -Leaf $InstallRoot
     $candidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
@@ -534,13 +568,15 @@ function Try-Update {
       if (-not (Test-Path (Join-Path $candidate $entry))) { throw "Prepared update is missing: $entry" }
     }
 
-    $script:UpdateStage = "atomic version swap"
+    Set-UpdateStage "atomic version swap"
     Stop-Services
     $backup = Join-Path $installParent ("." + $installLeaf + ".previous-" + $local + "-" + (Get-Date -Format "yyyyMMddHHmmss"))
     Invoke-PackagedVersionSwap $candidate $backup
     foreach ($entry in $required) {
       if (-not (Test-Path (Join-Path $InstallRoot $entry))) { throw "Activated update is missing: $entry" }
     }
+    $script:UpdateCheckSucceeded = $true
+    Write-UpdateDiagnostic "release validation" "verified" ("version=" + $remoteVersion)
     Good "Willard Media Center was updated safely. The prior runnable version is retained until health checks pass."
   } catch {
     if ($candidate -and (Test-Path $candidate)) {
@@ -548,8 +584,21 @@ function Try-Update {
     }
     $statusCode = 0
     try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
-    if ($statusCode -ne 404) {
-      Warn ("Update " + $script:UpdateStage + " skipped: " + $_.Exception.Message)
+    $errorType = "UnknownError"
+    try { $errorType = $_.Exception.GetType().Name } catch {}
+    if ($statusCode -eq 404) {
+      Write-UpdateDiagnostic $script:UpdateStage "no-release" "HTTP-404"
+      Say "No published update is available; starting the installed version."
+    } else {
+      Write-UpdateDiagnostic $script:UpdateStage "skipped" ("errorType=" + $errorType + " httpStatus=" + $statusCode)
+      Warn "Update unavailable; starting the installed version."
+    }
+  } finally {
+    if ($remoteManifestFile -and (Test-Path -LiteralPath $remoteManifestFile)) {
+      Remove-Item -LiteralPath $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($partialZip -and (Test-Path -LiteralPath $partialZip)) {
+      Remove-Item -LiteralPath $partialZip -Force -ErrorAction SilentlyContinue
     }
   }
 }
@@ -564,14 +613,34 @@ try {
     Good "Willard Media Center services stopped."
     exit 0
   }
+  $script:StartupMutex = [System.Threading.Mutex]::new($false, "Local\WillardMediaCenter.Startup")
+  try {
+    $script:StartupMutexOwned = $script:StartupMutex.WaitOne(0)
+  } catch [System.Threading.AbandonedMutexException] {
+    $script:StartupMutexOwned = $true
+    Write-UpdateDiagnostic "startup lock" "recovered" "previous_launcher_abandoned=true"
+  }
+  if (-not $script:StartupMutexOwned) {
+    Say "Another Willard startup or update is in progress; waiting..."
+    try {
+      $script:StartupMutexOwned = $script:StartupMutex.WaitOne([TimeSpan]::FromMinutes(3))
+    } catch [System.Threading.AbandonedMutexException] {
+      $script:StartupMutexOwned = $true
+      Write-UpdateDiagnostic "startup lock" "recovered" "previous_launcher_abandoned=true"
+    }
+  }
+  if (-not $script:StartupMutexOwned) {
+    throw "Another Willard startup or update is still in progress. Wait briefly and try again."
+  }
   $existing = Read-Pids
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
     Start-Process $WebUrl
-    exit 0
+    return
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
   Recover-InterruptedUpdateSwap
+  Start-LoadingScreen
   Try-Update
   if (-not (Ensure-Env)) {
     throw "Willard needs database connection details before it can start. Update '$EnvFile' and launch again."
@@ -587,7 +656,6 @@ try {
   $env:HOST = "127.0.0.1"
     # This local-only launcher explicitly authorizes token-free first-run setup.
     $env:WILLARD_LOCAL_SETUP = "true"
-  Start-LoadingScreen
   $BundledSevenZip = Join-Path $InstallRoot "api-runtime\vendor\7zip\7z.exe"
   if (Test-Path -LiteralPath $BundledSevenZip -PathType Leaf) { $env:WILLARD_7ZIP_PATH = $BundledSevenZip }
   $apiProc = $null
@@ -614,15 +682,30 @@ try {
     Remove-Item $script:UpdateBackup -Recurse -Force -ErrorAction SilentlyContinue
     $script:UpdateBackup = $null
     Remove-UpdateJournal
+  }
+  if ($script:UpdateCheckSucceeded) {
     Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+    Write-UpdateDiagnostic "startup" "healthy" "update_checked=true"
   }
   Good "Media Center is ready."
   Close-LoadingScreen
   Start-Process $WebUrl
 } catch {
-  Stop-Services
-  try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  if ($script:StartupMutexOwned) {
+    Stop-Services
+    try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  }
   Close-LoadingScreen
   Report-StartupFailure $_.Exception.Message
-  exit 1
+  $script:StartupExitCode = 1
+} finally {
+  if ($script:StartupMutexOwned) {
+    try { $script:StartupMutex.ReleaseMutex() } catch {}
+    $script:StartupMutexOwned = $false
+  }
+  if ($script:StartupMutex) {
+    $script:StartupMutex.Dispose()
+    $script:StartupMutex = $null
+  }
 }
+if ($script:StartupExitCode -ne 0) { exit $script:StartupExitCode }

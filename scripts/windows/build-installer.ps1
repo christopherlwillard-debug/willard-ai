@@ -11,8 +11,8 @@ $NodeExeSha256 = "e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e
 $Runtime = Join-Path $Root "build\node-runtime"
 $RuntimeMarker = Join-Path $Runtime "node-runtime.sha256"
 
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
-  throw "WILLARD_VERSION must be MAJOR.MINOR.PATCH."
+if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$') {
+  throw "WILLARD_VERSION must be a valid MAJOR.MINOR.PATCH semantic version."
 }
 
 if (-not (Test-Path (Join-Path $Runtime "node.exe")) -or

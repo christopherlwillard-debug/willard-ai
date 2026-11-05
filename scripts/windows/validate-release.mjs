@@ -9,7 +9,7 @@ import {
   assertLocalHtmlReferences,
   validatePayloadManifest,
 } from "./release-payload.mjs";
-import { validateReleaseManifest } from "../../desktop/release-contract.mjs";
+import { parseVersion, validateReleaseManifest } from "../../desktop/release-contract.mjs";
 import { assertStorageConformance } from "./storage-conformance.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -99,6 +99,7 @@ async function auditResolvedDependencies() {
 export async function validateRelease() {
   const releaseDir = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
   const version = process.env.WILLARD_VERSION || "0.1.0";
+  if (!parseVersion(version)) throw new Error("WILLARD_VERSION must be a valid MAJOR.MINOR.PATCH semantic version.");
   assertStorageConformance();
   assertCanonicalReleaseDirectory(releaseDir, root);
 

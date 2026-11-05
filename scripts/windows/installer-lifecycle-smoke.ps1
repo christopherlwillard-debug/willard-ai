@@ -145,14 +145,39 @@ try {
   $runnerContents = @'
 param(
   [Parameter(Mandatory = $true)][string]$Launcher,
-  [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure")][string]$Mode
+  [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure", "concurrent")][string]$Mode
 )
 $env:WILLARD_SKIP_UPDATE = "1"
 $env:WILLARD_RECOVERY_EXPORT_PATH = '__RECOVERY_EXPORT_PATH__'
 $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = 'installer-lifecycle-recovery-passphrase'
 if ($Mode -eq "failure") { $env:WILLARD_SUPPRESS_STARTUP_DIALOG = "1" }
-if ($Mode -eq "stop") { & $Launcher -Stop } else { & $Launcher }
-exit $LASTEXITCODE
+if ($Mode -eq "concurrent") {
+  $powershell = Join-Path $PSHOME "powershell.exe"
+  $firstOut = Join-Path $env:TEMP "willard-concurrent-first-$PID.out.log"
+  $secondOut = Join-Path $env:TEMP "willard-concurrent-second-$PID.out.log"
+  $first = Start-Process -FilePath $powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`"" -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $firstOut -RedirectStandardError ($firstOut + ".err") -PassThru
+  $second = Start-Process -FilePath $powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`"" -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $secondOut -RedirectStandardError ($secondOut + ".err") -PassThru
+  if (-not $first.WaitForExit(180000) -or -not $second.WaitForExit(180000)) {
+    Stop-Process -Id $first.Id, $second.Id -Force -ErrorAction SilentlyContinue
+    throw "Concurrent launcher processes did not exit within 180 seconds."
+  }
+  $first.Refresh()
+  $second.Refresh()
+  if ($first.ExitCode -ne 0 -or $second.ExitCode -ne 0) {
+    throw ("Concurrent launcher failed:`n" + (Get-Content $firstOut -Raw -ErrorAction SilentlyContinue) +
+      (Get-Content ($firstOut + ".err") -Raw -ErrorAction SilentlyContinue) +
+      (Get-Content $secondOut -Raw -ErrorAction SilentlyContinue) +
+      (Get-Content ($secondOut + ".err") -Raw -ErrorAction SilentlyContinue))
+  }
+  $launcherExitCode = 0
+} elseif ($Mode -eq "stop") {
+  & $Launcher -Stop
+  $launcherExitCode = if ($?) { 0 } else { 1 }
+} else {
+  & $Launcher
+  $launcherExitCode = if ($?) { 0 } else { 1 }
+}
+exit $launcherExitCode
 '@
   $runnerContents.Replace("__RECOVERY_EXPORT_PATH__", $recoveryExportLiteral) | Set-Content $Runner -Encoding ASCII
 
@@ -170,10 +195,14 @@ exit $LASTEXITCODE
     "First install did not create the standard-user Start Menu shortcut."
 
   Write-Host "Lifecycle: first start"
-  $startResult = Invoke-InstalledLauncher "start" "first-start"
+  $startResult = Invoke-InstalledLauncher "concurrent" "first-start"
   Assert-True ($startResult.exitCode -eq 0) ("Installed launcher failed after first install:`n" + $startResult.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Wait-Http "http://127.0.0.1:5000" { param($content) $content -match "<html|<!doctype html" }
+  $apiProcesses = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*api-runtime\dist\index.mjs*" })
+  $webProcesses = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*desktop-web-server.mjs*" })
+  Assert-True ($apiProcesses.Count -eq 1 -and $webProcesses.Count -eq 1) `
+    "Concurrent installed launches started duplicate API or web service processes."
   & $Psql -h localhost -U postgres -d $Database -c "CREATE TABLE IF NOT EXISTS willard_lifecycle_marker (marker text NOT NULL); DELETE FROM willard_lifecycle_marker; INSERT INTO willard_lifecycle_marker (marker) VALUES ('preserve database');"
   if ($LASTEXITCODE -ne 0) { throw "Could not seed external PostgreSQL lifecycle marker." }
   Assert-ExternalState

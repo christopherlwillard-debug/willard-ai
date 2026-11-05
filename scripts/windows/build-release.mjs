@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { assertCanonicalReleaseDirectory, writePayloadManifest } from "./release-payload.mjs";
 import { assertStorageConformance } from "./storage-conformance.mjs";
+import { parseVersion } from "../../desktop/release-contract.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const output = path.resolve(process.env.WILLARD_RELEASE_DIR || path.join(root, "build", "windows"));
@@ -189,7 +190,7 @@ async function pruneBuildOnlyFiles(apiOutput) {
 }
 
 async function main() {
-  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("WILLARD_VERSION must be MAJOR.MINOR.PATCH.");
+  if (!parseVersion(version)) throw new Error("WILLARD_VERSION must be a valid MAJOR.MINOR.PATCH semantic version.");
   assertStorageConformance();
   if (!nodeRuntime) throw new Error("Set WILLARD_NODE_RUNTIME to a directory containing the Windows node.exe runtime.");
   assertCanonicalReleaseDirectory(output, root);

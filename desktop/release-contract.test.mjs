@@ -29,10 +29,15 @@ const unsignedRelease = {
 };
 const release = { ...unsignedRelease, signature: signReleaseManifest(unsignedRelease, privateKey) };
 
-test("compares stable releases and prereleases safely", () => {
+test("compares stable releases and semantic prerelease identifiers safely", () => {
   assert.equal(compareVersions("1.2.0", "1.1.9"), 1);
   assert.equal(compareVersions("1.2.0-beta.1", "1.2.0"), -1);
+  assert.equal(compareVersions("1.2.0-alpha.10", "1.2.0-alpha.2"), 1);
+  assert.equal(compareVersions("1.2.0-alpha.2", "1.2.0-alpha.beta"), -1);
+  assert.equal(compareVersions("1.2.0-alpha", "1.2.0-alpha.1"), -1);
   assert.equal(compareVersions("1.2.0", "1.2.0"), 0);
+  assert.throws(() => compareVersions("1.02.0", "1.2.0"), /MAJOR\.MINOR\.PATCH/);
+  assert.throws(() => compareVersions("1.2.0-01", "1.2.0-1"), /MAJOR\.MINOR\.PATCH/);
 });
 
 test("rejects incomplete or unsafe release descriptions", () => {

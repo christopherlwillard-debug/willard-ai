@@ -8,8 +8,8 @@ $Inno = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
 $Script = Join-Path $Root "installer\WillardMediaCenter.iss"
 
 if (-not (Test-Path $Inno)) { throw "Install Inno Setup 6, then run this script again." }
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
-  throw "WILLARD_VERSION must be MAJOR.MINOR.PATCH."
+if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$') {
+  throw "WILLARD_VERSION must be a valid MAJOR.MINOR.PATCH semantic version."
 }
 
 $output = @(& $Inno "/DMyAppVersion=$Version" $Script 2>&1)

@@ -341,8 +341,8 @@ jobs:
         run: |
           $version = $env:WILLARD_VERSION_INPUT
           if (-not $version) { $version = "0.1.${{ github.run_number }}" }
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
-            throw "Release version must use MAJOR.MINOR.PATCH format."
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$') {
+            throw "Release version must use valid MAJOR.MINOR.PATCH semantic version format."
           }
           "WILLARD_VERSION=$version" >> $env:GITHUB_ENV
           "RELEASE_TAG=v$version" >> $env:GITHUB_ENV
@@ -377,12 +377,13 @@ jobs:
       - name: Compile the Windows installer
         shell: pwsh
         env:
-          WILLARD_REQUIRE_WINDOWS_SIGNING: "true"
+          WILLARD_REQUIRE_WINDOWS_SIGNING: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\compile-installer.ps1
 
       - name: Record installer trust metadata
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         shell: pwsh
         run: |
           $setup = Join-Path $env:GITHUB_WORKSPACE "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
@@ -439,7 +440,7 @@ jobs:
         shell: pwsh
         env:
           PGPASSWORD: "postgres"
-          WILLARD_REQUIRE_WINDOWS_SIGNING: "true"
+          WILLARD_REQUIRE_WINDOWS_SIGNING: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\installer-lifecycle-smoke.ps1

@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$/;
 export const RELEASE_SCHEMA = 2;
 export const RELEASE_PRODUCT = "Willard Media Center";
 export const RELEASE_REPOSITORY = "christopherlwillard-debug/willard-ai";
@@ -61,10 +62,37 @@ function hashFile(filePath) {
 }
 
 export function parseVersion(value) {
-  if (typeof value !== "string" || !VERSION_PATTERN.test(value.trim())) return null;
-  const [core, prerelease = ""] = value.trim().split("-", 2);
-  const parts = core.split(".").map(Number);
-  return { parts, prerelease };
+  if (typeof value !== "string") return null;
+  const match = VERSION_PATTERN.exec(value.trim());
+  if (!match) return null;
+  const [, major, minor, patch, prerelease = ""] = match;
+  return {
+    parts: [major, minor, patch].map(BigInt),
+    prerelease: prerelease
+      ? prerelease.split(".").map((identifier) => ({
+          value: identifier,
+          numeric: /^\d+$/.test(identifier),
+        }))
+      : [],
+  };
+}
+
+function comparePrereleaseIdentifiers(left, right) {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (a.numeric && b.numeric) {
+      const aNumber = BigInt(a.value);
+      const bNumber = BigInt(b.value);
+      if (aNumber !== bNumber) return aNumber > bNumber ? 1 : -1;
+      continue;
+    }
+    if (a.numeric !== b.numeric) return a.numeric ? -1 : 1;
+    if (a.value !== b.value) return a.value > b.value ? 1 : -1;
+  }
+  if (left.length === right.length) return 0;
+  return left.length > right.length ? 1 : -1;
 }
 
 export function compareVersions(left, right) {
@@ -74,9 +102,9 @@ export function compareVersions(left, right) {
   for (let i = 0; i < 3; i += 1) {
     if (a.parts[i] !== b.parts[i]) return a.parts[i] > b.parts[i] ? 1 : -1;
   }
-  if (!a.prerelease && b.prerelease) return 1;
-  if (a.prerelease && !b.prerelease) return -1;
-  return a.prerelease.localeCompare(b.prerelease);
+  if (a.prerelease.length === 0 && b.prerelease.length > 0) return 1;
+  if (a.prerelease.length > 0 && b.prerelease.length === 0) return -1;
+  return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
 export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_KEY, allowUnsigned = false } = {}) {
@@ -160,12 +188,18 @@ export function getUpdateDecision(currentVersion, manifest, options) {
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&
-    ["--verify", "--verify-artifact"].includes(process.argv[2])) {
+    ["--verify", "--verify-artifact", "--update-decision"].includes(process.argv[2])) {
   try {
-    const manifest = JSON.parse((await readFile(process.argv[3], "utf8")).replace(/^\uFEFF/, ""));
+    const manifestPath = process.argv[2] === "--update-decision"
+      ? process.argv[4]
+      : process.argv[3];
+    const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""));
     if (process.argv[2] === "--verify-artifact") {
       await verifyReleaseArtifact(manifest, process.argv[4]);
       console.log("Release signature, binding, and artifact checksum verified.");
+    } else if (process.argv[2] === "--update-decision") {
+      const decision = getUpdateDecision(process.argv[3], manifest);
+      console.log(JSON.stringify({ available: decision.available, version: decision.version }));
     } else {
       validateReleaseManifest(manifest);
       console.log("Release signature and binding verified.");

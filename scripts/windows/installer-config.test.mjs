@@ -399,16 +399,23 @@ test("Windows release workflow builds and publishes the versioned package", () =
     workflow,
     /WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD:\s*\$\{\{\s*secrets\.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD\s*\}\}/,
   );
-  assert.match(workflow, /WILLARD_REQUIRE_WINDOWS_SIGNING:\s*"true"/);
+  assert.match(
+    workflow,
+    /WILLARD_REQUIRE_WINDOWS_SIGNING:\s*\$\{\{\s*github\.event_name\s*!=\s*'workflow_dispatch'\s*\|\|\s*inputs\.validate_only\s*!=\s*true\s*\}\}/,
+  );
   const trustMetadataStep = workflow.slice(
     workflow.indexOf("Record installer trust metadata"),
     workflow.indexOf("Verify replacement Windows recovery from the packaged payload"),
+  );
+  assert.match(
+    trustMetadataStep,
+    /if:\s*\$\{\{\s*github\.event_name\s*!=\s*'workflow_dispatch'\s*\|\|\s*inputs\.validate_only\s*!=\s*true\s*\}\}/,
   );
   assert.match(trustMetadataStep, /Get-AuthenticodeSignature/);
   assert.match(trustMetadataStep, /SignerCertificate/);
   assert.match(trustMetadataStep, /TimeStamperCertificate/);
   assert.match(trustMetadataStep, /expected 'Willard Media Center'/);
-  assert.match(trustMetadataStep, /Release URL:/);
+  assert.match(trustMetadataStep, /Potential release URL \(only if published\):/);
   assert.match(trustMetadataStep, /Signer valid from:/);
   assert.match(trustMetadataStep, /Signer certification path: Valid/);
   assert.match(trustMetadataStep, /Timestamp signer valid from:/);
@@ -572,12 +579,16 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   );
   assert.match(launcher, /throw "Willard needs database connection details/);
 
-  const failureCatch = launcher.slice(launcher.lastIndexOf("} catch {"));
+  const failureReport = launcher.indexOf("  Report-StartupFailure $_.Exception.Message");
+  const failureCatch = launcher.slice(
+    launcher.lastIndexOf("} catch {", failureReport),
+    failureReport + "  Report-StartupFailure".length,
+  );
   assert.ok(
     failureCatch.indexOf("Close-LoadingScreen") <
       failureCatch.indexOf("Report-StartupFailure"),
   );
-  assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 150000/);
+  assert.match(loaderPage, /const deadline = Date\.now\(\) \+ 300000/);
   assert.match(
     loaderPage,
     /const elapsed = document\.getElementById\("elapsed"\)/,
@@ -589,6 +600,28 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
     loaderPage,
     /return;\s*\n\s*}\s*\n\s*window\.setTimeout\(waitForWillard, 800\)/,
   );
+});
+
+test("packaged updates use signed semantic decisions, serialize startup, and bound downloads", () => {
+  assert.match(launcher, /--update-decision/);
+  assert.doesNotMatch(launcher, /\$remote\.version -replace/);
+  assert.match(launcher, /Local\\WillardMediaCenter\.Startup/);
+  assert.match(launcher, /WaitOne\(\[TimeSpan\]::FromMinutes\(3\)\)/);
+  assert.match(launcher, /ReleaseMutex\(\)/);
+  assert.match(launcher, /-Method Head/);
+  assert.match(launcher, /maximumUpdateBytes = 1GB/);
+  assert.match(launcher, /Content-Length/);
+  assert.match(launcher, /release\.zip\.partial/);
+  assert.match(launcher, /Write-UpdateDiagnostic/);
+  assert.match(launcher, /262144/);
+  assert.doesNotMatch(
+    launcher,
+    /Warn \("Update " \+ \$script:UpdateStage \+ ": " \+ \$_.Exception.Message\)/,
+  );
+
+  const healthyWebCheck = launcher.indexOf('Wait-Ready $WebUrl "Media Center" $webProc');
+  const updateTimestamp = launcher.indexOf("Set-Content $UpdateCheckFile");
+  assert.ok(healthyWebCheck >= 0 && updateTimestamp > healthyWebCheck);
 });
 
 test("installer compilation stops on warnings", () => {
@@ -659,6 +692,9 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
   assert.match(installedLifecycleSmoke, /startup-failure\.log/);
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
+  assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent"\)/);
+  assert.match(installedLifecycleSmoke, /Invoke-InstalledLauncher "concurrent"/);
+  assert.match(installedLifecycleSmoke, /Concurrent installed launches started duplicate/);
   assert.match(installedLifecycleSmoke, /Upgrade removed or duplicated the Start Menu shortcut/);
   assert.match(installedLifecycleSmoke, /Uninstall left the Start Menu shortcut behind/);
   assert.match(installedLifecycleSmoke, /willard_lifecycle_marker/);
