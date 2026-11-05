@@ -372,3 +372,10 @@ Remaining archive hardening:
 
 - `getTempDir` sanitized job identifiers to letters, digits, dots, underscores, and hyphens, but allowed the exact values `.` and `..`. `path.join(tempRoot, "..")` could therefore return the parent `WillardAI` directory, and an empty ID could return the shared temp root instead of a per-job directory.
 - Empty and dot-segment IDs now receive unique generated child names. Added regression coverage verifying empty, `.`, and `..` all resolve to distinct directories directly under `WillardAI/temp`. Fast Validation is pending.
+
+
+## Windows alternate-stream and reserved archive names (2026-11-05)
+
+- Archive validation rejected drive-qualified paths, but still accepted colon characters in ordinary components such as `photo.jpg:payload`. On NTFS, a colon can address an alternate data stream; Windows also reserves device names such as `CON` and `AUX` and treats trailing dots/spaces specially. These names can behave differently across Linux and Windows extraction targets.
+- Archive entry validation now rejects Windows-invalid characters, alternate-stream separators, reserved device names (including COM/LPT aliases), and trailing dots/spaces before any extractor runs. The checks are applied consistently so an archive accepted on Linux remains portable to the Windows desktop runtime.
+- Added regressions for ADS names, reserved devices, and trailing dot/space components. Fast Validation is pending.
