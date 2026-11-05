@@ -126,7 +126,7 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
   assert.match(authSource, /authorizeFirstRunSetup/);
   assert.match(authSource, /configuredToken: process\.env\["WILLARD_SETUP_TOKEN"\]/);
   assert.match(authSource, /router\.post\("\/auth\/setup", setupRateLimiter/);
-  assert.match(authSource, /remoteAddress: req\.ip \?\? req\.socket\.remoteAddress/);
+  assert.match(authSource, /remoteAddress: req\.socket\.remoteAddress/);
   assert.match(authSource, /authorization === "token_misconfigured"/);
   assert.match(authSource, /authorization === "token_required" \|\| authorization === "token_invalid"/);
   assert.match(authSource, /status\(503\)/);
