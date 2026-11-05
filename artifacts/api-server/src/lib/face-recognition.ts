@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import crypto from "node:crypto";
-import { db, pool } from "@workspace/db";
+import { pool } from "@workspace/db";
 import { getActiveAppSettings } from "./active-library.ts";
 import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
