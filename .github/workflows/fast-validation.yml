@@ -177,6 +177,9 @@ jobs:
 
       - name: Verify NAS temp path and cleanup safety on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/nas-storage-paths.test.ts
+ 
+      - name: Verify conversion finalization no-overwrite and rollback on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalize.test.ts
 
       - name: Download, hash-verify, and stage official Windows 7-Zip
         shell: pwsh
