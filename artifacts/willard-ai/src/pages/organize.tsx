@@ -902,16 +902,19 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [dispositionDone, setDispositionDone]   = useState(false);
+  const [dispositionDoneLocal, setDispositionDoneLocal] = useState(false);
+  const [dispositionResultLocal, setDispositionResultLocal] = useState<string | null>(null);
 
   const applyDispositionMutation = useApplyOrganizeJobDisposition({
     mutation: {
       onSuccess: (result) => {
         setConfirmingDelete(false);
-        setDispositionDone(true);
+        setDispositionDoneLocal(true);
+        setDispositionResultLocal(result.dispositionResult);
         queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
         queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
-        toast({ title: `Archive ${result.dispositionResult === "deleted" ? "deleted" : "disposed"}` });
+        const label = result.dispositionResult === "deleted" ? "deleted" : result.dispositionResult === "already_gone" ? "is no longer present" : result.dispositionResult.startsWith("moved_to:") ? "moved to processed" : "updated";
+        toast({ title: `Archive ${label}` });
       },
       onError: (err: any) => {
         toast({ title: "Disposition failed", description: err?.message, variant: "destructive" });
@@ -922,9 +925,23 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   const plan      = job.planJson as any;
   const report    = (job as any).reportJson as any ?? null;
   const isRolledBack = job.status === "rolled_back";
+  const persistedDispositionResult = typeof report?.dispositionApplied === "string" ? report.dispositionApplied : null;
+  const persistedDispositionDone = report?.dispositionPending === false && (
+    persistedDispositionResult === "deleted" ||
+    persistedDispositionResult === "already_gone" ||
+    persistedDispositionResult?.startsWith("moved_to:")
+  );
+  const dispositionDone = dispositionDoneLocal || persistedDispositionDone;
+  const effectiveDispositionResult = dispositionResultLocal ?? persistedDispositionResult;
   const needsDeleteConfirm = !isRolledBack
     && job.archiveDisposition === "delete"
     && job.sourceType === "archive"
+    && !dispositionDone
+    && report?.dispositionPending !== false;
+  const needsMoveRetry = !isRolledBack
+    && job.archiveDisposition === "move_to_processed"
+    && job.sourceType === "archive"
+    && report?.dispositionPending === true
     && !dispositionDone;
 
   // Per-type counts from report (populated after execute) or derived from plan routes
@@ -1130,10 +1147,31 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       )}
 
+      {needsMoveRetry && (
+        <div className="space-y-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+          <p className="text-xs font-mono text-amber-300">The files were organized, but the archive could not be moved to the processed folder.</p>
+          {report?.dispositionError && <p className="text-xs text-muted-foreground">{report.dispositionError}</p>}
+          <Button
+            size="sm"
+            className="w-full font-mono"
+            disabled={applyDispositionMutation.isPending}
+            onClick={() => applyDispositionMutation.mutate({ id: job.id, data: { confirm: true } })}
+          >
+            {applyDispositionMutation.isPending ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Moving…</> : "Retry move to processed"}
+          </Button>
+        </div>
+      )}
+
       {dispositionDone && (
         <div className="flex items-center gap-2 p-2.5 text-xs font-mono text-green-400 border border-green-500/30 bg-green-500/5 rounded-lg">
           <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-          Archive deleted successfully.
+          {effectiveDispositionResult === "deleted"
+            ? "Archive deleted successfully."
+            : effectiveDispositionResult === "already_gone"
+              ? "Archive is no longer present. No further deletion was performed."
+              : effectiveDispositionResult?.startsWith("moved_to:")
+                ? "Archive moved to the processed folder."
+                : "Archive disposition completed."}
         </div>
       )}
     </div>
