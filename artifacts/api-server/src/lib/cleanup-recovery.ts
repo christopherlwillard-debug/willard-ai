@@ -1,13 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { canonicalizePath, ensureDirectoryWithinRoot, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 import { isTrashEntryExpired } from "./cleanup-retention.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
+import { getActiveNasPath } from "./active-library.ts";
 
 export type TrashManifestEntry = {
   ts?: string;
@@ -476,9 +476,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
  * run repeatedly after every restart; it never removes an unknown file.
  */
 export async function reconcileCleanupOperations(): Promise<void> {
-  const [settings] = await db.select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable).limit(1);
-  const nasPath = settings?.nasPath?.trim();
+  const nasPath = await getActiveNasPath();
   if (!nasPath) return;
 
   const result = await db.execute(sql`
