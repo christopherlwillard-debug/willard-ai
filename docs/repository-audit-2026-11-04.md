@@ -1370,3 +1370,29 @@ The first strict-ID batch exposed additional instances during the complete route
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Collection membership/merge, face reassignment/merge, library jobs, media details, OpenAI conversations, cleanup pagination | fixed; target test pending | This audit batch | Other non-route inputs and body schemas still require independent validation; no runtime browser test claimed |
+
+
+## Prioritized findings ledger — 2026-11-05
+
+Statuses use the strongest evidence currently available: found, fixed, target-tested, integration-tested, fully-validated, or blocked. Targeted tests are not full feature validation.
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Critical | Organize → replace existing destination | **blocked** | Source inspection: `organize.ts` unlinks the old destination before persisting the incoming move intent. | A failed checkpoint or process exit can lose the old file. Needs a durable replacement journal, verified recovery copy, crash-recovery states, tests, and a retention decision. No partial workaround applied. |
+| Critical | Optimize → conversion worker ownership | **blocked** | `conversion-job-lock.ts` uses a PostgreSQL session advisory lock; filesystem work uses separate pooled DB calls. | If the lock connection is lost while the worker process remains alive, another worker can acquire the lock while the old process may still write. Needs a process-lifetime filesystem mutation gate proven on Windows, local disks, SMB, and NAS. |
+| High | Windows installer lifecycle | **blocked** | The lifecycle smoke exists but is invoked from the Windows release workflow. No release workflow was run. | Clean-machine standard-user install, upgrade, rollback, and uninstall are not validated. A non-publishing test path is still needed. |
+| Medium | Archives → filter correctness and accessibility | **fixed**; latest tests pending | Parser/route/UI/API contract commits: `61f942c98c7dffe70f1805dfd5928e9b2a9da1dd`, `e2708f4ec721cb65402490961df192dc5129a578`, `084096106c7fe8786d7045f1e4e5c958a27e43a6`, `6817c81390eabec14caecd8670b68230faea3440`, `3fcfc8541582651c456bd15da04e04861ad221cb`, `8ba10192d60a4837ab345ae09a4d92d907d7f8e9`. Dependency Review #543 passed; Fast Validation #779 pending. | Focused tests were added but not yet confirmed on the latest head. Actual HTTP/database integration and browser/screen-reader checks remain outstanding. |
+| Medium | Windows updater journal | **integration-tested** | Commit `69091d09cad7deea5fa66306b8b416e6f2c51858`; Fast Validation #754 passed Windows updater preservation/rollback smoke. | Does not prove full installer lifecycle readiness. |
+| Medium | Search accessibility | **target-tested** | Commit `e0d69e50d0033e90984e4aa52b700d3070e24921`; Fast Validation #755 passed focused tests 2/2 and release-contract tests 61/61. | Browser and assistive-technology validation remains outstanding. |
+
+### Archive filter batch
+
+- Size filters now reject malformed, fractional, negative, repeated, and unsafe-integer values; inverted min/max ranges return a validation error.
+- Date-only filters validate calendar dates and order; `dateTo` includes the full selected day via a half-open UTC range.
+- A maximum size of zero is no longer dropped by UI truthiness checks.
+- OpenAPI and generated client/type contracts include the date filters and size bounds; filter controls have accessible names.
+- Fast Validation #776 exposed an invalid generated-Zod file during a pattern-based date-schema experiment. That experiment was reverted to standard OpenAPI `format: date`; do not count #776 as a pass. Fast Validation #777 and latest-head #779 are not yet confirmed complete.
+
+### Validation boundary
+
+Source inspection is complete for this batch. Focused parser, route-wiring, API-contract, and accessibility tests were added. Latest-head targeted tests are pending #779; archive HTTP/database integration and browser/screen-reader testing have not been run. Full release CI was intentionally not run because the Windows release workflow can publish artifacts.
