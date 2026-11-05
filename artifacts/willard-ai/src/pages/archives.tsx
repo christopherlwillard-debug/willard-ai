@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { ListArchivesParams } from "@workspace/api-zod";
+import type { ListArchivesParams } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
