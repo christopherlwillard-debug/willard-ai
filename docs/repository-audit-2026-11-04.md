@@ -524,5 +524,17 @@ Remaining archive hardening:
 - Confirmed a data-loss path in both automatic job completion and manual archive disposition: each used `moveFile(job.sourcePath, dest)` for the processed-archive folder. The helper uses rename semantics that can replace an existing destination on POSIX, so two source archives with the same basename could silently overwrite an earlier processed archive.
 - Replaced both calls with the existing `moveFileNoReplace` helper. If a processed archive with that basename already exists, the move fails closed and the source archive remains in place.
 - Added a route regression asserting both disposition paths use no-replace moves; the helper's existing tests cover the EEXIST/no-overwrite behavior.
-- Validation status: pending on the next Fast Validation run.
+- Fast Validation run [#508](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41947582646) passed on commit `2bccbcf815b5bd9797083e7433b92e45900aa6c1`, including the route regression and helper no-overwrite tests. Dependency Review [#272](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41947582831) also passed.
 
+
+
+## Prevent concurrent organize jobs from overwriting destinations (2026-11-05)
+
+- Confirmed a cross-job race in the initial and resumed organize paths. They check `fs.existsSync(destFile)` before moving, but separate jobs can both observe an absent destination. The shared `verifiedMove` helper then used `renameSync` semantics through `moveFile`; on POSIX, the later rename can silently replace the first job's completed file.
+- A related failure path left an unverified destination behind: `verifiedMove` threw on a post-move hash mismatch/read error before returning its `FileMoveRecord`, so the caller's batch rollback did not include that just-moved file. A later retry could then encounter and keep the unverified destination.
+- Updated `verifiedMove` to use the existing exclusive `moveFileNoReplace` helper. A destination created after the route's conflict check now causes the move to fail with EEXIST, preserving both the source and the other job's destination.
+- If post-move verification fails after this helper has created the destination, it now attempts a no-replace restoration to the staged source path before rethrowing. If restoration itself fails, an `AggregateError` preserves both errors and leaves the remaining destination in place rather than deleting the only available copy.
+- Added focused regressions for a destination appearing between conflict checking and move, and for restoring a hash-mismatch move to staging without leaving an unverified final destination.
+- Implementation commit: `2545e195cbfe89d8d2856cc733bfcc67e02f5911`; regression-test commit: `2a728ec97eb02d8ea2be510de48b5ccb21e1d02d`.
+- Validation is pending for the latest branch head. The prior processed-archive disposition change passed Fast Validation #508 and Dependency Review #272, but those runs predate this latest helper change.
+- Remaining limitation: the existing `conflictPolicy === "replace"` path still deletes the previous destination before a replacement has been safely journaled. Its durable backup/rollback design remains intentionally unmodified and is documented above.
