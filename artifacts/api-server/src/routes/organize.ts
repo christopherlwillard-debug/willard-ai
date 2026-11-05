@@ -693,6 +693,11 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
       const s = Seven.extractFull(archivePath, stagingDir, {
         $bin: getSevenZipPath(),
         overwrite: "a",
+        // Never let 7-Zip materialize archive-provided symbolic links. The
+        // metadata preflight below rejects known link entries; this explicit
+        // negative switch is defense in depth for formats/builds that expose
+        // incomplete link metadata through the list parser.
+        $raw: ["-snl-"],
         $progress: false,
       } as any);
       s.on("end",   resolve);
