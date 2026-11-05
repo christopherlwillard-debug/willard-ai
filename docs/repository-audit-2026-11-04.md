@@ -211,7 +211,7 @@ Remaining archive hardening:
 - Confirmed `secureRemove()` allocated `Buffer.alloc(info.size)` to overwrite temporary PostgreSQL dumps before deletion. For large databases this duplicated the entire dump size in RAM during cleanup and could cause memory exhaustion precisely after backup or restore work.
 - Replaced the single full-size allocation with a bounded 1 MiB zero buffer and positional writes that correctly handle partial writes, then syncs and closes the file before removal. The cleanup remains best-effort and does not claim guaranteed secure erasure on SSDs, copy-on-write filesystems, or network storage.
 - Added a regression test over a file larger than 2 MiB with deliberately partial writes, asserting memory buffer size remains capped, all bytes are overwritten, and the file handle is synced.
-- Fast Validation has not yet run against this commit; test is included in the existing database-backup test command.
+- Fast Validation run `41941085454` passed this bounded-memory cleanup regression in the targeted backend suite.
 
 
 ## Production dependency advisories and patch alignment (2026-11-04)
@@ -352,7 +352,7 @@ Remaining archive hardening:
 
 - ZIP preflight previously inspected only the upper 16-bit Unix file mode for symlinks. Windows-created ZIP entries can instead carry `FILE_ATTRIBUTE_REPARSE_POINT` (0x0400) in the lower DOS attribute word; those entries were not rejected by the pre-extraction link check and could reach the extractor before the post-extraction tree inspection.
 - ZIP link detection now rejects both Unix `S_IFLNK` modes and the Windows reparse-point attribute. Archive path validation also rejects drive-relative names such as `C:relative.txt`, not only fully-qualified drive paths such as `C:\\outside.txt`.
-- Added focused regressions for Windows reparse-point attributes and drive-relative paths. Fast Validation is pending; no validation result is claimed yet.
+- Added focused regressions for Windows reparse-point attributes and drive-relative paths. Both passed in Fast Validation run `41941085454`.
 
 
 ## Backup cryptographic key buffer cleanup (2026-11-05)
@@ -436,3 +436,9 @@ Remaining archive hardening:
 - This validation includes the Windows-portable archive filename rules (ADS, reserved devices, control characters, trailing dots/spaces, case and Unicode collisions, dot-segment handling, and pathless entries), ZIP Unix/Windows reparse-point rejection, drive-relative path rejection, trash tombstone liveness, NAS mount-alias containment, private temporary-directory parent checks, backup key zeroization, and the earlier authentication/backup regressions.
 - Remaining limitations: browser/runtime verification of the uploaded-SVG sandbox CSP is still outstanding. Windows POSIX permission bits are best-effort; the NAS share ACL must restrict the app-managed temporary directories to the service account. The Windows smoke job currently exercises updater and official 7-Zip packaging, not a full Windows-native archive extraction suite; adding that platform-specific archive smoke is the next validation improvement.
 - PR #2 remains open as a draft against `main`, and GitHub reports it mergeable. No main-branch changes, production-data changes, credential changes, or release publication were made.
+
+
+## Regression fixture corrections confirmed by final validation (2026-11-05)
+
+- Targeted run `41940230121` initially reported 119 passing, 2 skipped, and 2 failing tests. The duplicate-path fixture was updated from an empty path component (`./nested//same.txt`) to the portable harmless-dot form (`./nested/same.txt`); the tombstone fixture was corrected to append a real JSONL newline rather than a literal backslash-n.
+- These test-only corrections are in commits `4ea49d1edec4a108d6d9f74e28be068a5de66004` and `49fe5e2497f74bd61ef4c1b32338d72534d5bdd4`. The full targeted backend suite then passed in Fast Validation run `41941085454`.
