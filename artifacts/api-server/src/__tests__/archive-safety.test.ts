@@ -118,6 +118,38 @@ test("normalizes harmless current-directory archive prefixes", () => {
   assert.equal(result.normalizedPath, "folder/file.txt");
 });
 
+test("rejects file-directory prefix collisions in either archive entry order", () => {
+  const conflictingOrders = [
+    [
+      { path: "documents", sizeBytes: 1 },
+      { path: "documents/report.pdf", sizeBytes: 1 },
+    ],
+    [
+      { path: "documents/report.pdf", sizeBytes: 1 },
+      { path: "documents", sizeBytes: 1 },
+    ],
+  ] as const;
+
+  for (const [first, second] of conflictingOrders) {
+    const budget = createArchiveBudget();
+    validateArchiveEntry(first, budget);
+    assertSafetyFailure(
+      () => validateArchiveEntry(second, budget),
+      /conflicts with an existing file|conflicts with an existing directory/,
+    );
+  }
+});
+
+test("allows an explicit directory entry after its child file", () => {
+  const budget = createArchiveBudget();
+  validateArchiveEntry({ path: "documents/report.pdf", sizeBytes: 1 }, budget);
+  const directory = validateArchiveEntry(
+    { path: "documents", sizeBytes: 0, isDirectory: true },
+    budget,
+  );
+  assert.equal(directory.isDirectory, true);
+});
+
 test("bounds entry count, per-file expansion, total expansion, and duplicate paths", () => {
   const countBudget = createArchiveBudget();
   for (let i = 0; i < ARCHIVE_LIMITS.maxEntries; i++) {
