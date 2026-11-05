@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { ensureDirectoryWithinRoot, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { canonicalizePath, ensureDirectoryWithinRoot, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 import { isTrashEntryExpired } from "./cleanup-retention.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
@@ -63,6 +63,39 @@ function trashRoot(nasPath: string): string {
   return ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), nasPath);
 }
 
+function resolveTrashPath(targetPath: string, root: string): string {
+  const canonicalRoot = canonicalizePath(root);
+  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    throw new Error("Trash path is outside the configured trash root");
+  }
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Trash root is not a regular directory");
+  }
+  const components = relative.split(path.sep).filter(Boolean);
+  let current = canonicalRoot;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]!);
+    let info: fs.Stats;
+    try {
+      info = fs.lstatSync(current);
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return path.join(current, ...components.slice(index + 1));
+      }
+      throw error;
+    }
+    if (info.isSymbolicLink()) {
+      throw new Error("Trash path contains a symlink; refusing to follow it");
+    }
+    if (index < components.length - 1 && !info.isDirectory()) {
+      throw new Error("Trash path contains a non-directory parent");
+    }
+  }
+  return current;
+}
+
 function pathKey(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -102,6 +135,7 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
   const filePath = manifestPath(nasPath);
+  resolveTrashPath(entry.trashPath, trashRoot(nasPath));
   const fd = fs.openSync(filePath, "a", 0o600);
   try {
     fs.writeSync(fd, JSON.stringify(entry) + "\n");
@@ -124,8 +158,9 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
   const root = trashRoot(nasPath);
   let resolvedTarget: string;
   try {
-    resolvedTarget = resolveWithinRoot(targetTrashPath, root);
-  } catch {
+    resolvedTarget = resolveTrashPath(targetTrashPath, root);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("symlink")) throw error;
     return false;
   }
   const { entries } = readTrashManifest(nasPath);
@@ -164,7 +199,7 @@ async function markNeedsReview(operationId: string, error: string): Promise<void
 async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
   const source = resolveWithinRoot(op.sourcePath, op.nasPath);
   const trash = op.trashPath
-    ? resolveWithinRoot(op.trashPath, path.join(op.nasPath, "WillardAI", ".Trash"))
+    ? resolveTrashPath(op.trashPath, trashRoot(op.nasPath))
     : null;
   const sourceExists = fs.existsSync(source);
   const trashExists = Boolean(trash && fs.existsSync(trash));
@@ -188,7 +223,7 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
 
   const { entries } = readTrashManifest(op.nasPath);
   if (!entries.some((entry) => {
-    try { return samePath(resolveWithinRoot(entry.trashPath, trashRoot(op.nasPath)), trash); }
+    try { return samePath(resolveTrashPath(entry.trashPath, trashRoot(op.nasPath)), trash); }
     catch { return false; }
   })) {
     appendTrashManifestEntry(op.nasPath, {
@@ -242,7 +277,7 @@ export async function purgeExpiredTrashEntries(nasPath: string): Promise<Expired
     if (!isTrashEntryExpired(entry.expiresAt)) continue;
     result.expired++;
     let trashPath: string;
-    try { trashPath = resolveWithinRoot(entry.trashPath, trash); }
+    try { trashPath = resolveTrashPath(entry.trashPath, trash); }
     catch (error) {
       result.errors.push(error instanceof Error ? error.message : String(error));
       continue;
@@ -287,7 +322,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
   }
 
   const root = trashRoot(op.nasPath);
-  const sourceTrash = resolveWithinRoot(op.sourcePath, root);
+  const sourceTrash = resolveTrashPath(op.sourcePath, root);
   const destination = resolveWithinRoot(op.trashPath, op.nasPath);
   const [row] = await db.execute(sql`
     SELECT id, relative_path AS "relativePath", last_scan_action AS "lastScanAction",
