@@ -1,15 +1,7 @@
-import { db, appSettingsTable, archivesTable } from "@workspace/db";
+import { archivesTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { resolveWithinRoot } from "./nas-storage.ts";
-
-export async function getActiveNasPath(): Promise<string | null> {
-  const [row] = await db
-    .select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable)
-    .limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
-}
+import { getActiveNasPath } from "./active-library.ts";
 
 export function archiveScope(nasPath: string) {
   return eq(archivesTable.nasPath, nasPath);
