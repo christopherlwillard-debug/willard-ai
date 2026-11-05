@@ -71,7 +71,7 @@ export function resolveLibraryTrashPath(targetPath: string, nasPath: string): st
   return resolveTrashPath(targetPath, trashRoot(nasPath));
 }
 
-function resolveTrashPath(targetPath: string, root: string): string {
+export function resolveTrashPath(targetPath: string, root: string): string {
   const canonicalRoot = canonicalizePath(root);
   const relative = path.relative(path.resolve(root), path.resolve(targetPath));
   if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
