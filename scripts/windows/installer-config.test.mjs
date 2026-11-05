@@ -1414,3 +1414,16 @@ test("manual Windows installer validation can skip release publication", () => {
     /if: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true \}\}/,
   );
 });
+
+
+test("packaged updater enforces its signed minimum Windows requirement before downloading", () => {
+  const signatureCheck = launcher.indexOf('"--verify"');
+  const compatibilityCheck = launcher.indexOf('"Windows compatibility check"');
+  const releaseDownload = launcher.indexOf('"release download"');
+  assert.ok(signatureCheck >= 0, "The packaged updater must verify the release signature.");
+  assert.ok(compatibilityCheck > signatureCheck, "Windows compatibility must be checked after signature verification.");
+  assert.ok(releaseDownload > compatibilityCheck, "Windows compatibility must be checked before downloading the artifact.");
+  assert.match(launcher, /Get-CimInstance -ClassName Win32_OperatingSystem/);
+  assert.match(launcher, /--compare-windows/);
+  assert.match(launcher, /minimumWindowsVersion/);
+});

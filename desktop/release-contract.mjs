@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/;
+const WINDOWS_VERSION_PATTERN = /^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$/;
 export const RELEASE_SCHEMA = 2;
 export const RELEASE_PRODUCT = "Willard Media Center";
 export const RELEASE_REPOSITORY = "christopherlwillard-debug/willard-ai";
@@ -122,6 +123,26 @@ export function compareVersions(left, right) {
   return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
+export function parseWindowsVersion(value) {
+  if (typeof value !== "string" || !WINDOWS_VERSION_PATTERN.test(value)) return null;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) return null;
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+export function compareWindowsVersions(left, right) {
+  const a = parseWindowsVersion(left);
+  const b = parseWindowsVersion(right);
+  if (!a || !b) {
+    throw new Error("Windows versions must use MAJOR[.MINOR[.BUILD]] numeric format.");
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
+}
+
 export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_KEY, allowUnsigned = false } = {}) {
   if (!manifest || typeof manifest !== "object") throw new Error("The release description is not valid JSON.");
   if (manifest.schema !== RELEASE_SCHEMA) throw new Error("The release description has an unsupported schema.");
@@ -142,7 +163,11 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
   }
   assertSha256(manifest.sha256, "artifact");
   assertSha256(manifest.sourceSha256, "source artifact");
-  if (manifest.minimumWindowsVersion && typeof manifest.minimumWindowsVersion !== "string") {
+  const minimumWindowsVersion = manifest.minimumWindowsVersion ?? "";
+  if (
+    typeof minimumWindowsVersion !== "string" ||
+    (minimumWindowsVersion !== "" && !parseWindowsVersion(minimumWindowsVersion))
+  ) {
     throw new Error("The release description has an invalid Windows requirement.");
   }
   if (typeof manifest.notes !== "string") throw new Error("The release description has invalid notes.");
@@ -174,7 +199,7 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
     sourceSha256: manifest.sourceSha256.toLowerCase(),
     signature: manifest.signature || "",
     notes: manifest.notes,
-    minimumWindowsVersion: manifest.minimumWindowsVersion ?? "",
+    minimumWindowsVersion,
   };
 }
 
@@ -203,10 +228,12 @@ export function getUpdateDecision(currentVersion, manifest, options) {
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&
-    ["--verify", "--verify-artifact", "--compare"].includes(process.argv[2])) {
+    ["--verify", "--verify-artifact", "--compare", "--compare-windows"].includes(process.argv[2])) {
   try {
     if (process.argv[2] === "--compare") {
       console.log(compareVersions(process.argv[3], process.argv[4]));
+    } else if (process.argv[2] === "--compare-windows") {
+      console.log(compareWindowsVersions(process.argv[3], process.argv[4]));
     } else {
       const manifest = JSON.parse((await readFile(process.argv[3], "utf8")).replace(/^\uFEFF/, ""));
       if (process.argv[2] === "--verify-artifact") {

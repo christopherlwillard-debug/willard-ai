@@ -1905,3 +1905,26 @@ Expanded `scripts/ui-accessibility.test.mjs` with source-contract checks for Sea
 - All code and audit updates remain on `audit/full-repository-review-2026-11`. No changes were made to `main`, production data, credentials, or published releases.
 
 **Next batch:** prioritize the Critical Organize `replace` displaced-file journal and stale organization/conversion worker filesystem fencing. These need durable ownership/recovery design and race/crash tests; do not apply a superficial rename or heartbeat-only workaround. The separate Windows installer lifecycle and signed minimum-Windows-version enforcement findings remain open.
+
+
+## 2026-11-05 follow-up — enforce the signed minimum Windows version before updating
+
+### Finding and correction
+
+**Medium — The signed `minimumWindowsVersion` field was not enforced by the packaged updater.** The release signature authenticated the field, but manifest validation only checked that a truthy value was a string. The Windows launcher verified the signature and then proceeded to download and install a newer release without checking the operating system. A future release raising its Windows requirement could therefore be offered to an unsupported computer.
+
+**Fix in this batch:** the release contract now validates a numeric Windows NT version in `MAJOR[.MINOR[.BUILD]]` form and exposes a comparator used by the packaged PowerShell launcher. The launcher reads the local OS version from `Win32_OperatingSystem.Version`, checks the signed minimum after signature verification and before artifact download, and skips the update without stopping the current working installation when the machine is below the requirement. If Windows version detection fails, the update fails closed while normal startup continues. The current manifest value `10` means Windows NT major version 10 or later (Windows 10/11); a future Windows 11 build requirement can be expressed as `10.0.22000`.
+
+### Regression coverage
+
+- Release-contract tests cover numeric version ordering, Windows 10/11 build boundaries, malformed values, and signed manifest validation.
+- The Windows updater journal smoke now exercises the production comparison helper and verifies the local CIM version probe.
+- Installer source-contract tests assert signature verification precedes the compatibility check and the compatibility check precedes artifact download.
+
+### Prioritized findings ledger — current batch
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Packaged updater ignores signed minimum Windows version | fixed / target-tested pending CI | this batch | Windows CI and actual Windows 10/11 host verification pending; the CIM probe is exercised on the Windows runner |
+
+**Validation classification:** source inspection and regression-test implementation complete. No test or CI pass is claimed until the matching branch-head runs complete. This is not a complete installer lifecycle or release-readiness validation.

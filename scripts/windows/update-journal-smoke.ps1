@@ -2,6 +2,8 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Launcher = Join-Path $Root "desktop\\WillardMediaCenter.ps1"
+$Node = (Get-Command node.exe -ErrorAction Stop).Source
+$ReleaseContract = Join-Path $Root "desktop\release-contract.mjs"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-update-journal-$([guid]::NewGuid().ToString('N'))"
 $UpdateJournal = Join-Path $TempRoot "updates\\swap-journal.json"
 $InstallRoot = Join-Path $TempRoot "install"
@@ -40,7 +42,9 @@ try {
     "Read-UpdateJournal",
     "Remove-UpdateJournal",
     "Restore-UpdateBackup",
-    "Recover-InterruptedUpdateSwap"
+    "Recover-InterruptedUpdateSwap",
+    "Get-InstalledWindowsVersion",
+    "Test-WindowsVersionRequirement"
   )) {
     $functionAst = $ast.Find({
       param($node)
@@ -52,6 +56,14 @@ try {
   }
   $script:UpdateBackup = $null
   $script:UpdateCandidate = $null
+
+  $actualWindowsVersion = Get-InstalledWindowsVersion
+  Assert-True ($actualWindowsVersion -match '^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$') "CIM did not return a supported Windows NT version."
+  Assert-True (Test-WindowsVersionRequirement "10.0.19045" "10") "Windows 10 build 19045 should satisfy the Windows 10 baseline."
+  Assert-True (-not (Test-WindowsVersionRequirement "10.0.19045" "10.0.22000")) "Windows 10 build 19045 must not satisfy a Windows 11 build 22000 requirement."
+  Assert-True (Test-WindowsVersionRequirement "10.0.22000" "10.0.22000") "The minimum Windows build should be inclusive."
+  Assert-True (Test-WindowsVersionRequirement "10.0.22631" "10.0.22000") "A newer Windows build should satisfy the minimum."
+  Assert-True (-not (Test-WindowsVersionRequirement "6.3.9600" "10")) "Windows 8.1 must not satisfy the Windows 10 baseline."
 
   Write-UpdateJournal "prepared" $candidate $backup
   Assert-True (Test-Path -LiteralPath $UpdateJournal -PathType Leaf) "Initial journal was not created."

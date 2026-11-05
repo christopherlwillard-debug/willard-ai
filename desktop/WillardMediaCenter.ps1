@@ -545,6 +545,32 @@ function Test-Dependencies {
   if (-not $env:DATABASE_URL -or $env:DATABASE_URL -match "yourpassword") { Warn "Your local database connection still needs to be configured in '$EnvFile'."; return $false }
   return $true
 }
+function Get-InstalledWindowsVersion {
+  try {
+    $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -Property Version -ErrorAction Stop
+    if (-not $operatingSystem) { throw "Windows did not return operating-system version information." }
+    $version = [string]$operatingSystem.Version
+    if ($version -notmatch '^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$') {
+      throw "Windows returned an unsupported operating-system version value."
+    }
+    return $version
+  } catch {
+    throw "Windows version could not be determined safely: $($_.Exception.Message)"
+  }
+}
+function Test-WindowsVersionRequirement($currentVersion, $minimumVersion) {
+  $comparisonOutput = & $Node $ReleaseContract "--compare-windows" $currentVersion $minimumVersion
+  if ($LASTEXITCODE -ne 0) {
+    throw "The signed Windows version requirement could not be compared safely."
+  }
+  try {
+    $comparison = [int]([string]$comparisonOutput).Trim()
+  } catch {
+    throw "The Windows version comparison returned an invalid result."
+  }
+  return ($comparison -ge 0)
+}
+
 function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
   try {
@@ -577,6 +603,17 @@ function Try-Update {
       }
     } finally {
       Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($remote.minimumWindowsVersion) {
+      $script:UpdateStage = "Windows compatibility check"
+      $currentWindowsVersion = Get-InstalledWindowsVersion
+      if (-not (Test-WindowsVersionRequirement $currentWindowsVersion ([string]$remote.minimumWindowsVersion))) {
+        Warn ("Update " + $remote.version + " requires Windows " + $remote.minimumWindowsVersion +
+          " or later. This computer reports Windows " + $currentWindowsVersion +
+          "; the update was skipped and the installed version was left unchanged.")
+        Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+        return
+      }
     }
     if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
       -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {

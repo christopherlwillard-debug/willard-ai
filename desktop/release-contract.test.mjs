@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   compareVersions,
+  compareWindowsVersions,
   getUpdateDecision,
   signReleaseManifest,
   validateReleaseManifest,
@@ -54,6 +55,27 @@ test("compares stable releases and SemVer prerelease identifiers safely", () => 
   }
 });
 
+test("compares Windows NT versions numerically, including Windows 11 build thresholds", () => {
+  assert.equal(compareWindowsVersions("10.0.19045", "10"), 1);
+  assert.equal(compareWindowsVersions("10.0.22000", "10.0.22000"), 0);
+  assert.equal(compareWindowsVersions("10.0.22631", "10.0.22000"), 1);
+  assert.equal(compareWindowsVersions("10.0.19045", "10.0.22000"), -1);
+  assert.equal(compareWindowsVersions("6.3.9600", "10"), -1);
+
+  for (const invalid of [
+    "Windows 10",
+    "10..22000",
+    "10.00.1",
+    "10.0.22000.1",
+    "10.0.9007199254740992",
+  ]) {
+    assert.throws(
+      () => compareWindowsVersions(invalid, "10"),
+      /Windows versions must use/,
+    );
+  }
+});
+
 test("release-contract CLI compares semantic versions for the Windows launcher", () => {
   const compare = (left, right) => Number(execFileSync(
     process.execPath,
@@ -63,6 +85,13 @@ test("release-contract CLI compares semantic versions for the Windows launcher",
   assert.equal(compare("1.2.0", "1.2.0-beta.1"), 1);
   assert.equal(compare("1.2.0-beta.10", "1.2.0-beta.2"), 1);
   assert.equal(compare("1.2.0-beta.2", "1.2.0-beta.10"), -1);
+  const compareWindows = (current, minimum) => Number(execFileSync(
+    process.execPath,
+    [releaseContractPath, "--compare-windows", current, minimum],
+    { encoding: "utf8" },
+  ).trim());
+  assert.equal(compareWindows("10.0.19045", "10"), 1);
+  assert.equal(compareWindows("10.0.19045", "10.0.22000"), -1);
 });
 
 test("rejects incomplete or unsafe release descriptions", () => {
@@ -71,6 +100,35 @@ test("rejects incomplete or unsafe release descriptions", () => {
   assert.throws(() => validateReleaseManifest({ ...release, product: "Other App" }, { publicKey }), /wrong product/);
   assert.throws(() => validateReleaseManifest({ ...release, sha256: "c".repeat(64) }, { publicKey }), /signature/);
   assert.throws(() => validateReleaseManifest({ ...release, artifactUrl: "https://evil.example/download.zip" }, { publicKey }), /artifact address/);
+});
+
+test("validates signed minimum Windows requirements", () => {
+  const windows11Unsigned = { ...unsignedRelease, minimumWindowsVersion: "10.0.22000" };
+  const windows11Release = {
+    ...windows11Unsigned,
+    signature: signReleaseManifest(windows11Unsigned, privateKey),
+  };
+  assert.equal(
+    validateReleaseManifest(windows11Release, { publicKey }).minimumWindowsVersion,
+    "10.0.22000",
+  );
+
+  for (const invalid of [
+    "Windows 11",
+    "10..22000",
+    "10.00.1",
+    "10.0.22000.1",
+    "10.0.9007199254740992",
+  ]) {
+    assert.throws(
+      () => signReleaseManifest({ ...unsignedRelease, minimumWindowsVersion: invalid }, privateKey),
+      /Windows requirement/,
+    );
+  }
+  assert.throws(
+    () => validateReleaseManifest({ ...release, minimumWindowsVersion: 0 }, { publicKey }),
+    /Windows requirement/,
+  );
 });
 
 test("only offers a newer verified release", () => {

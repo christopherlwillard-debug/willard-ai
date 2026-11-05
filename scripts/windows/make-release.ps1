@@ -37,6 +37,7 @@ $sourceArtifactUrl = "$($ArtifactBaseUrl.TrimEnd('/'))/WillardMediaCenter-$Versi
   sourceArtifactUrl = $sourceArtifactUrl
   sourceSha256 = $sourceHash
   notes = "See the release notes for this version."
+  # Windows NT version (major.minor.build). "10" covers Windows 10 and 11; use 10.0.22000 to require build 22000 or later.
   minimumWindowsVersion = "10"
 } | ConvertTo-Json | Set-Content $manifest -Encoding UTF8
 node (Join-Path $Root "scripts/windows/sign-release.mjs") $manifest
