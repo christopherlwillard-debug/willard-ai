@@ -18,7 +18,7 @@ import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/lib
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
-import { getActiveNasPath } from "../lib/active-library.ts";
+import { getActiveNasPath, getActiveAppSettings } from "../lib/active-library.ts";
 import { CapacityAdmissionError } from "../lib/capacity-service.ts";
 
 const router = Router();
@@ -66,11 +66,10 @@ router.get("/library/health", async (_req: Request, res: Response) => {
   const activeId = getActiveJobId(nasPath ?? undefined);
   const activeJob = activeId !== null ? getJobProgress(activeId) : null;
   const lastCompleted = activeId === null ? getLastCompletedProgress() : null;
-  const [row] = await db.select({ lastScanAt: appSettingsTable.lastScanAt })
-    .from(appSettingsTable).limit(1);
+  const settings = await getActiveAppSettings();
   res.json({
     ...health,
-    lastScanAt: row?.lastScanAt?.toISOString() ?? null,
+    lastScanAt: settings?.lastScanAt?.toISOString() ?? null,
     activeJob,
     lastCompleted,
     watcher: getWatcherSnapshot(),
@@ -108,7 +107,11 @@ router.post("/library/reconnect-ack", (_req: Request, res: Response) => {
 // ── POST /api/library/indexing/pause | resume — user-facing indexing switch ──
 
 router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
-  await db.update(appSettingsTable).set({ indexingPaused: true });
+  const settings = await getActiveAppSettings();
+  if (settings) {
+    await db.update(appSettingsTable).set({ indexingPaused: true })
+      .where(eq(appSettingsTable.id, settings.id));
+  }
   const nasPath = await getNasPath();
   const activeId = getActiveJobId(nasPath ?? undefined);
   if (activeId !== null) requestPause(activeId);
@@ -117,7 +120,11 @@ router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
 });
 
 router.post("/library/indexing/resume", async (_req: Request, res: Response) => {
-  await db.update(appSettingsTable).set({ indexingPaused: false });
+  const settings = await getActiveAppSettings();
+  if (settings) {
+    await db.update(appSettingsTable).set({ indexingPaused: false })
+      .where(eq(appSettingsTable.id, settings.id));
+  }
   // Resume the most recent genuinely-PAUSED job (not INTERRUPTED_BY_RESTART).
   // INTERRUPTED_BY_RESTART jobs must be explicitly resumed by the user via
   // POST /api/library/jobs/:id/resume, not auto-resumed on indexing enable.
@@ -156,17 +163,7 @@ router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
 
   try {
     // Load current scanner settings
-    const [settingsRow] = await db.select({
-      ignoredFolders:    appSettingsTable.ignoredFolders,
-      ignoredExtensions: appSettingsTable.ignoredExtensions,
-      ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
-      ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
-      ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
-      ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
-      ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
-      followSymlinks:     appSettingsTable.followSymlinks,
-      indexOtherFiles:    appSettingsTable.indexOtherFiles,
-    }).from(appSettingsTable).limit(1);
+    const settingsRow = await getActiveAppSettings();
 
     const { walkNas } = await import("../lib/library-engine/indexer");
     const { getWillardAIDir } = await import("../lib/nas-storage");
@@ -800,7 +797,7 @@ router.patch("/library/thumbnails/quality", async (req: Request, res: Response) 
     return;
   }
 
-  const [existing] = await db.select({ id: appSettingsTable.id }).from(appSettingsTable).limit(1);
+  const existing = await getActiveAppSettings();
   if (!existing) {
     res.status(400).json({ error: "Settings not found" });
     return;
