@@ -186,9 +186,9 @@ export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEn
 }
 
 /**
- * Remove one manifest record with a replace-then-rename write. A crash before
- * the rename leaves the old manifest intact; a crash after it is safe because
- * the restore operation remains durable until it reaches RECORDED.
+ * Mark one manifest record as removed by appending a tombstone. The trash
+ * file must already be absent; this keeps recoverable media visible if a
+ * caller fails before completing its filesystem move or purge.
  */
 export function removeTrashManifestEntry(nasPath: string, targetTrashPath: string, operationId: string): boolean {
   const filePath = manifestPath(nasPath);
