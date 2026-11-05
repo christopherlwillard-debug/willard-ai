@@ -8,4 +8,5 @@
 
 export interface AuthSetupInput {
   password: string;
+  setupToken?: string;
 }
