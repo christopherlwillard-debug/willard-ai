@@ -2403,7 +2403,10 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
           .set({ fileMoves: merged as any })
           .where(eq(organizationJobsTable.id, id));
       } catch (e: any) {
-        send("log", { message: `WARN: fileMoves checkpoint failed: ${e.message ?? String(e)}` });
+        // A resume pass must not continue after losing its durable move journal.
+        // The catch path rolls back this pass and preserves its journal if that
+        // rollback is incomplete.
+        throw new Error(`Resume file-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
       if ((i + 1) % 5 === 0 || moved + skippedAlready + conflictSkipped + excluded >= sourceFiles.length) {
@@ -2463,13 +2466,18 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
     const rolledBack = await rollbackMoves(newMoves, () => {});
-
-    // Restore fileMoves in DB to existingMoves so the next resume attempt starts from
-    // a clean baseline (rolled-back files are gone from disk; DB must match disk state)
+    const resumeRollbackComplete = rolledBack === newMoves.length;
+    // Only discard this pass's journal when every new move was restored and
+    // checksum-verified. Keep all records if rollback is partial so Recovery
+    // Center still has the evidence needed for manual/repeated recovery.
+    const retainedMoves = resumeRollbackComplete ? existingMoves : [...existingMoves, ...newMoves];
+    const recoveryError = resumeRollbackComplete
+      ? `Resume failed: ${errMsg}. Rolled back ${rolledBack}/${newMoves.length} new move(s) from this resume pass.`
+      : `Resume failed: ${errMsg}. Rollback incomplete: ${rolledBack}/${newMoves.length} new move(s) restored; the full move journal was retained for manual recovery.`;
     await db.update(organizationJobsTable).set({
       status: "failed",
-      fileMoves: existingMoves as any,
-      error: `Resume failed: ${errMsg}. Rolled back ${rolledBack}/${newMoves.length} new move(s) from this resume pass.`,
+      fileMoves: retainedMoves as any,
+      error: recoveryError,
     }).where(eq(organizationJobsTable.id, id)).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
