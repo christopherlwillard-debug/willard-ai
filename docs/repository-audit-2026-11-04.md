@@ -1856,3 +1856,52 @@ A source-order review found that the initial no-op branch could return success b
 - No merge, close, force-push, rebase, main-branch change, production-data change, credential change, or release publication was performed.
 
 **Validation classification:** Fast Validation #829 and #830 plus Dependency Review #592/#593 passed. These are targeted, integration, and Windows smoke validations. They are not full CI, a complete installed-product lifecycle, or browser-based accessibility validation.
+
+## 2026-11-05 audit batch — keyboard-operable media workflows and artifact base-path routing
+
+### Findings and fixes
+
+**Medium — Search result cards were pointer-only.** The result card was a clickable `div`, so keyboard users had no native open action. The Similar action was nested inside the same click surface and hidden until hover. The card now has a labelled native open button, while Similar is a separate button; its visibility works on touch and keyboard focus.
+
+**Medium — Media grid actions could trigger the wrong action.** The thumbnail container used `role="button"` with nested select/favorite buttons. Its key handler could also open the viewer when a keyboard user activated a child control. Selection and favorite controls also lacked reliable accessible names and were visually hidden on touch. The card now uses a native open button with independent labelled select/favorite buttons, `aria-pressed` state, focus indicators, and touch-visible controls. The selected check remains visible.
+
+**Medium — People grid had the same nested-action problem.** A role-button tile contained a Move face button. It is now a native open button with a separate labelled Move face action; the action is visible on touch and keyboard focus.
+
+**Medium — Documents and Organize history rows were not keyboard-operable.** Their table rows opened only through pointer clicks. Both now expose a labelled native button in the primary filename cell. Full-row pointer opening is retained, with an event guard so activating an inner button does not trigger the row action a second time. Organize's filename label also normalizes Windows backslashes before extracting the basename, so it no longer displays the full Windows source path.
+
+**Medium — Cleanup duplicate choices were pointer-only.** The candidate tile is now a native button with a descriptive accessible name, `aria-pressed` selection state, and a visible focus indicator.
+
+**Medium — Three frontend API URLs bypassed the configured artifact base path.** Vite sets `BASE_PATH` per artifact, but Cleanup thumbnails, Media Detail streaming, and Optimize scans hardcoded root-relative `/api` URLs. Those requests now use the shared `apiUrl` helper. A source scan of the audited web page set found no remaining hardcoded root-relative `/api/` URLs in those pages.
+
+### Focused regression coverage
+
+Expanded `scripts/ui-accessibility.test.mjs` with source-contract checks for Search, Media, People, Documents, Organize, Cleanup, Windows path basename handling, and the three base-path URLs. These are focused source-contract tests, not browser or screen-reader tests.
+
+### Validation
+
+- Fast Validation #856 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42126912114)) passed on code head `83bd8216c2dad78346baefff67161ea9ebf458f2`. Both jobs passed: Linux `validate` and `windows-archive-and-updater-smoke`.
+- Linux validation included workspace typecheck/generated API contracts, Expo configuration, desktop web-server safety, release/storage contracts (including the new UI source-contract tests), official 7-Zip checks, PostgreSQL media-filter and conversion-lock/finalization integration, and targeted backend regressions.
+- Windows smoke included PowerShell parsing, launcher concurrency, environment-file encoding, media rename, storage migration concurrency/no-overwrite, NAS temporary-path cleanup, conversion finalization, official 7-Zip symlink metadata, packaged updater journal writes, and developer updater preservation/rollback.
+- Dependency Review #619 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42126912567)) passed on the same code head.
+- Earlier Fast Validation attempts #842, #848, and #853 exposed defects in the newly added static test assertions (invalid regex escaping and over-specific source matching); those test-only issues were corrected before #856. The application typecheck passed in those attempts. Only #856 is counted as the successful latest-head validation.
+- No browser-based keyboard/screen-reader run, real non-root Replit deployment, or complete installed-product lifecycle was performed. The Windows job above is the existing archive/updater smoke, not the full Inno Setup clean-install/upgrade/uninstall lifecycle. No release workflow was run.
+
+### Prioritized findings ledger — current batch
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search result card keyboard and touch access | target-tested | `e4ff6ade`, `bfb83d89`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Media grid open/select/favorite action separation | target-tested | `aa1ce941`, `940e2adb`, `186c29c7`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | People face-grid open/Move face controls | target-tested | `1fafc482`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Documents and Organize table navigation | target-tested | `191a86d9`, `552914e6`, `7cdfe938`, `4854e134`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Cleanup duplicate keep selection | target-tested | `1e7cb573`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Cleanup, Media Detail, and Optimize artifact base-path URLs | target-tested | `ff270f26`, `49ae062a`, `390361b6`; Fast Validation #856 | Live non-root Replit deployment verification |
+| Low | Windows source-path basename in Organize history | target-tested | `bb567532`, `c372c25a`; Fast Validation #856 | Browser verification on an actual Windows library path |
+
+### PR and safety snapshot
+
+- The validated application-code head was `83bd8216c2dad78346baefff67161ea9ebf458f2`.
+- PR #2 remained open, draft, unmerged, and mergeable at that head.
+- All code and audit updates remain on `audit/full-repository-review-2026-11`. No changes were made to `main`, production data, credentials, or published releases.
+
+**Next batch:** prioritize the Critical Organize `replace` displaced-file journal and stale organization/conversion worker filesystem fencing. These need durable ownership/recovery design and race/crash tests; do not apply a superficial rename or heartbeat-only workaround. The separate Windows installer lifecycle and signed minimum-Windows-version enforcement findings remain open.
