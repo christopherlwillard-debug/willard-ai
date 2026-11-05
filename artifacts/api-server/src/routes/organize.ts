@@ -30,7 +30,7 @@ import {
   validateArchiveEntry,
   writeArchiveFileAtomically,
 } from "../lib/archive-safety.ts";
-import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, walkDirectoryFiles, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
@@ -740,22 +740,10 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
 }
 
 function walkDir(dirPath: string): Array<{fullPath: string; relativePath: string; sizeBytes: number; fileType: string}> {
-  const results: Array<{fullPath: string; relativePath: string; sizeBytes: number; fileType: string}> = [];
-  function walk(dir: string) {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(full); }
-      else if (e.isFile()) {
-        let stat: fs.Stats;
-        try { stat = fs.statSync(full); } catch { continue; }
-        results.push({ fullPath: full, relativePath: path.relative(dirPath, full), sizeBytes: stat.size, fileType: getFileType(path.extname(e.name).replace(".", "").toLowerCase()) });
-      }
-    }
-  }
-  walk(dirPath);
-  return results;
+  return walkDirectoryFiles(dirPath).map(file => ({
+    ...file,
+    fileType: getFileType(path.extname(file.fullPath).replace(".", "").toLowerCase()),
+  }));
 }
 
 async function callAiConfidence(planSummary: object): Promise<{ confidence: number; reason: string; recommendation: string } | null> {
