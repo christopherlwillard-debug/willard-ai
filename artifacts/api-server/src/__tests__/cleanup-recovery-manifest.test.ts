@@ -13,6 +13,7 @@ const {
   manifestPath,
   readTrashManifest,
   removeTrashManifestEntry,
+  resolveLibraryTrashPath,
   reconcileCleanupOperations,
 } = await import("../lib/cleanup-recovery.ts");
 const { pool } = await import("@workspace/db");
@@ -154,7 +155,8 @@ test("trash tombstones match entries through a configured NAS mount alias", (con
       sizeBytes: 1,
     });
     assert.equal(readTrashManifest(aliasRoot).entries.length, 1);
-    assert.equal(removeTrashManifestEntry(aliasRoot, trashPath, "restore-alias"), true);
+    const canonicalTrashPath = resolveLibraryTrashPath(trashPath, aliasRoot);
+    assert.equal(removeTrashManifestEntry(aliasRoot, canonicalTrashPath, "restore-alias"), true);
     assert.equal(readTrashManifest(aliasRoot).entries.length, 0);
   } finally {
     fs.rmSync(aliasParent, { recursive: true, force: true });
