@@ -35,6 +35,12 @@ test("conversion retry refuses awaiting-action jobs without deleting staged outp
   const guard = retryRoute.indexOf('if (job.status !== "failed")');
   const reset = retryRoute.indexOf(".update(conversionJobsTable)", guard);
   assert.ok(guard >= 0 && reset > guard, "the status guard must run before resetting the job");
+  const retryWhere = retryRoute.slice(retryRoute.indexOf(".where(", reset), retryRoute.indexOf(".returning()", reset));
+  assert.match(retryWhere, /eq\(conversionJobsTable\.id, id\)/);
+  assert.match(retryWhere, /eq\(conversionJobsTable\.nasPath, job\.nasPath\)/);
+  assert.match(retryWhere, /eq\(conversionJobsTable\.status, "failed"\)/);
+  assert.match(retryRoute, /if \(!updated\)/);
+  assert.match(retryRoute, /changed before retry could be claimed/);
 });
 
 const walkerStart = source.indexOf("function walkForConversion(");
