@@ -141,6 +141,7 @@ jobs:
             artifacts/api-server/src/__tests__/private-media-response.test.ts \
             artifacts/api-server/src/__tests__/media-rename.test.ts \
             artifacts/api-server/src/__tests__/auth-session-guard.test.ts \
+            artifacts/api-server/src/__tests__/setup-authorization.test.ts \
             artifacts/api-server/src/__tests__/install-auth-reliability.test.ts \
             artifacts/api-server/src/__tests__/empty-folder-scan.test.ts \
             artifacts/api-server/src/__tests__/ai-library-context.test.ts \
