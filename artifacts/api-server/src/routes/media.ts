@@ -13,7 +13,7 @@ import { parseBoundedInteger, RequestValidationError } from "../lib/request-vali
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
-import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders } from "../lib/private-media-response.ts";
+import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
 import { renameFileWithPersistence } from "../lib/media-rename.ts";
 
 const router = Router();
@@ -496,10 +496,10 @@ function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
   res.setHeader("Content-Type", "image/webp");
   setPrivateMediaResponseHeaders(res);
   const stream = fs.createReadStream(thumbPath);
-  stream.on("error", () => {
+  stream.on("error", (streamError) => {
     _thumbCache.delete(id);
-    if (!res.headersSent) res.status(404).json({ error: "Thumbnail not found" });
-    else res.end();
+    logger.warn({ err: streamError, mediaId: id }, "thumbnail stream failed");
+    handlePrivateMediaStreamError(res, streamError, "Thumbnail not found");
   });
   stream.pipe(res);
 }
