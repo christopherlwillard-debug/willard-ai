@@ -1187,3 +1187,5 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Added a first-run token field to the setup screen, documented the environment variable in the API contract, updated the generated request type, and added direct helper plus route-source regression tests.
 - Hosted/LAN deployment action: before exposing a fresh installation, set a unique `WILLARD_SETUP_TOKEN` server secret (generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) and enter the same value in the first-run screen. Do not commit the secret. Local desktop setup from localhost remains token-free.
 - Validation: pending GitHub Actions on the audit branch. No production credentials or data were changed. Existing installations with a password are unaffected; the guard only matters while the first-run password is unset.
+
+- Hardening detail: the loopback exception uses the TCP socket peer address rather than `req.ip` or `X-Forwarded-For`, so a client cannot spoof a localhost address through forwarded headers. The helper's five isolated Node tests passed in a staged-copy run; the full repository workflow remains unverified.
