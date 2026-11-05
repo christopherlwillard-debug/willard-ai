@@ -219,7 +219,7 @@ export default function Archives() {
       <div className="flex flex-wrap gap-3 p-4 bg-secondary/30 rounded-lg border items-center">
         <Filter className="w-4 h-4 text-muted-foreground flex-shrink-0" />
         <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[150px] h-9 font-mono text-xs">
+          <SelectTrigger aria-label="Archive status" className="w-[150px] h-9 font-mono text-xs">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -230,7 +230,7 @@ export default function Archives() {
           </SelectContent>
         </Select>
         <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[150px] h-9 font-mono text-xs">
+          <SelectTrigger aria-label="Archive category" className="w-[150px] h-9 font-mono text-xs">
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
@@ -248,19 +248,19 @@ export default function Archives() {
         </Select>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">From</span>
-          <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
+          <Input aria-label="Modified on or after" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">To</span>
-          <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
+          <Input aria-label="Modified on or before" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">Min MB</span>
-          <Input type="number" min="0" placeholder="0" value={minSizeMb} onChange={(e) => { setMinSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+          <Input aria-label="Minimum archive size in megabytes" type="number" min="0" placeholder="0" value={minSizeMb} onChange={(e) => { setMinSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">Max MB</span>
-          <Input type="number" min="0" placeholder="∞" value={maxSizeMb} onChange={(e) => { setMaxSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+          <Input aria-label="Maximum archive size in megabytes" type="number" min="0" placeholder="∞" value={maxSizeMb} onChange={(e) => { setMaxSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
         </div>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="font-mono text-xs h-9">Clear</Button>
