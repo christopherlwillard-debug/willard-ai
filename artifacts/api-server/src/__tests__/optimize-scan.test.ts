@@ -151,5 +151,5 @@ test("scan-limit state is cached, returned by the API, and warned about in Optim
   assert.match(optimizePageSource, /scanLimitReached\?:\s*boolean/);
   assert.match(optimizePageSource, /scanResult\.scanLimitReached/);
   assert.match(optimizePageSource, /Scan limit reached/);
-  assert.match(optimizePageSource, /videos outside the scan window are safely skipped/);
+  assert.match(optimizePageSource, /Videos outside the scan window are safely skipped during conversion/);
 });
