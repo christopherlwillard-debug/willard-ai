@@ -812,3 +812,12 @@ Remaining archive hardening:
 - Extended `media-health-scan.test.ts` with a route-source regression ensuring the directory walker no longer suppresses read errors.
 - Commits: route `bd989dba145538c9a46b50e960735ce94156bdd4`; test `7f8f87768f4d0a81b9930f209cc9a0c504e97b50`.
 - Validation: pending GitHub Fast Validation. The existing local helper tests cover missing-file classification but do not execute the full Media Health route or a permission-denied nested-directory fixture.
+
+### Legacy scan adapter, media detail, and scan completion use the canonical settings row
+
+- Found additional legacy lookups in the compatibility scan API and media-detail API; both now use `getActiveNasPath()`.
+- The library job engine already used the canonical helper for several other settings reads, but its scan preference load still used unordered `LIMIT 1`. It now uses `getActiveAppSettings()`.
+- Fixed a related multi-settings write hazard: scan completion previously updated `lastScanAt` for every Settings row whose `nasPath` matched. It now re-reads the canonical settings row, verifies the active path still matches the path the job scanned, and updates only that row by ID. If the user switches libraries while a scan is running, the old scan cannot overwrite the new library's last-scan timestamp.
+- Added source regressions for the legacy scan adapter, media detail, and job-engine preference and completion-write behavior.
+- Commits: scan adapter `c942d8fa367cfefd26fb305aaffb3cd97e5f4fc4`; media detail `ffe9bc3bdb4973c3d03bbc5c5eca3d5bc7416a5b`; job engine `4e31179777fc076fe4217a5ba1f23797f9a8ad32`; regression `98d77b2b0ece33ebd7b45a531d9d5d6a5634c1d2`.
+- Validation: static regression added to Fast Validation; full typecheck and live scan/switch integration test still pending CI execution.
