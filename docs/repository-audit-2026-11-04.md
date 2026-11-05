@@ -1278,7 +1278,7 @@ The first duplicate-helper cleanup was followed by a stale-file update that rein
 
 **Correction:** Removed only the trailing orphaned fragment, retaining the complete `Ensure-EnvFile` implementation (32-byte OS cryptographic secret and UTF-8 without BOM) and all 55 unique helper definitions. The file now ends at the complete `Wait-ForUrl` function. Added regression assertions that the final helper is complete at end-of-file and no orphaned `SESSION_SECRET` write fragment follows it.
 
-**Commits:** implementation `2301c9a93a36b3b7e7c796551ab137f8826395d6`; regression `22a7287d4e2d9b5351620a5114557842f13c5cba`; assertion-pattern correction follows in this audit batch.
+**Commits:** implementation `2301c9a93a36b3b7e7c796551ab137f8826395d6`; regression `22a7287d4e2d9b5351620a5114557842f13c5cba`; regex assertion correction `e672563485067387467cae86eeba94782aa3ecc8`.
 
 **Validation:** Not yet run on GitHub Actions for this batch. The source boundary and helper count were inspected after the edit; the new regression and Windows PowerShell parser/runtime smoke must pass before this correction is marked validated.
 
