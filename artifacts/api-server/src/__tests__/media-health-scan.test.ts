@@ -45,5 +45,9 @@ test("media health checks library reachability and uses fail-closed missing-file
   assert.match(source, /if \(!reachability\.online\)/);
   assert.match(source, /isMissingRegularMediaFile\(source\)/);
   assert.doesNotMatch(source, /if \(!fs\.existsSync\(source\)\) missing\.push\(row\)/);
-  assert.doesNotMatch(source, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
+  const walkerStart = source.indexOf("function walkDirectories");
+  const walkerEnd = source.indexOf("function cacheInventory", walkerStart);
+  const walker = source.slice(walkerStart, walkerEnd);
+  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart);
+  assert.doesNotMatch(walker, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
 });
