@@ -213,10 +213,13 @@ export function validateArchiveEntry(
   }
 
   const sizeBytes = entrySize(entry.sizeBytes);
-  if (budget.paths.has(canonicalPath)) {
+  // Archives may be previewed on Linux and extracted later on Windows or
+  // macOS. Reject names that collide on common case-insensitive filesystems.
+  const collisionKey = canonicalPath.normalize("NFC").toLowerCase();
+  if (budget.paths.has(collisionKey)) {
     throw new ArchiveSafetyError(`Archive contains duplicate entry path "${rawPath}"`);
   }
-  budget.paths.add(canonicalPath);
+  budget.paths.add(collisionKey);
   budget.entryCount++;
   if (budget.entryCount > ARCHIVE_LIMITS.maxEntries) {
     throw new ArchiveSafetyError(
