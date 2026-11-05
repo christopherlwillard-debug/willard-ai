@@ -22,7 +22,7 @@ import {
   type DirCacheEntry, type FileEntry,
 } from "./indexer.ts";
 import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
-import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensurePrivateDir } from "../nas-storage.ts";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import {
   getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
@@ -3387,8 +3387,7 @@ export async function emitStartupHealth(nasPath: string): Promise<void> {
 
     // Append to rolling startup-history.jsonl (keep last 20 entries)
     try {
-      const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
-      ensurePrivateDir(cacheDir);
+      const cacheDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "cache"), nasPath);
       const historyPath = path.join(cacheDir, "startup-history.jsonl");
       let entries: string[] = [];
       try { entries = fs.readFileSync(historyPath, "utf8").split("\n").filter(Boolean); } catch { /* first run */ }
