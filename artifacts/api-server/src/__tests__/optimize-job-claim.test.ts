@@ -18,3 +18,21 @@ test("conversion execution claims pending jobs atomically before scanning", () =
   assert.match(executeRoute.slice(claim, scan), /if \(!claimedJob\)/);
   assert.doesNotMatch(executeRoute, /set\(\{ status: "running", cancelledAt: null, error: null \}\)\.where\(eq\(conversionJobsTable\.id, id\)\)/);
 });
+
+
+const retryStart = source.indexOf('router.post("/optimize/jobs/:id/retry"');
+const retryEnd = source.indexOf('\nrouter.post("/optimize/jobs/:id/cancel"', retryStart);
+const retryRoute = source.slice(retryStart, retryEnd);
+
+test("conversion retry refuses awaiting-action jobs without deleting staged outputs", () => {
+  assert.ok(retryStart >= 0 && retryEnd > retryStart, "retry route should be present");
+  assert.match(retryRoute, /if \(job\.status !== "failed"\)/);
+  assert.match(retryRoute, /only failed jobs can be retried/);
+  assert.match(retryRoute, /Finalize awaiting-action jobs first to preserve staged outputs/);
+  assert.match(retryRoute, /res\.status\(409\)/);
+  assert.doesNotMatch(retryRoute, /fs\.rmSync/);
+  assert.doesNotMatch(retryRoute, /job\.status === "awaiting_action"/);
+  const guard = retryRoute.indexOf('if (job.status !== "failed")');
+  const reset = retryRoute.indexOf("const [updated] = await db.update(conversionJobsTable)");
+  assert.ok(guard >= 0 && reset > guard, "the status guard must run before resetting the job");
+});

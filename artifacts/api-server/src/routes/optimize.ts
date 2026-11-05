@@ -1271,18 +1271,11 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
     if (isNaN(id)) { res.status(400).json({ error: "Invalid job id" }); return; }
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (job.status !== "failed" && job.status !== "awaiting_action") {
-      res.status(409).json({ error: `Cannot retry a job with status '${job.status}' — only failed or awaiting-action jobs can be retried` });
+    if (job.status !== "failed") {
+      res.status(409).json({
+        error: `Cannot retry a job with status '${job.status}' — only failed jobs can be retried. Finalize awaiting-action jobs first to preserve staged outputs.`,
+      });
       return;
-    }
-    // Clean up staging dir if retrying an awaiting_action job
-    if (job.status === "awaiting_action") {
-      const resultData = job.resultJson as { stagingDir?: string } | null;
-      try {
-        if (resultData?.stagingDir && fs.existsSync(resultData.stagingDir)) {
-          fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
-        }
-      } catch { /* best effort */ }
     }
     const [updated] = await db
       .update(conversionJobsTable)
