@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import type { ListArchivesParams } from "@workspace/api-zod";
 import { useLocation } from "wouter";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -182,20 +183,20 @@ export default function Archives() {
   const [maxSizeMb, setMaxSizeMb] = useState<string>("");
   const [selectedArchiveId, setSelectedArchiveId] = useState<number | null>(null);
 
-  const params = {
+  const params: ListArchivesParams = {
     limit,
     offset: page * limit,
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     ...(categoryFilter !== "all" ? { category: categoryFilter } : {}),
     ...(dateFrom ? { dateFrom } : {}),
     ...(dateTo ? { dateTo } : {}),
-    ...(minSizeMb ? { minSize: Math.round(parseFloat(minSizeMb) * 1024 * 1024) } : {}),
-    ...(maxSizeMb ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
+    ...(minSizeMb !== "" ? { minSize: Math.round(parseFloat(minSizeMb) * 1024 * 1024) } : {}),
+    ...(maxSizeMb !== "" ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
   };
 
   const { data, isLoading } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
 
-  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || !!minSizeMb || !!maxSizeMb;
+  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || minSizeMb !== "" || maxSizeMb !== "";
 
   const clearFilters = () => {
     setStatusFilter("all");
