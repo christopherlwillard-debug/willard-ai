@@ -22,6 +22,7 @@ test("manual restore and startup recovery use no-replace moves", () => {
   assert.match(cleanupRoute, /ensureDirectoryWithinRoot\(/);
   assert.match(cleanupRoute, /path\.join\(nasPath, "WillardAI", "\.Trash"\)[\s\S]{0,160}ensureDirectoryWithinRoot\(path\.join\(trashRoot, trashTimestamp\), nasPath\)/);
   assert.match(cleanupRoute, /moveFileNoReplace\(filePath, trashPath\)/);
+  assert.match(cleanupRoute, /const trashTimestamp = `\$\{Date\.now\(\)\}-\$\{randomUUID\(\)\}`/);
   assert.match(cleanupRoute, /moveFileNoReplace\(resolvedOriginalPath, resolvedTrashPath\)/);
   assert.match(recoverySource, /moveFileNoReplace\(sourceTrash, destination\)/);
 });
