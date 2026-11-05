@@ -97,3 +97,30 @@ test("getTempDir rejects an in-root job symlink without touching another job", (
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("getTempDir keeps distinct sanitized job IDs in separate directories", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  try {
+    const first = getTempDir(root, "job/one");
+    const second = getTempDir(root, "job?one");
+    assert.notEqual(first, second);
+    assert.equal(path.dirname(first), path.dirname(second));
+    assert.ok(fs.statSync(first).isDirectory());
+    assert.ok(fs.statSync(second).isDirectory());
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("getTempDir keeps long job IDs with identical prefixes separate", () => {
+  const root = makeTempRoot("willard-nas-root-");
+  try {
+    const prefix = "job-" + "x".repeat(140);
+    const first = getTempDir(root, prefix + "-one");
+    const second = getTempDir(root, prefix + "-two");
+    assert.notEqual(first, second);
+    assert.equal(path.dirname(first), path.dirname(second));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
