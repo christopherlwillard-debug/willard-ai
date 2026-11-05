@@ -53,3 +53,39 @@ export function parseOptionalDate(value: unknown, name: string): Date | undefine
   }
   return parsed;
 }
+
+/** Parse an optional scalar query string; repeated query parameters are rejected. */
+export function parseOptionalQueryString(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);
+  return value;
+}
+
+/** Parse a strict YYYY-MM-DD calendar date at UTC midnight. */
+export function parseOptionalDateOnly(value: unknown, name: string): Date | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) {
+    throw new RequestValidationError(`Invalid ${name}`);
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new RequestValidationError(`Invalid ${name}`);
+  }
+  return parsed;
+}
+
+/** Convert an inclusive date-only range to a half-open UTC range for timestamp comparisons. */
+export function parseOptionalDateOnlyRange(
+  fromValue: unknown,
+  toValue: unknown,
+): { from?: Date; toExclusive?: Date } {
+  const from = parseOptionalDateOnly(fromValue, "dateFrom");
+  const to = parseOptionalDateOnly(toValue, "dateTo");
+  if (from && to && from.getTime() > to.getTime()) {
+    throw new RequestValidationError("Invalid date range: dateFrom must be on or before dateTo");
+  }
+  return {
+    from,
+    toExclusive: to ? new Date(to.getTime() + 24 * 60 * 60 * 1000) : undefined,
+  };
+}
