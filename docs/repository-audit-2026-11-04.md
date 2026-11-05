@@ -1089,3 +1089,12 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Remaining limitation: the scan still has its existing 500,000-file traversal cap and does not yet return a truncation indicator to the UI. Libraries beyond that cap can still receive a partial summary, although inaccessible directories and failed file metadata lookups now fail closed. Add an explicit truncated-scan result and user-facing warning before treating very large library summaries as exhaustive.
 - The first-run `/auth/setup` owner-takeover exposure remains unresolved: the first unauthenticated visitor can still claim an uninitialized installation. I left it unchanged because a safe remote bootstrap secret / local-only provisioning model must preserve legitimate desktop and hosted installs. Conversion worker fencing also remains open: a stale worker that loses its PostgreSQL session lock could still race filesystem operations outside a checked boundary.
 - Next priority remains first-run owner provisioning, followed by stronger conversion-worker fencing. The scan-cap indicator is a lower-risk usability follow-up.
+
+
+## Desktop API network exposure (2026-11-05)
+
+- Confirmed the Windows desktop web server binds to `127.0.0.1` and proxies API requests to `127.0.0.1:8080`, but the API process previously called `app.listen(port)` without a host. Node therefore exposed the API listener on network interfaces as well as loopback, allowing LAN clients to bypass the intended desktop proxy.
+- The API listener now honors an explicit `HOST` environment variable while preserving the existing default for hosted deployments. The Windows launcher explicitly sets `HOST=127.0.0.1` before starting the API, restricting the packaged desktop API to the local machine.
+- Added a regression contract covering the API host option and the packaged launcher setting.
+- This closes the direct LAN listener exposure for the Windows desktop deployment. It does **not** resolve the separate remote first-run `/auth/setup` owner-takeover issue for hosted deployments; that still needs a secure provisioning mechanism.
+- Validation is pending on the new commit.
