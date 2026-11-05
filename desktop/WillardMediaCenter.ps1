@@ -428,10 +428,18 @@ function Ensure-Env {
       return $true
     }
   }
+  $sessionSecretBytes = New-Object byte[] 32
+  $sessionSecretRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $sessionSecretRng.GetBytes($sessionSecretBytes)
+  } finally {
+    $sessionSecretRng.Dispose()
+  }
+  $sessionSecret = ([BitConverter]::ToString($sessionSecretBytes)).Replace("-", "").ToLowerInvariant()
   @"
 DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/willard
 PORT=8080
-SESSION_SECRET=$(-join ((1..48) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) }))
+SESSION_SECRET=$sessionSecret
 "@ | Set-Content $EnvFile -Encoding UTF8
   Warn "A settings file was created. Update DATABASE_URL in '$EnvFile', then launch again."
   return $false
