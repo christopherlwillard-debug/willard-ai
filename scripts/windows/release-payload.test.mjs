@@ -57,6 +57,8 @@ test("Windows release stages official 7-Zip at the API resolver path", async () 
     "utf8",
   );
   assert.match(buildSource, /path\.join\(deployOutput, "dist", "vendor", "7zip"\)/);
+  assert.match(buildSource, /await assertPackagedSevenZip\(apiOutput\)/);
+  assert.match(buildSource, /"7z\.exe", "7z\.dll", "License\.txt"/);
   assert.match(resolverSource, /"\.\.\/vendor\/7zip", packagedName/);
 });
 
