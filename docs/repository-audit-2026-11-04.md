@@ -989,3 +989,15 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Reconfirmed that /auth/setup is in the public-path allowlist and the setup route accepts the first password while passwordHash is null, without an owner-provisioning token or local-only restriction. The API currently calls app.listen(port) without an explicit loopback host restriction.
 - On an uninitialized instance reachable by an untrusted network visitor, the first visitor can claim the initial administrator password. This is a concrete exposure if the service is deployed publicly or on an untrusted LAN.
 - No code change was made: a safe fix depends on the intended deployment model and owner bootstrap mechanism (for example, installer-generated one-time setup secret or explicit local-console provisioning). A rate limit alone would not prevent first-visitor takeover.
+
+
+## PNG-to-JPEG conversion safety (2026-11-05)
+
+- Confirmed a media-preservation defect: the PNG scan inspected only the first 20 files in each extension group, ignored metadata-read failures, and used that sample-level result to label the entire group convertible. The execution path did not independently validate PNG transparency, bit depth, or animation before encoding PNG bytes to JPEG. A transparent, 16-bit, animated, or unreadable PNG outside the sample could therefore be converted in a way that discarded image information.
+- Added a shared fail-closed PNG classifier. JPEG conversion is allowed only when metadata positively identifies a valid opaque, static, 8-bit PNG. Missing dimensions, unknown alpha state, non-8-bit depth, invalid page counts, transparency, and animation are preserved.
+- Scan-time PNG analysis now covers every tracked path in bounded batches, records per-file decisions, and marks the extension group for attention when any file is unsafe, uninspectable, or beyond the scan path cap. The execute path rechecks each PNG immediately before conversion, so a stale scan decision cannot authorize a newly changed unsafe file. Files without cached decisions are still analyzed at execution.
+- Bumped the optimization scan cache version from 6 to 7 so old sample-only PNG classifications are not reused.
+- Corrected the user-facing PNG explanation: PNG-to-JPEG is explicitly described as lossy; the previous copy incorrectly called it lossless and claimed pixel data was identical.
+- Added pure classifier regressions for opaque 8-bit PNGs, transparency, high bit depth, animation, missing metadata, and invalid page counts, plus route-contract regressions for bounded full-path analysis, execution-time rechecking, cache invalidation, and truthful copy.
+- Validation for the new tests and route changes: pending Fast Validation on this branch. These are focused unit/source-contract tests; a full HTTP/database conversion integration run with real Sharp fixtures remains outstanding.
+- This fix reduces PNG conversion risk but does not resolve the separately documented conversion-finalization transaction/data-loss gaps (replace ordering, no-overwrite publication, partial failure cleanup, concurrent finalization, and crash recovery).
