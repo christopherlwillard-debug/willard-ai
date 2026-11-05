@@ -941,7 +941,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           throw error;
         } finally {
           if (peekReservation) releaseCapacity(peekReservation.id);
-          cleanTempDir(peekScratch);
+          cleanTempDir(peekScratch, nasPath);
         }
       }
     } else {
@@ -1152,7 +1152,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
           detail: v.detail,
         });
       } finally {
-        cleanTempDir(validationScratch);
+        cleanTempDir(validationScratch, nasPath);
       }
     }
 
@@ -1927,7 +1927,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   } finally {
     stopHeartbeat?.();
     if (capacityReservation) releaseCapacity(capacityReservation.id);
-    for (const td of tempDirs) cleanTempDir(td);
+    for (const td of tempDirs) cleanTempDir(td, nasPath);
     res.end();
   }
 });
