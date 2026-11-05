@@ -38,17 +38,17 @@ test("conversion retry refuses awaiting-action jobs without deleting staged outp
 });
 
 const walkerStart = source.indexOf("function walkForConversion(");
-const walkerEnd = source.indexOf("\\n}", walkerStart);
+const walkerEnd = source.indexOf("\n}", walkerStart);
 const walker = source.slice(walkerStart, walkerEnd < 0 ? source.length : walkerEnd);
 
 test("conversion scans fail closed when a directory cannot be read", () => {
   assert.ok(walkerStart >= 0 && walkerEnd > walkerStart, "conversion walker should be present");
-  assert.match(walker, /catch \\(error\\)/);
+  assert.match(walker, /catch \(error\)/);
   assert.match(walker, /Unable to scan conversion directory/);
-  assert.doesNotMatch(walker, /catch \\{\\s*return;\\s*\\}/);
+  assert.doesNotMatch(walker, /catch \{\s*return;\s*\}/);
 
   const executeStart = source.indexOf('router.get("/optimize/jobs/:id/execute"');
-  const executeEnd = source.indexOf("\\nrouter.", executeStart + 1);
+  const executeEnd = source.indexOf("\nrouter.", executeStart + 1);
   const executeRoute = source.slice(executeStart, executeEnd < 0 ? source.length : executeEnd);
   const scan = executeRoute.indexOf("walkForConversion(path.resolve(nasPath)");
   const emptyResult = executeRoute.indexOf("if (totalFiles === 0)");
