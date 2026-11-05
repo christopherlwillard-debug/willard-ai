@@ -10,6 +10,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
+import { walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
@@ -368,55 +369,12 @@ function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
 
 // ── NAS directory walker ───────────────────────────────────────────────────────
 
-interface SampleFile { path: string; sizeBytes: number; }
-
 // `paths` holds ALL file paths for formats requiring per-file analysis (JPEG, container video).
 // `samples` holds the top-3 by size for UI display only.
 const PER_FILE_EXTS = new Set(["jpg","jpeg","png","mp4","m4v","mov","mkv"]);
 const MAX_PER_FILE_PATHS = 5_000; // cap to avoid memory blowout on huge libraries
 
-interface ExtGroup   { count: number; bytes: number; samples: SampleFile[]; paths: string[]; }
-
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
-
-function insertSample(samples: SampleFile[], filePath: string, size: number): void {
-  samples.push({ path: filePath, sizeBytes: size });
-  samples.sort((a, b) => b.sizeBytes - a.sizeBytes);
-  if (samples.length > 3) samples.pop();
-}
-
-function walkForOptimize(
-  dir: string,
-  groups: Map<string, ExtGroup>,
-  maxFiles: number,
-  counter: { total: number },
-): void {
-  if (counter.total >= maxFiles) return;
-  let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const entry of entries) {
-    if (counter.total >= maxFiles) return;
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
-        walkForOptimize(path.join(dir, entry.name), groups, maxFiles, counter);
-      }
-    } else if (entry.isFile()) {
-      const ext = path.extname(entry.name).slice(1).toLowerCase();
-      if (!ext || ext.length > 10) continue;
-      const fullPath = path.join(dir, entry.name);
-      let size = 0;
-      try { size = fs.statSync(fullPath).size; } catch { /* skip unreadable */ }
-      const curr = groups.get(ext) ?? { count: 0, bytes: 0, samples: [], paths: [] };
-      insertSample(curr.samples, fullPath, size);
-      // For formats needing per-file analysis, track every path (up to cap)
-      if (PER_FILE_EXTS.has(ext) && curr.paths.length < MAX_PER_FILE_PATHS) {
-        curr.paths.push(fullPath);
-      }
-      groups.set(ext, { count: curr.count + 1, bytes: curr.bytes + size, samples: curr.samples, paths: curr.paths });
-      counter.total++;
-    }
-  }
-}
 
 function walkForConversion(
   dir: string,
@@ -959,7 +917,7 @@ router.get("/optimize/scan", async (req, res) => {
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
     const groups = new Map<string, ExtGroup>();
     const counter = { total: 0 };
-    walkForOptimize(nasPath, groups, 500_000, counter);
+    walkForOptimize(nasPath, groups, 500_000, counter, SKIP_DIRS);
 
     const result = [];
     let totalSavingsBytes = 0;
