@@ -555,7 +555,7 @@ test("recovery routes validate persisted move journals before touching files", (
   assert.match(validator, /path\.isAbsolute\(move\.to\)/);
   assert.match(validator, /move\.sourceHash !== "string"/);
   assert.match(validator, /move\.destHash !== move\.sourceHash/);
-  assert.match(validator, /move\.verified !== true/);
+  assert.match(validator, /typeof move\.verified !== "boolean"/);
   assert.match(validator, /resolveWithinRoot\(move\.from, nasPath\)/);
   assert.match(validator, /resolveWithinRoot\(move\.to, nasPath\)/);
 
@@ -566,6 +566,7 @@ test("recovery routes validate persisted move journals before touching files", (
   const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
   const resumeEnd = source.indexOf('export default router', resumeStart);
   assert.match(source.slice(resumeStart, resumeEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+  assert.match(source.slice(resumeStart, resumeEnd), /existingMoves\.some\(\(move\) => !move\.verified\)/);
 });
 
 test("rollbackMoves: refuses a symlink destination instead of counting its target as restored", async (t) => {
@@ -616,4 +617,67 @@ test("organize job deletion preserves unresolved journals and conditionally excl
   assert.match(route, /inArray\(organizationJobsTable\.status, \["completed", "rolled_back"\]\)/);
   assert.match(route, /inArray\(organizationJobsTable\.status, \["pending", "planned", "verified", "failed"\]\)/);
   assert.match(route, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+});
+
+
+test("rollbackMoves: a pending move intent with its source intact is a safe no-op", async () => {
+  const source = writeFile(mkTmp("pending-intent", "source.txt"), "original bytes");
+  const destination = path.join(mkTmp("pending-intent", "destination"), "source.txt");
+  const sourceHash = await sha256File(source);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("rollbackMoves: a pending intent restores a file moved before its verified checkpoint", async () => {
+  const source = writeFile(mkTmp("pending-after-move", "source.txt"), "original bytes");
+  const destination = path.join(mkTmp("pending-after-move", "destination"), "source.txt");
+  const sourceHash = await sha256File(source);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.renameSync(source, destination);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("rollbackMoves: pending intent preserves an independent destination when source never moved", async () => {
+  const source = writeFile(mkTmp("pending-race", "source.txt"), "original bytes");
+  const destination = writeFile(mkTmp("pending-race", "destination", "source.txt"), "independent destination");
+  const sourceHash = await sha256File(source);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.readFileSync(destination, "utf8"), "independent destination");
 });
