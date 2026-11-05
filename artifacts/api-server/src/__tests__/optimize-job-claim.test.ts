@@ -162,3 +162,14 @@ test("conversion execution, finalization, and restart recovery share a per-job a
   assert.match(recoverySource, /eq\(conversionJobsTable\.status, "running"\)/);
   assert.match(recoverySource, /releaseConversionJobLock\(lockClient, job\.id\)/);
 });
+
+
+test("conversion execution does not mark an unclaimed job failed when lock or preflight fails", () => {
+  assert.match(executeRoute, /let jobClaimed = false/);
+  const claim = executeRoute.indexOf("jobClaimed = true");
+  const catchStart = executeRoute.indexOf("} catch (e: any)");
+  const catchBlock = executeRoute.slice(catchStart, executeRoute.indexOf("} finally", catchStart));
+  assert.ok(claim >= 0 && catchStart > claim, "the claim flag must be set only after the atomic pending-to-running update");
+  assert.match(catchBlock, /if \(jobClaimed\)/);
+  assert.match(catchBlock, /eq\(conversionJobsTable\.status, "running"\)/);
+});

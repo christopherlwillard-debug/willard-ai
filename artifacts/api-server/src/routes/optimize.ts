@@ -1604,6 +1604,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
+  let jobClaimed = false;
   try {
     jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
     if (!jobLockClient) {
@@ -1635,6 +1636,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       res.end();
       return;
     }
+    jobClaimed = true;
 
     // Read current profile from settings for this run
     const settings = await getActiveAppSettings();
@@ -1947,9 +1949,16 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     if (!wasCancelled && succeeded > 0) void requestLibraryBackup("completed optimization processing");
     res.end();
   } catch (e: any) {
-    try {
-      await db.update(conversionJobsTable).set({ status: "failed", error: e.message ?? "Unknown error" }).where(eq(conversionJobsTable.id, id));
-    } catch { /* best effort */ }
+    if (jobClaimed) {
+      try {
+        await db.update(conversionJobsTable)
+          .set({ status: "failed", error: e.message ?? "Unknown error" })
+          .where(and(
+            eq(conversionJobsTable.id, id),
+            eq(conversionJobsTable.status, "running"),
+          ));
+      } catch { /* best effort */ }
+    }
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
