@@ -152,7 +152,14 @@ export default function Documents() {
                 </TableCell>
               </TableRow>
             ) : data?.documents.map((doc) => (
-              <TableRow key={doc.id}>
+              <TableRow
+                key={doc.id}
+                className="cursor-pointer hover:bg-secondary/60"
+                onClick={(event) => {
+                  if ((event.target as HTMLElement).closest("button")) return;
+                  setSelectedDoc(doc);
+                }}
+              >
                 <TableCell>
                   <DocIcon filename={doc.filename} />
                 </TableCell>
