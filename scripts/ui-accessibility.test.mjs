@@ -217,6 +217,8 @@ test("organize job rows expose keyboard-accessible open and delete actions", () 
   assert.match(row, /aria-label=\\{\\"Open organization job \\" \\+ sourceName\\}/);
   assert.match(row, /aria-label=\\{\\"Delete organization job \\" \\+ sourceName\\}/);
   assert.match(row, /aria-label=\\{\\"View report for organization job \\" \\+ sourceName\\}/);
+  assert.match(row, /currentJob\\.sourcePath\\.replaceAll\\(\\"\\\\\\\\\\", \\"\\/\\"\\)/,
+    "Windows backslash paths must be normalized before extracting the filename");
   assert.doesNotMatch(row, /<TableRow[^>]*onClick=/);
 });
 
