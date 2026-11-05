@@ -1177,3 +1177,13 @@ Do not treat the scan, JPEG-analysis, or path-boundary fixes as a conversion fin
 - Changed the reset to a compare-and-set update requiring the same job ID, active NAS path, and `failed` status. If the row no longer matches, the route now returns HTTP 409 and leaves the changed job untouched.
 - Added a regression assertion covering all three predicates and the conflict response in `optimize-job-claim.test.ts`.
 - Validation: GitHub Actions has not yet completed for this follow-up commit; do not treat this source change as validated until the targeted test and workflow pass.
+
+
+## 2026-11-05 follow-up — remote first-run administrator takeover
+
+- Confirmed that `POST /auth/setup` was public and only relied on the first password-row write winning. Atomicity prevented two successful setups, but it did not establish that the first requester was the owner.
+- Added a fail-closed bootstrap authorization helper. Requests from IPv4/IPv6 loopback may complete local desktop setup without a token. Requests from LAN or public addresses must provide the server-side `WILLARD_SETUP_TOKEN`, configured with at least 32 characters. Missing or undersized server configuration returns HTTP 503; a missing or incorrect supplied token returns HTTP 403.
+- The supplied token is compared in constant time, is not logged, and is only accepted by the first-run setup endpoint. Setup attempts are rate-limited to five per 15 minutes. Existing password setup, login, recovery, and session behavior are otherwise unchanged.
+- Added a first-run token field to the setup screen, documented the environment variable in the API contract, updated the generated request type, and added direct helper plus route-source regression tests.
+- Hosted/LAN deployment action: before exposing a fresh installation, set a unique `WILLARD_SETUP_TOKEN` server secret (generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) and enter the same value in the first-run screen. Do not commit the secret. Local desktop setup from localhost remains token-free.
+- Validation: pending GitHub Actions on the audit branch. No production credentials or data were changed. Existing installations with a password are unaffected; the guard only matters while the first-run password is unset.
