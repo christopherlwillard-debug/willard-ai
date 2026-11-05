@@ -1625,8 +1625,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Open per-file operation log
     const ts = isoTimestamp();
     try {
-      const logsDir = path.join(getWillardAIDir(nasPath), "logs");
-      ensurePrivateDir(logsDir);
+      const logsDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "logs"), nasPath);
       pruneOperationalFiles(logsDir, "org-", 30);
       logPath = path.join(logsDir, `org-${ts}-${id}.log`);
       logStream = fs.createWriteStream(logPath, { flags: "a", mode: 0o600 });
@@ -1944,8 +1943,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
     let reportPath = "";
     try {
-      const reportsDir = path.join(getWillardAIDir(nasPath), "reports");
-      ensurePrivateDir(reportsDir);
+      const reportsDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "reports"), nasPath);
       reportPath = path.join(reportsDir, `org-${ts}-${id}.json`);
       const safeReport = redactOperationalData(report);
       fs.writeFileSync(reportPath, JSON.stringify(safeReport, null, 2), { encoding: "utf-8", mode: 0o600 });
