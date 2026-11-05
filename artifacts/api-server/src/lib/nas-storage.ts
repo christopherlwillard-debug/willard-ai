@@ -538,10 +538,35 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
   }
 }
 
-export function cleanTempDir(tempDir: string): void {
+/**
+ * Remove only a direct per-job child of the configured private NAS temp root.
+ * Re-check every path component immediately before recursive deletion so a
+ * replaced temp parent or job directory symlink cannot redirect cleanup.
+ */
+export function cleanTempDir(tempDir: string, nasPath: string | null | undefined): void {
+  if (!nasPath || !nasPath.trim()) return;
   try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch { /* non-fatal */ }
+    const canonicalNasRoot = canonicalizePath(normalizeNasPath(nasPath));
+    const expectedRoot = path.join(canonicalNasRoot, "WillardAI");
+    const expectedTempRoot = path.join(expectedRoot, "temp");
+    const target = path.resolve(tempDir);
+    if (path.dirname(target) !== expectedTempRoot || path.basename(target) === "." || path.basename(target) === "..") {
+      throw new Error("Refusing to clean a path outside the NAS job temp directory");
+    }
+
+    for (const directory of [canonicalNasRoot, expectedRoot, expectedTempRoot, target]) {
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink()) throw new Error(`Refusing to clean through a symlink: "${directory}"`);
+      if (directory !== target && !stat.isDirectory()) throw new Error(`Temp cleanup parent is not a directory: "${directory}"`);
+      if (directory === target && !stat.isDirectory()) throw new Error("Temp cleanup target is not a directory");
+    }
+    fs.rmSync(target, { recursive: true, force: false });
+  } catch (error) {
+    // Cleanup is best-effort, but unsafe paths are deliberately left untouched.
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      // No path or file contents are logged here; callers may log their own job context.
+    }
+  }
 }
 
 export function writeScanHistory(
