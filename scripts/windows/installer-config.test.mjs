@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 import { findHighSeverityImageAdvisories } from "./validate-release.mjs";
 
@@ -1175,6 +1179,39 @@ test("Windows update swaps are journaled and recoverable across copied, locked, 
   assert.match(launcher, /swap-after-backup/);
   assert.match(launcher, /backup-created/);
   assert.match(launcher, /Remove-UpdateJournal/);
+});
+
+test("updater smoke can create its temporary branch from a detached source checkout", () => {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "willard-detached-update-smoke-"));
+  const source = join(temporaryRoot, "source");
+  const remote = join(temporaryRoot, "remote");
+  const runGit = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+  try {
+    mkdirSync(source, { recursive: true });
+    runGit(["init", "--quiet", source]);
+    runGit(["-C", source, "config", "user.email", "smoke@example.invalid"]);
+    runGit(["-C", source, "config", "user.name", "Detached checkout regression"]);
+    writeFileSync(join(source, "README.md"), "source\n");
+    runGit(["-C", source, "add", "README.md"]);
+    runGit(["-C", source, "commit", "--quiet", "-m", "initial"]);
+    const sourceHead = runGit(["-C", source, "rev-parse", "HEAD"]).trim();
+    runGit(["-C", source, "checkout", "--quiet", "--detach", sourceHead]);
+    runGit(["clone", "--quiet", source, remote]);
+
+    assert.equal(
+      runGit(["-C", remote, "branch", "--show-current"]).trim(),
+      "",
+      "the cloned source should reproduce a detached CI checkout",
+    );
+
+    const branch = "smoke-update-regression";
+    runGit(["-C", remote, "checkout", "--quiet", "-b", branch]);
+    assert.equal(runGit(["-C", remote, "branch", "--show-current"]).trim(), branch);
+    assert.match(updateSmoke, /git -C \\$Remote checkout --quiet -b \\$remoteBranch/);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
