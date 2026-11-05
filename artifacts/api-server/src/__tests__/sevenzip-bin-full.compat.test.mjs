@@ -97,6 +97,25 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
         fs.copyFileSync(linkArchive, process.env.WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT);
       }
 
+      // Control extraction without the organize switch must materialize
+      // this safe relative symlink. Without the control, the assertion below
+      // would only prove the binary's default behavior, not that -snl- works.
+      const defaultLinkDestination = path.join(root, "link-extracted-default");
+      await new Promise((resolve, reject) => {
+        const stream = Seven.extractFull(linkArchive, defaultLinkDestination, {
+          $bin: binaryPath,
+          $progress: false,
+          overwrite: "a",
+        });
+        stream.once("error", reject);
+        stream.once("end", resolve);
+      });
+      assert.equal(
+        fs.lstatSync(path.join(defaultLinkDestination, "linked.txt")).isSymbolicLink(),
+        true,
+        "control extraction without -snl- must materialize the safe symlink fixture",
+      );
+
       // Exercise the exact extraction switch used by the organize route. A
       // successful command must not materialize the archive's symlink.
       const linkDestination = path.join(root, "link-extracted");
