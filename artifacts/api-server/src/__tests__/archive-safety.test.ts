@@ -66,6 +66,11 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
     "/absolute.txt",
     "C:\\outside.txt",
     "C:relative.txt",
+    "file.txt:secret-stream",
+    "CON.txt",
+    "nested/AUX",
+    "trailing-dot./file.txt",
+    "trailing-space /file.txt",
     "\\\\server\\share\\outside.txt",
   ]) {
     assertSafetyFailure(
