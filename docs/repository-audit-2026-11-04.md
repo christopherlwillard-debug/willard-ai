@@ -1424,3 +1424,15 @@ Source inspection is complete for this batch. Focused parser, route-wiring, API-
 **Regression coverage:** Extended the existing UI contract suite to assert the error state, accessible alert, accurate unavailable count label, and retry wiring. The test is included in the existing Fast Validation UI contract step.
 
 **Status:** Source correction and focused UI regression are committed. Targeted UI contract test and browser verification are pending the latest Fast Validation run. This is not browser/screen-reader validation.
+
+
+### Exact commits and current validation boundary
+
+- Generated Zod artifact cleanup: `0b3d45ee33adc8317cd920ae5ddf343c029a3f92`.
+- Generated-export guard: final test `c8e003c0a907d262f684834ca564e970620275f6`; API-spec codegen wiring `8462e7890e00f880c7430203a8b8596b5c520eeb`; Fast Validation ordering `a686b048ddfcbaad5978c61ca0244a7b8f0e2e53`.
+- Archive index UI repair: final page formatting/content `6dc11ea3f1b0c8979c43dfb2cf769e02b1d66824`; final UI regression assertions `f8174e8c8177fc6f5809702525212b2f2893ea1b`.
+- The intermediate UI commits `3c8c4105965957bf0f97bfde73e8573e87bf87aa` and `a158ab98041e8ac3bb3a4fcc36bd742eee2f07b8` were superseded by the final formatting and test corrections above.
+
+At the latest repository check, PR #2 remained **open and draft**, with 802 commits and 133 changed files; GitHub reported it mergeable. The branch comparison reports 802 commits ahead and 1 behind `main`. No merge, close, main-branch update, production-data change, credential change, or release publication was performed.
+
+No workflow run or combined status was visible for the latest head `f8174e8c8177fc6f5809702525212b2f2893ea1b` when checked. Therefore the generated-export test, codegen parity, TypeScript checks, archive UI regression, integration tests, and Windows tests are all **pending** on this head. Fast Validation run `42057014248` is a pre-fix failure and is not counted as a pass; it exposed the duplicate generated exports before the codegen step could run. The successful Dependency Review run `42057014279` is also from the pre-fix head and does not validate these changes.
