@@ -475,7 +475,7 @@ Remaining archive hardening:
 - Confirmed a reliability gap in `GET /settings/logo`: the route piped `fs.createReadStream(settings.logoPath)` directly to the response without an asynchronous error listener. A concurrent logo replacement/deletion or filesystem read failure after the existence check could emit an unhandled stream error; the surrounding route `try/catch` cannot catch that later event.
 - Reused the existing private-media stream failure handler. Before response headers are sent, the route returns a specific 404; after headers are sent, it destroys the response with the stream error. The error is also logged.
 - Added regression coverage for the route's error listener and the helper's logo-specific not-found response.
-- Validation status: pending on the next Fast Validation run. No test pass is claimed yet.
+- The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in [Fast Validation run `41946233784`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41946233784). The overall run was canceled before the Windows job completed; a fresh run on the latest branch head is still required for full validation.
 - Remaining limitation: this covers the asynchronous stream lifecycle, not a race-free file-handle guarantee against a hostile process replacing a branding path after the realpath check. Browser-level SVG CSP verification remains separate.
 
 
@@ -484,7 +484,7 @@ Remaining archive hardening:
 - Review of the shared stream-error handler found that every pre-header stream failure was being returned as HTTP 404, including permission errors and I/O failures. That incorrectly represented server-side failures as missing files and could hide storage/ACL problems from monitoring and clients.
 - Updated the shared handler to return 404 only for filesystem `ENOENT` and `ENOTDIR`; other pre-header errors return a generic 500. Once headers are sent, the response is still destroyed with the original error to avoid a second response or truncated successful-looking payload.
 - Added regression coverage for missing files, logo-specific not-found messaging, permission-denied errors, and post-header stream failure.
-- Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. Validation is pending.
+- Implementation commit: `04b52bfe9773e4f85db1451891bb6976de228f4f`; tests commit: `be5ca70fb17c015aa2649db757c14d4f82efce82`. The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in run `41946233784`; the full workflow was canceled before Windows validation completed.
 
 
 ## Thumbnail and byte-range stream error consistency (2026-11-05)
@@ -493,4 +493,18 @@ Remaining archive hardening:
 - Cached thumbnails now evict the failed cache entry, log the failure, and use the shared media stream handler. Missing paths return 404; permission/I/O failures return 500; failures after headers are sent destroy the response rather than ending it as a successful partial payload.
 - Byte-range media delivery now uses the same handler, and its missing-file regression expects 404.
 - Regression tests cover thumbnail route wiring and the shared handler's ENOENT/EACCES/post-header behavior.
-- Commits: `260b003d08c26a8eb44e7f719b69a5156d52f8ca`, `6c25ed61edc0f826a16d128ed4e9ae38819cd0aa`, `f4f43a1e7852541ab07a836749d3f3a761fc4464`, `65f259f3a0534f948a182922b7566b6c6748bba3`, and `b16814e15267ce4d704a5305b3a7344973817ea7`. Validation pending.
+- Commits: `260b003d08c26a8eb44e7f719b69a5156d52f8ca`, `6c25ed61edc0f826a16d128ed4e9ae38819cd0aa`, `f4f43a1e7852541ab07a836749d3f3a761fc4464`, `65f259f3a0534f948a182922b7566b6c6748bba3`, and `b16814e15267ce4d704a5305b3a7344973817ea7`. The targeted backend regression step passed on commit `464166ebf906504dd59d5010fd29f06413cde38a` in run `41946233784`; the full workflow was canceled before Windows validation completed. The first test attempt failed because the thumbnail test looked for `res.destroy` in the route instead of the shared helper; commit `464166eb` corrected the assertion to inspect the helper.
+
+
+## Branding logo deletion ordering (2026-11-05)
+
+- Confirmed a data-loss path in `DELETE /settings/logo`: the route unlinked the current logo before clearing `appSettingsTable.logoPath`. If the database update failed, the settings row continued pointing at a file that had already been deleted.
+- Reordered the operation to clear and verify the database pointer first, then perform best-effort file cleanup. A database failure now preserves the original logo; an unlink failure can leave only an unreferenced orphan.
+- Added a regression test that asserts the database pointer update precedes filesystem deletion.
+- Validation status: pending on the next Fast Validation run; no pass is claimed yet.
+
+## Organization conflict replacement is not rollback-safe (2026-11-05)
+
+- Confirmed a high-priority data-loss risk in both initial execution and resume paths. When `conflictPolicy === "replace"`, `organize.ts` calls `fs.unlinkSync(destFile)` before `verifiedMove` installs and hashes the replacement. If that move/hash fails, or a later file/verification step fails, the catch path calls `rollbackMoves(fileMoves)`; `FileMoveRecord` contains only the new source/destination hashes and `rollbackMoves` has no backup record for the previous destination. The old destination is therefore not restored even though the job reports a rollback.
+- Left unchanged because a safe correction requires durable per-file backup intents, crash recovery for the interval between backup/move/checkpoint, and rollback support in both initial and resumed execution. A temporary rename without journaled recovery could strand the only old copy after a process crash; changing `replace` to skip/abort would alter user-visible semantics and needs approval.
+- Until that transactional backup design and its crash-recovery tests exist, treat `replace` as unsafe for valuable existing destination files. The default `keep_existing` path is not affected by this finding.

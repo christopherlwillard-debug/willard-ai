@@ -68,6 +68,22 @@ test("branding logo stream failures are handled without an unhandled error", () 
   assert.match(routeSource, /handlePrivateMediaStreamError\(res, streamError, "Logo file not found"\)/);
 });
 
+test("branding logo deletion clears the database pointer before removing the old file", () => {
+  const routePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../routes/settings.ts",
+  );
+  const routeSource = fs.readFileSync(routePath, "utf8");
+  const deleteStart = routeSource.indexOf('router.delete("/settings/logo"');
+  assert.notEqual(deleteStart, -1);
+  const deleteEnd = routeSource.indexOf("// ── GET /api/settings/scanner", deleteStart);
+  const deleteRoute = routeSource.slice(deleteStart, deleteEnd === -1 ? undefined : deleteEnd);
+  const pointerUpdate = deleteRoute.indexOf(".update(appSettingsTable)");
+  const fileDelete = deleteRoute.indexOf("fs.unlinkSync(settings.logoPath)");
+  assert.ok(pointerUpdate >= 0, "logo pointer update must be present");
+  assert.ok(fileDelete > pointerUpdate, "the old file must not be deleted before the database pointer is cleared");
+});
+
 test("thumbnail stream failures clear cache and use shared status handling", () => {
   const routePath = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),

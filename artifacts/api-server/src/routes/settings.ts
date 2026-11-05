@@ -396,14 +396,18 @@ router.post(
 router.delete("/settings/logo", async (_req, res) => {
   try {
     const settings = await getOrCreateSettings();
-    if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
-      try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
-    }
     const [updated] = await db
       .update(appSettingsTable)
       .set({ logoPath: null })
       .where(eq(appSettingsTable.id, settings.id))
       .returning();
+    if (!updated) throw new Error("Branding settings row was not updated");
+
+    // Clear the database pointer first. If the database update fails, preserve
+    // the current logo; a failed best-effort unlink can only leave an orphan.
+    if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
+      try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal orphan cleanup */ }
+    }
     res.json(sanitizeSettings(updated));
   } catch (err) {
     res.status(500).json({ error: "Failed to remove logo" });
