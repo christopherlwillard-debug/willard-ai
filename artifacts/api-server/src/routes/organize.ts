@@ -30,7 +30,7 @@ import {
   validateArchiveEntry,
   writeArchiveFileAtomically,
 } from "../lib/archive-safety.ts";
-import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, walkDirectoryFiles, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, walkDirectoryFiles, canDeleteOrganizationJob, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
@@ -890,8 +890,37 @@ router.delete("/organize/jobs/:id", async (req, res) => {
     const nasPath = await getNasPath();
     const job = nasPath ? await getScopedOrganizationJob(id, nasPath) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Cannot delete a running job" }); return; }
-    await db.delete(organizationJobsTable).where(and(eq(organizationJobsTable.id, id), eq(organizationJobsTable.nasPath, nasPath!)));
+    if (!canDeleteOrganizationJob(job.status, job.fileMoves)) {
+      res.status(409).json({
+        error: "Cannot delete an active job or discard an unresolved file-move recovery journal. Resume the job or complete rollback first.",
+      });
+      return;
+    }
+
+    // Recheck state and journal in the DELETE predicate so a concurrent
+    // execute/resume/rollback cannot lose its recovery row after the read.
+    const emptyJournal = or(
+      isNull(organizationJobsTable.fileMoves),
+      sql`CASE WHEN jsonb_typeof(${organizationJobsTable.fileMoves}) = 'array' THEN jsonb_array_length(${organizationJobsTable.fileMoves}) = 0 ELSE false END`,
+    );
+    const deletableState = or(
+      inArray(organizationJobsTable.status, ["completed", "rolled_back"]),
+      and(
+        inArray(organizationJobsTable.status, ["pending", "planned", "verified", "failed"]),
+        emptyJournal,
+      ),
+    );
+    const [deletedJob] = await db.delete(organizationJobsTable)
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPath!),
+        deletableState,
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!deletedJob) {
+      res.status(409).json({ error: "The job became active or acquired recovery records. Refresh before deleting it." });
+      return;
+    }
     res.json({ ok: true });
   } catch { res.status(500).json({ error: "Failed to delete organize job" }); }
 });
