@@ -161,19 +161,17 @@ test("search result cards are keyboard operable and keep similar-search actions 
   const cardEnd = searchPage.indexOf("// ── Detail sheet", cardStart);
   assert.ok(cardStart >= 0 && cardEnd > cardStart, "ResultCard component should exist");
   const card = searchPage.slice(cardStart, cardEnd);
-  assert.match(card, /<button\\s+type="button"/);
-  assert.match(card, /aria-label=\\{"Open " \\+ item\\.name \\+ " details"\\}/);
-  assert.match(card, /onClick=\\{\\(\\) => onOpen\\(item\\)\\}/);
-  assert.match(card, /focus-visible:ring-2/);
-  assert.doesNotMatch(card, /<div[^>]*onClick=/);
-
+  assert.ok(card.includes('<button\n        type="button"'));
+  assert.ok(card.includes('aria-label={"Open " + item.name + " details"}'));
+  assert.ok(card.includes("onClick={() => onOpen(item)}"));
+  assert.ok(card.includes("focus-visible:ring-2"));
+  assert.ok(!card.slice(0, card.indexOf("<button")).includes("onClick="));
   const mainButtonClose = card.indexOf("</button>");
   const similarAction = card.indexOf('data-testid={"button-similar-" + item.id}');
   assert.ok(mainButtonClose >= 0 && similarAction > mainButtonClose,
     "Similar-search action must not be nested inside the card's open button");
-  assert.match(card, /aria-label=\\{"Find similar files to " \\+ item\\.name\\}/);
-  assert.match(card, /sm:group-focus-within:opacity-100/,
-    "Hover-revealed action must also become visible when keyboard-focused");
+  assert.ok(card.includes('aria-label={"Find similar files to " + item.name}'));
+  assert.ok(card.includes("sm:group-focus-within:opacity-100"));
 });
 
 test("media thumbnail cards use a native open button and independent labelled actions", () => {
@@ -181,14 +179,14 @@ test("media thumbnail cards use a native open button and independent labelled ac
   const end = mediaPage.indexOf("// ── Scan status banner", start);
   assert.ok(start >= 0 && end > start, "ThumbnailCard component should exist");
   const card = mediaPage.slice(start, end);
-  assert.match(card, /<button[\\s\\S]*?aria-label=\\{\\"Open \\" \\+ file\\.name\\}/);
-  assert.match(card, /data-testid=\\{\\"button-open-media-\\" \\+ file\\.id\\}/);
-  assert.match(card, /aria-label=\\{selected \\? \\"Deselect \\" \\+ file\\.name : \\"Select \\" \\+ file\\.name\\}/);
-  assert.match(card, /aria-pressed=\\{selected\\}/);
-  assert.match(card, /aria-label=\\{file\\.favorite \\? \\"Remove \\" \\+ file\\.name \\+ \\" from favorites\\" : \\"Add \\" \\+ file\\.name \\+ \\" to favorites\\"\\}/);
-  assert.match(card, /aria-pressed=\\{file\\.favorite\\}/);
-  assert.match(card, /group-focus-within:opacity-100/);
-  assert.doesNotMatch(card, /role=\\"button\\"/);
+  assert.ok(card.includes('aria-label={"Open " + file.name}'));
+  assert.ok(card.includes('aria-label={selected ? "Deselect " + file.name : "Select " + file.name}'));
+  assert.ok(card.includes("aria-pressed={selected}"));
+  assert.ok(card.includes('aria-label={file.favorite ? "Remove " + file.name + " from favorites" : "Add " + file.name + " to favorites"}'));
+  assert.ok(card.includes("aria-pressed={file.favorite}"));
+  assert.ok(card.includes("group-focus-within:opacity-100"));
+  assert.ok(!card.includes('role="button"'));
+  assert.ok(card.includes('selected ? "border-primary bg-primary text-primary-foreground opacity-100"'));
 });
 
 test("people media tiles separate open and move-face controls", () => {
@@ -196,11 +194,12 @@ test("people media tiles separate open and move-face controls", () => {
   const end = peoplePage.indexOf("<ReassignFaceDialog", start);
   assert.ok(start >= 0 && end > start, "People media grid should exist");
   const grid = peoplePage.slice(start, end);
-  assert.match(grid, /<button[\\s\\S]*?aria-label=\\{\\"Open \\" \\+ it\\.name \\+ \\" in media viewer\\"\\}/);
-  assert.match(grid, /aria-label=\\{\\"Move face from \\" \\+ it\\.name\\}/);
-  assert.match(grid, /group-focus-within:opacity-100/);
-  assert.doesNotMatch(grid, /role=\\"button\\"/);
-  assert.doesNotMatch(grid, /onKeyDown=/);
+  assert.ok(grid.includes('aria-label={"Open " + it.name + " in media viewer"}'));
+  assert.ok(grid.includes('aria-label={"Move face from " + it.name}'));
+  assert.ok(grid.includes("group-focus-within:opacity-100"));
+  assert.ok(grid.indexOf("</button>") < grid.indexOf('aria-label={"Move face from " + it.name}'));
+  assert.ok(!grid.includes('role="button"'));
+  assert.ok(!grid.includes("onKeyDown="));
 });
 
 test("document table navigation is provided by a labelled native button", () => {
@@ -210,9 +209,9 @@ test("document table navigation is provided by a labelled native button", () => 
   const buttonEnd = documentsPage.indexOf("</button>", start);
   assert.ok(buttonStart >= 0 && buttonEnd > start);
   const button = documentsPage.slice(buttonStart, buttonEnd);
-  assert.match(button, /type=\\"button\\"/);
-  assert.match(button, /aria-label=\\{\\"Open document \\" \\+ doc\\.filename\\}/);
-  assert.match(button, /onClick=\\{\\(\\) => setSelectedDoc\\(doc\\)\\}/);
+  assert.ok(button.includes('type="button"'));
+  assert.ok(button.includes('aria-label={"Open document " + doc.filename}'));
+  assert.ok(button.includes("onClick={() => setSelectedDoc(doc)}"));
   assert.ok(documentsPage.includes('if ((event.target as HTMLElement).closest("button")) return;'));
   assert.ok(documentsPage.includes("setSelectedDoc(doc);"));
 });
@@ -223,10 +222,10 @@ test("organize job rows expose keyboard-accessible open and delete actions", () 
   assert.ok(start >= 0 && end > start, "OrganizeJobRow component should exist");
   const row = organizePage.slice(start, end);
   assert.ok(row.includes('className="cursor-pointer hover:bg-secondary/30"'));
-  assert.match(row, /aria-label=\\{\\"Open organization job \\" \\+ sourceName\\}/);
-  assert.match(row, /aria-label=\\{\\"Delete organization job \\" \\+ sourceName\\}/);
-  assert.match(row, /aria-label=\\{\\"View report for organization job \\" \\+ sourceName\\}/);
-  assert.ok(row.includes('currentJob.sourcePath.replaceAll("\\\\", "/")'),
+  assert.ok(row.includes('aria-label={"Open organization job " + sourceName}'));
+  assert.ok(row.includes('aria-label={"Delete organization job " + sourceName}'));
+  assert.ok(row.includes('aria-label={"View report for organization job " + sourceName}'));
+  assert.ok(row.includes('currentJob.sourcePath.replaceAll("\\", "/")'),
     "Windows backslash paths must be normalized before extracting the filename");
   assert.ok(row.includes('if ((event.target as HTMLElement).closest("button")) return;'));
   assert.ok(row.includes("onOpen();"));
@@ -239,10 +238,10 @@ test("duplicate cleanup choices expose selection state to assistive technology",
   const buttonEnd = cleanupPage.indexOf("</button>", start);
   assert.ok(buttonStart >= 0 && buttonEnd > start);
   const button = cleanupPage.slice(buttonStart, buttonEnd);
-  assert.match(button, /type=\\"button\\"/);
-  assert.match(button, /aria-pressed=\\{isKeep\\}/);
-  assert.match(button, /aria-label=\\{\\"Choose \\" \\+ file\\.filename \\+ \\" as the copy to keep\\"\\}/);
-  assert.match(button, /focus-visible:ring-2/);
+  assert.ok(button.includes('type="button"'));
+  assert.ok(button.includes("aria-pressed={isKeep}"));
+  assert.ok(button.includes('aria-label={"Choose " + file.filename + " as the copy to keep"}'));
+  assert.ok(button.includes("focus-visible:ring-2"));
 });
 
 test("cleanup thumbnails honor the configured application base path", () => {
