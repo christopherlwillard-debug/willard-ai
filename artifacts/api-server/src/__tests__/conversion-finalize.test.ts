@@ -64,7 +64,9 @@ test("replace preserves the original in staging until the verified output is pub
       { filePath: original, stagedPath: staged, status: "success" },
     ]));
 
-    assert.equal(fs.readFileSync(original, "utf8"), "converted bytes");
+    const output = path.join(f.root, "photos", "portrait.jpg");
+    assert.equal(fs.readFileSync(output, "utf8"), "converted bytes");
+    assert.equal(fs.existsSync(original), false, "cross-format replace publishes under the converted extension");
     assert.equal(
       fs.readFileSync(path.join(f.stagingDir, ".originals", "photos", "portrait.png"), "utf8"),
       "original bytes",
