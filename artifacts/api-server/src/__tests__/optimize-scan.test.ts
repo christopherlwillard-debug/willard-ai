@@ -33,9 +33,10 @@ test("optimization scan groups regular files and records their actual sizes", ()
     fs.writeFileSync(path.join(f.root, "WillardAI", "internal.jpg"), "ignored directory");
 
     const { groups, counter } = scan(f.root);
-    assert.equal(counter.total, 2);
+    assert.equal(counter.total, 3, "all files with a recognized extension are included in the scan total");
     assert.equal(groups.get("jpg")?.count, 2);
     assert.equal(groups.get("jpg")?.bytes, 10);
+    assert.equal(groups.get("txt")?.count, 1);
     assert.deepEqual(
       [...(groups.get("jpg")?.paths ?? [])].sort(),
       [path.join(f.root, "one.jpg"), path.join(f.root, "nested", "two.jpg")].sort(),
