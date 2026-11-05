@@ -378,10 +378,6 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   }
   const dir = path.dirname(file.relativePath);
   const newRelPath = dir === "." ? newName : `${dir}/${newName}`;
-  if (newRelPath === file.relativePath) {
-    res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
-    return;
-  }
   let newAbs: string;
   try {
     newAbs = resolveLibraryPath(nasPath, newRelPath);
@@ -391,23 +387,34 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   }
 
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
+  if (newRelPath === file.relativePath) {
+    res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
+    return;
+  }
   if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
 
-  const updated = await renameFileWithPersistence(
-    oldAbs,
-    newAbs,
-    async () => {
-      const [row] = await db
-        .update(mediaFilesTable)
-        .set({ name: newName, relativePath: newRelPath })
-        .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-        .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
-      return row;
-    },
-    (from, to) => moveFileNoReplace(from, to),
-  );
-
-  res.json(updated);
+  try {
+    const updated = await renameFileWithPersistence(
+      oldAbs,
+      newAbs,
+      async () => {
+        const [row] = await db
+          .update(mediaFilesTable)
+          .set({ name: newName, relativePath: newRelPath })
+          .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+          .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+        return row;
+      },
+      (from, to) => moveFileNoReplace(from, to),
+    );
+    res.json(updated);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+      res.status(409).json({ error: "A file with that name already exists" });
+      return;
+    }
+    throw error;
+  }
 });
 
 // ── GET /api/media/timeline — year/month buckets ─────────────────────────────

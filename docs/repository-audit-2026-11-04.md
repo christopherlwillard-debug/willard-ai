@@ -1801,3 +1801,15 @@ The rename route called \`.trim()\` on \`req.body.name\` before checking its JSO
 ### Validation baseline
 
 Fast Validation #826 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121215284)) is validating the preceding documentation-only commit \`b842925b355d108d8a703d030536ef0ee19cf744\`; it does not include these media rename changes. A new run is required for this batch.
+
+
+## 2026-11-05 follow-up — media rename race response and Windows test coverage
+
+Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed on commit \`5c8afebe4d969bacc519bae563a278709bddcfbb\`: Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job all completed successfully. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed. The Windows job did not yet execute the new media-rename test file.
+
+A source-order review of the new no-op branch found that it returned success before checking whether the source file still existed. This batch moves the no-op response after the source existence check. It also maps an \`EEXIST\` from the no-replace filesystem operation to HTTP 409 rather than allowing the global handler to report a generic HTTP 500.
+
+The Windows Fast Validation job now runs \`media-rename.test.ts\` after installing the API test dependency graph, so the hard-link/exclusive-copy no-overwrite behavior and portable filename rules are exercised on both Linux and Windows.
+
+**Status:** code and regression/workflow changes committed; Fast Validation #829 pending.
+**Remaining risk:** The route still has a filesystem-to-database crash window because the rename helper only rolls back in-process persistence errors. A durable rename journal/reconciliation mechanism is not part of this batch. Case-only rename behavior on case-insensitive filesystems also remains a separate UX edge case.

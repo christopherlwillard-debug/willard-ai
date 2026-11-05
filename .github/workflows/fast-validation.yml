@@ -233,6 +233,9 @@ jobs:
       - name: Install API server test dependency graph
         run: pnpm install --filter @workspace/api-server... --frozen-lockfile --ignore-scripts --no-optional
 
+      - name: Verify media rename no-overwrite and portable filename behavior on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-rename.test.ts
+
       - name: Run storage migration concurrency and no-overwrite regressions on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-migration.test.ts
 
