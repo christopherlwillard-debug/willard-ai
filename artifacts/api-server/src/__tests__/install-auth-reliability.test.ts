@@ -22,6 +22,14 @@ const desktopLauncherSource = fs.readFileSync(
   path.join(repoRoot, "desktop/WillardMediaCenter.ps1"),
   "utf8",
 );
+const developerLauncherSource = fs.readFileSync(
+  path.join(repoRoot, "scripts/launcher/start.ps1"),
+  "utf8",
+);
+const viteConfigSource = fs.readFileSync(
+  path.join(repoRoot, "artifacts/willard-ai/vite.config.ts"),
+  "utf8",
+);
 
 test("standalone setup keeps vector columns optional", () => {
   const requiredSql = setupSource
@@ -100,4 +108,15 @@ test("desktop API binds only to loopback behind the localhost web proxy", () => 
   assert.match(indexSource, /const host = process\.env\["HOST"\]\?\.trim\(\)/);
   assert.match(indexSource, /app\.listen\(\{ port, \.\.\.\(host \? \{ host \} : \{\}\) \}/);
   assert.match(desktopLauncherSource, /\$env:HOST = "127\.0\.0\.1"/);
+});
+
+
+test("developer desktop launcher and local Vite servers bind only to loopback", () => {
+  const startup = developerLauncherSource.indexOf("function Start-WillardServices");
+  const host = developerLauncherSource.indexOf('$env:HOST = "127.0.0.1"', startup);
+  const apiStart = developerLauncherSource.indexOf("$apiProc = Start-Process", startup);
+
+  assert.ok(startup >= 0 && host > startup && apiStart > host, "developer API host must be set before the process starts");
+  assert.match(viteConfigSource, /const serverHost = isReplit \? "0\\.0\\.0\\.0" : "127\\.0\\.0\\.1"/);
+  assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
 });
