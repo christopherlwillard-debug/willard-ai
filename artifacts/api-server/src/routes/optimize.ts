@@ -22,8 +22,12 @@ import {
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
 import { requestLibraryBackup } from "../lib/backup-coordinator.ts";
-import { finalizeConversionFiles, ConversionFinalizationError } from "../lib/conversion-finalize.ts";
-import { rollbackMoves } from "../lib/organize-helpers.ts";
+import {
+  finalizeConversionFiles,
+  recoverConversionFinalizationMoves,
+  ConversionFinalizationError,
+} from "../lib/conversion-finalize.ts";
+import { rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers.ts";
 import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
 import {
   acquireConversionJobLock,
@@ -1403,7 +1407,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       return;
     }
 
-    const resultData = job.resultJson as {
+    let resultData = job.resultJson as {
       files: Array<{
         filePath: string; stagedPath?: string; status: string;
         originalBytes?: number; convertedBytes?: number; isSameExt?: boolean;
@@ -1411,12 +1415,50 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       }>;
       totalSaved: number;
       stagingDir: string;
+      finalizationJournal?: FileMoveRecord[];
+      finalizationRecoveryMoves?: FileMoveRecord[];
+      finalizationError?: string | null;
     } | null;
 
     if (!resultData) { res.status(500).json({ error: "Job result data is missing" }); return; }
 
     const nasPath = job.nasPath;
     assertWithinRoot(resultData.stagingDir, nasPath);
+
+    // A previous process may have stopped after persisting a move intent. Reconcile
+    // that journal under the job lock before allowing another finalization attempt.
+    if (Array.isArray(resultData.finalizationJournal) && resultData.finalizationJournal.length > 0) {
+      const recovery = await recoverConversionFinalizationMoves(resultData.finalizationJournal, nasPath);
+      const recoveryMessage = recovery.complete
+        ? "An interrupted finalization was rolled back safely; you may retry."
+        : "Interrupted finalization could not be fully rolled back. Remaining files are preserved for manual recovery.";
+      const recoveredResult = {
+        ...resultData,
+        finalizationJournal: recovery.complete ? [] : resultData.finalizationJournal,
+        finalizationRecoveryMoves: recovery.unresolvedMoves,
+        finalizationError: recoveryMessage,
+      };
+      const [recoveryCheckpoint] = await db.update(conversionJobsTable)
+        .set({ resultJson: recoveredResult, error: recoveryMessage })
+        .where(and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "awaiting_action"),
+        ))
+        .returning({ id: conversionJobsTable.id });
+      if (!recoveryCheckpoint) {
+        res.status(409).json({ error: "Conversion job changed while recovering its previous finalization; no new files were moved." });
+        return;
+      }
+      resultData = recoveredResult;
+      if (!recovery.complete) {
+        res.status(409).json({
+          error: recoveryMessage,
+          recoveryRequired: true,
+          recoveryMoves: recovery.unresolvedMoves.length,
+        });
+        return;
+      }
+    }
     const capacity = await evaluateCapacity({
       nasPath,
       operation: `Finalize conversion #${id}`,
@@ -1444,6 +1486,34 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       return;
     }
 
+    const finalizationJournal: FileMoveRecord[] = [];
+    const checkpointFinalizationMove = async (move: FileMoveRecord, completed: boolean): Promise<void> => {
+      if (completed) {
+        const index = finalizationJournal.findIndex((entry) => entry.from === move.from && entry.to === move.to);
+        if (index < 0) throw new Error("Finalization completion has no persisted move intent");
+        finalizationJournal[index] = move;
+      } else {
+        finalizationJournal.push(move);
+      }
+      const [checkpoint] = await db.update(conversionJobsTable)
+        .set({
+          resultJson: {
+            ...resultData,
+            action,
+            finalizationJournal: [...finalizationJournal],
+            finalizationRecoveryMoves: [],
+          },
+        })
+        .where(and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "awaiting_action"),
+        ))
+        .returning({ id: conversionJobsTable.id });
+      if (!checkpoint) {
+        throw new Error("Conversion finalization lost job ownership before its move journal could be saved");
+      }
+    };
+
     let finalized: Awaited<ReturnType<typeof finalizeConversionFiles>>;
     try {
       finalized = await finalizeConversionFiles({
@@ -1453,6 +1523,8 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         trashBase,
         archiveBase,
         files: resultData.files,
+        onMoveIntent: (move) => checkpointFinalizationMove(move, false),
+        onMoveComplete: (move) => checkpointFinalizationMove(move, true),
       });
     } catch (error) {
       if (error instanceof ConversionFinalizationError) {
@@ -1461,6 +1533,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
           action,
           finalizationError: error.message,
           finalizationRollbackComplete: error.rollbackComplete,
+          finalizationJournal: error.rollbackComplete ? [] : error.journalMoves,
           finalizationRecoveryMoves: error.recoveryMoves,
         };
         await db.update(conversionJobsTable)
@@ -1490,6 +1563,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         fileOutcomes,
         finalizationError: null,
         finalizationRollbackComplete: true,
+        finalizationJournal: [],
         finalizationRecoveryMoves: [],
       },
     }).where(and(
