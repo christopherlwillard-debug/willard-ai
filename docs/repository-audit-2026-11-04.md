@@ -143,7 +143,7 @@ Remaining archive hardening:
 
 - The updater rewrote its recovery journal in place with Set-Content. A power loss during that write could leave malformed JSON. Startup treated an unreadable journal as absent, potentially losing the recovery instructions while the previous installation was in its sibling backup directory.
 - Journal updates now write a unique temporary file in the same directory and atomically replace the existing journal (or move into place for the first write). A crash leaves the previous complete journal or the new complete journal rather than a partially written document.
-- The first Windows journal smoke exposed a runtime compatibility issue: the runner's current .NET rejected a null backup-file argument to `File.Replace`. The writer now supplies a unique same-directory backup path and removes it after replacement. The journal smoke is included in the non-publishing Windows job in Fast Validation; the corrected run is pending. No release workflow was run and no release artifacts were published.
+- The first Windows journal smoke exposed a runtime compatibility issue: the runner's current .NET rejected a null backup-file argument to `File.Replace`. The writer now supplies a unique same-directory backup path and removes it after replacement. The journal smoke is included in the non-publishing Windows job in Fast Validation; the corrected Windows journal smoke passed in Fast Validation run `41941085454`. No release workflow was run and no release artifacts were published.
 
 
 ## Atomic password reset and session revocation (2026-11-04)
@@ -227,7 +227,7 @@ Remaining archive hardening:
 
 - The backup snapshot holder wrote its SQL to child stdin before registering stdin error handling. If psql exited immediately, a broken-pipe error could be emitted by the writable stream without a listener. The 10-second timeout also sent only SIGTERM and did not guarantee termination if the child remained alive.
 - Extracted the process protocol into postgres-snapshot-process.mjs. It registers stdout, stderr, stdin, spawn-error, and close handlers before writing; bounds stdout to 64 KiB and stderr to a 4 KiB tail; handles write callback and stream errors; and escalates from SIGTERM to SIGKILL after a grace period. Termination is idempotent.
-- database-backup.mjs now uses the guarded helper. Added regression tests for successful snapshot token capture, stdin EPIPE, and timeout termination/escalation. The tests are included in the existing database-backup test suite. The first CI attempt exposed an escaped-newline error in the success-case fixture (the EPIPE and timeout tests passed); the fixture was corrected in commit 8f8e722. Validation of that corrected fixture is pending.
+- database-backup.mjs now uses the guarded helper. Added regression tests for successful snapshot token capture, stdin EPIPE, and timeout termination/escalation. The tests are included in the existing database-backup test suite. The first CI attempt exposed an escaped-newline error in the success-case fixture (the EPIPE and timeout tests passed); the fixture was corrected in commit 8f8e722. Validation of that corrected fixture passed in run `41941085454`.
 
 
 ## Production dependency audit result (2026-11-04)
@@ -241,7 +241,7 @@ Remaining archive hardening:
 
 - `getTempDir()` previously used recursive directory creation under `<library>/WillardAI/temp/<job>`. That followed existing symlinks and could place temporary archive/media staging outside the configured library.
 - Added `ensureDirectoryWithinRoot()` to validate the lexical path beneath the configured root, inspect each existing component with `lstat`, reject symlinks and non-directory components, create one component at a time, recheck after creation, and return the canonical path. The shared `temp` parent and each job directory are created with private mode `0700` on POSIX.
-- `getTempDir()` now validates the shared parent before creating a job directory. Tests cover symlink escapes at `WillardAI`, `temp`, and the job directory, in-root cross-job symlink substitution, and private permissions. The first CI run exposed an assertion expecting the wrong error wording; the assertion now matches the fail-closed symlink error. Final validation is pending.
+- `getTempDir()` now validates the shared parent before creating a job directory. Tests cover symlink escapes at `WillardAI`, `temp`, and the job directory, in-root cross-job symlink substitution, and private permissions. The first CI run exposed an assertion expecting the wrong error wording; the assertion now matches the fail-closed symlink error. Final validation passed in run `41941085454`.
 
 ## Further production dependency patching (2026-11-04)
 
@@ -289,34 +289,34 @@ Remaining archive hardening:
 
 - The earlier preview and validation paths did not consistently reject ZIP symbolic links or TAR symbolic/hard links, even though extraction itself was guarded. This could make unsafe archives appear readable until execution.
 - Added shared TAR link-entry classification and applied ZIP/TAR link rejection to archive preview, validation, and extraction preflight. Regression tests now exercise link-entry rejection before extraction approval, in addition to existing extraction-time checks.
-- The implementation and tests are committed to the audit branch. Latest Fast Validation after the full set of 7-Zip resolver changes is pending; the individual ZIP/TAR test assertions are included in the targeted backend suite.
+- The implementation and tests are committed to the audit branch. Fast Validation run `41941085454` passed after the full set of 7-Zip resolver changes; the individual ZIP/TAR test assertions are included in the targeted backend suite.
 
 
 ## Remove vulnerable legacy 7-Zip fallback (2026-11-04)
 
 - The API previously preferred official 7-Zip from `WILLARD_7ZIP_PATH`, the packaged `vendor/7zip` directory, or PATH, but silently fell back to `7zip-bin@5.2.0` when none existed. On Linux this package supplies p7zip 16.02, leaving unprovisioned environments exposed to old archive-parser vulnerabilities.
 - Removed the direct `7zip-bin` dependency and its lockfile entries. The resolver now verifies the executable reports official 7-Zip 26.01 or newer before selecting it. Old, missing, or unrecognized executables are skipped. Archive routes resolve the executable lazily and return an actionable error when none is available, so the API itself still starts and non-archive functionality remains usable.
-- Replit uses the pinned official static 7-Zip 26.05 derivation; packaged Windows builds stage hash-verified official 7-Zip 26.05 into `api-runtime/vendor/7zip`. CI tests both platforms and `node-7z` compatibility. Resolver regression tests cover configured/system/packaged priority, version rejection, missing-binary behavior, and the actionable error. Latest Fast Validation for this resolver/dependency removal is pending.
+- Replit uses the pinned official static 7-Zip 26.05 derivation; packaged Windows builds stage hash-verified official 7-Zip 26.05 into `api-runtime/vendor/7zip`. CI tests both platforms and `node-7z` compatibility. Resolver regression tests cover configured/system/packaged priority, version rejection, missing-binary behavior, and the actionable error. Fast Validation run `41941085454` passed for this resolver/dependency removal.
 
 
 ## Plaintext database backup temporary-file permissions (2026-11-04)
 
 - `createBackup` wrote the unencrypted `pg_dump` file into a randomly named directory under the OS temp root using recursive `mkdir` with default permissions. On POSIX systems with a permissive umask, that directory could be traversable by other local users while the plaintext dump existed, before encryption and secure cleanup.
-- Replaced the manually generated directory with `fs.mkdtemp`, which creates an owner-only work directory on POSIX. The raw dump remains inside that private directory until encryption completes; cleanup behavior is unchanged. Added a regression test that verifies the actual directory mode is `0700` on POSIX. Fast Validation for this change is pending.
+- Replaced the manually generated directory with `fs.mkdtemp`, which creates an owner-only work directory on POSIX. The raw dump remains inside that private directory until encryption completes; cleanup behavior is unchanged. Added a regression test that verifies the actual directory mode is `0700` on POSIX. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Backup retention authenticates manifests before deleting (2026-11-04)
 
 - `pruneBackups` previously used `createdAt` from a structurally valid manifest to sort and delete old backup directories without checking the manifest's AES-GCM authentication tag. An altered creation date could make a valid backup appear expired and cause automatic retention to delete it.
 - Retention now reads, decrypts, and verifies each candidate backup using the configured backup secret before considering its authenticated creation date. Corrupt or tampered backup directories are excluded from retention deletion and preserved for manual inspection.
-- Extended the PostgreSQL-backed backup/restore integration test: a copied backup has only its `createdAt` changed to 2000, then retention runs with zero-day retention and `keep=1`. The test requires the tampered backup to remain while the authenticated older backup is pruned. Fast Validation is pending.
+- Extended the PostgreSQL-backed backup/restore integration test: a copied backup has only its `createdAt` changed to 2000, then retention runs with zero-day retention and `keep=1`. The test requires the tampered backup to remain while the authenticated older backup is pruned. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Restore plaintext workspace isolation (2026-11-04)
 
 - Restore decrypted the complete database dump into a randomly named file directly under the shared OS temp directory. The file used mode `0600`, but creation was not exclusive and its parent was shared with unrelated processes.
 - Restore now creates a unique owner-only operation directory with `mkdtemp`, writes `database.dump` with exclusive `wx` creation, zeroes the dump during cleanup, and removes the private workspace. This reuses the existing backup workspace helper and avoids introducing another dependency.
-- Added a regression assertion for private workspace creation, exclusive file creation, and workspace cleanup. Fast Validation is pending for this change.
+- Added a regression assertion for private workspace creation, exclusive file creation, and workspace cleanup. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Trash manifest crash safety and symlink containment (2026-11-04)
@@ -324,28 +324,28 @@ Remaining archive hardening:
 - Restore/expiry previously rewrote the complete trash manifest through a temporary file. On Windows, replacement fell back to deleting the old manifest before renaming the new one; a crash in that interval could erase unrelated recoverable trash entries.
 - Manifest removals now append an authenticated-state-independent tombstone record and leave all prior lines intact. `readTrashManifest` applies tombstones when presenting active entries, preserving idempotent removal while making the journal append-only. Unknown/malformed lines remain untouched.
 - Manifest path resolution now creates/checks the logs directory component-by-component under the configured library root and rejects symlinks, preventing manifest writes from following a redirected logs directory.
-- Added regression tests for active-entry filtering, retained original journal lines, malformed-line preservation, and external logs-directory symlink rejection. Fast Validation is pending.
+- Added regression tests for active-entry filtering, retained original journal lines, malformed-line preservation, and external logs-directory symlink rejection. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Backup subprocess output and plaintext handling follow-up (2026-11-04)
 
 - Bounded stdout/stderr capture for database backup subprocesses so a noisy or misbehaving PostgreSQL utility cannot grow process memory without limit. Regression coverage exercises oversized stdout and stderr tail retention.
 - Restore plaintext is now written only inside a private per-operation workspace, with exclusive file creation, zero-overwrite cleanup, and workspace removal. Decrypted buffers used by backup creation, verification, restore, and discovery are explicitly zero-filled after use.
-- The first validation after exporting the bounded subprocess helper exposed a duplicate named export (`runTool` was exported both at declaration and in the export list). Removed the duplicate; latest validation is pending.
+- The first validation after exporting the bounded subprocess helper exposed a duplicate named export (`runTool` was exported both at declaration and in the export list). Removed the duplicate; Fast Validation run `41941085454` passed.
 
 
 ## Trash entry symlink protection (2026-11-05)
 
 - Trash root directories were already being checked, but individual manifest paths still used a resolver that followed symlinks. A symlink inside `.Trash` pointing at another file inside the trash root could therefore cause restore/removal to act on the target instead of the manifest path.
 - Added component-by-component `lstat` resolution for trash paths. It rejects symlinks and non-directory parent components, including links that remain inside the trash root. Manifest insertion, restore reconciliation, purge, and tombstone removal now use this resolver.
-- Added a regression test that creates a trash symlink pointing at a different file and verifies removal refuses to follow it and preserves both the target and link. Fast Validation is pending.
+- Added a regression test that creates a trash symlink pointing at a different file and verifies removal refuses to follow it and preserves both the target and link. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Windows 7-Zip release payload path (2026-11-05)
 
 - The compiled API entry point is `api-runtime/dist/index.mjs`. The resolver resolves `../vendor/7zip` relative to that entry point, so the actual runtime path is `api-runtime/vendor/7zip`. The release builder stages verified official binaries in `deployOutput/vendor/7zip`, which copies to that exact location.
 - Added a release-payload contract test that checks the builder staging path and the final API runtime vendor directory against the resolver. The release builder verifies `7z.exe`, `7z.dll`, and `License.txt` are regular files at the final `api-runtime/vendor/7zip` location after copy/merge. The release validator also requires those files and executes the binary to confirm version 26.05.
-- Official 7-Zip 26.05 asset SHA-256 values used by the staging scripts were checked against the upstream GitHub release metadata; the Linux x64 archive, Windows extra archive, Windows installer, and 7zr hashes match upstream release digests. Fast Validation is pending.
+- Official 7-Zip 26.05 asset SHA-256 values used by the staging scripts were checked against the upstream GitHub release metadata; the Linux x64 archive, Windows extra archive, Windows installer, and 7zr hashes match upstream release digests. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Cross-platform ZIP reparse-point and drive-relative path rejection (2026-11-05)
@@ -358,72 +358,81 @@ Remaining archive hardening:
 ## Backup cryptographic key buffer cleanup (2026-11-05)
 
 - AES-256-GCM backup creation and restore derive per-operation keys with scrypt. Those key buffers previously remained allocated until garbage collection after cipher use.
-- Encryption and decryption now zero the derived key buffers in `finally` blocks, including authentication failures. Added a regression assertion for both paths. Fast Validation is pending.
+- Encryption and decryption now zero the derived key buffers in `finally` blocks, including authentication failures. Added a regression assertion for both paths. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Trash restore paths through symlinked NAS mount aliases (2026-11-05)
 
 - The symlink-safe trash resolver returns a canonical path. When the configured NAS root is itself a symlink alias, the manual restore route passes that canonical path back to tombstone removal; a purely lexical root comparison would reject it and leave a stale active manifest record.
 - The resolver now accepts either the configured lexical path or its canonical equivalent only when the configured root itself is a symlink alias. Canonical fallback uses lexical normalization rather than realpath on the requested target, so an outside symlink pointing into the library is still rejected. It checks every descendant component for symlinks. The mount-alias regression exercises both the canonical path returned by the route resolver and an outside symlink attempt.
-- Fast Validation is pending.
+- Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Temporary job identifiers cannot escape their child directory (2026-11-05)
 
 - `getTempDir` sanitized job identifiers to letters, digits, dots, underscores, and hyphens, but allowed the exact values `.` and `..`. `path.join(tempRoot, "..")` could therefore return the parent `WillardAI` directory, and an empty ID could return the shared temp root instead of a per-job directory.
-- Empty and dot-segment IDs now receive unique generated child names. Added regression coverage verifying empty, `.`, and `..` all resolve to distinct directories directly under `WillardAI/temp`. Fast Validation is pending.
+- Empty and dot-segment IDs now receive unique generated child names. Added regression coverage verifying empty, `.`, and `..` all resolve to distinct directories directly under `WillardAI/temp`. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Windows alternate-stream and reserved archive names (2026-11-05)
 
 - Archive validation rejected drive-qualified paths, but still accepted colon characters in ordinary components such as `photo.jpg:payload`. On NTFS, a colon can address an alternate data stream; Windows also reserves device names such as `CON` and `AUX` and treats trailing dots/spaces specially. These names can behave differently across Linux and Windows extraction targets.
 - Archive entry validation now rejects Windows-invalid characters, alternate-stream separators, reserved device names (including COM/LPT aliases), and trailing dots/spaces before any extractor runs. The checks are applied consistently so an archive accepted on Linux remains portable to the Windows desktop runtime.
-- Added regressions for ADS names, reserved devices, and trailing dot/space components. Fast Validation is pending.
+- Added regressions for ADS names, reserved devices, and trailing dot/space components. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Cross-platform archive path portability (2026-11-05)
 
 - Archive paths accepted on POSIX could still be unextractable or ambiguous on Windows: alternate data stream separators (`:`), reserved device names (`CON`, `AUX`, `COM1`, etc.), trailing dots/spaces, and Windows-invalid characters can behave differently after extraction.
 - Archive preflight now rejects these Windows-incompatible components for all platforms, so the same archive validation decision is made regardless of the host OS. Regression coverage includes ADS syntax, reserved devices, trailing dot/space, and the portable-path error class.
-- Fast Validation on the immediately preceding commit `a3e6239` passed; this follow-up test and path-policy change are pending validation.
+- Fast Validation run `41941085454` passed on the current audit head, including this follow-up test and path-policy change.
 
 
 ## Integrated validation on 2026-11-05
 
 - Fast Validation run `41939971842` passed on commit `a3e62392773f5aa33dd3338c81d5cb1fdf2ca074`. Both `validate` and `windows-updater-smoke` jobs completed successfully. The Linux job passed workspace typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official static 7-Zip 26.05 download and compatibility with `node-7z`, and the targeted backend regression suite. The Windows job passed hash-verified official 7-Zip staging and updater preservation/rollback smoke tests.
 - Dependency review run `41939971796` also passed on that commit.
-- The integrated result includes the cleanup manifest fixture corrections, NAS mount-alias restore handling, backup key-buffer zeroization, ZIP reparse-point and drive-relative path checks, and temporary job-ID path containment. Later Windows ADS/reserved-name archive-path tests were added after this validated commit and are awaiting the next Fast Validation run.
+- The integrated result includes the cleanup manifest fixture corrections, NAS mount-alias restore handling, backup key-buffer zeroization, ZIP reparse-point and drive-relative path checks, and temporary job-ID path containment. Later Windows ADS/reserved-name, control-character, case/Unicode collision, pathless-entry, and NAS temporary-parent tests were added after this commit and are validated by Fast Validation run `41941085454` on `f5b0f2e`.
 - The prior targeted backend run `41939454292` had reported 117 passing, 2 skipped, and 2 failing manifest tests. Commit `95bce2a0b0935ed270c12b9572ecb5f28d3d33c7` corrected both fixtures; the targeted suite passed in the integrated run above.
 
 ## Trash journal tombstone liveness (2026-11-05)
 
 - The manifest parser previously treated any syntactically valid `REMOVE` record as authoritative, even if the referenced file still existed. A forged or partially written journal append could hide a recoverable file from the trash list and prevent restore.
 - The parser now honors a tombstone only when `lstat` confirms the recorded trash path is absent. The removal helper refuses to append a tombstone while the file remains. A regression verifies a forged tombstone cannot hide a live file, that the removal helper refuses it, and that the tombstone becomes effective after the file is actually absent.
-- Validation for this follow-up is pending.
+- Validation for this follow-up passed in run `41941085454`.
 
 
 ## Cross-platform archive filename collision detection (2026-11-05)
 
 - Archive duplicate detection previously compared normalized names case-sensitively. An archive containing `Photos/Cat.jpg` and `photos/cat.JPG` could pass preflight on Linux but collide on a case-insensitive Windows or macOS filesystem, allowing extraction order to overwrite one entry. Canonically equivalent Unicode names could also alias on common filesystems.
 - Duplicate detection now uses NFC-normalized, case-folded collision keys while preserving the original normalized path for extraction. This intentionally enforces portable archive names consistently on all platforms.
-- Added regressions for case-only and Unicode-normalization collisions. Fast Validation is pending.
+- Added regressions for case-only and Unicode-normalization collisions. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Cross-platform archive filename collisions (2026-11-05)
 
 - Two distinct paths on a case-sensitive Linux filesystem can collide when the archive is later extracted on a typical case-insensitive Windows/macOS volume. Unicode-composed and decomposed names can also normalize to the same filename on some filesystems.
 - Archive path uniqueness now uses NFC normalization plus case folding, rejecting those collisions before extraction. Tests cover both case-only and Unicode-normalization-only collisions.
-- Portable filename checks were also tightened to reject ASCII control characters and additional Windows device aliases (`CONIN$`, `CONOUT$`, superscript COM/LPT names, and reserved names with spaces before extensions). Harmless leading `./` archive prefixes remain accepted after normalization. Fast Validation is pending for this follow-up.
+- Portable filename checks were also tightened to reject ASCII control characters and additional Windows device aliases (`CONIN$`, `CONOUT$`, superscript COM/LPT names, and reserved names with spaces before extensions). Harmless leading `./` archive prefixes remain accepted after normalization. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## Archive entries without a usable file path (2026-11-05)
 
 - Archive path validation normalized empty, `.` and `./` names to the extraction root. A non-directory entry with no usable filename should never be passed to an extractor because it does not identify a file destination.
-- Empty raw names are now rejected, and normalized root-only entries are accepted only when explicitly marked as directories (a common harmless TAR root marker). Added regression coverage for empty/dot file entries and the root-directory case. Fast Validation is pending.
+- Empty raw names are now rejected, and normalized root-only entries are accepted only when explicitly marked as directories (a common harmless TAR root marker). Added regression coverage for empty/dot file entries and the root-directory case. Fast Validation run `41941085454` passed on commit `f5b0f2e`.
 
 
 ## NAS temporary storage parent permissions (2026-11-05)
 
 - `getTempDir` secured the per-job directory and shared `WillardAI/temp` parent, but an existing `WillardAI` directory with permissive POSIX mode bits could still allow another NAS user to rename or replace the temp parent itself.
 - Temporary-directory creation now validates and applies private permissions to the app-managed `WillardAI` root before securing `temp` and the per-job child. Regression coverage checks all three directory levels. On Windows, POSIX mode changes remain best-effort and the configured NAS share's ACL must provide equivalent user-only access; this is still a deployment configuration requirement.
-- Fast Validation is pending.
+- Fast Validation run `41941085454` passed on commit `f5b0f2e`.
+
+
+## Latest integrated validation — 2026-11-05
+
+- Fast Validation run [`41941085454`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41941085454) passed on commit `f5b0f2ed479133a1dba912ab5bcb3e9dac73de99`. Both the Linux `validate` job and Windows `windows-updater-smoke` job succeeded. Linux validation included typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 staging and `node-7z` compatibility, and the targeted backend regression suite. Windows smoke verified official 7-Zip staging and updater journal/preservation/rollback behavior.
+- Dependency review run [`41941085293`](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/41941085293) passed on the same commit.
+- This validation includes the Windows-portable archive filename rules (ADS, reserved devices, control characters, trailing dots/spaces, case and Unicode collisions, dot-segment handling, and pathless entries), ZIP Unix/Windows reparse-point rejection, drive-relative path rejection, trash tombstone liveness, NAS mount-alias containment, private temporary-directory parent checks, backup key zeroization, and the earlier authentication/backup regressions.
+- Remaining limitations: browser/runtime verification of the uploaded-SVG sandbox CSP is still outstanding. Windows POSIX permission bits are best-effort; the NAS share ACL must restrict the app-managed temporary directories to the service account. The Windows smoke job currently exercises updater and official 7-Zip packaging, not a full Windows-native archive extraction suite; adding that platform-specific archive smoke is the next validation improvement.
+- PR #2 remains open as a draft against `main`, and GitHub reports it mergeable. No main-branch changes, production-data changes, credential changes, or release publication were made.
