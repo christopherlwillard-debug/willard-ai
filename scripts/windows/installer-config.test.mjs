@@ -1179,6 +1179,9 @@ test("Windows update swaps are journaled and recoverable across copied, locked, 
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
   assert.match(updateSmoke, /git clone/);
+  assert.match(updateSmoke, /\$remoteBranch = "smoke-update-\$\(\[guid\]::NewGuid\(\)\.ToString\('N'\)\)"/);
+  assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
+  assert.doesNotMatch(updateSmoke, /git -C \$Remote branch --show-current/);
   assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
