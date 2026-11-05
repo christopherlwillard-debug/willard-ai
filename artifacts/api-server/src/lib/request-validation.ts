@@ -99,3 +99,22 @@ export function parseOptionalDateOnlyRange(
     toExclusive: to ? new Date(to.getTime() + 24 * 60 * 60 * 1000) : undefined,
   };
 }
+
+
+/** Normalize untrusted search-intent date bounds; discard invalid or contradictory ranges. */
+export function normalizeOptionalDateOnlyRange(
+  fromValue: unknown,
+  toValue: unknown,
+): { dateFrom: string | null; dateTo: string | null } {
+  const from = fromValue === null ? undefined : fromValue;
+  const to = toValue === null ? undefined : toValue;
+  try {
+    const range = parseOptionalDateOnlyRange(from, to);
+    return {
+      dateFrom: range.from ? from as string : null,
+      dateTo: range.toExclusive ? to as string : null,
+    };
+  } catch {
+    return { dateFrom: null, dateTo: null };
+  }
+}
