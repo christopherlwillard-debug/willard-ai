@@ -13,7 +13,7 @@ import * as tar from "tar";
 import Seven from "node-7z";
 import { getSevenZipPath } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, ensureDataDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import { getActiveAppSettings, getActiveNasPath } from "../lib/active-library.ts";
 import {
@@ -1815,6 +1815,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // Enforce NAS root boundary — destination must be within configured nasPath
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
+      ensureDataDirectoryWithinRoot(destDir, nasPath);
 
       // Apply conflict policy when destination file already exists
       if (fs.existsSync(destFile)) {
@@ -1883,8 +1884,14 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       const record = await verifiedMove(sf.fullPath, destFile, {
         sourceRelPath: sf.relativePath,
         expectedSourceHash: sourceHash,
-        beforeMove: () => assertOrganizationLease(id, nasPath, executionLeaseToken),
-        beforeRestore: () => assertOrganizationLease(id, nasPath, executionLeaseToken),
+        beforeMove: async () => {
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
+          ensureDataDirectoryWithinRoot(destDir, nasPath);
+        },
+        beforeRestore: async () => {
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
+          ensureDataDirectoryWithinRoot(path.dirname(sf.fullPath), nasPath);
+        },
       });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
@@ -2105,7 +2112,11 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
     let rolledBack = 0;
     try {
-      rolledBack = await rollbackMoves(fileMoves, line => opLog(line), () => assertOrganizationLease(id, cleanupNasPath, executionLeaseToken));
+      rolledBack = await rollbackMoves(fileMoves, line => opLog(line), async (move) => {
+        await assertOrganizationLease(id, cleanupNasPath, executionLeaseToken);
+        ensureDataDirectoryWithinRoot(path.dirname(move.from), cleanupNasPath);
+        ensureDataDirectoryWithinRoot(path.dirname(move.to), cleanupNasPath);
+      });
     } catch {
       send("error", { message: "This worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
       return;
@@ -2356,7 +2367,11 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
 
     const logs: string[] = [];
     await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
-    const rolledBack = await rollbackMoves(moves, line => logs.push(line), () => assertOrganizationLease(id, nasPath, rollbackLeaseToken));
+    const rolledBack = await rollbackMoves(moves, line => logs.push(line), async (move) => {
+      await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
+      ensureDataDirectoryWithinRoot(path.dirname(move.from), nasPath);
+      ensureDataDirectoryWithinRoot(path.dirname(move.to), nasPath);
+    });
     const isComplete = rolledBack === moves.length;
 
     // Only mark rolled_back when ALL moves were reversed.
@@ -2730,7 +2745,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         }
       }
 
-      fs.mkdirSync(destDir, { recursive: true });
+      ensureDataDirectoryWithinRoot(destDir, nasPath);
       const sourceHash = await sha256File(sf.fullPath);
       const intent: FileMoveRecord = {
         from: sf.fullPath,
@@ -2765,8 +2780,14 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       const record = await verifiedMove(sf.fullPath, destFile, {
         sourceRelPath: sf.relativePath,
         expectedSourceHash: sourceHash,
-        beforeMove: () => assertOrganizationLease(id, nasPath, resumeLeaseToken),
-        beforeRestore: () => assertOrganizationLease(id, nasPath, resumeLeaseToken),
+        beforeMove: async () => {
+          await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+          ensureDataDirectoryWithinRoot(destDir, nasPath);
+        },
+        beforeRestore: async () => {
+          await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+          ensureDataDirectoryWithinRoot(path.dirname(sf.fullPath), nasPath);
+        },
       });
       newMoves[newMoves.length - 1] = record;
       moved++;
@@ -2871,7 +2892,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
     let rolledBack = 0;
     try {
-      rolledBack = await rollbackMoves(newMoves, () => {}, () => assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken));
+      rolledBack = await rollbackMoves(newMoves, () => {}, async (move) => {
+        await assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken);
+        ensureDataDirectoryWithinRoot(path.dirname(move.from), cleanupNasPath);
+        ensureDataDirectoryWithinRoot(path.dirname(move.to), cleanupNasPath);
+      });
     } catch {
       send("error", { message: "This resume worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
       return;
