@@ -1639,7 +1639,8 @@ test("audit installer lifecycle validation is isolated from release publishing",
   assert.ok(auditInstallerLifecycleWorkflow.includes("pull_request:"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("- opened"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("- reopened"));
-  assert.equal(auditInstallerLifecycleWorkflow.includes("- synchronize"), false);
+  assert.ok(auditInstallerLifecycleWorkflow.includes("- synchronize"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("scripts/windows/installer-config.test.mjs"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("  push:"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("      - audit/full-repository-review-2026-11"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("github.event.pull_request.head.ref"));
