@@ -8,7 +8,7 @@ import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
 import { resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
-import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry, resolveLibraryTrashPath } from "../lib/cleanup-recovery.ts";
+import { appendTrashManifestEntry, manifestPath, readTrashManifest, removeTrashManifestEntry, resolveLibraryTrashPath } from "../lib/cleanup-recovery.ts";
 import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
@@ -514,7 +514,7 @@ router.get("/cleanup/trash", async (_req, res) => {
       return;
     }
 
-    await purgeExpiredTrashEntries(nasPath);
+    // GET is strictly read-only; retention cleanup runs in the background.
     const filePath = manifestPath(nasPath);
     if (!fs.existsSync(filePath)) {
       res.json({ entries: [] });
