@@ -1494,7 +1494,7 @@ test("installer upgrade and uninstall refuse to proceed when the packaged shutdo
 });
 
 test("packaged stop failures are non-modal and do not retry unsafe shutdown", () => {
-  const catchStart = launcher.indexOf("\\n} catch {\\n  $startupError = $_");
+  const catchStart = launcher.indexOf("  $startupError = $_");
   assert.ok(catchStart >= 0, "The packaged launcher failure handler must be present.");
   const catchBlock = launcher.slice(catchStart);
   const stopBranch = catchBlock.slice(0, catchBlock.indexOf("  $servicesStopped = $true"));
@@ -1505,7 +1505,7 @@ test("packaged stop failures are non-modal and do not retry unsafe shutdown", ()
   assert.doesNotMatch(stopBranch, /Stop-Services|Report-StartupFailure|MessageBox/);
 
   const reportStart = launcher.indexOf("function Report-StopFailure");
-  const reportEnd = launcher.indexOf("\\nfunction Read-Version", reportStart);
+  const reportEnd = launcher.indexOf("function Read-Version", reportStart + 1);
   const report = launcher.slice(reportStart, reportEnd);
   assert.match(report, /could not stop safely/i);
   assert.match(report, /services state file/);
