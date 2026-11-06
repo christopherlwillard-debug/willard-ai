@@ -22,6 +22,8 @@ test("archive previews use the canonical media catalog extension sets", () => {
     ["slides.key", "document", "document"],
   ];
 
+  assert.equal(classifyMediaType(".avif"), "photo");
+
   for (const [filename, mediaType, archiveType] of cases) {
     assert.equal(classifyMediaType(filename.split(".").pop()!), mediaType, filename);
     assert.equal(getFileTypeFromName(filename), archiveType, filename);
