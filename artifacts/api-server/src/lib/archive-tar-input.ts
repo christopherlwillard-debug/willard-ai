@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { getSevenZipPath } from "./sevenzip.ts";
+import { assertMediaProcessStartAllowed, trackActiveMediaProcess } from "./media-tools.ts";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import {
@@ -60,9 +61,14 @@ export async function withTarInput<T>(
   const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
   const sevenZipPath = compression === "gzip" ? null : await getSevenZipPath();
   const child = sevenZipPath
-    ? spawn(sevenZipPath, ["x", "-so", archivePath, "-y"], {
-        stdio: ["ignore", "pipe", "pipe"],
-      })
+    ? (() => {
+        assertMediaProcessStartAllowed();
+        const process = spawn(sevenZipPath, ["x", "-so", archivePath, "-y"], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        trackActiveMediaProcess(process);
+        return process;
+      })()
     : null;
   let stderr = "";
   child?.stderr?.setEncoding("utf8");
