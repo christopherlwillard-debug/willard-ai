@@ -71,7 +71,7 @@ test("shutdown terminates owned media subprocesses before the server exits", asy
     ["-e", "setInterval(() => {}, 1_000)"],
     { timeoutMs: 10_000 },
   );
-  const rejected = assert.rejects(pending, (error: NodeJS.ErrnoException & { killed?: boolean }) => {
+  const rejected = assert.rejects(pending, (error: NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }) => {
     assert.ok(error.killed || error.signal === "SIGTERM" || error.signal === "SIGKILL");
     return true;
   });
