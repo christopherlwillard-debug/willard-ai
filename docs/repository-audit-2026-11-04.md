@@ -2450,3 +2450,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Analysis now keeps its claimed library path/token outside the try block, fences catch cleanup only when its claim is still owned, and uses the stable non-null path for all predicates. Plan-edit and preflight routes explicitly reject unscoped jobs and use stable path variables for their claim predicates. The media route imports the existing shared `sha256File` helper rather than duplicating hashing logic.
 - Commits: analysis lease typing/cleanup `5a9823d93bd8887d201ca9eda22b31fb1b42d85c`, scoped path guards `3d08a3edea9542025a08ea282594a71757f5fbb4`, media import `5250b7729bb963de9f5e21077a6971e7920a6f5b`, stable plan/preflight scope `b947da299d44b9d9f99614ad1df2cb3367ab3d7f`, and analysis scope `d816f5d49ec60d4a0a2d95cf1fec6673510cb102`.
 - A prior typecheck run reported these issues; the repaired head has not yet completed Fast Validation. The media hash check and the concurrency changes still require the next CI pass.
+
+
+## Thumbnail lock ownership: aged-lock stealing removed
+- Confirmed the thumbnail lock implementation unlinked any lock older than two minutes without proving that its owner had exited. Slow but valid generation could therefore overlap with a second process and race publication.
+- Removed age-only lock reclamation. A worker now waits for the existing lock and fails with a timeout rather than stealing it. This deliberately prefers a recoverable stuck cache entry over concurrent writers/corrupt publication. An abandoned lock after a crashed process may need operator cleanup; automatic stale-owner recovery remains open until ownership can be verified safely across supported NAS/SMB hosts.
+- Added a regression assertion that age-only lock stealing remains absent and the bounded timeout remains present.
+- Commits: implementation `b0d469423cd5d010576f7a243b337045e9026868`; regression `ccaa8105b10fe7a996d0d974fbee92751151728f`.
+- Validation is pending; this source-contract test does not replace a multi-process NAS/SMB lock integration test.
