@@ -211,7 +211,7 @@ test("conversion finalization checkpoints pre-move intents and reconciles them b
 
 
 const cancelStart = source.indexOf('router.post("/optimize/jobs/:id/cancel"');
-const cancelEnd = source.indexOf("\\n});", cancelStart) + 4;
+const cancelEnd = source.indexOf("\n});", cancelStart) + 4;
 const cancelRoute = source.slice(cancelStart, cancelEnd);
 
 test("conversion cancellation conditionally updates only the same still-running library job", () => {
@@ -221,13 +221,13 @@ test("conversion cancellation conditionally updates only the same still-running 
   const returningEnd = cancelRoute.indexOf(".returning()", whereStart);
   assert.ok(updateStart >= 0 && whereStart > updateStart && returningEnd > whereStart);
   const predicate = cancelRoute.slice(whereStart, returningEnd);
-  assert.match(predicate, /and\\(/);
-  assert.match(predicate, /eq\\(conversionJobsTable\\.id, id\\)/);
-  assert.match(predicate, /eq\\(conversionJobsTable\\.nasPath, job\\.nasPath\\)/);
-  assert.match(predicate, /eq\\(conversionJobsTable\\.status, "running"\\)/);
-  assert.match(cancelRoute, /if \\(!updated\\)/);
-  assert.match(cancelRoute, /res\\.status\\(409\\)/);
-  assert.match(cancelRoute, /changed before cancellation could be recorded/);
-  assert.match(cancelRoute, /status: updated\\.status/);
-  assert.doesNotMatch(cancelRoute, /\\.where\\(eq\\(conversionJobsTable\\.id, id\\)\\)/);
+  assert.ok(predicate.includes("and("));
+  assert.ok(predicate.includes("eq(conversionJobsTable.id, id)"));
+  assert.ok(predicate.includes("eq(conversionJobsTable.nasPath, job.nasPath)"));
+  assert.ok(predicate.includes('eq(conversionJobsTable.status, "running")'));
+  assert.ok(cancelRoute.includes("if (!updated)"));
+  assert.ok(cancelRoute.includes("res.status(409)"));
+  assert.ok(cancelRoute.includes("changed before cancellation could be recorded"));
+  assert.ok(cancelRoute.includes("status: updated.status"));
+  assert.equal(cancelRoute.includes(".where(eq(conversionJobsTable.id, id))"), false);
 });
