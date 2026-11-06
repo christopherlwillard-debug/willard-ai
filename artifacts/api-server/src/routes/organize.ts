@@ -2083,7 +2083,13 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
 
     // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
-    const rolledBack = await rollbackMoves(fileMoves, line => opLog(line), () => assertOrganizationLease(id, cleanupNasPath, executionLeaseToken));
+    let rolledBack = 0;
+    try {
+      rolledBack = await rollbackMoves(fileMoves, line => opLog(line), () => assertOrganizationLease(id, cleanupNasPath, executionLeaseToken));
+    } catch {
+      send("error", { message: "This worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
+      return;
+    }
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
@@ -2832,7 +2838,13 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     }
 
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
-    const rolledBack = await rollbackMoves(newMoves, () => {}, () => assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken));
+    let rolledBack = 0;
+    try {
+      rolledBack = await rollbackMoves(newMoves, () => {}, () => assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken));
+    } catch {
+      send("error", { message: "This resume worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
+      return;
+    }
     const resumeRollbackComplete = rolledBack === newMoves.length;
     // Only discard this pass's journal when every new move was restored and
     // checksum-verified. Keep all records if rollback is partial so Recovery
