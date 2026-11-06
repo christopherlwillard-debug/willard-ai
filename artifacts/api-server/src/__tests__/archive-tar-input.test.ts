@@ -163,10 +163,13 @@ test("invalid compressed input fails and leaves no partial scratch TAR", async (
 
 test("archive preview uses shared bounded decompression and rejects partial parse results", () => {
   const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+  const tarInputSource = fs.readFileSync(new URL("../lib/archive-tar-input.ts", import.meta.url), "utf8");
   assert.match(routeSource, /peekTarWithPrivateScratch\(archivePath, archive\.filename, nasPath\)/);
   assert.ok(routeSource.includes("getTempDir(nasPath, `archive-preview-${randomUUID()}`)"));
   assert.ok(routeSource.includes("cleanTempDir(scratchDir, nasPath)"));
   assert.match(routeSource, /shouldTreatAsStandaloneCompressedFile\(archive\.filename, entries\.length, failureKind\)/);
   assert.match(routeSource, /Never persist a partial listing as a successful archive preview/);
   assert.ok(routeSource.includes('throw new Error(`Archive preview failed: ${error}`)'));
+  assert.match(tarInputSource, /assertMediaProcessStartAllowed\(\)/);
+  assert.match(tarInputSource, /trackActiveMediaProcess\(process\)/);
 });
