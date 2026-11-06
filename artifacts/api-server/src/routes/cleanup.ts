@@ -6,7 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { randomUUID } from "crypto";
-import { resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
+import { canonicalizePath, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
 import { appendTrashManifestEntry, manifestPath, readTrashManifest, removeTrashManifestEntry, resolveLibraryTrashPath } from "../lib/cleanup-recovery.ts";
 import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
