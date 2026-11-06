@@ -1,7 +1,57 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMediaToolAsync } from "./media-tools.ts";
+import type { ChildProcess } from "node:child_process";
+import {
+  assertMediaProcessStartAllowed,
+  runMediaToolAsync,
+  stopMediaProcess,
+  trackActiveMediaProcess,
+} from "./media-tools.ts";
+
+
+type SevenZipProcessStream = {
+  _childProcess?: ChildProcess;
+  destroy?: (error?: Error) => unknown;
+};
+
+/**
+ * node-7z 3.x exposes the spawned ChildProcess on its returned stream. Register
+ * that process with the same owner used by FFmpeg so shutdown and request
+ * cancellation cannot leave archive work running after its caller is gone.
+ */
+export function createTrackedSevenZipStream<T>(
+  create: () => T,
+  signal?: AbortSignal,
+): T {
+  assertMediaProcessStartAllowed();
+  if (signal?.aborted) throw new Error("7-Zip operation was cancelled before it started.");
+
+  const stream = create();
+  const child = (stream as T & SevenZipProcessStream)._childProcess;
+  if (!child) {
+    const error = new Error("node-7z did not expose its spawned child process.");
+    (stream as T & SevenZipProcessStream).destroy?.(error);
+    throw error;
+  }
+
+  trackActiveMediaProcess(child);
+  if (signal) {
+    const stop = () => { void stopMediaProcess(child).catch(() => {}); };
+    const detach = () => signal.removeEventListener("abort", stop);
+    child.once("close", detach);
+    child.once("error", detach);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+  }
+  return stream;
+}
+
+/** Stop a 7-Zip stream after archive validation rejects its metadata. */
+export function stopTrackedSevenZipStream(stream: unknown): Promise<void> {
+  const child = (stream as SevenZipProcessStream | null | undefined)?._childProcess;
+  return child ? stopMediaProcess(child) : Promise.resolve();
+}
 
 export interface SevenZipResolutionOptions {
   platform?: NodeJS.Platform;
