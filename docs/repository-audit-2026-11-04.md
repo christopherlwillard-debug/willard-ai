@@ -2328,3 +2328,6 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 
 **Filesystem regression tests added:** `organize-helpers.test.ts` now exercises a lost lease after source hashing (source remains untouched), a lost lease before failed-move restoration (destination evidence is preserved), and a lease loss after rollback checksum work (the rollback mutation is refused). Test commit: `c6fd37e97f6589f9ac750e81e7af963cf15e2fbc`. These are local filesystem unit tests; they do not simulate PostgreSQL multi-process takeover or power loss.
+
+
+**Additional high-severity shutdown race fixed:** The API shutdown hook previously marked *all* `executing` organization jobs as failed. In a multi-instance deployment, shutting down one instance could therefore invalidate a different instance's live job and allow a premature resume/rollback. Shutdown now leaves organization job ownership unchanged and relies on the durable heartbeat becoming stale after the owning process exits. Added a source regression to ensure shutdown does not update organization job status. Commits: `f822e0bab98d196c4e24df8d6eb4ccb8dc532aea` and `800b2334287cf43fd2dceab46a871887fa825e08`. This preserves correct behavior across instances; recovery may wait up to the five-minute lease timeout after an ungraceful shutdown.
