@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { closePool, conversionJobsTable, db, organizationJobsTable } from "@workspace/db";
+import { closePool, conversionJobsTable, db } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { stopAiEnrichment } from "./ai-enrichment.ts";
 import { stopFaceRecognition } from "./face-recognition.ts";
@@ -59,16 +59,14 @@ async function checkpointExternalJobs(): Promise<void> {
   const conversion = await db.update(conversionJobsTable)
     .set({ cancelledAt: now })
     .where(eq(conversionJobsTable.status, "running"));
-  const organize = await db.update(organizationJobsTable)
-    .set({
-      status: "failed",
-      error: "Interrupted by server shutdown — partial work is recoverable",
-      stageUpdatedAt: now,
-    })
-    .where(eq(organizationJobsTable.status, "executing"));
+  // Do not mark every executing organization job failed here. This process
+  // may be one of several API instances, and another instance may still own
+  // and be actively moving files for the same library. The job's lease
+  // heartbeat is the authority: after this process exits, recovery can reclaim
+  // it only once stage_updated_at becomes stale.
   logger.info({
     conversionJobs: conversion.rowCount ?? 0,
-    organizeJobs: organize.rowCount ?? 0,
+    organizationJobsDeferredToLeaseExpiry: true,
   }, "Checkpointed external jobs for shutdown");
 }
 
