@@ -786,3 +786,54 @@ test("rollbackMoves: checks ownership before each individual restore", async () 
   assert.equal(fs.existsSync(source), false);
   assert.equal(fs.readFileSync(destination, "utf8"), "protected bytes");
 });
+
+
+test("verifiedMove: stale worker cannot move after losing its lease during source hashing", async () => {
+  const src = writeFile(path.join(mkTmp("vm-lost-before-src"), "file.bin"), "preserve source");
+  const dest = path.join(mkTmp("vm-lost-before-dest"), "file.bin");
+
+  await assert.rejects(
+    () => verifiedMove(src, dest, {
+      beforeMove: async () => { throw new Error("Organization worker lease was lost"); },
+    }),
+    /lease was lost/,
+  );
+
+  assert.equal(fs.readFileSync(src, "utf8"), "preserve source");
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test("verifiedMove: stale worker preserves destination when lease is lost before local restore", async () => {
+  const src = writeFile(path.join(mkTmp("vm-lost-restore-src"), "file.bin"), "original bytes");
+  const dest = path.join(mkTmp("vm-lost-restore-dest"), "file.bin");
+
+  await assert.rejects(
+    () => verifiedMove(src, dest, {
+      afterMoveHook: (to) => fs.writeFileSync(to, "corrupted bytes"),
+      beforeRestore: async () => { throw new Error("Organization worker lease was lost"); },
+    }),
+    /could not be restored to its source path/,
+  );
+
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "corrupted bytes");
+});
+
+test("rollbackMoves: stops before mutation when ownership expires during checksum verification", async () => {
+  const src = writeFile(path.join(mkTmp("rb-lost-src"), "file.bin"), "rollback payload");
+  const dest = path.join(mkTmp("rb-lost-dest"), "file.bin");
+  const move = await verifiedMove(src, dest);
+  let checks = 0;
+
+  await assert.rejects(
+    () => rollbackMoves([move], undefined, async () => {
+      checks++;
+      if (checks === 2) throw new Error("Organization worker lease was lost");
+    }),
+    /lease was lost/,
+  );
+
+  assert.equal(checks, 2);
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "rollback payload");
+});
