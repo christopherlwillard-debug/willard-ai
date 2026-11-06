@@ -49,7 +49,7 @@ test("organization execution, resume, and rollback are fenced by unique lease to
   assert.match(routes, /beforeMove: \(\) => assertOrganizationLease/);
   assert.match(routes, /beforeRestore: \(\) => assertOrganizationLease/);
   assert.match(routes, /if \(!updatedRollback\)/);
-  assert.match(routes, /function publicOrganizationJob[\\s\\S]*leaseToken: _leaseToken/);
+  assert.match(routes, /function publicOrganizationJob[\s\S]*leaseToken: _leaseToken/);
   assert.match(routes, /jobs\.map\(publicOrganizationJob\)/);
   assert.match(helpers, /await beforeEachMove\?\.\(\);\s*try/);
   assert.match(helpers, /await opts\?\.beforeMove\?\.\(\);/);
