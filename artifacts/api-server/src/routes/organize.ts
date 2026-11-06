@@ -1219,7 +1219,24 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "This job is currently being processed" }); return;
+    }
+
+    // Serialize plan edits against each other and against execution claims.
+    const planEditToken = crypto.randomUUID();
+    const [claimedPlanEdit] = await db.update(organizationJobsTable)
+      .set({ leaseToken: planEditToken })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.status, job.status),
+        isNull(organizationJobsTable.leaseToken),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedPlanEdit) {
+      res.status(409).json({ error: "This job changed while the plan was being updated. Refresh and try again." }); return;
+    }
 
     const plan = job.planJson as any;
     const { excludeCategories = [], excludePaths = [] } = req.body as any;
@@ -1245,10 +1262,16 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
     };
 
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: "planned", planJson: updatedPlan, preflightJson: null })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: "planned", planJson: updatedPlan, preflightJson: null, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.leaseToken, planEditToken),
+        eq(organizationJobsTable.status, job.status),
+      ))
       .returning();
-    res.json(updated ? publicOrganizationJob(updated) : updated);
+    if (!updated) { res.status(409).json({ error: "Plan update lost ownership. Refresh and try again." }); return; }
+    res.json(publicOrganizationJob(updated));
   } catch { res.status(500).json({ error: "Failed to update plan" }); }
 });
 
