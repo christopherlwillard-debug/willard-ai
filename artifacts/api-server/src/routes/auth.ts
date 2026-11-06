@@ -470,7 +470,12 @@ router.delete("/auth/sessions/:sid", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const { sid } = req.params;
+    const sidParam = req.params.sid;
+    const sid = Array.isArray(sidParam) ? sidParam[0] : sidParam;
+    if (typeof sid !== "string" || sid.length === 0 || sid.length > 256) {
+      res.status(400).json({ error: "Invalid session id." });
+      return;
+    }
     if (sid === req.sessionID) {
       res.status(400).json({ error: "Use /auth/logout to end the current session." });
       return;

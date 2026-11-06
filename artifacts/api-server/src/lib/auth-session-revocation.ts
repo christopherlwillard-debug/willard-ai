@@ -5,9 +5,7 @@ export interface SessionCredentialScope {
   credentialVersion: string;
 }
 
-type SessionRevocationClient = Awaited<ReturnType<typeof pool.connect>>;
-
-async function inTransaction(work: (client: SessionRevocationClient) => Promise<void>): Promise<void> {
+async function inTransaction(work: (client: any) => Promise<void>): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
