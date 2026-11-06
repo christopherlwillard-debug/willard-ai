@@ -1226,6 +1226,7 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
     if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
       res.status(409).json({ error: "This job is currently being processed" }); return;
@@ -1307,6 +1308,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
     if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
       res.status(409).json({ error: "This job is currently being processed" }); return;
