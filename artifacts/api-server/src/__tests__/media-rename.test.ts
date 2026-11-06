@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  findPortableNameCollision,
   isPortableMediaFileName,
   MediaRenameConflictError,
   renameFileWithPersistence,
@@ -171,4 +172,18 @@ test("media rename route validates JSON name type and uses no-replace moves", ()
   const sourceCheck = route.indexOf("if (!fs.existsSync(oldAbs))");
   const noOpCheck = route.indexOf("if (newRelPath === file.relativePath)");
   assert.ok(sourceCheck >= 0 && noOpCheck > sourceCheck, "no-op rename must still verify that the source exists");
+});
+
+
+test("portable media names reject case-fold and Unicode-normalization collisions", () => {
+  assert.equal(findPortableNameCollision(["Photo.jpg", "family.jpg"], "photo.JPG", "family.jpg"), "Photo.jpg");
+  assert.equal(findPortableNameCollision(["résumé.pdf"], "re\u0301sume\u0301.pdf"), "résumé.pdf");
+  assert.equal(findPortableNameCollision(["photo.jpg"], "PHOTO.JPG", "photo.jpg"), null);
+  assert.equal(findPortableNameCollision(["photo.jpg"], "new-photo.jpg", "photo.jpg"), null);
+});
+
+test("media rename route checks portable sibling collisions before moving", () => {
+  const route = fs.readFileSync("artifacts/api-server/src/routes/media.ts", "utf8");
+  assert.match(route, /findPortableNameCollision\(/);
+  assert.match(route, /case-insensitive filesystem/);
 });
