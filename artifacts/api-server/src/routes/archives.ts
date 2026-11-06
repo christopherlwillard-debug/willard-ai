@@ -9,7 +9,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { randomUUID } from "node:crypto";
 import Seven from "node-7z";
-import { getSevenZipPath } from "../lib/sevenzip.ts";
+import { createTrackedSevenZipStream, getSevenZipPath, stopTrackedSevenZipStream } from "../lib/sevenzip.ts";
 import { getFileTypeFromName, computeCategoryFromContent } from "../lib/archive-classification.ts";
 import {
   archiveByIdScope,
@@ -136,7 +136,7 @@ async function peekTarWithPrivateScratch(
     cleanTempDir(scratchDir, nasPath);
   }
 }
-async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
+async function peek7z(filePath: string, signal?: AbortSignal): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
   const entries: any[] = [];
   let isPasswordProtected = false;
   let format = "7z";
@@ -145,19 +145,24 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
   const sevenZipPath = await getSevenZipPath();
 
   return new Promise((resolve, reject) => {
-    const stream = Seven.list(filePath, {
+    const stream = createTrackedSevenZipStream(() => Seven.list(filePath, {
       $bin: sevenZipPath,
       $progress: false,
       techInfo: true,
-    } as any);
+    } as any), signal);
     let safetyError: Error | undefined;
+    const rejectUnsafeEntry = (error: Error) => {
+      if (safetyError) return;
+      safetyError = error;
+      void stopTrackedSevenZipStream(stream);
+    };
 
     stream.on("data", (data: any) => {
       if (data.file !== undefined && !safetyError) {
         const info = getSevenZipEntryInfo(data);
         const isDir = info.isDirectory;
         if (info.isLink) {
-          safetyError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`);
+          rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`));
           return;
         }
         try {
@@ -175,7 +180,7 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
             fileType,
           });
         } catch (error) {
-          safetyError = error instanceof Error ? error : new Error(String(error));
+          rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
         }
       }
     });
@@ -185,6 +190,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     stream.on("end", () => {
       if (safetyError) {
         reject(safetyError);
+        return;
+      }
+      if (signal?.aborted) {
+        reject(new Error("Archive preview was cancelled because the client disconnected."));
         return;
       }
       try {
@@ -198,6 +207,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     stream.on("error", (err: Error) => {
       if (safetyError) {
         reject(safetyError);
+        return;
+      }
+      if (signal?.aborted) {
+        reject(new Error("Archive preview was cancelled because the client disconnected."));
         return;
       }
       const msg = err?.message ?? "";
@@ -495,7 +508,18 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── RAR / 7Z / ISO / CAB — full listing via node-7z + official 7-Zip binary ──────────
     if (BINARY_ONLY_EXTS.has(ext)) {
-      const { entries, isPasswordProtected, format, error } = await peek7z(archivePath);
+      const previewAbort = new AbortController();
+      const abortPreviewIfDisconnected = () => {
+        if (!res.writableEnded) previewAbort.abort();
+      };
+      res.once("close", abortPreviewIfDisconnected);
+      let preview: Awaited<ReturnType<typeof peek7z>>;
+      try {
+        preview = await peek7z(archivePath, previewAbort.signal);
+      } finally {
+        res.off("close", abortPreviewIfDisconnected);
+      }
+      const { entries, isPasswordProtected, format, error } = preview;
 
       const hasNestedArchives = entries.some(e => {
         const nestedExt = path.extname(e.path).replace(".", "").toLowerCase();
@@ -532,6 +556,7 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     res.status(422).json({ error: `Unrecognized archive format: .${ext}` });
   } catch (err) {
+    if (res.destroyed || res.writableEnded) return;
     if (err instanceof ArchiveSafetyError) {
       res.status(422).json({ error: err.message });
       return;
