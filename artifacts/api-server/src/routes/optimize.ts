@@ -41,7 +41,7 @@ import {
 const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
-const activeConversionJobIds = new Set<number>();
+const activeConversionJobIds = new Map<number, number>();
 const activeConversionJobWaiters = new Set<() => void>();
 
 function notifyConversionJobWaiters(): void {
@@ -1691,7 +1691,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
-  activeConversionJobIds.add(id);
+  activeConversionJobIds.set(id, (activeConversionJobIds.get(id) ?? 0) + 1);
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
   let jobClaimed = false;
@@ -2072,7 +2072,9 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
-    activeConversionJobIds.delete(id);
+    const activeRequestsForJob = activeConversionJobIds.get(id) ?? 0;
+    if (activeRequestsForJob <= 1) activeConversionJobIds.delete(id);
+    else activeConversionJobIds.set(id, activeRequestsForJob - 1);
     notifyConversionJobWaiters();
     if (jobLockClient) {
       try {
