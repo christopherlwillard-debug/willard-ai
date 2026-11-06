@@ -2786,3 +2786,14 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Optimize Center → cancel a conversion | fixed; targeted-test pending | f3ba596fbcaec37ee72f8d72a0796d11034c6c21, 93699683f748640580a09a4340bf6bda6292012b | Fast Validation must execute the regression on the final branch head. Active FFmpeg cancellation remains a separate high-priority issue. |
+## Windows installer lifecycle noninteractive failure handling — November 6
+
+- **Finding — Medium (Windows installer lifecycle validation → stop failure reporting):** The generated child runner in installer-lifecycle-smoke.ps1 set update/recovery variables but did not set WILLARD_NO_PAUSE. When the installed launcher correctly failed closed on incomplete WMI process identity, its error handler reached Pause-BeforeClose and waited on Read-Host. The lifecycle harness waits for the child process for up to 180 seconds, so a known identity failure was reported as a timeout and obscured the actionable cause. This was confirmed by the #50 captured output and the runner/common.ps1 source.
+- **Fix:** The generated lifecycle child runner now sets WILLARD_NO_PAUSE=1 before invoking start/stop/failure modes. The automated test installer-config.test.mjs now asserts that the generated runner disables interactive pauses. This affects only the isolated test process; normal interactive launcher behavior is unchanged.
+- **Commit:** f49c19decb3f306609df8f2b6da96161c54a83b1.
+- **Validation:** Source inspection confirms the generated runner includes the flag and the regression assertion is present. The test is part of the Windows lifecycle workflow's installer-config test step. The next lifecycle run on the final head must execute it. Run #50 failed at the post-upgrade stop: WMI returned incomplete identity metadata for PID 5576, and the harness timed out after 180 seconds. Fast Validation #1205 and Windows archive/updater smoke passed on the preceding head 535a5f6b083eba3090d18088d67782f1202bb530; they do not validate this runner change. The new lifecycle run for this change is pending.
+- **Remaining risk:** This fixes the misleading timeout caused by interactive pause behavior; it does not resolve the underlying Windows process-identity failure. The launcher must continue refusing to terminate an unverified PID. A clean standard-user install → upgrade → stop → recovery → diagnostics → uninstall run must pass before the installer area is fully validated.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installer lifecycle → noninteractive stop error handling | fixed; source-inspected, targeted workflow test pending | f49c19decb3f306609df8f2b6da96161c54a83b1 | The underlying WMI identity failure still blocks the installed-product lifecycle; no PID ownership checks were weakened. |
