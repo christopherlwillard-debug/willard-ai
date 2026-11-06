@@ -106,6 +106,10 @@ test("archive filter controls expose accessible names", () => {
     assert.ok(archivePage.includes(`aria-label="${label}"`), label);
   }
 });
+test("archive category filter exposes every computed category", () => {
+  assert.ok(archivePage.includes('<SelectItem value="Audio Archive">Audio Archive</SelectItem>'));
+});
+
 test("archive index reports request failures and provides a retry action", () => {
   assert.ok(archivePage.includes("const { data, isLoading, isError, refetch } = useListArchives"));
   assert.ok(archivePage.includes("Archive index unavailable"));
