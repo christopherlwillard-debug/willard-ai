@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream } from "node:fs";
-import { resolveWithinRoot } from "./nas-storage.ts";
+import { canonicalizePath, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
@@ -198,12 +198,42 @@ async function readManifest(manifestDir: string, id: string): Promise<StorageMig
   if (typeof parsed.sourceRoot !== "string" || typeof parsed.destinationRoot !== "string" || samePath(parsed.sourceRoot, parsed.destinationRoot)) {
     throw new Error("Migration manifest has invalid roots.");
   }
+  if (
+    isWithin(parsed.sourceRoot, parsed.destinationRoot) ||
+    isWithin(parsed.destinationRoot, parsed.sourceRoot)
+  ) {
+    throw new Error("Migration manifest source and destination roots overlap.");
+  }
   for (const entry of parsed.entries) {
-    if (!isWithin(parsed.sourceRoot, entry.sourcePath) || !isWithin(parsed.destinationRoot, entry.destinationPath)) {
+    if (
+      !isWithin(parsed.sourceRoot, entry.sourcePath) ||
+      samePath(parsed.sourceRoot, entry.sourcePath) ||
+      !isWithin(parsed.destinationRoot, entry.destinationPath) ||
+      samePath(parsed.destinationRoot, entry.destinationPath)
+    ) {
       throw new Error("Migration manifest contains a path outside its source or destination root.");
     }
+    const relativePath = relativeFor(parsed.sourceRoot, entry.sourcePath);
+    if (entry.relativePath !== relativePath || !samePath(entry.destinationPath, destinationFor(parsed.destinationRoot, relativePath))) {
+      throw new Error("Migration manifest contains inconsistent source and destination paths.");
+    }
+    const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
+    if (namespace) {
+      const namespaceRoot = path.join(parsed.sourceRoot, namespace.relativeRoot);
+      if (!isWithin(namespaceRoot, entry.sourcePath) || samePath(namespaceRoot, entry.sourcePath)) {
+        throw new Error("Migration manifest entry does not belong to its declared namespace.");
+      }
+      entry.protected = namespace.protected;
+    } else if (entry.namespace === "unsafe" || entry.namespace === "database-reference") {
+      entry.protected = true;
+    } else {
+      throw new Error("Migration manifest contains an unknown namespace.");
+    }
+    if (!Array.isArray(entry.references) || !Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0) {
+      throw new Error("Migration manifest contains invalid entry metadata.");
+    }
     for (const reference of entry.references) {
-      if (!allowedReferences.has(`${reference.table}:${reference.column}`)) {
+      if (!allowedReferences.has(`${reference.table}:${reference.column}`) || !Number.isSafeInteger(reference.rowId) || reference.rowId <= 0) {
         throw new Error("Migration manifest contains an unsupported database reference.");
       }
     }
@@ -332,10 +362,24 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   }
 
   async function preview(input: Omit<MigrationPreviewOptions, "manifestDir">): Promise<StorageMigrationManifest> {
-    const sourceRoot = safeRoot(input.sourceRoot);
-    const destinationRoot = safeRoot(input.destinationRoot);
-    if (samePath(sourceRoot, destinationRoot)) throw new Error("Migration source and destination must be different.");
+    const sourceRoot = canonicalizePath(input.sourceRoot);
+    const destinationRoot = canonicalizePath(input.destinationRoot);
+    if (samePath(sourceRoot, destinationRoot) || isWithin(sourceRoot, destinationRoot) || isWithin(destinationRoot, sourceRoot)) {
+      throw new Error("Migration source and destination must be separate, non-overlapping directories.");
+    }
     if (!fs.existsSync(sourceRoot)) throw new Error("Migration source is not reachable.");
+    const sourceStat = fs.lstatSync(sourceRoot);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
+      throw new Error("Migration source must resolve to a regular directory.");
+    }
+    try {
+      const destinationStat = fs.lstatSync(destinationRoot);
+      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
+        throw new Error("Migration destination must be a regular directory when it already exists.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
 
     const references = input.referenceRows ?? await databaseReferences(query);
     const unsafe: Array<{ path: string; reason: string }> = [];
@@ -644,7 +688,8 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     const manifest = await get(id);
     if (!manifest.cleanupConfirmed) throw new Error("Cleanup requires a separate explicit confirmation.");
     for (const entry of manifest.entries) {
-      if (entry.protected || entry.state !== "verified") continue;
+      const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
+      if (!namespace || namespace.protected || entry.protected || entry.state !== "verified") continue;
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
       const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
       const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
