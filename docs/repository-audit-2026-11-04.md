@@ -2967,3 +2967,21 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Optimize Center → crash after successful staged files → retry | found; architecture required | documentation/investigation only | Result JSON is not checkpointed per file; staged successes can become orphaned, and retries reuse the same job-level staging directory. Requires attempt-scoped staging, durable per-file checkpoints, and worker fencing. |
+
+
+## November 6 — additional media and NAS responsiveness findings
+
+### On-demand thumbnail generation still blocks the API event loop
+
+- **Finding — Medium (Media Library → video/PDF thumbnail requests and image fallback):** `thumbnail-engine.ts` exports an asynchronous thumbnail generation flow, but the video, PDF, and FFmpeg image-fallback helpers call `spawnSync` directly with 15–30 second timeouts. A thumbnail request can therefore block the API event loop for the full tool timeout; concurrent media requests, health checks, and cancellation handling in the same API process are delayed. This is separate from the longer Optimize Center FFmpeg blocking path already recorded above.
+- **Status: found by source inspection.** Include thumbnail jobs in the shared asynchronous media-tool runner design. The runner should bound stdout/stderr, time out, terminate the process tree on Windows, clean temporary frames in a finally path, and preserve the existing per-thumbnail lock and atomic publish behavior. Do not convert only the call to a Promise while leaving process ownership/cancellation undefined.
+
+### Organization preflight disk-space probe is synchronous and platform-dependent
+
+- **Finding — Medium (Organize → destination preflight on slow/offline NAS):** `getDiskFreeBytes` calls `fs.existsSync` and `spawnSync("df", ["-B1", ...])` without a timeout. On Linux/macOS, a stalled network mount can block the Node event loop while those synchronous filesystem/command calls wait. On Windows, `df` is not a standard command, so the helper returns `null`; the caller leaves `diskOk` true and reports only “Check unavailable on this system.” The preflight can therefore appear successful even though the per-destination free-space check was not performed.
+- **Status: found by source inspection; no runtime failure is claimed.** Replace this with a bounded, asynchronous, cross-platform capacity probe and represent “unknown” separately from “enough space” in the preflight result. Keep the existing NAS-root capacity check, but do not render an unavailable per-destination check as an unqualified pass. Test Windows local and UNC paths, Linux mounted paths, and an unavailable/stalled NAS without blocking unrelated API requests.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media Library → on-demand video/PDF/fallback thumbnail | found; architecture required | documentation/investigation only | Synchronous FFmpeg calls can block the API event loop for up to 30 seconds per request. |
+| Medium | Organize → per-destination disk-space preflight | found; architecture required | documentation/investigation only | Synchronous `df`/filesystem probes can block on NAS; Windows treats an unavailable per-destination check as non-blocking. Requires an async bounded provider and an explicit unknown state. |
