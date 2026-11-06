@@ -2478,3 +2478,27 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Failure branches now clear the owned lease token, catch cleanup runs only when the request still owns the claim, and final persistence returns HTTP 409 when ownership was lost rather than reporting success.
 - Added regression assertions for lease cleanup and lost-final-write handling. Commits: implementation `d2220a71cdb3a51817f0dd7db4e3f3774973924a`; regression `ef26d581e53f2d4011a648a0dca8bc9828664bba`.
 - Fast Validation is not yet confirmed on this change; latest runs are frequently cancelled by subsequent hourly commits. Crash recovery for an analysis request that dies without executing its catch remains a separate open item.
+
+## 2026-11-06 follow-up — symlinked parent paths in verified media moves
+
+<badge color="danger">High — blocked for safe design</badge>
+
+**Finding:** The shared verified-move boundary rejects a symlink or special file only at the final source/destination component. Its no-replace move helper creates destination parents recursively, and conversion finalization uses lexical assertWithinRoot checks plus final-component lstat. Those checks do not prove that every parent directory remains inside the active library. A symlinked parent such as NAS/photos -> an external directory can therefore make a lexically in-root media path resolve to an outside file. The conversion finalizer and its startup rollback path both pass persisted paths through this boundary; organize moves also use the same verifiedMove helper. The organize scanner rejects symlinks during its initial walk, but the move and recovery paths do not revalidate the full parent chain immediately before mutation.
+
+**Impact:** A parent symlink introduced after scan/conversion (or present in a persisted recovery journal) could redirect a hash/read, move, or rollback outside the configured library. This is a data-integrity and unintended-file-mutation risk, not merely a scan omission.
+
+**Why no partial patch was applied:** Adding only another lstat loop before verifiedMove would reduce the static-symlink case but leave a check-to-mutation race: a parent can be replaced after validation and before link/copy/unlink/rename. The existing PostgreSQL lease checks do not fence filesystem path resolution. A superficial path check would overstate protection and could still move external user data.
+
+**Safe implementation plan:**
+1. Define one cross-platform no-follow move primitive in the existing filesystem helper boundary. It must anchor operations to already-open directory handles and reject symlink/reparse-point ancestors, not merely inspect the final file.
+2. On POSIX, evaluate dirfd-relative open/stat and no-replace rename/link semantics (for Linux, openat2 with RESOLVE_BENEATH and RESOLVE_NO_SYMLINKS plus renameat2 where supported); on Windows, use handles opened with FILE_FLAG_OPEN_REPARSE_POINT and handle-based rename with no-replace semantics. NAS compatibility and unsupported filesystems must fail closed rather than silently fall back to path-based mutation.
+3. Reuse that primitive for verifiedMove, rollbackMoves, conversion finalization/recovery, and organization moves so the safety boundary is not duplicated.
+4. Add adversarial Linux and Windows tests for a symlink/junction at every ancestor, a parent swapped between validation and mutation, recovery from a persisted journal, and cross-volume/NAS fallback behavior. Assert that outside bytes are never read, moved, overwritten, or deleted.
+5. Keep the current final-component and lexical checks as defense in depth, but do not mark the finding resolved until the handle-anchored primitive and both OS integration suites pass.
+
+**Status:** Blocked pending the filesystem-operation design and supported-NAS compatibility decision. No source workaround was applied.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Organize and Optimize conversion → verified move / rollback / startup recovery can follow a symlinked parent outside the active library | found; blocked for safe design | this documentation batch | Existing path checks are lexical plus final-component only; full parent-chain and race-safe filesystem confinement remain unresolved |
+
