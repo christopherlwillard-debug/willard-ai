@@ -15,7 +15,7 @@ import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandl
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
-import { isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
+import { findPortableNameCollision, isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
 import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 
 const router = Router();
@@ -430,6 +430,15 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     }
   } catch {
     res.status(409).json({ error: "Source file could not be verified. Refresh the library and try again." });
+    return;
+  }
+  const siblingCollision = findPortableNameCollision(
+    fs.readdirSync(path.dirname(oldAbs)),
+    newName,
+    path.basename(oldAbs),
+  );
+  if (siblingCollision) {
+    res.status(409).json({ error: `A file named "${siblingCollision}" already exists on a case-insensitive filesystem.` });
     return;
   }
   if (newRelPath === file.relativePath) {
