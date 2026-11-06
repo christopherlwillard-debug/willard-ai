@@ -9,14 +9,15 @@ on:
       - "installer/**"
       - "desktop/**"
       - "scripts/windows/**"
-      - "artifacts/api-server/**"
-      - "artifacts/willard-ai/**"
-      - "lib/**"
+      - "scripts/launcher/**"
+      - "artifacts/api-server/package.json"
+      - "artifacts/willard-ai/package.json"
+      - "artifacts/willard-mobile/package.json"
+      - "lib/**/package.json"
       - "pnpm-lock.yaml"
       - "package.json"
       - "pnpm-workspace.yaml"
       - "setup-db.cjs"
-      - "test-media/**"
   workflow_dispatch:
     inputs:
       version:
