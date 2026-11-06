@@ -2364,3 +2364,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Validation-only manual runs skip both artifact upload and the publisher. Push-to-main and manual publish runs still require the full Windows build/lifecycle checks to succeed before publication.
 - Commits: workflow permission split `b19152c8be8427f00ac9dead2d1859e801f60a4d`; artifact path correction `0b3630849708350b6ff9e166efa746e4f4f0afdb`.
 - This workflow is not triggered by the audit branch, so its GitHub Actions execution remains unverified here. YAML structure and artifact path behavior require CI validation before relying on the new publisher path. No release was dispatched or published.
+
+
+## Windows backup termination failure fallback (latest)
+- Found that the Windows timeout path awaited the taskkill.exe callback but ignored its error, then waited indefinitely for the backup child to close. If taskkill was unavailable or denied, the timeout handler could hang and leave the coordinator stuck.
+- The handler now force-stops the direct child as a fallback, waits for its close event, and raises an explicit process-tree termination error so a possible surviving descendant is not silently treated as safely terminated.
+- Added a regression assertion for the taskkill failure fallback and diagnostic.
+- Commits: implementation 234fef2e2ac488a4498df870757e234558ea5983; regression fecd59d13c947a38244bfb55877bebc956dee0c6; matcher correction 51be838f32b86d8eaf91312250c0c21e4ccf524c.
+- This is source-contract coverage only. Controlled Windows taskkill failure and descendant-process integration tests remain outstanding; the fallback cannot guarantee termination of grandchildren when Windows tree termination itself fails.
