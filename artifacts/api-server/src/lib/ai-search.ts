@@ -170,6 +170,28 @@ export async function parseIntent(
       location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
       personNames: [],
     };
+    // Built-in no-result suggestions must work even if the model omits or
+    // misstates a clear flag. These exact UI actions are deterministic.
+    const localClear = previous ? localSearchClearFilters(query) : {};
+    const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
+    const objectName = objectMatch?.[1]?.trim().toLowerCase();
+    if (localClear.dateRange) {
+      parsed.dateFrom = null;
+      parsed.dateTo = null;
+    }
+    if (localClear.mediaTypes) parsed.mediaTypes = [];
+    if (localClear.favoriteOnly) parsed.favoriteOnly = false;
+    if (localClear.location) parsed.location = null;
+    if (localClear.excludeAll) parsed.exclude = [];
+    else if (localClear.exclude?.length) {
+      const removed = new Set(localClear.exclude);
+      parsed.exclude = parsed.exclude.filter((value) => !removed.has(value));
+    }
+    if (localClear.objects && objectName) {
+      parsed.semanticQuery = objectName;
+      parsed.keywords = [objectName];
+      parsed.objects = [objectName];
+    }
     const rawClear = p.clearFilters && typeof p.clearFilters === "object"
       ? p.clearFilters as Record<string, unknown>
       : {};
@@ -186,7 +208,12 @@ export async function parseIntent(
       location: rawClear.location === true,
       personNames: rawClear.personNames === true,
     };
-    const merged = previous ? mergeRefinedIntent(previous, parsed, clear) : parsed;
+    const effectiveClear: SearchIntentClear = {
+      ...clear,
+      ...localClear,
+      exclude: [...(clear.exclude ?? []), ...(localClear.exclude ?? [])],
+    };
+    const merged = previous ? mergeRefinedIntent(previous, parsed, effectiveClear) : parsed;
     return { ...merged, ...normalizeOptionalDateOnlyRange(merged.dateFrom, merged.dateTo) };
   } catch (err) {
     logger.warn({ err, query }, "Intent parsing failed — falling back to keyword search");
