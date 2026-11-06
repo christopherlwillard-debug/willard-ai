@@ -108,7 +108,6 @@ export function findReusableThumbnailPaths(
 // A tiny valid WebP can be smaller than 100 bytes, so use the minimum size
 // needed for a RIFF/WebP header and validate the declared RIFF length too.
 const MIN_VALID_THUMBNAIL_BYTES = 32;
-const THUMBNAIL_LOCK_STALE_MS = 2 * 60_000;
 /** A backfill is intentionally bounded; on-demand requests remain lazy. */
 export const THUMBNAIL_CACHE_MAX_BYTES = 1 * 1024 * 1024 * 1024;
 const INCOMPLETE_FILE_RETENTION_MS = 15 * 60_000;
@@ -156,10 +155,10 @@ async function acquireThumbnailLock(destPath: string): Promise<() => void> {
         break;
       } catch (err: any) {
         if (err?.code !== "EEXIST") throw err;
-        try {
-          const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-          if (ageMs > THUMBNAIL_LOCK_STALE_MS) fs.unlinkSync(lockPath);
-        } catch { /* another process may be replacing/removing the lock */ }
+        // Never steal a lock based only on age: thumbnail generation can
+        // legitimately exceed two minutes on slow disks or large media. A
+        // stale lock may require operator cleanup after a crash, but deleting
+        // it here could let two processes publish the same derivative.
         await sleep(50);
       }
     }
