@@ -3722,3 +3722,39 @@ Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/w
 - **Dependency Review [42294097091](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42294097091):** passed on this exact head; production advisory gate passed; installed dependency-graph audit skipped.
 - **Windows installer lifecycle [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030):** failed on earlier code commit `347b8cdbd9c093aae216920d33c25a48f6009358` in prepared-phase recovery. The fail-fast test diagnostic now exposes the missing launcher path directly. First install, first start, upgrade, post-upgrade start, and swapped-phase recovery had succeeded before the prepared-phase failure. This confirms the stable-bootstrap defect remains; no recovery workaround was applied.
 - **Full CI:** not run. The available validation workflows remain separate and do not constitute full-repository CI.
+
+
+## November 6 — manual local first-run setup and session transaction type hardening
+
+- **Branch head before this report update:** `168edf6b95ef3250c5ff152841fd92dd24f43633`.
+- **PR #2:** open, draft, unmerged; existing branch `audit/full-repository-review-2026-11`, base `main`; 1,395 commits and 195 changed files at this snapshot. No branch switch, merge, deployment, release, production-data operation, or credential modification.
+- **Architecture/repository review:** rechecked `ARCHITECTURE.md`, workspace/package boundaries, API startup/auth middleware, setup authorization, desktop/developer launchers, setup UI, root scripts, workflow definitions, current PR diff, findings ledger, and recent branch CI before changing files.
+
+### P2 — documented manual local setup could not complete first-run authorization
+
+- **Affected workflow:** direct/manual API startup on a user's own Windows, macOS, or Linux computer, followed by first administrator password creation.
+- **Evidence/root cause:** `authorizeFirstRunSetup()` intentionally permits tokenless setup only when the process has the explicit `WILLARD_LOCAL_SETUP=true` opt-in, is not running under Replit, and binds to `HOST=127.0.0.1`. The packaged and developer desktop launchers set those values. The documented manual startup in `LOCAL_SETUP.md` did not, so users following the documented direct-start commands received `token_required` or `token_misconfigured` and could not complete first-run setup without an undocumented workaround.
+- **Fix:** `LOCAL_SETUP.md` now provides PowerShell and POSIX first-run commands that set both values for the local API process, explicitly warns not to use the bypass on a hosted server or behind a reverse proxy, and directs remote/LAN setup to the operator-configured `WILLARD_SETUP_TOKEN`.
+- **Regression coverage:** `install-auth-reliability.test.ts` now asserts both shell command forms and the hosted/reverse-proxy warning. Existing `setup-authorization.test.ts` continues to verify that the bypass requires explicit opt-in and rejects non-loopback peers.
+- **Status:** fixed; target-tested on exact code/test head `168edf6b95ef3250c5ff152841fd92dd24f43633` by Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129). The manual-start regression passed in the targeted backend suite.
+
+### P3 — remove untyped transaction client from session-revocation code
+
+- **Affected workflow:** logout, per-device session revocation, revoke-other-sessions, and stale-session cleanup transactions.
+- **Evidence/root cause:** `auth-session-revocation.ts` accepted its transaction client as `any`, weakening compile-time checks around the new security-critical transaction boundary.
+- **Fix:** `lib/db/src/index.ts` now exports the existing `pg` `PoolClient` type, and the revocation transaction helper uses that type. This is type-only; it adds no runtime dependency and changes no transaction behavior.
+- **Status:** fixed; workspace/library and API typechecks passed on code commit `ec1a916295c3c9191b1ad151200d36a2bdfa6cd1`, and the latest exact-head typecheck also passed in Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129).
+
+### Validation evidence
+
+- **Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129), exact head `168edf6b95ef3250c5ff152841fd92dd24f43633`:** Linux validation job passed. Workspace typechecks/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, PostgreSQL media-query validation, conversion advisory-lock integration, conversion finalization recovery, and session-revocation tombstone integration passed. Targeted backend regressions: 361 total, 359 passed, 0 failed, 2 skipped. The new manual local setup documentation regression passed.
+- **Windows archive/updater smoke:** the matching job in run 42296111129 was still in progress at the time this ledger update was prepared; no pass is claimed for that job yet. The same Windows smoke job did pass on code commit `ec1a916295c3c9191b1ad151200d36a2bdfa6cd1` in Fast Validation [42296007239](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296007239), including PowerShell parsing, launcher ownership, Windows capacity probes, storage migration, NAS temp-path safety, conversion rollback, official 7-Zip symlink metadata, compressed TAR preview, updater journal, and developer-updater preservation/rollback.
+- **Dependency Review [42296110982](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296110982), exact head `168edf6b95ef3250c5ff152841fd92dd24f43633`:** production advisory gate passed; installed dependency-graph audit skipped.
+- **Full CI:** not run. The repository has Fast Validation, Dependency Review, Windows installer lifecycle, and Windows release workflows, but no full-repository CI workflow or all-tests script. Fast Validation is broad targeted validation, not full CI.
+
+### Remaining prioritized risks
+
+- **Critical / blocked:** default Windows installer directory overlaps persistent data directory; the stable external recovery bootstrap and legacy data migration still need a coordinated implementation and installed-product lifecycle validation.
+- **High / architecture work:** conversion workers need attempt-generation fencing and unique staging ownership; node-7z list/extract child processes still need shared process ownership and cancellation.
+- **High / open:** organization worker takeover and NAS/SMB recovery, durable replacement rollback, and cleanup/revocation retention boundaries still need further concurrency and crash testing.
+- **Lifecycle evidence:** the latest Windows installer lifecycle run remains [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030), failed on earlier commit `347b8cdbd9c093aae216920d33c25a48f6009358` in prepared-phase recovery. No installed-product recovery pass is claimed.
