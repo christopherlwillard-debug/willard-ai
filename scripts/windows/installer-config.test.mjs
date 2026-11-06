@@ -1655,6 +1655,7 @@ test("installer lifecycle validation only runs for installer and packaging input
   assert.ok(auditInstallerLifecycleWorkflow.includes('"installer/**"'));
   assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/build-installer.ps1"'));
   assert.ok(auditInstallerLifecycleWorkflow.includes('"artifacts/api-server/package.json"'));
+  assert.equal((auditInstallerLifecycleWorkflow.match(/"desktop\/postgres-snapshot-process\.mjs"/g) ?? []).length, 2);
   assert.ok(auditInstallerLifecycleWorkflow.includes('"pnpm-lock.yaml"'));
 
 });
