@@ -2338,3 +2338,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Confirmed the database backup's 30-minute timeout sent SIGTERM only to the direct Node child. The backup helper already had a platform-aware process-tree terminator (Windows taskkill /T /F; POSIX TERM then KILL escalation), but the timeout did not use it. The timeout now invokes that helper so spawned backup descendants are terminated too. Added `backup-timeout-process-tree.test.ts` and wired it into Fast Validation.
 - Commits: Optimize UI `475cac0ca57858abb2cfec80ca250dda9680940e`; Optimize regression `a555a7d597252042f73eb4c73def991cafc78e11`; backup timeout `d9f8391debcaf1f9e79e84901f51e714b9590dba`; backup regression `eaa916dfd56e7c95fb7ebf6ee7b6055a36d3e6a0`; workflow wiring `7ef83a671d7ab9a17eab0b1647ff80b18ad37f25`.
 - Validation is pending on the current head. The new checks are source-contract regressions; process-tree timeout behavior still merits a controlled integration test with a child process that spawns a grandchild on Windows and POSIX.
+
+
+## Library-job failure persistence correction (2026-11-06)
+- Confirmed `failJob` swallowed every PostgreSQL update error, then removed the job from the in-memory active map and logged that the job had FAILED. If the database was unavailable, the durable row could remain `RUNNING` while the process falsely reported a terminal failure and allowed another job to start.
+- The failure transition now requires exactly one updated row before removing the active entry or logging a durable FAILED state. A failed write propagates and leaves the job registered, preventing a duplicate in-process job while the database still reports it active. The user-facing force-discard/restart-recovery paths remain the explicit ways to clear an unresolved job after database connectivity is restored.
+- Added `library-job-failure-persistence.test.ts` and wired it into Fast Validation.
+- Commits: implementation `4285392ab9f5ac16cf7fba0f8c31988ef74fc98f`; regression `0a65572c00247235ca843e7220e7f58924067feb`; workflow `6aa52fa79dca52d78b6d73ea347d4e6dceb1d452`.
+- Validation pending. This source-contract test does not replace a PostgreSQL fault-injection test that forces the terminal update to fail and verifies the active-job guard and recovery behavior end to end.
