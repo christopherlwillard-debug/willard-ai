@@ -1603,8 +1603,16 @@ test("developer launch, setup, repair, and update fail closed on unjournaled ser
   const setupGuard = setupLauncher.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
   const setupMutation = setupLauncher.indexOf("Install-WillardMediaTools");
   assert.ok(setupGuard >= 0 && setupGuard < setupMutation, "Setup must guard listeners before setup mutations.");
+  assert.match(setupLauncher, /if \\(\$entryTracked\\) \\{\\s+Stop-TrackedProcesses \\| Out-Null/);
+
+  const repairTrackedStart = repairLauncher.indexOf("if ($tracked) {", repairGuard);
+  const repairTrackedEnd = repairLauncher.indexOf("\\n}\\n\\n# -- Helper programs", repairTrackedStart);
+  assert.ok(repairTrackedStart >= 0 && repairTrackedEnd > repairTrackedStart);
+  const repairTrackedBlock = repairLauncher.slice(repairTrackedStart, repairTrackedEnd);
+  assert.match(repairTrackedBlock, /Stop-TrackedProcesses/);
+  assert.doesNotMatch(repairTrackedBlock, /Clear-TrackedPids/);
 
   const updateGuard = updater.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
-  const updatePreparation = updater.indexOf("New-CandidateDirectory");
+  const updatePreparation = updater.indexOf("$candidate = New-CandidateDirectory $gitCommand");
   assert.ok(updateGuard >= 0 && updateGuard < updatePreparation, "Update must guard listeners before preparing a candidate.");
 });
