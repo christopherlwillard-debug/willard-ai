@@ -2294,3 +2294,12 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Cancelled conversion with successful staged outputs could not be finalized | fixed in route; source-contract regression added; validation pending | implementation `00311e42`; test `c81fa89f` | Live mid-run cancellation/finalization integration coverage and matching CI pending |
+
+
+## Cancelled conversion finalization UI follow-up (2026-11-06)
+- Followed the server-side cancellation correction through the Optimize page and found two UI paths that still treated a cancelled summary as terminal even when successful files were staged: both live SSE summary handlers gated finalization on `!data.cancelled`.
+- The reconnect/polling path also did not recognize the new `awaiting_action` server status as terminal/actionable, and mapped legacy cancelled jobs directly to the done screen.
+- Updated both SSE summary handlers to expose finalization whenever at least one file succeeded, regardless of the cancellation flag. Reconnect polling now stops on `awaiting_action` and opens the finalization controls for that server state. The cancelled-state copy now explicitly tells the user to choose what to do with originals.
+- Added `artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts` to guard both SSE paths and reconnect state mapping.
+- UI commit: `d8f186b0a91d9b915c1f595c8e718caa1c5bf7aa`; regression commit: `2a3d48a9f997764356c8baae7aaaeedbad1c6f12`.
+- Validation is pending on the current branch head. The new test is source-contract coverage; a browser-level cancellation/reconnect test remains desirable.
