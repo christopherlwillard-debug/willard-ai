@@ -3169,10 +3169,51 @@ Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the W
 - **Severity: Medium. Affected workflow:** PR validation of standard-user Windows install, upgrade, interrupted-update recovery, diagnostics, and uninstall.
 - **Root cause confirmed from workflow and run logs:** `.github/workflows/windows-installer-lifecycle-validation.yml` used the shared group `windows-installer-lifecycle-${{ github.ref }}` with `cancel-in-progress: true`. The pull-request path filter is evaluated against the complete PR diff, which already contains installer/desktop files. Every later PR synchronize therefore starts another lifecycle run even when the new commit only changes API code or this audit report. The newer run cancels the in-progress installer build. Run [42251591470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591470) was cancelled at the installer build step; the subsequent `pg_ctl` cleanup warning that `postmaster.pid` was absent is secondary cleanup after cancellation, not the initiating failure.
 - **Fix:** changed the lifecycle workflow to `cancel-in-progress: false`. A running 120-minute lifecycle test now finishes instead of being killed by a later audit commit; GitHub may retain only the newest pending run. Added a regression to `scripts/windows/installer-config.test.mjs` that asserts this workflow's own concurrency block does not cancel an active lifecycle run. The release workflow's separate concurrency policy was not changed.
-- **Status:** fixed in source; targeted workflow-contract validation pending. Do not treat cancelled run 42251591470 as a product pass or a product failure.
+- **Status:** fixed; target-tested. Fast Validation run 42253408096 passed `scripts/windows/installer-config.test.mjs` 85/85, including this assertion. Do not treat cancelled run 42251591470 as a product pass or a product failure.
 - **Fix commits:** workflow `6d29a99eb392a144f398dd32ee292e6237361c62`; regression test `ddae704b4724a33d93cb0ec2891e03529f4d652f`.
 - **Validation at this snapshot:** prior Fast Validation [run 42251591421](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591421) completed successfully on code head `64b430c7528b26e3477b4f5ee8798b98174be618`: Linux `validate` and Windows `windows-archive-and-updater-smoke` both passed. The Windows job passed PowerShell parsing, media subprocess tests (4/4), storage migration (20/20), NAS path safety (16/16), conversion finalization (12/12), official Windows 7-Zip 26.05 hash/smoke, node-7z metadata, compressed TAR preview (7/7), and developer updater preservation/rollback. Linux workspace typecheck and targeted backend regressions passed (346 passed, 0 failed, 2 skipped).
 - Dependency Review [run 42251591583](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591583) passed; its installed dependency-graph audit step was skipped.
 - The replacement lifecycle run [42252476286](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42252476286), started on the previous audit-report head before the concurrency change, was still building the unsigned installer at this snapshot. A new lifecycle run for the concurrency fix is pending; the current Fast Validation run for the regression test is queued. Do not claim either has passed until its latest matching run completes.
 - **Full CI:** not run. Fast Validation is targeted/integration coverage and is not the full-repository CI suite.
 - **Next batch:** conversion worker ownership/fencing. The source trace confirms the session advisory lock is released on DB disconnect while the old JS worker may continue; retries reuse `WillardAI/conversions/<jobId>`, progress/result checkpoints are job-ID-only, and child processes are not scoped to a conversion attempt. Implement only after a generation-fenced, attempt-scoped staging design and fault-injection tests are agreed.
+
+
+## 2026-11-06 follow-up — compressed TAR decompressor shutdown ownership
+
+- **Severity: Medium. Affected workflow:** archive preview of bzip2/xz-compressed TAR files on NAS or local storage.
+- **Root cause:** `withTarInput` launched the official 7-Zip decompressor directly with `spawn`. The child was not registered with the shared shutdown owner and the path had no shutdown guard. If the API shut down during decompression, `stopActiveMediaTools` could terminate FFmpeg/ffprobe and the async 7-Zip version probe but not this streaming decompressor. The child could continue writing the large scratch TAR and the helper's `finally` cleanup would not run until the child/pipeline ended.
+- **Fix:** reused the existing process registry rather than adding another one. `media-tools.ts` now exports `assertMediaProcessStartAllowed` and `trackActiveMediaProcess`; the TAR helper checks the shutdown state immediately before spawning and registers the child with the same owner that `stopActiveMediaTools` drains. The shutdown documentation now covers media and archive children.
+- **Regression coverage:** `media-tools-async.test.ts` directly spawns a long-lived child, registers it, and verifies the shared shutdown owner terminates it; the final shutdown test verifies no new child can start after shutdown. `archive-tar-input.test.ts` asserts the production TAR helper uses both the pre-spawn guard and shared tracker.
+- **Status:** fixed; target-tested on Linux and Windows in Fast Validation run 42253408096. The direct archive-helper process ownership test passed on both platforms; Windows `media-tools-async.test.ts` passed 5/5 and `archive-tar-input.test.ts` passed 7/7.
+- **Remaining risk:** request-abort cancellation is not yet wired to an `AbortSignal`; this fix covers server shutdown. The `node-7z` list/extract streams in Organize and archive preview still need an explicit child-process ownership/cancellation integration audit. No arbitrary timeout was added to large archive decompression.
+
+## 2026-11-06 validation snapshot — process ownership and workflow repair
+
+- **Code head:** `1e7b1fa5a4967e6db6b3407e8559362ad9f51dee`. This is 19 commits after the prior audit-ledger head `1c40b0d9eb68d88e10573fcb57c7c997137c150e`. The exact commits, oldest to newest, are:
+  `6ebd2b0425b757987bb52ea226834f6d43e2d522`,
+  `f95b218adebc290060ec3d63b3a6155bb01d0ae7`,
+  `2707c14cfbf17622463784b2b8dc0073a7e0d584`,
+  `f27aee4c9251b81a477810383cc4786bf90e78c9`,
+  `658e8b7ea0609ac0933a013276d535f7f777da8c`,
+  `08590557aff4341feec43796c127bc9491a4ba5a`,
+  `594284e5450975448b6429f276a1433098284c40`,
+  `eae046a47d1e829070dc72a5a225df82a30cd5d4`,
+  `446433e72e127ca501408e13f4bf729e48cc571b`,
+  `64b430c7528b26e3477b4f5ee8798b98174be618`,
+  `0cd7148e83a5303c72ecc503a6cce2eb48fc29f0`,
+  `6d29a99eb392a144f398dd32ee292e6237361c62`,
+  `ddae704b4724a33d93cb0ec2891e03529f4d652f`,
+  `4b0c1de5cfd0bd52aa36b6b01d3a22754e2461a4`,
+  `49b0025b3eaa16589570f8532cb6972b90e6463f`,
+  `a9653098bb3b052c6bd31a01750bb55896758dcb`,
+  `a88a1ebf353cc58738b9da355a30e6b26de1c355`,
+  `9f8bca6ddb38363a7972e56b2bb0cdd1dc4bf2e0`,
+  `1e7b1fa5a4967e6db6b3407e8559362ad9f51dee`.
+- **PR #2:** open, draft, unmerged, base `main`; 188 changed files; 1,343 commits. At code head, comparison was 1,343 ahead and 1 behind `main`; base SHA `694a055aeb10a41ee8e98f5b776faef89cbd449d`.
+- **Fast Validation [run 42253408096](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253408096):** fully completed successfully on code head `1e7b1fa...`. Linux `validate` job `128014159749` passed workspace typechecks, generated API contracts, desktop/release/storage checks, PostgreSQL integration, and targeted backend tests: 349 total, 347 passed, 0 failed, 2 skipped. The new shutdown ownership tests, async 7-Zip resolver/cache tests, and workflow concurrency regression all passed.
+- The Windows `windows-archive-and-updater-smoke` job `128015062822` also completed successfully. It parsed 20 PowerShell scripts; passed Windows media rename (11), media-tools async/shutdown (5), storage migration (20), NAS path safety (16), conversion finalization (12), official Windows 7-Zip 26.05 hash/archive smoke, node-7z symlink metadata, compressed TAR preview (7), packaged updater journal writes, and developer updater full-version/preservation/rollback.
+- **Dependency Review [run 42253407954](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253407954):** passed. Its separate installed dependency-graph audit was skipped by workflow configuration.
+- **Windows installer lifecycle:** prior run [42251591470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591470) was cancelled by the old `cancel-in-progress: true` concurrency policy. That policy is fixed and its regression test passed. The run [42252476286](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42252476286), started before the fix, is still exercising the standard-user lifecycle; the latest run [42253408506](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253408506) is pending under the non-cancelling policy. No lifecycle pass is claimed yet.
+- **Full CI:** not run. Fast Validation and Dependency Review are not full-repository CI.
+- **Unresolved high-priority risks:** stable external Windows recovery bootstrap; conversion worker fencing and attempt-scoped staging; organization multi-process takeover/SMB validation; durable Replace backup/recovery (Replace remains disabled); node-7z list/extract child ownership and request-abort cancellation; hosted first-run owner provisioning.
+- **Next batch:** conversion worker ownership/fencing. Trace DB advisory-lock loss, job-ID-only progress writes, retry reuse of `WillardAI/conversions/<jobId>`, per-file durable progress, finalization recovery, and child cancellation. Do not add a partial token check; design an attempt generation, isolated staging, and filesystem mutation fence, then test stale workers and crash/retry interleavings.
