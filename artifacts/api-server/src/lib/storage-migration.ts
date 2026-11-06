@@ -581,10 +581,15 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
             const destinationValue = exactEntry
               ? exactEntry.destinationPath
               : destinationFor(manifest.destinationRoot, relativeFor(manifest.sourceRoot, reference.value));
-            await client.query(
+            const updatedReference = await client.query(
               `UPDATE ${reference.table} SET ${reference.column} = $1 WHERE id = $2 AND ${reference.column} = $3`,
               [destinationValue, reference.rowId, reference.value],
             );
+            if (updatedReference.rowCount !== 1) {
+              throw new Error(
+                `Database reference changed or disappeared during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved; review the migration before retrying.`,
+              );
+            }
           }
           await client.query("COMMIT");
         } catch (error) {
