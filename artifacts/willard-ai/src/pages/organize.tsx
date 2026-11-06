@@ -167,14 +167,11 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
           <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="keep_existing">Keep existing — skip source file (safe default)</SelectItem>
-            <SelectItem value="replace">Replace — overwrite destination with source</SelectItem>
+            <SelectItem value="replace" disabled>Replace — temporarily unavailable (safe recovery not supported)</SelectItem>
             <SelectItem value="rename">Rename — add suffix to source (file_1.jpg, file_2.jpg…)</SelectItem>
             <SelectItem value="skip">Skip — same as keep existing</SelectItem>
           </SelectContent>
         </Select>
-        {form.conflictPolicy === "replace" && (
-          <p className="text-xs text-amber-400/80 font-mono">⚠ Existing destination files will be permanently overwritten.</p>
-        )}
       </div>
 
       <Button
