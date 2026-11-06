@@ -208,3 +208,26 @@ test("conversion finalization checkpoints pre-move intents and reconciles them b
   assert.match(recoverySource, /recoverConversionFinalizationMoves\(/);
   assert.match(recoverySource, /finalizationRecoveryMoves: recovery\.unresolvedMoves/);
 });
+
+
+const cancelStart = source.indexOf('router.post("/optimize/jobs/:id/cancel"');
+const cancelEnd = source.indexOf("\\n});", cancelStart) + 4;
+const cancelRoute = source.slice(cancelStart, cancelEnd);
+
+test("conversion cancellation conditionally updates only the same still-running library job", () => {
+  assert.ok(cancelStart >= 0 && cancelEnd > cancelStart, "cancel route should be present");
+  const updateStart = cancelRoute.indexOf("const [updated] = await db.update(conversionJobsTable)");
+  const whereStart = cancelRoute.indexOf(".where(", updateStart);
+  const returningEnd = cancelRoute.indexOf(".returning()", whereStart);
+  assert.ok(updateStart >= 0 && whereStart > updateStart && returningEnd > whereStart);
+  const predicate = cancelRoute.slice(whereStart, returningEnd);
+  assert.match(predicate, /and\\(/);
+  assert.match(predicate, /eq\\(conversionJobsTable\\.id, id\\)/);
+  assert.match(predicate, /eq\\(conversionJobsTable\\.nasPath, job\\.nasPath\\)/);
+  assert.match(predicate, /eq\\(conversionJobsTable\\.status, "running"\\)/);
+  assert.match(cancelRoute, /if \\(!updated\\)/);
+  assert.match(cancelRoute, /res\\.status\\(409\\)/);
+  assert.match(cancelRoute, /changed before cancellation could be recorded/);
+  assert.match(cancelRoute, /status: updated\\.status/);
+  assert.doesNotMatch(cancelRoute, /\\.where\\(eq\\(conversionJobsTable\\.id, id\\)\\)/);
+});

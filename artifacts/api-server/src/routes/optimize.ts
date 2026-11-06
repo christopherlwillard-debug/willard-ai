@@ -1331,9 +1331,19 @@ router.post("/optimize/jobs/:id/cancel", async (req, res) => {
     }
     const [updated] = await db.update(conversionJobsTable)
       .set({ cancelledAt: new Date() })
-      .where(eq(conversionJobsTable.id, id))
+      .where(and(
+        eq(conversionJobsTable.id, id),
+        eq(conversionJobsTable.nasPath, job.nasPath),
+        eq(conversionJobsTable.status, "running"),
+      ))
       .returning();
-    res.json({ id, status: updated?.status ?? job.status, cancellationRequested: true });
+    if (!updated) {
+      res.status(409).json({
+        error: "Conversion job changed before cancellation could be recorded. Refresh the job and try again.",
+      });
+      return;
+    }
+    res.json({ id, status: updated.status, cancellationRequested: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Failed to cancel conversion job" });
   }
