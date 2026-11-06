@@ -208,6 +208,27 @@ test("conversion scan filters extensions and skips hidden, internal, and backup 
   }
 });
 
+test("conversion scan fails closed when a nested directory is unreadable", {
+  skip: process.platform === "win32" || process.getuid?.() === 0,
+}, async () => {
+  const f = fixture();
+  const blocked = path.join(f.root, "blocked");
+  try {
+    fs.mkdirSync(blocked);
+    fs.writeFileSync(path.join(blocked, "hidden.mp4"), "must not be silently omitted");
+    fs.chmodSync(blocked, 0);
+    await assert.rejects(
+      walkForConversion(f.root, new Set(["mp4"]), [], SKIP_DIRS),
+      (error: unknown) => error instanceof Error &&
+        error.message.includes("Unable to scan conversion directory") &&
+        error.message.includes(blocked),
+    );
+  } finally {
+    try { fs.chmodSync(blocked, 0o700); } catch { /* fixture may not have been created */ }
+    f.cleanup();
+  }
+});
+
 test("bounded settled mapping preserves order and limits per-scan work", async () => {
   let active = 0;
   let peak = 0;
