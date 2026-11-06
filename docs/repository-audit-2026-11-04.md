@@ -3352,3 +3352,41 @@ The source diff traced this to an incomplete refactor of `openDatabaseSnapshot`:
 **Remaining high-priority risks:** The previously confirmed stable-bootstrap gap remains unresolved: prepared-phase recovery cannot launch when the entire install directory has been moved because the recovery launcher and shortcuts are inside that directory. The current lifecycle failure occurred before that scenario, so the bootstrap fix remains blocked and unvalidated. The node-7z child ownership/cancellation and conversion attempt-fencing findings remain open as documented above.
 
 **Next batch:** Confirm the new Fast Validation run, then rerun the installed Windows lifecycle through first startup, upgrade, prepared-phase recovery, standard-user permissions, and uninstall. Preserve the prepared-phase scenario; do not weaken the test. If startup proceeds, diagnose the next actual lifecycle failure before designing the stable external bootstrap. Continue the node-7z process ownership/cancellation work after the installer blocker is isolated.
+
+
+## November 6 follow-up — conversion worker can outlive its database ownership lock
+
+### Confirmed — High: stale conversion workers are not fenced from retries or shared staging
+
+**Affected workflows:** Optimize Center conversion execute/retry/cancel/finalize; API restart recovery; multi-instance operation and rolling restarts. This is a data-integrity and job-state ownership risk. Original media is staged/untouched during conversion, but stale workers can overwrite staged outputs, publish stale job results, or race a newer attempt's finalization.
+
+**Root cause traced through callers, schema, process ownership, and tests:**
+
+- `artifacts/api-server/src/lib/conversion-job-lock.ts:25-44` acquires a PostgreSQL session advisory lock on a dedicated checked-out pool client. PostgreSQL correctly releases that lock when the session disconnects. The lock helper does not own or terminate the JavaScript request or its FFmpeg child when that happens.
+- `conversion-recovery.ts:17-38` treats an available advisory lock as evidence that a `running` job is abandoned and marks it failed. That is correct for a dead worker, but a lost lock connection does not prove that the separate API request or child process has stopped.
+- `routes/optimize.ts:1683-1723` tracks only a process-local request count, acquires the lock, then claims the row. There is no listener/abort path that stops the worker when the lock connection is lost.
+- `routes/optimize.ts:1291-1318` retries the same row by resetting it to `pending`, clearing `resultJson`, and resetting counters. It does not increment an attempt generation or allocate a new attempt identity.
+- `routes/optimize.ts:1793-1796` uses the shared staging path `WillardAI/conversions/<jobId>`. A retry therefore reuses the same staging directory. A previous request that is still alive can write to the same staged filename as the new request.
+- Numerous progress updates in `routes/optimize.ts:1837-2000` filter only by job ID. The final result/status write at lines 2032-2035 also filters only by job ID. The catch path at lines 2051-2061 filters by job ID and `status = running`; if a newer retry has already claimed the row, the stale worker can still match that status and mark the newer attempt failed. These writes are not fenced by a generation or owner token.
+- `conversion_jobs` schema (`lib/db/src/schema/conversion_jobs.ts:1-22`) contains no attempt ID, generation, or owner token.
+- `media-tools.ts:41-44, 59-75, 107-123, 159-226` provides a global child-process registry and timeout/shutdown handling, but `MediaToolExecutionOptions` has no `AbortSignal` or attempt owner. The registry cannot cancel only the child processes belonging to a particular conversion attempt.
+- The cancel endpoint records `cancelledAt`; the worker checks it between files and after a completed conversion. That cooperative behavior preserves completed staged outputs, but it does not provide a per-attempt process cancellation path if ownership is lost.
+- Existing `conversion-job-lock-postgres.test.ts` verifies lock serialization and automatic lock release after disconnect. `conversion-recovery.test.ts` verifies that recovery skips a locked job. Neither keeps an old worker/child alive after deliberately dropping its lock and then races recovery plus retry. The finalization tests cover per-move journal recovery, not cross-attempt fencing.
+
+**Status:** found; architecture required. No partial token check or cleanup workaround was applied. Clearing the shared staging directory on retry would be unsafe while a stale worker may still be alive, and adding only a post-process status check would not prevent stale filesystem writes.
+
+**Safe implementation plan:**
+
+1. Add a monotonically increasing `attempt_generation` (or immutable attempt UUID) to `conversion_jobs`. Increment it atomically in the pending-to-running claim and return the generation to the worker. Include it in the durable job result and all finalization journal records.
+2. Give each attempt a unique, exclusively created staging directory, e.g. `WillardAI/conversions/<jobId>/<attemptId>`. Never reuse or eagerly delete another attempt's staging tree. Preserve abandoned attempts until recovery proves they are safe to remove or the user explicitly clears them.
+3. Fence every progress, result, error, cancellation, and final-status write with `id + attempt_generation + expected status`. A stale worker must receive a zero-row result and stop; it must never overwrite the new attempt's state.
+4. Bind every spawned media child to an attempt-scoped `AbortController`/owner registry. Monitor the advisory-lock connection's error/end/close events; loss of the lock must abort the attempt and terminate only its children with bounded SIGTERM/SIGKILL escalation. Retain the database generation fence as the authority even if process termination is delayed.
+5. Before every filesystem mutation during finalization, revalidate the attempt generation and lock ownership. Persist intent and verified completion with the attempt ID; preserve the existing no-overwrite/hash checks and unresolved-move journal. Recovery must reconcile only the matching attempt and must not clear a newer attempt's journal.
+6. Make retry allocate a new attempt identity only after recovery has fenced the previous attempt. Keep per-file staged-result checkpoints durable so a crash after a successful conversion does not orphan its verified output.
+7. Add PostgreSQL fault-injection tests that drop the lock connection while an FFmpeg child remains alive, run recovery and a retry, and prove that the old worker cannot update the new row, write into the new staging directory, or finalize files. Also test crash points before/after each durable finalization intent/completion checkpoint and cancellation during a long-running child.
+
+**Validation gap:** Source inspection only for this finding. Existing advisory-lock/recovery tests do not cover the stale-worker interleaving described above. This requires the generation/staging/process-ownership design and PostgreSQL concurrency tests before it can be marked fixed.
+
+**Current validation snapshot at investigation:** PR #2 remained open/draft on branch `audit/full-repository-review-2026-11`. Fast Validation run [42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413) was pending/in progress, Windows installer lifecycle run [42265345436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345436) was pending, and Dependency Review run [42265345459](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345459) was in progress on head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf`. No result is inferred from those states.
+
+**Investigation/report commit:** `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf` (ledger update only). No conversion product code was changed in this batch.
