@@ -9,9 +9,12 @@ const cropRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-derived-cleanup-
 const faceDir = path.join(cropRoot, "WillardAI", "cache", "faces");
 const safeCrop = path.join(faceDir, "42-1.webp");
 const outsideCrop = path.join(cropRoot, "outside.webp");
+const reportPath = path.join(cropRoot, "WillardAI", "reports", "important-report.json");
 fs.mkdirSync(faceDir, { recursive: true });
+fs.mkdirSync(path.dirname(reportPath), { recursive: true });
 fs.writeFileSync(safeCrop, "safe");
 fs.writeFileSync(outsideCrop, "outside");
+fs.writeFileSync(reportPath, "preserve report");
 
 const client = {
   async query(text: string): Promise<{ rows: any[]; rowCount: number }> {
@@ -21,6 +24,7 @@ const client = {
         rows: [
           { crop_path: safeCrop, person_id: 7, media_file_id: 42 },
           { crop_path: outsideCrop, person_id: 7, media_file_id: 42 },
+          { crop_path: reportPath, person_id: 7, media_file_id: 42 },
         ],
         rowCount: 2,
       };
@@ -48,6 +52,7 @@ test("derived purge is transactional and only removes crops under WillardAI", as
   assert.equal(report.cropErrors.length, 0);
   assert.equal(fs.existsSync(safeCrop), false);
   assert.equal(fs.existsSync(outsideCrop), true);
+  assert.equal(fs.readFileSync(reportPath, "utf8"), "preserve report", "a poisoned face crop path must not delete other WillardAI artifacts");
 });
 
 test.after(() => {
