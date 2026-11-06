@@ -380,6 +380,8 @@ test("archive peek does not mislabel corrupt archives as password protected", ()
   const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
   assert.match(routeSource, /if \(\/password\|wrong password\|encrypted\|cannot open encrypted\/i\.test\(message\)\)/);
   assert.match(routeSource, /reject\(err instanceof Error \? err : new Error\(String\(err\)\)\)/);
-  assert.match(routeSource, /if \(error && entries\.length === 0 && ext === "gz"\)/);
+  assert.match(routeSource, /shouldTreatAsStandaloneCompressedFile\(archive\.filename, entries\.length, failureKind\)/);
+  assert.match(routeSource, /Never persist a partial listing as a successful archive preview/);
+  assert.match(routeSource, /throw new Error\(`Archive preview failed: \$\{error\}`\)/);
   assert.match(routeSource, /if \(error instanceof ArchiveSafetyError\) throw error;/);
 });
