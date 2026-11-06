@@ -43,20 +43,24 @@ test("conversion retry refuses awaiting-action jobs without deleting staged outp
   assert.match(retryRoute, /changed before retry could be claimed/);
 });
 
-const walkerStart = source.indexOf("function walkForConversion(");
-const walkerEnd = source.indexOf("\n}", walkerStart);
-const walker = source.slice(walkerStart, walkerEnd < 0 ? source.length : walkerEnd);
+const scanHelperPath = fileURLToPath(new URL("../lib/optimize-scan.ts", import.meta.url));
+const scanHelperSource = readFileSync(scanHelperPath, "utf8");
+const walkerStart = scanHelperSource.indexOf("export async function walkForConversion(");
+const walkerEnd = scanHelperSource.indexOf("\n}", walkerStart);
+const walker = scanHelperSource.slice(walkerStart, walkerEnd < 0 ? scanHelperSource.length : walkerEnd);
 
 test("conversion scans fail closed when a directory cannot be read", () => {
-  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart, "conversion walker should be present");
-  assert.match(walker, /catch \(error\)/);
-  assert.match(walker, /Unable to scan conversion directory/);
+  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart, "shared asynchronous conversion walker should be present");
+  assert.match(walker, /walkMediaDirectories\(/);
+  assert.match(walker, /fs\.promises\.lstat/);
+  assert.ok(scanHelperSource.includes("Unable to scan ${operation} directory"));
+  assert.match(walker, /}, "conversion"\)/);
   assert.doesNotMatch(walker, /catch \{\s*return;\s*\}/);
 
   const executeStart = source.indexOf('router.get("/optimize/jobs/:id/execute"');
   const executeEnd = source.indexOf("\nrouter.", executeStart + 1);
   const executeRoute = source.slice(executeStart, executeEnd < 0 ? source.length : executeEnd);
-  const scan = executeRoute.indexOf("walkForConversion(path.resolve(nasPath)");
+  const scan = executeRoute.indexOf("await walkForConversion(path.resolve(nasPath)");
   const emptyResult = executeRoute.indexOf("if (totalFiles === 0)");
   assert.ok(scan >= 0 && emptyResult > scan, "directory scanning must finish before the empty-library result");
   assert.match(executeRoute, /status: "failed"/);
