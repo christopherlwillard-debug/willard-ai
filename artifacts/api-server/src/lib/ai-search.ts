@@ -43,20 +43,66 @@ export function emptyIntent(): SearchIntent {
   };
 }
 
-export function mergeRefinedIntent(previous: SearchIntent, refinement: SearchIntent): SearchIntent {
+export interface SearchIntentClear {
+  semanticQuery?: boolean;
+  keywords?: boolean;
+  mediaTypes?: boolean;
+  dateRange?: boolean;
+  objects?: boolean;
+  exclude?: string[];
+  excludeAll?: boolean;
+  favoriteOnly?: boolean;
+  docTypes?: boolean;
+  location?: boolean;
+  personNames?: boolean;
+}
+
+export function mergeRefinedIntent(
+  previous: SearchIntent,
+  refinement: SearchIntent,
+  clear: SearchIntentClear = {},
+): SearchIntent {
+  const removedExclusions = new Set((clear.exclude ?? []).map((value) => value.toLowerCase()));
+  const exclude = clear.excludeAll
+    ? refinement.exclude
+    : [...new Set([
+        ...previous.exclude.filter((value) => !removedExclusions.has(value.toLowerCase())),
+        ...refinement.exclude,
+      ])];
   return {
-    semanticQuery: refinement.semanticQuery ?? previous.semanticQuery,
-    keywords: [...new Set([...previous.keywords, ...refinement.keywords])],
-    mediaTypes: refinement.mediaTypes.length ? refinement.mediaTypes : previous.mediaTypes,
-    dateFrom: refinement.dateFrom ?? previous.dateFrom,
-    dateTo: refinement.dateTo ?? previous.dateTo,
-    objects: [...new Set([...previous.objects, ...refinement.objects])],
-    exclude: [...new Set([...previous.exclude, ...refinement.exclude])],
-    favoriteOnly: previous.favoriteOnly || refinement.favoriteOnly,
-    docTypes: [...new Set([...previous.docTypes, ...refinement.docTypes])],
-    location: refinement.location ?? previous.location,
-    personNames: [...new Set([...previous.personNames, ...refinement.personNames])],
+    semanticQuery: clear.semanticQuery ? refinement.semanticQuery : refinement.semanticQuery ?? previous.semanticQuery,
+    keywords: clear.keywords ? refinement.keywords : [...new Set([...previous.keywords, ...refinement.keywords])],
+    mediaTypes: clear.mediaTypes ? refinement.mediaTypes : refinement.mediaTypes.length ? refinement.mediaTypes : previous.mediaTypes,
+    dateFrom: clear.dateRange ? refinement.dateFrom : refinement.dateFrom ?? previous.dateFrom,
+    dateTo: clear.dateRange ? refinement.dateTo : refinement.dateTo ?? previous.dateTo,
+    objects: clear.objects ? refinement.objects : [...new Set([...previous.objects, ...refinement.objects])],
+    exclude,
+    favoriteOnly: clear.favoriteOnly ? refinement.favoriteOnly : previous.favoriteOnly || refinement.favoriteOnly,
+    docTypes: clear.docTypes ? refinement.docTypes : [...new Set([...previous.docTypes, ...refinement.docTypes])],
+    location: clear.location ? refinement.location : refinement.location ?? previous.location,
+    personNames: clear.personNames ? refinement.personNames : [...new Set([...previous.personNames, ...refinement.personNames])],
   };
+}
+
+export function localSearchClearFilters(query: string): SearchIntentClear {
+  const normalized = query.trim().toLowerCase();
+  const clear: SearchIntentClear = {};
+  if (/^remove the date filter\b/.test(normalized)) clear.dateRange = true;
+  if (/^search all media\b/.test(normalized)) clear.mediaTypes = true;
+  if (/^include non[- ]favorites\b/.test(normalized)) clear.favoriteOnly = true;
+  if (/^drop the location\b/.test(normalized)) clear.location = true;
+  if (/^stop excluding (?:everything|all)\b/.test(normalized)) {
+    clear.excludeAll = true;
+  } else {
+    const exclusion = query.trim().match(/^stop excluding\s+["']?(.+?)["']?\s*$/i);
+    if (exclusion?.[1]) clear.exclude = [exclusion[1].trim().toLowerCase()];
+  }
+  if (/^try just\b/.test(normalized) && /\bon its own\s*$/.test(normalized)) {
+    clear.objects = true;
+    clear.keywords = true;
+    clear.semanticQuery = true;
+  }
+  return clear;
 }
 
 const INTENT_PROMPT = `You convert plain-English media library searches into structured JSON.
@@ -72,12 +118,19 @@ Return STRICT JSON:
  "exclude": ["terms the user excluded"],
  "favoriteOnly": false,
  "docTypes": ["receipt"|"invoice"|"statement"|"manual"|"contract"|"letter"|"report"|"form"|"ticket"|"recipe"|"note"],
- "location": "place name or null"}
+ "location": "place name or null",
+ "clearFilters": {
+   "semanticQuery": false, "keywords": false, "mediaTypes": false, "dateRange": false,
+   "objects": false, "exclude": [], "excludeAll": false, "favoriteOnly": false,
+   "docTypes": false, "location": false, "personNames": false
+ }}
 
 Rules:
 - "pictures"/"photos" → mediaTypes ["image"]; "videos" → ["video"]; "PDFs"/"documents"/"receipts" → ["document"].
 - Resolve relative dates ("last summer", "2024") into dateFrom/dateTo using today's date.
-- If REFINING a previous search (previous intent provided), MERGE: keep previous constraints and add/override only what the new message changes. "Only the ones with waterfalls" adds waterfall to objects. "Exclude screenshots" adds to exclude. A completely new topic replaces the intent.
+- When refining, merge constraints by default. Set clearFilters.dateRange when the user removes the date filter; clearFilters.mediaTypes when they ask for all media; clearFilters.favoriteOnly when they include non-favorites; clearFilters.exclude to the exact exclusions they want removed; set clearFilters.excludeAll to remove every exclusion; set clearFilters.objects when they ask to keep only the newly parsed objects; and use the matching clearFilters field when they explicitly remove another constraint.
+- Leave every clearFilters field false/empty unless the user explicitly asks to remove or replace that constraint.
+- A completely new topic should replace the previous semanticQuery and keywords and clear any obsolete constraints.
 Return JSON only.`;
 
 export async function parseIntent(
@@ -117,13 +170,37 @@ export async function parseIntent(
       location: typeof p.location === "string" && p.location.trim() ? p.location.trim() : null,
       personNames: [],
     };
-    const merged = previous ? mergeRefinedIntent(previous, parsed) : parsed;
+    const rawClear = p.clearFilters && typeof p.clearFilters === "object"
+      ? p.clearFilters as Record<string, unknown>
+      : {};
+    const clear: SearchIntentClear = {
+      semanticQuery: rawClear.semanticQuery === true,
+      keywords: rawClear.keywords === true,
+      mediaTypes: rawClear.mediaTypes === true,
+      dateRange: rawClear.dateRange === true,
+      objects: rawClear.objects === true,
+      exclude: arr(rawClear.exclude),
+      excludeAll: rawClear.excludeAll === true,
+      favoriteOnly: rawClear.favoriteOnly === true,
+      docTypes: rawClear.docTypes === true,
+      location: rawClear.location === true,
+      personNames: rawClear.personNames === true,
+    };
+    const merged = previous ? mergeRefinedIntent(previous, parsed, clear) : parsed;
     return { ...merged, ...normalizeOptionalDateOnlyRange(merged.dateFrom, merged.dateTo) };
   } catch (err) {
     logger.warn({ err, query }, "Intent parsing failed — falling back to keyword search");
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2).slice(0, 8);
-    const fallback = { ...emptyIntent(), semanticQuery: query, keywords: words };
-    return previous ? mergeRefinedIntent(previous, fallback) : fallback;
+    const clear = previous ? localSearchClearFilters(query) : {};
+    const hasClearAction = Object.values(clear).some((value) => value === true || (Array.isArray(value) && value.length > 0));
+    const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
+    const objectName = objectMatch?.[1]?.trim().toLowerCase();
+    const fallback: SearchIntent = hasClearAction
+      ? objectName
+        ? { ...emptyIntent(), semanticQuery: objectName, keywords: [objectName], objects: [objectName] }
+        : emptyIntent()
+      : { ...emptyIntent(), semanticQuery: query, keywords: words };
+    return previous ? mergeRefinedIntent(previous, fallback, clear) : fallback;
   }
 }
 
