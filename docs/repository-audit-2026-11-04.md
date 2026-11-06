@@ -2435,3 +2435,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | Medium | Scheduled backup → timeout diagnostic overstated process-tree cleanup after Windows taskkill fallback | fixed; target test pending | this batch | OS-level descendant termination under forced taskkill failure remains unverified |
 
+
+
+## Organization preflight ownership fencing (latest)
+- Confirmed preflight checked only whether a job was already executing, then performed filesystem/capacity checks and finally wrote `verified` or `planned` by job ID alone. An execution worker could claim the job while preflight was running, then have its status overwritten by the late preflight result.
+- Preflight now rejects executing/analyzing/rolling-back states, atomically claims the row only when its lease is empty, and writes the final status only while its token and original status still match. The token is cleared on success and best-effort released on errors.
+- Added source-contract regression coverage for busy-state rejection, exclusive claim, token-fenced final persistence, and error cleanup.
+- Commits: implementation `c7b2392bd87cd1d238bbf79f17a69b4eb2ee8aa8`, regression `3309b775fefb75b4f0b5a83db4d6478de4826bd7`.
+- Validation pending. A PostgreSQL-backed concurrent preflight-versus-execute integration test remains desirable.
