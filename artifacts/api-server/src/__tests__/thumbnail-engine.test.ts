@@ -50,6 +50,14 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.deepEqual(files, ["41.webp"]);
   });
 
+  test("does not steal an aged thumbnail lock while another worker may still own it", () => {
+    const source = fs.readFileSync(new URL("../lib/thumbnail-engine.ts", import.meta.url), "utf8");
+    assert.match(source, /Never steal a lock based only on age/);
+    assert.match(source, /Timed out waiting for thumbnail generation lock/);
+    assert.doesNotMatch(source, /THUMBNAIL_LOCK_STALE_MS/);
+    assert.doesNotMatch(source, /ageMs > THUMBNAIL_LOCK_STALE_MS/);
+  });
+
   test("replaces a corrupt legacy cache file instead of serving it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
     roots.push(root);
