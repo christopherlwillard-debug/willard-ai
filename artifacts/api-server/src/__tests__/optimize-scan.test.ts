@@ -15,6 +15,7 @@ import {
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git"]);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const optimizeRouteSource = fs.readFileSync(path.join(repoRoot, "artifacts/api-server/src/routes/optimize.ts"), "utf8");
+const optimizeScanSource = fs.readFileSync(path.join(repoRoot, "artifacts/api-server/src/lib/optimize-scan.ts"), "utf8");
 const optimizePageSource = fs.readFileSync(path.join(repoRoot, "artifacts/willard-ai/src/pages/optimize.tsx"), "utf8");
 
 function fixture(): { root: string; cleanup: () => void } {
@@ -158,10 +159,16 @@ test("Optimize filesystem walks yield to the event loop", async () => {
       fs.writeFileSync(path.join(f.root, `photo-${index}.jpg`), "image");
     }
     let ticked = false;
+    let completed = false;
     const tick = new Promise<void>((resolve) => setImmediate(() => { ticked = true; resolve(); }));
-    await scan(f.root);
+    const scanPromise = scan(f.root).then((result) => {
+      completed = true;
+      return result;
+    });
     await tick;
     assert.equal(ticked, true);
+    assert.equal(completed, false, "the scan must yield while filesystem work is still in progress");
+    await scanPromise;
   } finally {
     f.cleanup();
   }
@@ -250,6 +257,7 @@ test("Optimize scan and conversion routes use asynchronous traversal and bounded
   assert.match(optimizeRouteSource, /const withVideoProbeSlot = createConcurrencyLimiter\(4\)/);
   assert.match(optimizeRouteSource, /await withVideoProbeSlot\(\(\) => runMediaToolAsync\(/);
   assert.match(optimizeRouteSource, /mapSettledWithConcurrency\(videoProbeTasks, 4/);
+  assert.doesNotMatch(optimizeScanSource, /readdirSync|lstatSync/);
 });
 
 test("scan-limit state is cached, returned by the API, and warned about in Optimize Center", () => {
