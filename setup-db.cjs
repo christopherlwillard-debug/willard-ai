@@ -139,7 +139,7 @@ const OPTIONAL_SQL = [
 // Increment this when a new ordered schema step is added. The history table
 // makes the bootstrap contract inspectable without relying on a local marker
 // file, while every step remains idempotent for existing installations.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS willard_schema_versions (
@@ -268,6 +268,7 @@ const SETUP_SQL = [
   )`,
 
   `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS nas_path text`,
+  `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS lease_token text`,
 
   // conversion_jobs
   `CREATE TABLE IF NOT EXISTS conversion_jobs (
