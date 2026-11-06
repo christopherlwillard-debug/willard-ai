@@ -107,7 +107,7 @@ function sha256Bytes(value) {
  * Read only a regular file, refusing final-component symlinks and replacement
  * races. Backup manifests and encrypted dumps are untrusted input paths.
  */
-export async function readRegularFileNoFollow(filePath, encoding) {
+export async function readRegularFileNoFollow(filePath, encoding, maxBytes = Number.MAX_SAFE_INTEGER) {
   const initial = await lstat(filePath);
   if (initial.isSymbolicLink() || !initial.isFile()) {
     fail("Backup input must be a regular, non-symlink file.");
@@ -125,6 +125,9 @@ export async function readRegularFileNoFollow(filePath, encoding) {
       (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
     ) {
       fail("Backup input changed or became a symlink while opening.");
+    }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || opened.size > maxBytes) {
+      fail("Backup input exceeds its permitted size limit.");
     }
     return await handle.readFile(encoding ? { encoding } : undefined);
   } finally {
@@ -545,6 +548,7 @@ function validateManifest(manifest) {
       (manifest.library.catalogInventoryScope !== undefined &&
         !["all", "active"].includes(manifest.library.catalogInventoryScope)) ||
       !Array.isArray(manifest.library.mediaSamples) ||
+      manifest.library.mediaSamples.length > 32 ||
       manifest.library.mediaSamples.some(
         (sample) =>
           !sample ||
@@ -596,7 +600,7 @@ function validateManifest(manifest) {
   ) {
     fail("Backup manifest has no restore verification facts.");
   }
-  if (!manifest.verification.rowCounts || typeof manifest.verification.rowCounts !== "object") {
+  if (!manifest.verification.rowCounts || typeof manifest.verification.rowCounts !== "object" || Array.isArray(manifest.verification.rowCounts) || Object.keys(manifest.verification.rowCounts).length > 5000) {
     fail("Backup manifest has no table row counts.");
   }
   for (const [key, count] of Object.entries(manifest.verification.rowCounts)) {
@@ -614,7 +618,7 @@ async function readBackup(backupDir) {
   }
   const directory = await realpath(backupDir);
   const manifestPath = path.join(directory, MANIFEST_FILE);
-  const manifestText = await readRegularFileNoFollow(manifestPath, "utf8");
+  const manifestText = await readRegularFileNoFollow(manifestPath, "utf8", 4 * 1024 * 1024);
   const manifest = validateManifest(JSON.parse(manifestText.replace(/^\uFEFF/, "")));
   const dumpPath = path.join(directory, manifest.dump.file);
   if (path.dirname(dumpPath) !== directory) fail("Backup dump path escapes its backup directory.");
