@@ -2471,3 +2471,10 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | Medium | Backup recovery drill → foreign-library identity fixture failed before reaching the intended assertion | fixed; target test pending | this batch | The recovery drill still needs a successful matching CI run; Windows installed-PostgreSQL path remains separately covered by the installer lifecycle workflow |
 
+
+
+## Organization analysis lease cleanup and terminal-write handling
+- Follow-up inspection found that some analysis failure branches changed the status to `failed` but retained the analysis lease token, which could block subsequent plan edits/preflight. Also, a lost final update returned an empty successful response rather than an explicit conflict.
+- Failure branches now clear the owned lease token, catch cleanup runs only when the request still owns the claim, and final persistence returns HTTP 409 when ownership was lost rather than reporting success.
+- Added regression assertions for lease cleanup and lost-final-write handling. Commits: implementation `d2220a71cdb3a51817f0dd7db4e3f3774973924a`; regression `ef26d581e53f2d4011a648a0dca8bc9828664bba`.
+- Fast Validation is not yet confirmed on this change; latest runs are frequently cancelled by subsequent hourly commits. Crash recovery for an analysis request that dies without executing its catch remains a separate open item.
