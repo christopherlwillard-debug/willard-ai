@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isSessionInactive,
   persistSessionUnderCredentialLock,
   type CredentialLock,
 } from "../lib/auth-session-guard.ts";
@@ -105,4 +106,28 @@ test("preserves cleanup failure when a stale session cannot be destroyed", async
       return true;
     },
   );
+});
+
+
+test("session inactivity expires missing, malformed, stale, and implausibly future timestamps", () => {
+  const now = Date.parse("2026-11-06T12:00:00.000Z");
+  assert.equal(isSessionInactive("2026-11-06T11:29:59.000Z", now), true);
+  assert.equal(isSessionInactive(undefined, now), true);
+  assert.equal(isSessionInactive(null, now), true);
+  assert.equal(isSessionInactive("", now), true);
+  assert.equal(isSessionInactive("not-a-date", now), true);
+  assert.equal(isSessionInactive("2026-11-07T12:00:00.000Z", now), true);
+});
+
+test("session inactivity accepts fresh timestamps and tolerates small clock skew", () => {
+  const now = Date.parse("2026-11-06T12:00:00.000Z");
+  assert.equal(isSessionInactive("2026-11-06T11:45:00.000Z", now), false);
+  assert.equal(isSessionInactive("2026-11-06T12:00:30.000Z", now), false);
+  assert.equal(isSessionInactive(new Date("2026-11-06T11:59:00.000Z"), now), false);
+});
+
+test("session inactivity uses the configured timeout", () => {
+  const now = Date.parse("2026-11-06T12:00:00.000Z");
+  assert.equal(isSessionInactive("2026-11-06T11:50:00.000Z", now, 5 * 60 * 1000), true);
+  assert.equal(isSessionInactive("2026-11-06T11:56:00.000Z", now, 5 * 60 * 1000), false);
 });
