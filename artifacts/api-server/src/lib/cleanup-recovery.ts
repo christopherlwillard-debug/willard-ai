@@ -320,10 +320,12 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
     return;
   }
   const actualHash = await sha256File(trash);
-  if (typeof canonical.contentHash === "string" && /^[a-f0-9]{64}$/i.test(canonical.contentHash) &&
-      actualHash.toLowerCase() !== canonical.contentHash.toLowerCase()) {
-    await markNeedsReview(op.operationId, "Trash file hash no longer matches the canonical media row");
-    return;
+  if (canonical.contentHash != null) {
+    if (typeof canonical.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(canonical.contentHash) ||
+        actualHash.toLowerCase() !== canonical.contentHash.toLowerCase()) {
+      await markNeedsReview(op.operationId, "Trash file hash no longer matches the canonical media row");
+      return;
+    }
   }
 
   const { entries } = readTrashManifest(op.nasPath);
