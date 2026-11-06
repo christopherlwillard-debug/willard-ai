@@ -3430,3 +3430,33 @@ The earlier finding under **“On-demand thumbnail generation still blocks the A
 **Validation:** Fast Validation run [42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345), Linux `validate` job 128056974463, passed the targeted backend batch (351 tests: 349 passed, 0 failed, 2 skipped). The Windows archive/updater job in the same run was still in progress at this snapshot; no Windows result is claimed.
 
 **Status:** fixed; target-tested on Linux. The async refactor is already part of the existing PR diff; its exact introducing commit was not isolated during this pass, and no new thumbnail code was changed. Keep request-abort/per-thumbnail cancellation and process-tree ownership as separate remaining design questions; the current fix covers event-loop responsiveness and shared shutdown ownership, not attempt-scoped cancellation.
+
+
+## November 6 — organization preflight destination-capacity check made asynchronous and fail-closed
+
+### Fixed — High: per-destination disk-space probe blocked the API and failed open on non-GNU systems
+
+**Affected workflow:** Organize Center preflight for archive/folder jobs, especially Windows and NAS/SMB destinations with nested mounts or unavailable shares.
+
+**Evidence and root cause:** `routes/organize.ts` used `spawnSync("df", ["-B1", checkDir])` in the preflight request, with no timeout. A slow or disconnected network filesystem could hold the API event loop while `df` waited on the mount. The command is GNU-specific and unavailable on Windows/macOS; on those systems the helper returned `null`, but the route initialized `diskOk = true` and treated an unknown per-destination capacity result as a passing check. The existing `evaluateCapacity` call checks the configured NAS root, not every unique destination filesystem, so a full nested mount could be missed.
+
+**Fix:** Reused the existing `capacity-service` asynchronous `fs.promises.statfs` provider through new `probeFilesystemCapacity`. Organization preflight now uses asynchronous `fs.promises.stat`/`realpath` for destination path resolution, awaits the per-filesystem capacity probe, and fails closed if the path or free space cannot be measured. Removed the synchronous `df` child process and its import. No new dependency or parallel capacity subsystem was added.
+
+**Regression coverage:**
+- `capacity-service.test.ts`: injected known/unknown destination probes and a real default filesystem probe against the current platform's temporary directory.
+- New `organize-preflight-capacity.test.ts`: verifies preflight awaits the per-destination probe, uses async path checks, and does not pass when free space is unknown.
+- Fast Validation now runs both tests on Linux and Windows.
+
+**Commits:** `1f98f02437b38305df9c51566d14e77d8ed8d5fb` (shared probe); `3cce8c673187063bdb74781f660f9894070cd92c` (probe tests); `33978312046d37ca8fc4d82a4ec21495627a1c42` (preflight fix); `1b290916e748bf58cfa4325b07b7dc122880d540` (route regression test); `60e18c7cf6bad3dd067f111854db5be6522c60f7` (Linux/Windows CI coverage).
+
+**Status:** fixed; targeted and Windows validation pending on the latest code head. Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) was in progress on head `60e18c7cf6bad3dd067f111854db5be6522c60f7`; its Linux job had started and its Windows archive/updater job had not yet completed. Dependency Review [run 42266842234](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842234) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+
+### Validation follow-up — database-backup fix and Fast Validation concurrency
+
+- Fast Validation [run 42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345) on head `704631bf79569ba3f90064cc7d8483ae73e90904` completed successfully. Linux `validate` job 128056974463 passed typechecks/generated contracts, desktop/Expo checks, release/storage contracts, PostgreSQL media LIKE checks, conversion advisory-lock integration, finalization recovery, and targeted backend regressions. The database-backup suite passed 33/33 and the snapshot-process suite passed 85/85; the targeted backend batch passed 351 tests (349 passed, 0 failed, 2 skipped).
+- The Windows `windows-archive-and-updater-smoke` job 128057682197 also completed successfully. It passed launcher PowerShell parsing (20 scripts), single-instance startup, orphan-service handling, UTF-8 environment creation, media rename/no-overwrite, non-blocking media process checks, storage migration, NAS temp cleanup, conversion finalization rollback, official Windows 7-Zip symlink/TAR checks, updater journal writes, and developer updater preservation/rollback. Its update-preparation error messages were expected negative-path assertions; the final log states: `Windows updater smoke passed: full-version update, preservation, and rollback.`
+- Fast Validation [run 42266208602](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266208602) on head `bc455b61d076064d7e39d868faa1b3601fcf3210` also completed successfully on Linux and Windows. This run continued while newer audit commits were pushed, confirming that the `cancel-in-progress: false` change in `da327bd5fa6a29fc32a676334dbb033daf47be08` prevents a new PR commit from cancelling an already-running Windows validation. Newer pending runs were replaced by the latest pending run, as GitHub's one-pending-run concurrency rule allows.
+- These Fast Validation runs are not full CI and do not replace the dedicated installed Windows lifecycle workflow. The latest lifecycle run [42266842470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842470) was pending at this snapshot; no installed first-start or prepared-phase recovery result is claimed.
+- **Full CI:** not run.
+
+**Next batch:** Finish Fast Validation run 42266842331 on the new capacity code and verify the Windows capacity-probe step. Then let the latest Windows installer lifecycle run start; it must get beyond installed first startup now that the module parse defect is fixed. Continue with the stable external bootstrap design and attempt-fenced conversion worker architecture; do not weaken recovery tests.
