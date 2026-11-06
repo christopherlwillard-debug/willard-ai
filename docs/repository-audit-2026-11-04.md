@@ -2921,3 +2921,37 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 - Follow-up inspection confirmed the lifecycle script preserves runner-local diagnostics on failure and prints them to the job log. The current connected GitHub metadata view exposes the failed step but not that log body. Next action is to obtain the failing phase/assertion from the job log, reproduce it, and only then make a targeted correction.
 - The thumbnail cache clear change is now **CI-validated** by Fast Validation #1235. It intentionally leaves stale lock recovery open; no age-only lock stealing was reintroduced.
 - PR #2 remains open and draft. No main branch, production data, credentials, release artifacts, or production settings were changed.
+
+
+## November 6 — installer release gate and interrupted-update entrypoint
+
+### Confirmed Windows lifecycle failure
+
+- Windows installer lifecycle run [#87](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208095) completed dependency installation, release staging, installer compilation, standard-user first install/start, in-place upgrade, and the simulated `swapped` recovery case.
+- It then failed in the prepared-phase recovery case. The smoke test deliberately moved the entire install directory to its sibling backup, leaving the configured install path absent, then invoked `$InstallRoot\\desktop\\WillardMediaCenter.ps1`. The captured standard-user stderr is a PowerShell `CommandNotFoundException` for that missing path; the subsequent health check timed out.
+- This exposes a real recovery-entrypoint gap, not merely an arbitrary assertion failure: Inno Setup's Start Menu and desktop shortcuts also point directly to `{app}\\desktop\\WillardMediaCenter.ps1`. When a crash occurs after the old install directory is renamed to its backup but before the candidate becomes the install directory, the ordinary shortcut cannot launch the script that contains `Recover-InterruptedUpdateSwap`. The recovery code is present but unreachable through the normal entrypoint in this exact crash window.
+- **Status: high severity, found / architecture blocked.** Do not mark prepared-phase recovery as validated. A safe fix needs a stable bootstrap entrypoint outside the directory being swapped (for example, a small per-user launcher under LOCALAPPDATA) and shortcuts that target it. The bootstrap must validate the journal and all sibling paths, reject reparse/symlink escapes, restore only a verified backup using same-volume no-overwrite moves, preserve candidate/backup/journal on ambiguous states, and then invoke the restored launcher. The Windows lifecycle test must invoke the same stable shortcut target after simulating the missing install directory. Do not paper over this by invoking a hidden backup launcher from the test; that would not represent normal user recovery.
+- The lifecycle run did pass the earlier first-install/start, upgrade, and `swapped` rollback path. It did **not** reach the database-failure diagnostics or uninstall checks.
+
+### Release validation was not fail-closed
+
+- The same run's release staging log showed `validate-release.mjs` failing because it expected packaged `sharp@0.35.2` while the resolved API runtime dependency and staged package were `0.35.5`. The PowerShell build script continued to compile Setup.exe because it did not inspect `$LASTEXITCODE` after either Node command. Thus a failed payload validation did not stop the local installer build.
+- Fixed the version-drift check to compare the packaged sharp manifest with the actually resolved API-runtime sharp manifest, rather than a stale hard-coded patch version.
+- Added a checked Node-step wrapper in `build-installer.ps1` that throws on a non-zero exit from both release staging and release validation, before installer compilation can run.
+- Added regression assertions for resolved-version parity and fail-closed command ordering.
+- **Commits:** validator `d324bba29bbcfb38609cf1e9ce563bda21e184fb`; build gate `5edd4460866e95dbd0ce557aa3b145e08d436525`; tests `693bf789c5ec9657892a59b61cbef1559d1e2221` and correction `dfcae31e1e906c340f1659e41a3e9e9bd9cff856`. These changes are committed; their new targeted CI validation is pending.
+
+### Prioritized findings ledger update
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows updater → restart after crash between install-root rename and candidate activation | found / architecture blocked | — | Normal shortcuts target a launcher inside the temporarily absent install root. Requires a stable out-of-root bootstrap and a lifecycle test that launches through the real shortcut target. |
+| High | Windows installer build → release staging/validation failure handling | fixed | `5edd4460866e95dbd0ce557aa3b145e08d436525` | Await Fast Validation and Windows installer lifecycle on the new head; do not claim the gate is CI-validated yet. |
+| Medium | Windows release payload → sharp version parity | fixed | `d324bba29bbcfb38609cf1e9ce563bda21e184fb` | Await Fast Validation and a Windows package build to confirm source and staged manifests agree. |
+
+### Validation snapshot
+
+- Fast Validation [#1236](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208446) passed on the preceding code head `164e2f10726f47aa24ea6c97328bed5812f08742`, including typecheck/generated contracts, PostgreSQL media filters and conversion recovery checks, targeted backend regressions, and the Windows archive/updater smoke job.
+- Windows installer lifecycle [#87](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208095) failed as detailed above. The installer compiled, but the full installed-product lifecycle did not pass.
+- Dependency Review #999 passed on the preceding head. The new installer changes still require a fresh dependency-review result.
+- This audit branch remains separate from `main`; PR #2 remains open and draft. No production data, credentials, or release artifacts were changed.
