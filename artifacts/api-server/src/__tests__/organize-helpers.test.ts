@@ -722,3 +722,67 @@ test("execute and resume persist move intents before invoking filesystem moves",
     assert.match(route.slice(moveIndex, moveIndex + 250), /expectedSourceHash: sourceHash/);
   }
 });
+
+test("verifiedMove: lease loss after hashing prevents the filesystem move", async () => {
+  const source = writeFile(path.join(mkTmp("lease-before-move"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-before-move", "destination"), "source.txt");
+  let checks = 0;
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, {
+      beforeMove: async () => {
+        checks++;
+        throw new Error("worker lease lost");
+      },
+    }),
+    /worker lease lost/,
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "protected bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("verifiedMove: lost lease prevents an automatic restore from racing a replacement worker", async () => {
+  const source = writeFile(path.join(mkTmp("lease-before-restore"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-before-restore", "destination"), "source.txt");
+  let restoreChecks = 0;
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, {
+      afterMoveHook: async () => {
+        throw new Error("simulated verification failure");
+      },
+      beforeRestore: async () => {
+        restoreChecks++;
+        throw new Error("worker lease lost");
+      },
+    }),
+    (error: unknown) => error instanceof AggregateError &&
+      error.message.includes("could not be restored") &&
+      error.errors.some((item) => item instanceof Error && item.message === "worker lease lost"),
+  );
+
+  assert.equal(restoreChecks, 1);
+  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.readFileSync(destination, "utf8"), "protected bytes");
+});
+
+test("rollbackMoves: checks ownership before each individual restore", async () => {
+  const source = writeFile(path.join(mkTmp("lease-rollback"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-rollback", "destination"), "source.txt");
+  const record = await verifiedMove(source, destination);
+  let checks = 0;
+
+  await assert.rejects(
+    () => rollbackMoves([record], undefined, async () => {
+      checks++;
+      throw new Error("worker lease lost");
+    }),
+    /worker lease lost/,
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.readFileSync(destination, "utf8"), "protected bytes");
+});
