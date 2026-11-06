@@ -450,7 +450,7 @@ test("organization resume and reset require a stale execution lease", () => {
   const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
   const rollbackRoute = source.slice(rollbackStart, rollbackEnd);
   assert.match(rollbackRoute, /status: "rolling_back"/);
-  assert.match(rollbackRoute, /startOrganizationJobHeartbeat\(id, nasPath, "rolling_back"\)/);
+  assert.match(rollbackRoute, /startOrganizationJobHeartbeat\(id, nasPath, rollbackLeaseToken, "rolling_back"\)/);
   assert.match(rollbackRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
 
   const helperSource = fs.readFileSync(new URL("../lib/organize-helpers.ts", import.meta.url), "utf8");
