@@ -1,5 +1,6 @@
 import { execFile, spawnSync, type ChildProcess, type SpawnSyncReturns } from "child_process";
 import { logger } from "./logger.ts";
+import { isShuttingDown } from "./shutdown-state.ts";
 
 /**
  * Shared helpers for the external media binaries (ffmpeg / ffprobe).
@@ -144,6 +145,11 @@ export function runMediaToolAsync(
   args: string[],
   options: MediaToolExecutionOptions,
 ): Promise<MediaToolExecutionResult> {
+  if (isShuttingDown()) {
+    const failure = new Error("Cannot start a media subprocess while the API server is shutting down.") as MediaToolExecutionError;
+    failure.code = "ERR_SERVER_SHUTTING_DOWN";
+    return Promise.reject(failure);
+  }
   return new Promise((resolve, reject) => {
     let child: ChildProcess | null = null;
     const removeChild = () => {
@@ -183,6 +189,9 @@ export function formatMediaToolExecutionError(
   const failure = error instanceof Error
     ? error as MediaToolExecutionError
     : new Error(String(error)) as MediaToolExecutionError;
+  if (failure.code === "ERR_SERVER_SHUTTING_DOWN") {
+    return `${bin} was not started because the API server is shutting down`;
+  }
   if (failure.code === "ENOENT") {
     return `${bin} is not installed or not on PATH. ${FFMPEG_INSTALL_HINT}`;
   }
