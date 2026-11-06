@@ -91,3 +91,40 @@ export function waitForExportedSnapshot(child, {
     }
   });
 }
+
+
+function isSnapshotHolderRunning(child) {
+  return Boolean(child?.pid) && child.exitCode === null && child.signalCode === null;
+}
+
+export function releaseExportedSnapshot(child, { timeoutMs = 3_000 } = {}) {
+  // A process terminated by signal has exitCode === null. signalCode is the
+  // authoritative closed-state check; never signal its stale PID after close.
+  if (!isSnapshotHolderRunning(child)) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let killTimer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      child.removeListener("close", finish);
+      resolve();
+    };
+
+    child.once("close", finish);
+    killTimer = setTimeout(() => {
+      if (isSnapshotHolderRunning(child)) {
+        try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }
+      }
+      finish();
+    }, timeoutMs);
+
+    try {
+      child.stdin.end("ROLLBACK;\\n\\\\q\\n");
+    } catch {
+      // Keep the bounded SIGKILL fallback if the stdin pipe is already closed.
+    }
+  });
+}
