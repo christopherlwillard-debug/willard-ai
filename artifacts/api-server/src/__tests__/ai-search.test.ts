@@ -152,6 +152,16 @@ const aiSearchSource = await readFile(
   "utf8",
 );
 
+const searchRouteSource = await readFile(
+  new URL("../routes/search.ts", import.meta.url),
+  "utf8",
+);
+
+test("local-only route applies explicit clear-filter refinements", () => {
+  assert.match(searchRouteSource, /localSearchClearFilters\(query\)/);
+  assert.match(searchRouteSource, /mergeRefinedIntent\(previous, fallback, clear\)/);
+});
+
 test("AI intent parser accepts explicit clear-filter instructions", () => {
   assert.match(aiSearchSource, /"clearFilters"/);
   assert.match(aiSearchSource, /mergeRefinedIntent\(previous, parsed, clear\)/);
