@@ -421,3 +421,14 @@ test("recovery quarantines a restore manifest with no canonical row", async (t) 
     fs.rmSync(path.join(activeRoot, "__stale-restore-test__"), { recursive: true, force: true });
   }
 });
+test("Trash GET route does not invoke permanent-retention cleanup", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const routeStart = cleanupRoute.indexOf('router.get("/cleanup/trash"');
+  const routeEnd = cleanupRoute.indexOf('router.post("/cleanup/restore"', routeStart);
+  assert.notEqual(routeStart, -1, "Trash GET route exists");
+  assert.notEqual(routeEnd, -1, "Restore POST route follows Trash GET route");
+  const routeBody = cleanupRoute.slice(routeStart, routeEnd);
+  assert.doesNotMatch(routeBody, /purgeExpiredTrashEntries/);
+  assert.match(routeBody, /readTrashManifest/);
+});
