@@ -189,8 +189,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
       const msg = err?.message ?? "";
       if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg)) {
         isPasswordProtected = true;
+        resolve({ entries, isPasswordProtected, format, error: msg });
+        return;
       }
-      resolve({ entries, isPasswordProtected, format, error: msg });
+      reject(err instanceof Error ? err : new Error(String(err)));
     });
   });
 }
@@ -371,7 +373,12 @@ router.post("/archives/:id/peek", async (req, res) => {
         assertArchiveFileUnchanged(archivePath, archiveSnapshot);
       } catch (error) {
         if (error instanceof ArchiveSafetyError) throw error;
-        isPasswordProtected = true;
+        const message = error instanceof Error ? error.message : String(error);
+        if (/password|wrong password|encrypted|cannot open encrypted/i.test(message)) {
+          isPasswordProtected = true;
+        } else {
+          throw error;
+        }
       }
 
       const category = computeCategoryFromContent(entries, isPasswordProtected);
@@ -401,7 +408,7 @@ router.post("/archives/:id/peek", async (req, res) => {
     if (TAR_EXTS.has(ext)) {
       const { entries, error } = await peekTar(archivePath, rawExt);
 
-      if (error && entries.length === 0) {
+      if (error && entries.length === 0 && ext === "gz") {
         // Plain .gz (not a TAR) — provide basic metadata from file size
         await db.update(archivesTable).set({
           peekStatus: "peeked",
