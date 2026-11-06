@@ -163,6 +163,30 @@ async function defaultHashFile(filePath: string): Promise<string> {
   return sha256File(filePath);
 }
 
+async function copyFileFromNoFollowDescriptor(sourcePath: string, destinationHandle: fs.promises.FileHandle): Promise<void> {
+  const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | noFollow);
+  try {
+    const opened = fs.fstatSync(sourceFd);
+    const current = fs.lstatSync(sourcePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("Migration source changed or became a symlink while opening.");
+    }
+    await pipeline(
+      fs.createReadStream(sourcePath, { fd: sourceFd, autoClose: false }),
+      destinationHandle.createWriteStream(),
+    );
+  } finally {
+    fs.closeSync(sourceFd);
+  }
+}
+
 async function walkFiles(root: string, onUnsafe: (filePath: string, reason: string) => void): Promise<string[]> {
   const files: string[] = [];
   if (!fs.existsSync(root)) return files;
@@ -649,7 +673,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           // failed open must never clean up another worker's partial file.
           const partialHandle = await fs.promises.open(partialPath, "wx", 0o600);
           partialCreated = true;
-          await pipeline(createReadStream(safeSourcePath), partialHandle.createWriteStream());
+          await copyFileFromNoFollowDescriptor(safeSourcePath, partialHandle);
           const copiedHash = await hashFile(partialPath);
           if (copiedHash !== entry.sourceHash) {
             entry.state = "error";
