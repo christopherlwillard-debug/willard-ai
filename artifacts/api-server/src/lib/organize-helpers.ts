@@ -364,7 +364,7 @@ export async function rollbackMoves(
           ) {
             const restoredHash = await sha256File(mv.from);
             if (restoredHash === mv.sourceHash) {
-              await beforeEachMove?.();
+              await beforeEachMove?.(mv);
               fs.unlinkSync(mv.to);
               rolledBack++;
               log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hard-link finalized`);
@@ -413,7 +413,7 @@ export async function rollbackMoves(
         continue;
       }
 
-      await beforeEachMove?.();
+      await beforeEachMove?.(mv);
       moveFileNoReplace(mv.to, mv.from);
 
       // Re-check the restored path without following links. This closes the
@@ -422,7 +422,7 @@ export async function rollbackMoves(
       const restoredStat = fs.lstatSync(mv.from);
       if (!restoredStat.isFile() || restoredStat.isSymbolicLink()) {
         try {
-          await beforeEachMove?.();
+          await beforeEachMove?.(mv);
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; entry returned to destination`);
         } catch (preserveError: any) {
@@ -437,7 +437,7 @@ export async function rollbackMoves(
       const restoredHash = await sha256File(mv.from);
       if (restoredHash !== mv.sourceHash) {
         try {
-          await beforeEachMove?.();
+          await beforeEachMove?.(mv);
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; unverified file returned to destination`);
         } catch (preserveError: any) {
