@@ -116,7 +116,7 @@ test("Windows release stages every helper imported by the PostgreSQL backup entr
   for (const helper of importedHelpers) {
     assert.ok(
       stagedDesktopFiles.has(helper),
-      \`Windows installer does not stage desktop/\${helper}, imported by database-backup.mjs\`,
+      "Windows installer does not stage desktop/" + helper + ", imported by database-backup.mjs",
     );
   }
 });
