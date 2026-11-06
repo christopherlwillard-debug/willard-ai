@@ -1,0 +1,145 @@
+name: Windows installer lifecycle validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/windows-installer-lifecycle-validation.yml"
+      - "installer/**"
+      - "desktop/**"
+      - "scripts/windows/**"
+      - "artifacts/api-server/**"
+      - "artifacts/willard-ai/**"
+      - "lib/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "setup-db.cjs"
+      - "test-media/**"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional installer test version (defaults to 0.1.<run number>)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-lifecycle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/audit/full-repository-review-2026-11' }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      NODE_VERSION: "24.13.1"
+      PGPASSWORD: "postgres"
+    steps:
+      - name: Check out the audited source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.12.4 --activate
+          pnpm --version
+
+      - name: Install the frozen workspace dependency graph
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Install isolated portable PostgreSQL 16
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          $postgresRoot = Join-Path $env:RUNNER_TEMP 'postgresql/pgsql'
+          $postgresBin = Join-Path $postgresRoot "bin"
+          if (-not (Test-Path (Join-Path $postgresBin "initdb.exe"))) {
+            $archive = Join-Path $env:RUNNER_TEMP "postgresql-16.15.zip"
+            $downloadUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.15-1-windows-x64-binaries.zip"
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
+            $expectedSha256 = "25e6fcdfb8caec38691bf461125e7564508760666f7b8e5dc6a5f0818f58f81e"
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha256) {
+              throw "The portable PostgreSQL archive did not match the pinned SHA-256."
+            }
+            Expand-Archive -Path $archive -DestinationPath (Join-Path $env:RUNNER_TEMP "postgresql") -Force
+          }
+          if (-not (Test-Path (Join-Path $postgresBin "initdb.exe"))) {
+            throw "Portable PostgreSQL command-line tools were not found at $postgresBin."
+          }
+          $postgresBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "PGPASSWORD=postgres" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $passwordFile = Join-Path $env:RUNNER_TEMP "postgresql-password.txt"
+          Set-Content -Path $passwordFile -Value "postgres" -Encoding ASCII
+          $dataRoot = Join-Path $env:RUNNER_TEMP "postgresql-data"
+          & (Join-Path $postgresBin "initdb.exe") --username=postgres --pwfile=$passwordFile --encoding=UTF8 --pgdata=$dataRoot
+          if ($LASTEXITCODE -ne 0) { throw "Portable PostgreSQL initdb failed." }
+          Remove-Item $passwordFile -Force
+          $serverLog = Join-Path $env:RUNNER_TEMP "postgresql-server.log"
+          & (Join-Path $postgresBin "pg_ctl.exe") -D $dataRoot -l $serverLog -o "-h 127.0.0.1 -p 5432" start
+          if ($LASTEXITCODE -ne 0) { throw "Portable PostgreSQL failed to start. See $serverLog." }
+          $ready = $false
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            & (Join-Path $postgresBin "pg_isready.exe") -h 127.0.0.1 -p 5432 -U postgres
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw "Portable PostgreSQL did not become ready. See $serverLog." }
+
+      - name: Select an isolated unsigned installer version
+        id: version
+        shell: pwsh
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          $version = $env:VERSION_INPUT
+          if (-not $version) { $version = "0.1.${{ github.run_number }}" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[\w.-]+)?$') {
+            throw "Installer test version must use MAJOR.MINOR.PATCH."
+          }
+          "WILLARD_VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build and compile the unsigned test installer
+        shell: pwsh
+        timeout-minutes: 60
+        run: ./scripts/windows/build-installer.ps1
+
+      - name: Exercise standard-user install, upgrade, recovery, diagnostics, and uninstall
+        shell: pwsh
+        timeout-minutes: 60
+        env:
+          PGPASSWORD: postgres
+        run: ./scripts/windows/installer-lifecycle-smoke.ps1
+
+      - name: Stop isolated PostgreSQL
+        if: always()
+        shell: pwsh
+        run: |
+          $dataRoot = Join-Path $env:RUNNER_TEMP "postgresql-data"
+          $pgCtl = Join-Path $env:RUNNER_TEMP 'postgresql/pgsql/bin/pg_ctl.exe'
+          if ((Test-Path $pgCtl) -and (Test-Path $dataRoot)) {
+            & $pgCtl -D $dataRoot -m fast stop
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Portable PostgreSQL did not stop cleanly." }
+          }
+
+# This workflow deliberately has no production signing secrets, release
+# permissions, artifact publication, or GitHub Release action. It validates
+# installer behavior, not Authenticode trust or SmartScreen reputation.
