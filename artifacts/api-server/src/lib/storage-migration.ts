@@ -585,9 +585,23 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
               `UPDATE ${reference.table} SET ${reference.column} = $1 WHERE id = $2 AND ${reference.column} = $3`,
               [destinationValue, reference.rowId, reference.value],
             );
-            if (updatedReference.rowCount !== 1) {
+            if (updatedReference.rowCount === 0) {
+              // A prior attempt may have committed the reference transaction
+              // and then failed while saving the manifest. Accept only the
+              // exact destination value as an idempotent retry; never accept
+              // an unrelated concurrent edit or a deleted row.
+              const currentReference = await client.query(
+                `SELECT ${reference.column} AS value FROM ${reference.table} WHERE id = $1`,
+                [reference.rowId],
+              );
+              if (currentReference.rows?.length !== 1 || currentReference.rows[0]?.value !== destinationValue) {
+                throw new Error(
+                  `Database reference changed or disappeared during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved; review the migration before retrying.`,
+                );
+              }
+            } else if (updatedReference.rowCount !== 1) {
               throw new Error(
-                `Database reference changed or disappeared during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved; review the migration before retrying.`,
+                `Unexpected number of database references updated during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved.`,
               );
             }
           }
