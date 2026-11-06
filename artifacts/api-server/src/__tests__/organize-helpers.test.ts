@@ -867,6 +867,8 @@ test("organization analysis claims and fences every write with its lease token",
   assert.match(route, /const analysisLeaseToken = crypto\.randomUUID\(\)/);
   assert.match(route, /eq\(organizationJobsTable\.status, job\.status\)/);
   assert.match(route, /eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/);
+  assert.match(route, /const failAnalysis = async \(message: string\)/);
+  assert.match(route, /await failAnalysis\("Archive record not found in the active library"\)/);
   assert.match(route, /set\(\{ status: "planned", planJson, leaseToken: null \}\)/);
   assert.ok((route.match(/eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/g) ?? []).length >= 3,
     "success and failure writes must be fenced by the analysis owner");
