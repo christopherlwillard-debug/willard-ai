@@ -3647,18 +3647,27 @@ The PR-triggered rerun [42274780057](https://github.com/christopherlwillard-debu
 
 **Confirmed race:** Request A loads a session and passes the global guard. Request B logs out or revokes that SID and deletes the session row. Request A then completes and saves its modified session. The store can insert the old SID again. Because its password credential fingerprint is still current, a later request can pass the new credential-version check. The same issue affects an in-flight request from a device revoked through the session-management screen.
 
-**Status:** found; blocked pending a durable revocation design. No partial delete-only workaround was applied.
+**Status:** fixed; target validation pending on code commit `347b8cdbd9c093aae216920d33c25a48f6009358`.
 
-**Safe implementation plan:**
+**Fix — commit:** `347b8cdbd9c093aae216920d33c25a48f6009358`.
 
-1. Add an idempotently created revoked_sessions table alongside the existing session table in setup-db.cjs. Use SID as the primary key, record revoked_at, and index expiry/cleanup metadata.
-2. For logout, insert the current SID tombstone before destroying the session. For revoke-one, insert the target SID tombstone and delete its row in one transaction. For revoke-others, insert tombstones for every target SID and delete those rows in the same transaction while preserving the current SID.
-3. Keep tombstones effective even if a late session-store upsert recreates the session row. The global auth guard must check both credential version and the SID tombstone before routing; /auth/status and /auth/sessions must apply the same revocation state.
-4. Retain tombstones until the maximum session lifetime plus a safety grace has elapsed and no session row for that SID remains. A cleanup job must not remove a marker merely because the original session row was deleted; a late upsert may still recreate it.
-5. Add PostgreSQL integration tests that load a session, revoke it, deliberately perform a late store set/upsert, and prove that the SID remains unauthorized. Also verify that revoke-others preserves the current session and that logout cannot be undone.
-6. If marker persistence fails, fail closed and do not return a successful revocation response.
+- Added the idempotent `revoked_sessions` table to the single required-schema bootstrap used by standalone setup and API startup. The desktop launcher's schema fingerprint includes `setup-db.cjs`, so the changed schema script invalidates its prior ready marker and runs the migration before starting the API.
+- Added `auth-session-revocation.ts`. Logout and authenticated-session cleanup write a SID tombstone and delete the session row in one transaction. Targeted device revocation inserts a tombstone only for a row belonging to the current settings ID and credential generation. Revoke-all tombstones every other row in that credential generation before deleting it and deliberately does not filter by expiry, because an expired row may still be held by an in-flight request.
+- The global authorization middleware now checks the tombstone and credential version in one query before dispatching protected routes. A tombstoned SID is rejected even if connect-pg-simple later recreates its row. Database verification failures return 503 rather than authorizing.
+- `/auth/status` checks tombstones; `/auth/sessions` excludes them. Logout reports 503 if durable revocation cannot be written instead of returning a false success.
+- Session regeneration while already authenticated now tombstones the previous SID before express-session destroys it, closing the same late-save window on re-login/session rotation.
+- The physical session-row delete is cleanup only after the marker commits. If that delete fails, the tombstone still denies authorization and the cleanup failure is logged.
+- Tombstones are retained indefinitely in this batch. No age-only cleanup is safe until the application establishes and enforces a maximum in-flight request lifetime; removing a marker while an old request can still upsert would reopen the vulnerability.
 
-**Remaining risk:** Until this is implemented, logout and targeted session revocation can be undone by an already-running request that saves afterward. Password change/recovery revocation is protected by the credential fingerprint, but explicit session revocation is not.
+**Regression coverage added:**
+
+- `auth-session-revocation-postgres.test.ts` uses a real PostgreSQL service and reproduces connect-pg-simple's `INSERT ... ON CONFLICT DO UPDATE` after deletion for logout, targeted revoke, and revoke-all.
+- The integration test verifies current-session preservation, credential-scope isolation, and that expired-but-still-present session rows are tombstoned.
+- `install-auth-reliability.test.ts` verifies every revocation entry point, the global guard, and inventory filtering.
+- `schema-bootstrap.test.ts` verifies the new table is created by the idempotent required-schema bootstrap.
+- Fast Validation now runs the PostgreSQL tombstone integration test and the schema-bootstrap regression explicitly.
+
+**Remaining risk:** Already-authorized work that began before revocation is not forcibly cancelled; this change prevents a later request from using the SID after a late upsert. Cancellation/fencing of already-running destructive jobs remains a separate workstream. Tombstone rows currently accumulate until a safe bounded-lifetime cleanup design is available.
 
 ## November 6 — validation failures diagnosed and audit checks stabilized
 
@@ -3678,3 +3687,15 @@ Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/w
 - Dependency Review [run 42284917015](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284917015) passed on code/test head 7e185ba807503bf7975af6c58e994c75f4ac71e0. The production advisory gate passed; the separate installed dependency-graph audit was skipped.
 - No dedicated full-CI workflow exists in .github/workflows at this branch head. The available workflows are dependency refresh, dependency review, Fast Validation, Windows installer lifecycle validation, and Windows release. Full CI was not run; the release workflow was not invoked.
 
+
+
+## November 6 — durable session revocation implementation and validation
+
+### High (P1): logout/device-session late-upsert resurrection
+
+- **Status:** fixed in source; target PostgreSQL integration and full Fast Validation pending.
+- **Implementation commit:** `347b8cdbd9c093aae216920d33c25a48f6009358`.
+- **Affected files:** `setup-db.cjs`, `artifacts/api-server/src/lib/auth-session-revocation.ts`, `artifacts/api-server/src/app.ts`, `artifacts/api-server/src/routes/auth.ts`, authentication/schema tests, and `.github/workflows/fast-validation.yml`.
+- **Validation workflow:** Fast Validation [run 42292732845](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292732845) is running on the exact implementation commit. Its job includes workspace typechecks, generated contracts, the new PostgreSQL late-upsert integration test, schema-bootstrap/source regressions, and Windows archive/updater smoke. Windows installer lifecycle [run 42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030) is also running on this exact commit; it remains separate from Fast Validation and does not substitute for the auth integration test. Dependency Review [run 42292732818](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292732818) is in progress; the separate installed dependency-graph audit was skipped.
+- **Full CI:** not run. The repository's available validation workflows are not a full-repository CI run.
+- **Residual risk:** tombstones are retained without automatic cleanup to avoid deleting a marker while a stale request could still upsert. Already-authorized in-flight operations are not cancelled by session revocation; destructive job fencing remains a separate finding.
