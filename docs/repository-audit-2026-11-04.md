@@ -2273,3 +2273,6 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Cleanup / library duplicate summary overstates reclaimable bytes for unequal-sized perceptual matches | fixed; targeted test pending | `<HELPER>`, `<ROUTE>`, `<TEST>` | Confirm with PostgreSQL-backed fixture covering 100, 60, and 40 byte candidates; browser summary and staging behavior remain to be integration-tested |
+
+
+**Implementation follow-up:** The detailed endpoint now carries `largest_file_size` through both exact-hash and perceptual group mappings; the focused regression checks both mappings and the aggregate/per-group calculations. Commits: `8b5bbcc79e6ee18107eb4db62b8bc2716b13da02` (mapping correction), `d6c5ca028ed74f209bcd7e4425f2753be7cede74` (assertion correction). These follow-ups were made after source review caught a missing perceptual mapping and overly escaped assertions before validation; they are included in the pending validation head.
