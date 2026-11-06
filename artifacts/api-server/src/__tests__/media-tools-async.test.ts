@@ -7,6 +7,7 @@ import {
   runMediaToolAsync,
   stopActiveMediaTools,
 } from "../lib/media-tools.ts";
+import { markShuttingDown } from "../lib/shutdown-state.ts";
 
 const optimizePath = fileURLToPath(new URL("../routes/optimize.ts", import.meta.url));
 const optimizeSource = readFileSync(optimizePath, "utf8");
@@ -79,4 +80,13 @@ test("shutdown terminates owned media subprocesses before the server exits", asy
   await stopActiveMediaTools(500);
   await rejected;
   assert.match(runtimeSource, /await stopActiveMediaTools/);
+
+  markShuttingDown();
+  await assert.rejects(
+    runMediaToolAsync("willard-audit-must-not-spawn", [], { timeoutMs: 1_000 }),
+    (error: NodeJS.ErrnoException) => {
+      assert.equal(error.code, "ERR_SERVER_SHUTTING_DOWN");
+      return true;
+    },
+  );
 });
