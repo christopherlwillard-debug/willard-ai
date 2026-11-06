@@ -2481,7 +2481,7 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 ## 2026-11-06 follow-up — symlinked parent paths in verified media moves
 
-<badge color="danger">High — blocked for safe design</badge>
+**Severity: High — blocked for safe design**
 
 **Finding:** The shared verified-move boundary rejects a symlink or special file only at the final source/destination component. Its no-replace move helper creates destination parents recursively, and conversion finalization uses lexical assertWithinRoot checks plus final-component lstat. Those checks do not prove that every parent directory remains inside the active library. A symlinked parent such as NAS/photos -> an external directory can therefore make a lexically in-root media path resolve to an outside file. The conversion finalizer and its startup rollback path both pass persisted paths through this boundary; organize moves also use the same verifiedMove helper. The organize scanner rejects symlinks during its initial walk, but the move and recovery paths do not revalidate the full parent chain immediately before mutation.
 
