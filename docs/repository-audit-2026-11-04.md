@@ -2824,3 +2824,16 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Search → no-result suggestion → clear inherited filters | fixed; targeted validation pending | `c5958eed90da42ab487debb1d90a949490832147` | Fast Validation must execute the new UI regression on the latest branch head. |
+
+## Search refinement filter overrides — November 6
+
+- **Finding — Medium (Search → refine → remove a conventional media/favorites filter):** The search page only sent `mediaTypes` when the selected type was not “all” and only sent `favoriteOnly` when true. On a refinement, returning the controls to “all” or toggling favorites off omitted the corresponding field. The API therefore retained the previous intent's media-type or favorites constraint. This made a visible filter reset appear successful while results remained constrained.
+- **Fix:** The UI now distinguishes untouched controls from explicit user choices. Untouched controls do not override natural-language intent; selecting “all” sends an explicit empty media-type list, and turning favorites off sends explicit `false`. The API now applies empty arrays and both boolean values as intentional overrides. Starting a new search clears the overrides; opening a saved search synchronizes the controls to its saved intent. Built-in “Search all media” and “Include non-favorites” suggestions also clear the matching UI override before refining.
+- **Regression coverage:** Added route contract assertions for empty media-type and false favorites overrides, plus UI contract coverage for explicit clear state, reset behavior, saved-search synchronization, and suggestion handling.
+- **Implementation/test commit:** `b0b75d489dab5e99b623616156601938948bc2fa`.
+- **Validation:** Pending on the new branch head. The preceding Fast Validation #1216 is associated with the earlier no-result suggestion change and does not cover this filter-override batch. The new API/UI regressions must pass in the next Fast Validation run.
+- **Remaining risk:** The UI currently exposes one media-type selection at a time. Multi-type intent from natural language or saved searches remains preserved in the search response; the single-select control displays “all” when more than one type is active rather than silently narrowing it.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search → refine → clear media type or favorites filter | fixed; targeted validation pending | `b0b75d489dab5e99b623616156601938948bc2fa` | Fast Validation must execute the route and UI regressions on the current head. |
