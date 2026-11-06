@@ -30,7 +30,6 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -710,11 +709,26 @@ async function overwriteFileWithZeroes(handle, size, chunkSize = 1024 * 1024) {
 
 async function secureRemove(filePath) {
   try {
-    const info = await stat(filePath);
-    if (info.isFile() && info.size > 0) {
-      const handle = await openFile(filePath, "r+");
+    const info = await lstat(filePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error("Temporary plaintext backup must be a regular, non-symlink file.");
+    }
+    if (info.size > 0) {
+      const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+      const handle = await openFile(filePath, fsConstants.O_RDWR | noFollow);
       try {
-        await overwriteFileWithZeroes(handle, info.size);
+        const opened = await handle.stat();
+        const current = await lstat(filePath);
+        if (
+          !opened.isFile() ||
+          current.isSymbolicLink() ||
+          !current.isFile() ||
+          (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+          (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+        ) {
+          throw new Error("Temporary plaintext backup changed or became a symlink during cleanup.");
+        }
+        await overwriteFileWithZeroes(handle, opened.size);
       } finally {
         await handle.close();
       }
