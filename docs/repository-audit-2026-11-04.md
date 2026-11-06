@@ -2217,3 +2217,23 @@ Before permanent deletion, retention now requires a regular non-symlink file, an
 **Validation:** Regression added; no local test execution or matching branch-head CI result confirmed.
 
 **Remaining critical risk:** This does not close the cross-resource crash window. A process can still stop after the verified file unlink and before canonical-row deletion/tombstone append. The next safe step is a durable permanent-delete intent and restart reconciliation, likely requiring a new operation type/status and coordinated schema migration. Until that is implemented, any resulting missing-file entry is now preserved for manual review rather than silently finalized.
+
+
+## 2026-11-06 follow-up — literal wildcard handling in legacy file search
+
+### Finding: filename searches treated wildcard characters as pattern syntax
+**Severity:** Medium (search correctness). **Workflow:** canonical media search through \`GET /files/search\`.
+
+**Source inspection:** \`routes/files.ts\` passed the user's query directly to Drizzle's \`ilike\` operator. PostgreSQL therefore interpreted \`%\` and \`_\` as wildcards rather than literal filename characters. The media-list route already had the intended behavior: it reuses \`escapeLikePattern\` and supplies an explicit PostgreSQL \`ESCAPE\` clause.
+
+**Fix in this batch:** Reused the existing \`sql-like.ts\` helper in the legacy-compatible file search route, applying the same escaped, case-insensitive substring semantics as media listing. No dependency or new abstraction was added.
+
+**Regression coverage:**
+- Added a route contract assertion that \`/files/search\` escapes the user query and uses an explicit \`ILIKE ... ESCAPE\` clause.
+- Extended the PostgreSQL-backed query regression to prove escaped \`ILIKE\` matches case-insensitively while literal wildcard lookalikes do not match.
+
+**Validation:** implementation and tests committed together. The Fast Validation workflow is the matching validation path; its result must be checked against the exact resulting branch head before this batch is marked target-tested.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | \`GET /files/search\` treated \`%\` and \`_\` as filename wildcards | fixed; target validation pending | this batch | PostgreSQL-backed regression and full Fast Validation result pending |
