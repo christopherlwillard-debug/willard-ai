@@ -30,7 +30,11 @@ function identityPath(libraryRoot) {
  */
 export async function ensureLibraryDirectory(libraryRoot, relativePath, create = false) {
   const root = await realpath(normalizeLibraryRoot(libraryRoot));
-  const components = String(relativePath).split(/[\\/]+/).filter(Boolean);
+  const rawRelative = String(relativePath);
+  if (path.isAbsolute(rawRelative) || path.win32.isAbsolute(rawRelative) || /^[A-Za-z]:/.test(rawRelative)) {
+    throw new Error("Library directory path must be relative to the configured NAS root.");
+  }
+  const components = rawRelative.split(/[\\/]+/).filter(Boolean);
   if (components.some((component) => component === "." || component === ".." || component.includes("\0"))) {
     throw new Error("Library directory path contains an invalid component.");
   }
