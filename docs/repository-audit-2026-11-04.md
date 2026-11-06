@@ -2325,3 +2325,6 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 
 **Additional filesystem guard:** The follow-up review extended the ownership check to archive disposition moves into the processed folder and their attempted restoration, not just ordinary file routing. Commit `112b3b92be5fa0c86b27e793484f8f1dae405a91`. Rollback helper checks ownership again after potentially long hash operations and propagates lost-lease errors so the caller stops rather than continuing with later entries. Helper commits: `46021c6d328e1f547570a4c5e65331723b7aab4b`, `e5c794969447383aa5b44820013b48541cb810d7`.
+
+
+**Filesystem regression tests added:** `organize-helpers.test.ts` now exercises a lost lease after source hashing (source remains untouched), a lost lease before failed-move restoration (destination evidence is preserved), and a lease loss after rollback checksum work (the rollback mutation is refused). Test commit: `c6fd37e97f6589f9ac750e81e7af963cf15e2fbc`. These are local filesystem unit tests; they do not simulate PostgreSQL multi-process takeover or power loss.
