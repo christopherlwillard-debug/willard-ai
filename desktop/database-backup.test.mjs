@@ -13,6 +13,7 @@ import {
   createPrivateBackupWorkDirectory,
   findWindowsPostgresBinary,
   overwriteFileWithZeroes,
+  readRegularFileNoFollow,
   runTool,
 } from "./database-backup.mjs";
 import {
@@ -45,6 +46,30 @@ test("concurrent NAS identity initialization never replaces the first published 
     assert.equal(first.libraryId, persisted.libraryId);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("backup input reader refuses symlinked manifest and dump files", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-backup-input-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-backup-outside-"));
+  try {
+    const target = path.join(outside, "secret.bin");
+    const link = path.join(root, "dump.enc");
+    await writeFile(target, "sensitive external bytes");
+    try {
+      await symlink(target, link, "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readRegularFileNoFollow(link), /regular, non-symlink file/);
+    assert.equal(await readRegularFileNoFollow(target, "utf8"), "sensitive external bytes");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 
