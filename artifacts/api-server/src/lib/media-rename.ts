@@ -1,5 +1,16 @@
 import { existsSync } from "node:fs";
 
+/** Find a sibling that would collide on common case-insensitive, Unicode-normalizing filesystems. */
+export function findPortableNameCollision(
+  existingNames: readonly string[],
+  requestedName: string,
+  currentName?: string,
+): string | null {
+  const key = (value: string) => value.normalize("NFC").toLowerCase();
+  const requestedKey = key(requestedName);
+  return existingNames.find((name) => name !== currentName && key(name) === requestedKey) ?? null;
+}
+
 export class MediaRenameConflictError extends Error {
   constructor() {
     super("Media record changed before the rename could be committed");
