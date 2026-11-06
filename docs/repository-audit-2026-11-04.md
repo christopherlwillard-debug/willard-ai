@@ -2006,3 +2006,41 @@ Fast Validation #864 passed Linux validation, including 73 installer/source-cont
 **Safe implementation plan (not patched in this batch):** add a read-only orphan-service discovery step for the missing-journal case. It must identify only processes whose executable path exactly matches the packaged/developer Node runtime and whose command line contains the expected API or web entrypoint under the active install root. If any such process is found, fail closed and require explicit stop/recovery; do not kill by process name or port alone. Add Windows tests for missing journal + matching process, missing journal + unrelated Node process, and PID reuse. Longer term, use a Windows Job Object with kill-on-close semantics so a launcher crash cannot leave child services running before their process identities are journaled.
 
 This means the new corrupt-journal and WMI-error protections are useful but do not make installer shutdown fully safe when the journal is missing. The Inno uninstall hook remains source-reviewed; its full installed lifecycle has not been executed on this PR branch.
+
+## 2026-11-06 follow-up — detect untracked packaged Windows services
+
+### Finding: missing or partial service journals could hide a live packaged process
+
+**Severity:** High (installer reliability, update safety, and service lifecycle integrity).
+**Affected workflows:** Packaged Windows launcher startup and stop; installer upgrade and uninstall.
+
+**Source inspection:** `desktop/WillardMediaCenter.ps1` writes the API process record immediately after starting the API, then starts the web process and writes the complete pair. A crash between those steps leaves a valid journal with `web = null`. A crash before the first journal write, or deletion/loss of `services.json`, leaves no journal at all. Previously, `Read-Pids` returned `$null` for a missing file and `Stop-Services` stopped only processes named in the journal. An orphaned packaged API or web service could therefore survive while a later launcher, update, or Inno uninstall proceeded as if nothing were running.
+
+**Fix in this batch:**
+- Added read-only process discovery using the existing Windows CIM process provider. A candidate must use the exact packaged Node executable and its command line must contain the exact absolute API or desktop web-server entrypoint path with argument boundaries.
+- Compared discovered processes against the journal using PID, executable path, command line, and creation date. A reused PID is not treated as ownership.
+- Startup and stop now refuse to proceed when an untracked packaged service is found. They also fail closed when CIM cannot enumerate processes or when a matching process identity is incomplete.
+- Discovery does not kill processes, clear the journal, move installation directories, or modify user data. The diagnostic lists role and PID and instructs the user to verify and close only the confirmed Willard process.
+- Stop repeats discovery immediately before acting, rather than relying solely on an earlier startup check.
+
+**Regression coverage added:**
+- Missing journal with a matching API process.
+- Partial API-only journal with a live web process.
+- PID reuse with a different executable identity.
+- Unrelated Node process and a path-prefix lookalike.
+- CIM query failure, missing command line for the packaged Node runtime, and missing executable path for a matching entrypoint.
+- Source-contract checks that discovery is read-only and runs before startup decisions and before journal-based shutdown.
+
+**Implementation commits:** `78902ad4c15f520886d26ad90cc5066a8dfdd8ee`, `ddcb2c726b0a5e11bab71422323897289e668237`, `cf538676f511e40b54a56c8fa5e9d2c7d9e45a4b`.
+**Test commits:** `18cd7ac09159458b7c99edab6d48faf5e7f02c0a`, `fd9df23d33e921b2cf9bf8946eb7ebb01cbec15b`, `13f97b0678d2196017cc6fd2689c3b3d9243dfea`, `eb5742ee5b15e365491c3f10d866438f91c2d8f5`.
+
+**Status:** implementation and focused regression cases committed; target validation pending the matching branch-head CI run. The Windows smoke exercises the production PowerShell functions with synthetic process records; it does not launch or terminate a real orphan process.
+
+**Remaining risk:** This batch covers the packaged Windows launcher only. The developer launcher has the analogous missing/partial journal gap and remains open for a separate follow-up. CIM process visibility can also vary by Windows security context; the implementation fails closed when a candidate entrypoint is visible but its executable identity is not. A Windows Job Object remains a stronger future design for eliminating the process-start-to-journal crash window rather than detecting it on the next launch.
+
+### Prioritized findings ledger — packaged service ownership
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Packaged launcher may miss API/web processes when `services.json` is missing or only partially written | fixed; target validation pending | implementation: `cf538676`; regression tests: `fd9df23d` | Matching Fast Validation and Windows smoke pending; full installed installer lifecycle remains separate |
+| High | Developer launcher may miss an orphan when its process journal is missing or partial | found / blocked for next batch | not fixed | Needs exact process-tree ownership for Node API and pnpm/Vite web process; do not kill by port or process name |
