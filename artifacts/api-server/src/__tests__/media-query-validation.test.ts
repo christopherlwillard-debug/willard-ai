@@ -35,11 +35,14 @@ test("media listing validates scalar filters and escapes literal folder/search p
   assert.doesNotMatch(route, /req\.query\["(?:mediaType|favorites|folder|search|sort)"\]\s+as\s+string/);
 });
 
-test("legacy file search escapes literal filename LIKE metacharacters", () => {
+test("legacy file search validates scalar filters and escapes literal filename wildcards", () => {
   const route = readFileSync("artifacts/api-server/src/routes/files.ts", "utf8");
   assert.ok(route.includes('import { escapeLikePattern } from "../lib/sql-like.ts";'));
   assert.ok(route.includes("escapeLikePattern(q)"));
   assert.match(route, /ILIKE.*ESCAPE E'/);
+  for (const field of ["q", "fileType", "source", "after", "before"]) {
+    assert.ok(route.includes('parseOptionalQueryString(req.query["' + field + '"], "' + field + '")'), field);
+  }
 });
 
 test("Explorer rejects repeated path parameters before resolving filesystem paths", () => {
