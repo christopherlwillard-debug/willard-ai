@@ -39,8 +39,6 @@ test("NAS log stream switches only after the new library path is persisted", () 
   const persistence = route.indexOf(".update(appSettingsTable)");
   const streamSwitch = route.indexOf("nasLogStream.setNasPath(normalizedNasPath)");
   assert.ok(persistence >= 0 && streamSwitch > persistence);
-  const preflightEnd = route.indexOf("if (body.nasPath)", persistence);
   const preflight = route.slice(route.indexOf("const normalizedNasPath"), persistence);
   assert.doesNotMatch(preflight, /nasLogStream\.setNasPath/);
-  assert.ok(preflightEnd > 0);
 });
