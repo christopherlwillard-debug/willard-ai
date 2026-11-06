@@ -41,6 +41,30 @@ test("long-running media tools leave the API event loop responsive", async () =>
   assert.equal(result.stdout, "finished");
 });
 
+test("media tool timeout escalates when a child ignores SIGTERM", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("Windows terminates this child directly when SIGTERM is sent");
+    return;
+  }
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    runMediaToolAsync(
+      process.execPath,
+      [
+        "-e",
+        "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 8_000); setInterval(() => {}, 1_000)",
+      ],
+      { timeoutMs: 100 },
+    ),
+    (error: NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }) => {
+      assert.ok(error.code === "ETIMEDOUT" || error.killed || error.signal === "SIGKILL");
+      return true;
+    },
+  );
+  assert.ok(Date.now() - startedAt < 4_000, "timeout escalation should not wait for the child’s own 8-second timer");
+});
+
 test("media tool timeout is enforced and missing binaries stay actionable", async () => {
   await assert.rejects(
     runMediaToolAsync(
