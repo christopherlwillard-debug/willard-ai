@@ -5,6 +5,7 @@ import test from "node:test";
 process.env.DATABASE_URL ??= "postgres://shutdown-test.invalid/willard";
 
 const { createShutdownCoordinator } = await import("../lib/shutdown.ts");
+const { trackConversionRequest, stopActiveConversionJobs } = await import("../lib/conversion-runtime.ts");
 
 function dependencies(events: string[], options: { hangingStep?: string } = {}) {
   const step = (name: string) => async () => {
@@ -68,4 +69,20 @@ test("a stuck shutdown step is bounded and later resources still close", async (
 
   await shutdown(null);
   assert.deepEqual(events.slice(-3), ["jobs:done", "http", "pool"]);
+});
+
+test("conversion shutdown drain waits for every local request sharing a job ID", async () => {
+  const releaseFirst = trackConversionRequest(72);
+  const releaseSecond = trackConversionRequest(72);
+  let drained = false;
+  const stopping = stopActiveConversionJobs(1_000).then(() => { drained = true; });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  releaseFirst();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(drained, false, "one duplicate request must not release the shared job ID early");
+
+  releaseSecond();
+  await stopping;
+  assert.equal(drained, true);
 });
