@@ -2240,3 +2240,19 @@ Before permanent deletion, retention now requires a regular non-symlink file, an
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | `GET /files/search` treated `%` and `_` as filename wildcards | fixed; target validation pending | this batch | PostgreSQL-backed regression and full Fast Validation result pending |
+
+
+## 2026-11-06 safety mitigation — organization Replace now fails closed
+
+### Confirmed critical finding: Replace could permanently discard an existing destination
+
+The full recovery design for Replace requires durable backup intents, checksums, resume compatibility, rollback ordering, and crash-injection coverage. Until that coordinated change is ready, leaving the destructive unlink enabled is not acceptable.
+
+**Mitigation committed:** Both normal organization execution and resume now stop with an actionable error when a Replace collision is encountered. They do not unlink, overwrite, or rename the existing destination. Users can select Rename or Keep Existing to proceed. If earlier files in the same operation were already moved, the existing operation error/rollback path is invoked; this mitigation does not claim to replace or validate that broader rollback architecture.
+
+**Implementation:** `d0a5062e41eb5f6432f03ace315f1abdbec61d23`.
+**Regression:** `413e98d6c98de4af72fe97a49d5bd297c02e6eb4` asserts both execute and resume branches fail closed and contain no destructive filesystem operation.
+
+**Status:** Safety mitigation and source-contract regression committed. Test execution and matching CI are pending.
+
+**Product impact:** Replace is temporarily unavailable for collisions. This is an intentional safety restriction, not a completed Replace implementation. Restore Replace only after the durable backup/journal/resume/rollback design above is implemented and Windows/SMB crash tests pass.
