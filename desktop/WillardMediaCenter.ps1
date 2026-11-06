@@ -251,12 +251,91 @@ function Test-ProcessIdentity($tracked) {
   return ($current.path -eq $tracked.path -and $current.commandLine -eq $tracked.commandLine -and
     (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
 }
+function Test-CommandLineContainsExactPath($commandLine, $targetPath) {
+  if ([string]::IsNullOrWhiteSpace($commandLine) -or [string]::IsNullOrWhiteSpace($targetPath)) {
+    return $false
+  }
+  $fullPath = [IO.Path]::GetFullPath($targetPath)
+  $offset = 0
+  while ($offset -lt $commandLine.Length) {
+    $index = $commandLine.IndexOf($fullPath, $offset, [StringComparison]::OrdinalIgnoreCase)
+    if ($index -lt 0) { return $false }
+    $afterIndex = $index + $fullPath.Length
+    $beforeBoundary = ($index -eq 0) -or ($commandLine.Substring($index - 1, 1) -match '["\s]')
+    $afterBoundary = ($afterIndex -ge $commandLine.Length) -or ($commandLine.Substring($afterIndex, 1) -match '["\s]')
+    if ($beforeBoundary -and $afterBoundary) { return $true }
+    $offset = $index + 1
+  }
+  return $false
+}
+function Get-PackagedServiceProcesses {
+  $expectedNode = [IO.Path]::GetFullPath($Node)
+  $expectedApi = [IO.Path]::GetFullPath($Api)
+  $expectedWeb = [IO.Path]::GetFullPath($WebServer)
+  try {
+    $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  } catch {
+    throw "Windows could not inspect running processes for orphaned Willard services: $($_.Exception.Message)"
+  }
+  foreach ($process in $processes) {
+    if (-not $process) { continue }
+    $executablePath = [string]$process.ExecutablePath
+    $commandLine = [string]$process.CommandLine
+    if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
+      continue
+    }
+    try { $actualNode = [IO.Path]::GetFullPath($executablePath) } catch { continue }
+    if (-not [string]::Equals($actualNode, $expectedNode, [StringComparison]::OrdinalIgnoreCase)) {
+      continue
+    }
+    $roles = @()
+    if (Test-CommandLineContainsExactPath $commandLine $expectedApi) { $roles += "API" }
+    if (Test-CommandLineContainsExactPath $commandLine $expectedWeb) { $roles += "web" }
+    if ($roles.Count -eq 0) { continue }
+    $processId = 0
+    if (-not [int]::TryParse([string]$process.ProcessId, [ref]$processId) -or $processId -le 0) {
+      throw "Windows found a Willard service command line but could not verify its process ID."
+    }
+    [pscustomobject]@{
+      pid = $processId
+      roles = $roles
+      path = $executablePath
+      commandLine = $commandLine
+      creationDate = [string]$process.CreationDate
+    }
+  }
+}
+function Assert-NoUntrackedPackagedServices($tracked) {
+  $trackedRecords = @()
+  if ($tracked) {
+    $trackedRecords = @($tracked.api, $tracked.web) | Where-Object { $null -ne $_ }
+  }
+  $untracked = @()
+  foreach ($candidate in @(Get-PackagedServiceProcesses)) {
+    $owned = $false
+    foreach ($record in $trackedRecords) {
+      if ([int]$record.pid -ne [int]$candidate.pid) { continue }
+      if (-not [string]::Equals([string]$record.path, [string]$candidate.path, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      if (-not [string]::Equals([string]$record.commandLine, [string]$candidate.commandLine, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      if ($record.creationDate -and $candidate.creationDate -and
+        -not [string]::Equals([string]$record.creationDate, [string]$candidate.creationDate, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      $owned = $true
+      break
+    }
+    if (-not $owned) { $untracked += $candidate }
+  }
+  if ($untracked.Count -gt 0) {
+    $details = ($untracked | ForEach-Object { "$($_.roles -join '/') PID $($_.pid)" }) -join ", "
+    throw "Willard found packaged service process(es) not safely recorded in '$PidFile': $details. It did not stop them or change the installation. Use Task Manager to inspect the listed process command lines and close only the confirmed Willard services, then retry. Keep the services state file for diagnosis."
+  }
+}
 function Is-Alive($process) {
   if ($process -is [psobject] -and $process.pid) { return (Test-ProcessIdentity $process) }
   return $false
 }
-function Stop-Services {
+function Stop-Services([switch]$SkipOrphanCheck) {
   $pids = Read-Pids
+  if (-not $SkipOrphanCheck) { Assert-NoUntrackedPackagedServices $pids }
   $remaining = @()
   foreach ($process in @($pids.api, $pids.web)) {
     if (Test-ProcessIdentity $process) {
@@ -757,6 +836,7 @@ try {
     exit 0
   }
   $existing = Read-Pids
+  Assert-NoUntrackedPackagedServices $existing
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
     Start-Process $WebUrl
@@ -764,7 +844,7 @@ try {
     $script:LauncherMutex = $null
     exit 0
   }
-  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
+  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services -SkipOrphanCheck }
   Recover-InterruptedUpdateSwap
   Try-Update
   if (-not (Ensure-Env)) {
