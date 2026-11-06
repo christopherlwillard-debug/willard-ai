@@ -34,7 +34,10 @@ test("shutdown does not invalidate organization worker leases owned by another A
   const checkpoint = source.slice(start, end);
 
   assert.doesNotMatch(checkpoint, /update\\(organizationJobsTable\\)/);
+  assert.doesNotMatch(checkpoint, /update\\(conversionJobsTable\\)/);
   assert.match(checkpoint, /organizationJobsDeferredToLeaseExpiry/);
+  assert.match(checkpoint, /conversionJobsDeferredToLeaseExpiry/);
+  assert.match(checkpoint, /another API instance still owns and runs those jobs/);
 });
 
 test("shutdown is idempotent and closes resources in dependency order", async () => {
