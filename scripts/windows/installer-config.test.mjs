@@ -1463,6 +1463,37 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
 });
 
+test("packaged launcher detects orphaned API and web processes before startup or shutdown", () => {
+  const discoveryStart = launcher.indexOf("function Test-CommandLineContainsExactPath");
+  const discoveryEnd = launcher.indexOf("\\nfunction Is-Alive", discoveryStart);
+  assert.ok(discoveryStart >= 0 && discoveryEnd > discoveryStart, "Packaged orphan discovery helpers must be present.");
+  const discovery = launcher.slice(discoveryStart, discoveryEnd);
+  assert.match(discovery, /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/);
+  assert.match(discovery, /\$Node/);
+  assert.match(discovery, /\$Api/);
+  assert.match(discovery, /\$WebServer/);
+  assert.match(discovery, /OrdinalIgnoreCase/);
+  assert.match(discovery, /not safely recorded/);
+  assert.doesNotMatch(discovery, /taskkill|Stop-Process|\.Kill\(|Remove-Item/);
+
+  const stopStart = launcher.indexOf("function Stop-Services {");
+  const stopEnd = launcher.indexOf("\\nfunction Stop-StartedProcess", stopStart);
+  const stop = launcher.slice(stopStart, stopEnd);
+  assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") >= 0);
+  assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") < stop.indexOf("taskkill"));
+
+  const startupRead = launcher.indexOf("$existing = Read-Pids");
+  const startupAssert = launcher.indexOf("Assert-NoUntrackedPackagedServices $existing", startupRead);
+  const startupDecision = launcher.indexOf("if ($existing -and (Is-Alive", startupRead);
+  assert.ok(startupRead >= 0 && startupAssert > startupRead && startupDecision > startupAssert,
+    "The launcher must inspect untracked services before deciding that no services are running.");
+
+  assert.match(installerLifecycleSmoke, /missing-journal/i);
+  assert.match(installerLifecycleSmoke, /partial-journal/i);
+  assert.match(installerLifecycleSmoke, /reused PID/i);
+  assert.match(installerLifecycleSmoke, /synthetic packaged WMI failure/i);
+});
+
 test("installed lifecycle smoke uninstalls while both packaged services are running", () => {
   const start = installedLifecycleSmoke.indexOf('Invoke-InstalledLauncher "start" "uninstall-running-start"');
   const uninstall = installedLifecycleSmoke.indexOf('Invoke-AsLifecycleUser $uninstaller');
