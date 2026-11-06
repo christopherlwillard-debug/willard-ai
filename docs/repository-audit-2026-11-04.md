@@ -2873,3 +2873,16 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 |---|---|---|---|---|
 | Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Confirm regression on latest Fast Validation; metadata snapshot is not a file lock. |
 | Medium | Windows installer → interrupted-update lifecycle fixture cleanup | fixed; target-test pending | `3b063902d289a1d08bc7289221e79ee6900f604a` | Confirm installer-config test and complete installed-product recovery lifecycle on latest head. |
+
+
+## UI contract test parser correction — November 6
+
+- **Finding — Medium (Fast Validation → UI accessibility/search filter contracts):** Fast Validation #1229 completed TypeScript/generated-contract checks, Expo CLI configuration, and desktop web-server safety, then failed in `test:ui-contracts` (22 passed, 1 failed). The failing test was `search filter controls can explicitly clear inherited media and favorite constraints`. Its test helper used the first literal `>` after a JSX opening tag; for `onClick={() => { ... }}`, that character is the arrow token inside a JSX expression, not the end of the opening tag. The helper therefore truncated the button before `setFavoriteOnlyOverride(next)` and produced a false regression failure. Source inspection of `search.tsx` confirmed the intended setter is present in the click handler.
+- **Fix:** Replaced the first-`>` search with a small brace- and quote-aware JSX opening-tag scanner, and reused it for the favorites-filter button assertion. The scanner ignores arrow tokens and comparison characters inside JSX expression braces, and handles quoted/escaped strings before identifying the actual tag terminator. No application UI code was changed.
+- **Commits:** `e641dd6cfbd3509065ca07f0803c49b3832b9a2a` (parser and regression extraction); `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` (single-backslash escape handling).
+- **Validation:** Fast Validation #1229 is a confirmed failure on head `28fbb4b853e20951ebbff7585d6560796598fa86`; its log identifies the exact assertion above. The updated parser has been source-inspected, but no successful UI contract run is yet confirmed on the corrected head. The next Fast Validation run must pass the entire UI contract suite and then reach the targeted backend regression step.
+- **Remaining risk:** This improves the static JSX contract test helper, not a full browser accessibility audit. Keyboard/screen-reader behavior still needs real browser testing at a later milestone.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation → Search filter UI contract | fixed; target-test pending | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Confirm the full UI contract suite on the corrected head; static contract checks do not replace browser accessibility testing. |
