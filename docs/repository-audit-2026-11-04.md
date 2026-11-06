@@ -3217,3 +3217,59 @@ Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the W
 - **Full CI:** not run. Fast Validation and Dependency Review are not full-repository CI.
 - **Unresolved high-priority risks:** stable external Windows recovery bootstrap; conversion worker fencing and attempt-scoped staging; organization multi-process takeover/SMB validation; durable Replace backup/recovery (Replace remains disabled); node-7z list/extract child ownership and request-abort cancellation; hosted first-run owner provisioning.
 - **Next batch:** conversion worker ownership/fencing. Trace DB advisory-lock loss, job-ID-only progress writes, retry reuse of `WillardAI/conversions/<jobId>`, per-file durable progress, finalization recovery, and child cancellation. Do not add a partial token check; design an attempt generation, isolated staging, and filesystem mutation fence, then test stale workers and crash/retry interleavings.
+
+
+## 2026-11-06 follow-up — shared ownership for Optimize Center probes; node-7z lifecycle trace
+
+### Fixed — Medium: Optimize Center FFprobe and media-health subprocess ownership
+
+**Affected workflows:** Optimize Center codec detection and Settings/media-tool health checks; API graceful shutdown.
+
+**Evidence and root cause:** Source inspection found two subprocess paths bypassing the existing media-tools.ts process owner:
+- detectVideoCodec in artifacts/api-server/src/routes/optimize.ts used promisified execFile("ffprobe", ...), with a 12-second timeout.
+- probeTool in artifacts/api-server/src/lib/media-tools.ts used a second direct execFile(bin, ["-version"]) path, with a 5-second timeout.
+
+Those children were not in the shared active-process registry and were not rejected by the common shutdown start guard. A shutdown could therefore finish draining owned media processes while one of these bounded probes remained active.
+
+**Fix:** Both callers now use the existing runMediaToolAsync helper. FFprobe retains its 12-second timeout and 1 MiB output ceiling; health probes retain a 5-second timeout and use a 64 KiB output ceiling. No dependency or parallel process registry was added.
+
+**Regression coverage:** media-tools-async.test.ts asserts that the Optimize Center FFprobe and health probe call sites use the shared runner. The same suite's existing behavioral tests exercise the runner's timeout, event-loop responsiveness, process registration, and shutdown termination.
+
+**Status:** fixed; Linux target-tested. Fast Validation run [42255943324](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943324), Linux job 128023065207, completed successfully: workspace typechecks/generated contracts and PostgreSQL integration steps passed; targeted backend suite reported 350 tests, 348 passed, 0 failed, 2 skipped. The new process-ownership assertion passed. Windows archive/updater smoke was still running at this report snapshot; do not claim its result until that job completes.
+
+**Implementation/test commits:** db10a44db2afda0066de4e0deeb46bf0b8ad67a7 (Optimize Center FFprobe); 873cc2b00d2aeab39498f23471ed5fe78345d1a6 (media health probe); 7d6f35d213e89ac6e48407e2b3e7acb4becca3e1 (initial regression); fb293a5c296c5233ec2682e450461607d79f15aa (corrected regression matchers).
+
+**Remaining risk:** This covers the two identified direct probe paths, not every process launched by third-party wrappers. Windows process-level validation is pending.
+
+### Found — High: node-7z listing/extraction children are not integrated with process ownership or cancellation
+
+**Affected workflows:** Archive Preview; Organize archive inspection and extraction; API shutdown and long-running archive safety checks.
+
+**Evidence and root cause:**
+- The lockfile pins node-7z@3.0.0. Inspection of that exact tag's src/lifecycle.js confirms that Seven.list/Seven.extractFull spawn a child process and store it on the returned stream's _childProcess; src/main.js starts and attaches the stream listeners before returning it. The package documents deferred/external-child hooks ($defer, $childProcess, Seven.listen), but the product call sites do not use a shared ownership adapter.
+- routes/archives.ts peek7z and four routes/organize.ts listing/extraction call sites attach stream event handlers but do not call assertMediaProcessStartAllowed or register the child with trackActiveMediaProcess.
+- In the Organize 7-Zip preflight, the first invalid entry calls the local fail function and rejects the wrapper promise; it does not stop the still-running listing child. Other listing paths retain a safety error and wait for the stream's end, so the configured archive entry/size budgets reject the result but do not stop 7-Zip work immediately after the first violation.
+- The Organize SSE handler does not register request/response close handlers or expose an explicit active-operation cancellation path. A disconnected client therefore stops receiving progress but does not cancel the server-owned operation. This behavior must not be changed by automatically aborting destructive work on socket close.
+
+**Status:** found; architecture/integration plan required. No partial process-tracking-only patch applied because it would not define cancellation semantics, child-close ordering, or cleanup ownership for extraction staging.
+
+**Safe implementation plan:**
+1. Add one adapter around the pinned node-7z stream API. Capture the spawned child immediately, reject starts after shutdown begins, register it with the existing media process owner, and resolve/reject only after both the child and stream lifecycle have settled.
+2. Support an explicit AbortSignal for read-only archive preview. On the first archive-safety violation, terminate the listing child and await its close rather than consuming the rest of a hostile listing.
+3. Keep Organize execution server-owned when an SSE client disconnects. Add an explicit, durable cancel request/state transition for mutating jobs; do not infer cancellation from a disconnected progress socket. Cancellation must stop 7-Zip, await child close, then clean staging and run the existing journal/rollback path under the current execution lease.
+4. Wire every Seven.list and Seven.extractFull call site through the adapter. Ensure stream errors, child errors, abort, and server shutdown converge on one idempotent cleanup path.
+5. Add fault-injection tests for shutdown during list/extract, preview disconnect, safety-budget rejection, child spawn/exit failure, cancellation during extraction, and the race between child close and staging cleanup. Run official 7-Zip integration tests on Linux and Windows before marking integration-tested.
+
+**Remaining risk:** Archive preview and Organize 7-Zip operations can currently continue consuming CPU after a safety rejection or client disconnect; their child processes are not included in the shared shutdown registry. The fix must preserve the rule that an SSE disconnect does not silently cancel a destructive job.
+
+### Validation snapshot for this batch
+
+- **Code head:** fb293a5c296c5233ec2682e450461607d79f15aa.
+- **PR #2:** open, draft, unmerged; base main at 694a055aeb10a41ee8e98f5b776faef89cbd449d; 188 changed files and 1,348 commits at this snapshot.
+- **Branch comparison with main:** 1348 commits ahead, 1 behind.
+- **Fast Validation [42255943324](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943324):** Linux validation job 128023065207 passed typecheck/generated contracts, release/storage checks, PostgreSQL conversion-lock/finalization integration, and 350 targeted tests (348 passed, 0 failed, 2 skipped). The Windows archive/updater job 128023913661 was still in progress at developer-updater preservation/rollback; no Windows result is claimed here.
+- **Dependency Review [42255943232](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943232):** passed; the separate installed dependency-graph audit step was skipped.
+- **Windows installer lifecycle [42255943133](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943133):** pending. Earlier lifecycle run [42254322661](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42254322661) remained in progress at the standard-user lifecycle step. No lifecycle pass is claimed.
+- **Full CI:** not run; Fast Validation is not the full-repository CI suite.
+
+**Next batch:** Complete Windows archive/updater and installer-lifecycle result diagnosis, then implement the node-7z ownership/cancellation adapter only after the explicit distinction between read-only preview abort and server-owned destructive Organize execution is covered by tests. Continue the conversion attempt-fencing design separately; do not add a token-only workaround.
