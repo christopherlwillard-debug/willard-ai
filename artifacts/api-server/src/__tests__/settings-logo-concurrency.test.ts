@@ -21,3 +21,13 @@ test("branding logo replacement and deletion use compare-and-set on the previous
   assert.match(upload, /\.where\(and\([\s\S]*?appSettingsTable\.id[\s\S]*?appSettingsTable\.logoPath/);
   assert.match(deletion, /\.where\(and\([\s\S]*?appSettingsTable\.id[\s\S]*?appSettingsTable\.logoPath/);
 });
+
+
+test("branding storage refuses symlinked data or branding roots", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const route = fs.readFileSync(path.join(sourceDir, "routes", "settings.ts"), "utf8");
+  assert.match(route, /function ensureBrandingDirectory\(\)/);
+  assert.match(route, /fs\.lstatSync\(directory\)/);
+  assert.match(route, /stat\.isSymbolicLink\(\) \|\| !stat\.isDirectory\(\)/);
+  assert.match(route, /ensureBrandingDirectory\(\);[\s\S]*?fs\.realpathSync\(getBrandingDir\(\)\)/);
+});
