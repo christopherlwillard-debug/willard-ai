@@ -2403,3 +2403,12 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | Medium | AI search → suggestion prefix treats percent, underscore, and backslashes as SQL wildcards | fixed; targeted test pending | this batch | PostgreSQL-backed suggestion endpoint test and browser search workflow remain to be integration-tested |
 
+
+
+## Organization analysis ownership fencing (latest)
+- Confirmed that the analyze route read a job, then changed it to `analyzing` without a conditional claim. Two concurrent requests could both pass the initial status check, and a delayed analysis could overwrite a newer plan or failure state.
+- Analysis now claims the job with a unique lease token using a compare-and-set transition scoped to the active NAS and the status read at request start. Concurrent or already-processing requests receive HTTP 409.
+- Final plan persistence and failure updates are fenced by the claim token and `analyzing` status. The token is cleared on completion/failure. Rejected source/archive references also release the claim as failed instead of leaving the job stuck in `analyzing`.
+- Added source-contract regression coverage for the claim, token-fenced success/failure writes, and rejected archive reference cleanup.
+- Commits: route claim `5b92fa4834092b45d85bd89356af2651d15b27e8`, regression `da615b6663290e0781a0ebe00b7715b4a3d2cc92`, rejected-path cleanup `121dde95615d1257f17f55e5731e8eba2d533ca4`, and regression follow-up `a3e723b00b48c9f0099451c1038f67d84a85d993`.
+- Fast Validation is pending for the latest branch head. A crash during analysis can still leave an `analyzing` row requiring recovery; automatic stale-analysis reclamation remains open and should be handled separately from concurrent-request fencing.
