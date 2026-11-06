@@ -96,9 +96,10 @@ function waitForMediaProcess(child: ChildProcess): Promise<void> {
 }
 
 /**
- * Stop tracked media subprocesses before the server closes its database and
- * exits. FFmpeg only writes staged/cache derivatives, so terminating it
- * preserves originals and leaves incomplete work available for recovery.
+ * Stop tracked media and archive subprocesses before the server closes its
+ * database and exits. These children write only staged/cache/scratch outputs,
+ * so terminating them preserves originals and leaves incomplete work available
+ * for recovery.
  */
 export async function stopActiveMediaTools(graceMs = 2_000): Promise<void> {
   const active = [...activeMediaProcesses].filter(isMediaProcessRunning);
