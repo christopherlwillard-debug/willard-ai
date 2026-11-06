@@ -5,9 +5,7 @@ import { eq, desc, inArray, or, and, isNull, isNotNull, lt, sql } from "drizzle-
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawn, spawnSync } from "child_process";
-import { pipeline } from "stream/promises";
-import { createGunzip } from "node:zlib";
+import { spawnSync } from "child_process";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -22,7 +20,6 @@ import {
   assertArchiveFileUnchanged,
   assertBufferedZipFile,
   createArchiveBudget,
-  createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
   isTarLinkEntry,
@@ -37,7 +34,7 @@ import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../l
 import { logger } from "../lib/logger.ts";
 import { parseAllowedString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
-import { StoragePolicyError } from "../lib/storage-policy.ts";
+import { withTarInput } from "../lib/archive-tar-input.ts";
 import {
   reserveCapacity,
   releaseCapacity,
@@ -170,67 +167,7 @@ function getArchiveExt(filename: string): string {
 type TarCompression = "none" | "gzip" | "bzip2" | "xz";
 
 function getTarCompression(filename: string): TarCompression {
-  const fn = filename.toLowerCase();
-  if (fn.endsWith(".tar.gz") || fn.endsWith(".tgz") || fn.endsWith(".gz")) return "gzip";
-  if (fn.endsWith(".tar.bz2") || fn.endsWith(".tbz2") || fn.endsWith(".bz2")) return "bzip2";
-  if (fn.endsWith(".tar.xz") || fn.endsWith(".txz") || fn.endsWith(".xz")) return "xz";
-  return "none";
-}
-
-/**
- * Make a plain TAR file available to the tar library. tar itself supports gzip,
- * but not bzip2 or xz; those formats are decompressed with argument-array
- * child processes so archive filenames are never interpreted by a shell.
- *
- * The scratch directory is caller-owned. Compressed archive bytes must never
- * be decompressed into the OS temp directory because the result can be large
- * and is part of a NAS-required media operation.
- */
-async function withTarInput<T>(
-  archivePath: string,
-  filename: string,
-  scratchDir: string,
-  callback: (tarPath: string, options: Record<string, unknown>) => Promise<T>,
-): Promise<T> {
-  const compression = getTarCompression(filename);
-  if (compression === "none") return callback(archivePath, {});
-  if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
-
-  const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
-  const child = compression === "gzip" ? null : spawn(compression === "bzip2" ? "bzip2" : "xz", ["-dc", "--", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
-  let stderr = "";
-  child?.stderr?.setEncoding("utf8");
-  child?.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4096); });
-  const exit = child ? new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error((compression === "bzip2" ? "bzip2" : "xz") + " failed" + (signal ? " (" + signal + ")" : "") + ": " + (stderr.trim() || "exit code " + code)));
-    });
-  }) : Promise.resolve();
-
-  try {
-    const limiter = createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes);
-    const output = fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 });
-    if (compression === "gzip") {
-      await pipeline(fs.createReadStream(archivePath), createGunzip(), limiter, output);
-    } else {
-      if (!child?.stdout) throw new Error("Archive decompressor did not provide output");
-      await pipeline(child.stdout, limiter, output);
-    }
-    await exit;
-    return await callback(tarPath, {});
-  } catch (error) {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await exit.catch(() => {});
-    throw error;
-  } finally {
-    try { fs.rmSync(tarPath, { force: true }); } catch { /* best effort */ }
-  }
-}
-
-function getFileType(ext: string): string {
-  const img   = ["jpg","jpeg","png","gif","bmp","webp","heic","heif","tiff","raw","cr2","nef","arw","dng"];
+  const f2","nef","arw","dng"];
   const vid   = ["mp4","mkv","avi","mov","wmv","flv","m4v","webm","mpeg","mpg","3gp"];
   const doc   = ["pdf","doc","docx","xls","xlsx","ppt","pptx","odt","ods","odp","txt","rtf","pages","numbers","key","epub","md"];
   const audio = ["mp3","flac","wav","aac","ogg","wma","m4a","aiff"];
