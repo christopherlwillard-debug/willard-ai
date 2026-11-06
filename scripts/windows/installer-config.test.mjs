@@ -647,13 +647,13 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
 
 test("local installer build fails closed when staging or validation fails", () => {
   const helperStart = localBuildInstaller.indexOf("function Invoke-NodeBuildStep");
-  const helperEnd = localBuildInstaller.indexOf("\\n}", helperStart);
-  const helper = localBuildInstaller.slice(helperStart, helperEnd + 2);
-  assert.match(helper, /& node \\(Join-Path \\$PSScriptRoot \\$scriptName\\)/);
-  assert.match(helper, /\\$exitCode = \\$LASTEXITCODE/);
-  assert.match(helper, /if \\(\\$exitCode -ne 0\\)/);
-  assert.match(localBuildInstaller, /Invoke-NodeBuildStep "build-release\\.mjs"/);
-  assert.match(localBuildInstaller, /Invoke-NodeBuildStep "validate-release\\.mjs"/);
+  const helperEnd = localBuildInstaller.indexOf("$env:WILLARD_VERSION", helperStart);
+  const helper = localBuildInstaller.slice(helperStart, helperEnd);
+  assert.ok(helper.includes("& node (Join-Path $PSScriptRoot $scriptName)"));
+  assert.ok(helper.includes("$exitCode = $LASTEXITCODE"));
+  assert.ok(helper.includes("if ($exitCode -ne 0)"));
+  assert.ok(localBuildInstaller.includes('Invoke-NodeBuildStep "build-release.mjs"'));
+  assert.ok(localBuildInstaller.includes('Invoke-NodeBuildStep "validate-release.mjs"'));
   assert.ok(
     localBuildInstaller.indexOf('Invoke-NodeBuildStep "validate-release.mjs"') <
       localBuildInstaller.indexOf('& (Join-Path $PSScriptRoot "compile-installer.ps1")'),
