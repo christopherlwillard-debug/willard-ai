@@ -75,7 +75,12 @@ function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean
   if (counts.document / total > 0.45) return "Document Backup";
   if (counts.software / total > 0.35) return "Software";
 
-  const topType = Object.entries(counts).sort((aasync function peekTar(
+  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  if (counts[topType] / total < 0.4) return "Mixed";
+  return "General";
+}
+
+async function peekTar(
   filePath: string,
   filename: string,
   scratchDir: string,
@@ -145,11 +150,7 @@ function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean
       failureKind: "input",
     };
   }
-} — that's expected
-    return { entries, error: e?.message ?? "Could not parse as TAR archive" };
-  }
 }
-
 async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
   const entries: any[] = [];
   let isPasswordProtected = false;
