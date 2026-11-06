@@ -5,6 +5,10 @@ Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
+# Detect an orphaned API or web listener before update recovery or startup work.
+$entryTracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $entryTracked
+
 Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
