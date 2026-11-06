@@ -25,6 +25,10 @@ import {
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
+import {
+  shouldTreatAsStandaloneCompressedFile,
+  withTarInput,
+} from "../lib/archive-tar-input.ts";
 import { logger } from "../lib/logger.ts";
 import { parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
@@ -71,54 +75,77 @@ function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean
   if (counts.document / total > 0.45) return "Document Backup";
   if (counts.software / total > 0.35) return "Software";
 
-  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  if (counts[topType] / total < 0.4) return "Mixed";
-  return "General";
-}
-
-async function peekTar(filePath: string, ext: string): Promise<{ entries: any[]; error: string | null }> {
+  const topType = Object.entries(counts).sort((aasync function peekTar(
+  filePath: string,
+  filename: string,
+  scratchDir: string,
+): Promise<{
+  entries: any[];
+  error: string | null;
+  failureKind: "input" | "tar-parse" | null;
+}> {
   const entries: any[] = [];
-  const isGzipped = ["gz", "tgz", "bz2", "tbz2", "xz", "txz"].includes(ext);
   const budget = createArchiveBudget();
   const archiveSnapshot = snapshotArchiveFile(filePath);
+  let parseError: Error | undefined;
+
   try {
-    let validationError: Error | undefined;
-    await tar.list({
-      file: filePath,
-      ...(isGzipped ? { gzip: ext === "gz" || ext === "tgz" } : {}),
-      preservePaths: true,
-      strict: true,
-      filter: (_path: string, entry: any) => {
-        if (validationError) return false;
-        try {
-          const isDirectory = entry.type === "Directory";
-          if (entry.type === "SymbolicLink" || entry.type === "Link" || entry.type === "HardLink") {
-            throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" in TAR`);
-          }
-          validateArchiveEntry({ path: entry.path, sizeBytes: entry.size, isDirectory }, budget);
-          return true;
-        } catch (error) {
-          validationError = error instanceof Error ? error : new Error(String(error));
-          return false;
-        }
-      },
-      onentry: (entry: any) => {
-        const fileType = getFileTypeFromName(entry.path);
-        entries.push({
-          name: path.basename(entry.path),
-          path: entry.path,
-          sizeBytes: typeof entry.size === "number" ? entry.size : 0,
-          isDirectory: entry.type === "Directory",
-          fileType,
+    await withTarInput(filePath, filename, scratchDir, async (tarPath, tarOptions) => {
+      let validationError: Error | undefined;
+      try {
+        await tar.list({
+          file: tarPath,
+          ...tarOptions,
+          preservePaths: true,
+          strict: true,
+          filter: (_path: string, entry: any) => {
+            if (validationError) return false;
+            try {
+              const isDirectory = entry.type === "Directory";
+              if (entry.type === "SymbolicLink" || entry.type === "Link" || entry.type === "HardLink") {
+                throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" in TAR`);
+              }
+              validateArchiveEntry({ path: entry.path, sizeBytes: entry.size, isDirectory }, budget);
+              return true;
+            } catch (error) {
+              validationError = error instanceof Error ? error : new Error(String(error));
+              return false;
+            }
+          },
+          onentry: (entry: any) => {
+            const fileType = getFileTypeFromName(entry.path);
+            entries.push({
+              name: path.basename(entry.path),
+              path: entry.path,
+              sizeBytes: typeof entry.size === "number" ? entry.size : 0,
+              isDirectory: entry.type === "Directory",
+              fileType,
+            });
+          },
         });
+      } catch (error) {
+        if (validationError) throw validationError;
+        if (error instanceof ArchiveSafetyError) throw error;
+        parseError = error instanceof Error ? error : new Error(String(error));
       }
+      if (validationError) throw validationError;
     });
-    if (validationError) throw validationError;
+
     assertArchiveFileUnchanged(filePath, archiveSnapshot);
-    return { entries, error: null };
-  } catch (e: any) {
-    if (e instanceof ArchiveSafetyError) throw e;
-    // Plain .gz (not a tar wrapper) will fail here — that's expected
+    return {
+      entries,
+      error: parseError?.message ?? null,
+      failureKind: parseError ? "tar-parse" : null,
+    };
+  } catch (error) {
+    if (error instanceof ArchiveSafetyError) throw error;
+    return {
+      entries,
+      error: error instanceof Error ? error.message : String(error),
+      failureKind: "input",
+    };
+  }
+} — that's expected
     return { entries, error: e?.message ?? "Could not parse as TAR archive" };
   }
 }
@@ -406,10 +433,10 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── TAR / GZ / BZ2 / XZ ─────────────────────────────────────────────────
     if (TAR_EXTS.has(ext)) {
-      const { entries, error } = await peekTar(archivePath, rawExt);
+      const { entries, error, failureKind } = await peekTar(archivePath, archive.filename, nasPath);
 
-      if (error && entries.length === 0 && ext === "gz") {
-        // Plain .gz (not a TAR) — provide basic metadata from file size
+      if (error && shouldTreatAsStandaloneCompressedFile(archive.filename, entries.length, failureKind)) {
+        // A bare .gz/.bz2/.xz file is a compressed payload, not a TAR wrapper.
         await db.update(archivesTable).set({
           peekStatus: "peeked",
           containedFileCount: 0,
@@ -424,9 +451,13 @@ router.post("/archives/:id/peek", async (req, res) => {
           archiveId: id, filename: archive.filename, entries: [], totalEntries: 0,
           isPasswordProtected: false, hasNestedArchives: false, estimatedExtractionSizeBytes: 0,
           category: archive.category ?? "General", format: "gz",
-          notes: "Plain compressed file (not a TAR) — contents not listable without extraction",
+          notes: "Standalone compressed file (not a TAR) — contents not listable without extraction",
         });
         return;
+      }
+      if (error) {
+        // Never persist a partial listing as a successful archive preview.
+        throw new Error(`Archive preview failed: ${error}`);
       }
 
       const hasNestedArchives = entries.some(e =>
