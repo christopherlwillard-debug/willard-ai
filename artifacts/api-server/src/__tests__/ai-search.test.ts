@@ -1,7 +1,9 @@
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import {
   buildNoResultSuggestions,
+  buildSuggestionPattern,
   buildSearchQuery,
   emptyIntent,
   mergeRefinedIntent,
@@ -96,4 +98,17 @@ test("no-result suggestions explain the active constraints", () => {
     "Try fewer or more general words",
     "Browse your collections instead",
   ]);
+});
+
+const aiSearchSource = await readFile(
+  new URL("../lib/ai-search.ts", import.meta.url),
+  "utf8",
+);
+
+test("search suggestions treat SQL wildcard characters as literal text", () => {
+  assert.equal(
+    buildSuggestionPattern("  100%_\\Archive  "),
+    "%100\\%\\_\\\\archive%",
+  );
+  assert.match(aiSearchSource, /term LIKE \$2 ESCAPE E'\\\\\\\\'/);
 });
