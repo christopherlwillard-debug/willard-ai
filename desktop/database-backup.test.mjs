@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ import {
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
   ensureLibraryIdentity,
+  readLibraryIdentity,
 } from "./library-recovery.mjs";
 import {
   loadLibraryDurabilityManifest,
@@ -31,6 +32,58 @@ import {
 import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("NAS library identity refuses symlinked config directories", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-identity-outside-"));
+  try {
+    await mkdir(path.join(root, "WillardAI"), { recursive: true });
+    try {
+      await symlink(outside, path.join(root, "WillardAI", "config"), "dir");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => ensureLibraryIdentity(root), /symlink or non-directory component/);
+    assert.deepEqual(await readdir(outside), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("NAS library identity refuses a symlinked marker file", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-identity-outside-"));
+  try {
+    const config = path.join(root, "WillardAI", "config");
+    await mkdir(config, { recursive: true });
+    const outsideMarker = path.join(outside, "marker.json");
+    await writeFile(outsideMarker, JSON.stringify({
+      format: "willard-library-identity",
+      version: 1,
+      libraryId: "12345678-1234-1234-1234-123456789abc",
+      createdAt: new Date().toISOString(),
+    }));
+    try {
+      await symlink(outsideMarker, path.join(config, "library-identity.json"), "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readLibraryIdentity(root), /regular file inside the configured library/);
+    assert.equal((await readFile(outsideMarker, "utf8")).length > 0, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
 
 test("plaintext backup work directory is private before pg_dump writes", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "willard-backup-test-"));
