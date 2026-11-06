@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+test("branding logo replacement and deletion use compare-and-set on the previous path", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const route = fs.readFileSync(path.join(sourceDir, "routes", "settings.ts"), "utf8");
+
+  assert.match(route, /settings\.logoPath \? eq\(appSettingsTable\.logoPath, settings\.logoPath\) : isNull\(appSettingsTable\.logoPath\)/);
+  assert.match(route, /Branding logo changed during upload/);
+  assert.match(route, /Branding logo changed before it could be removed/);
+  assert.match(route, /res\.status\(409\)/);
+
+  const uploadStart = route.indexOf('router.post(\n  "/settings/logo"');
+  const deleteStart = route.indexOf('router.delete("/settings/logo"');
+  assert.ok(uploadStart >= 0 && deleteStart > uploadStart);
+  const upload = route.slice(uploadStart, deleteStart);
+  const deletion = route.slice(deleteStart);
+  assert.match(upload, /\.where\(and\([\s\S]*?appSettingsTable\.id[\s\S]*?appSettingsTable\.logoPath/);
+  assert.match(deletion, /\.where\(and\([\s\S]*?appSettingsTable\.id[\s\S]*?appSettingsTable\.logoPath/);
+});
