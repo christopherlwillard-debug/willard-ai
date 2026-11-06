@@ -2420,3 +2420,18 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added source-contract regression coverage for busy-state rejection, exclusive claim, owner-fenced persistence, and error cleanup.
 - Commits: implementation `b712ad812ddc183542165fa386d961b13ee6e210`, cleanup `5edb297f836ed3dfd8e038e4a9840426ecf59732`, type-safe claim state `9c53bddb35c9586e2df1a5003a5f827f651e2499`, regression `8484f62aee6ca005fa46e126438914b725c722f0`, and assertion correction `df35eddc11262468b55712394ccefb72c98d30fe`.
 - Validation is pending. The regression is a source-contract test; a PostgreSQL-backed concurrent PATCH test is still desirable.
+
+## 2026-11-06 follow-up — truthful backup timeout diagnostics
+
+**Finding — Medium (backup reliability / operator diagnostics):** The Windows process-tree fallback deliberately reports when taskkill fails because force-stopping only the direct child cannot guarantee that descendants were stopped. However, the outer timeout error still said the process tree had been terminated. The API's persisted backup error could therefore overstate cleanup certainty even though the server log recorded the fallback failure.
+
+**Fix:** Changed the persisted timeout diagnostic to say tree termination was attempted and direct operators to the server log if cleanup may remain incomplete. This does not change process signaling, retry policy, or backup contents.
+
+**Regression:** Tightened the existing timeout process-tree source-contract test to require the honest message and reject the old success claim.
+
+**Validation status:** Targeted backup timeout regression and Fast Validation are pending. This remains source-contract coverage; Windows taskkill failure and descendant-process behavior still need controlled OS integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Scheduled backup → timeout diagnostic overstated process-tree cleanup after Windows taskkill fallback | fixed; target test pending | this batch | OS-level descendant termination under forced taskkill failure remains unverified |
+
