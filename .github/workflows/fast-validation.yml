@@ -163,6 +163,7 @@ jobs:
             artifacts/api-server/src/__tests__/optimize-scan.test.ts \
             artifacts/api-server/src/__tests__/backup-timeout-process-tree.test.ts \
             artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts \
+            artifacts/api-server/src/__tests__/library-job-failure-persistence.test.ts \
             artifacts/api-server/src/__tests__/conversion-job-lock.test.ts \
             artifacts/api-server/src/__tests__/png-safety.test.ts \
             artifacts/api-server/src/__tests__/conversion-finalize.test.ts
