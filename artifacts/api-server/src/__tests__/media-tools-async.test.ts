@@ -147,15 +147,16 @@ test("aborting a read-only 7-Zip operation stops only its owned child", async ()
 });
 
 test("every node-7z archive route uses tracked process ownership and early validation stops", () => {
-  const routes = `${archiveRoutesSource}\\n${organizeRoutesSource}`;
-  const node7zCalls = routes.match(/Seven\\.(?:list|extractFull)\\(/g) ?? [];
-  const trackedCalls = routes.match(/createTrackedSevenZipStream\\(\\(\\) => Seven\\.(?:list|extractFull)\\(/g) ?? [];
-  assert.equal(node7zCalls.length, 5);
-  assert.equal(trackedCalls.length, node7zCalls.length);
-  assert.match(archiveRoutesSource, /peek7z\\(filePath: string, signal\\?: AbortSignal\\)/);
-  assert.match(archiveRoutesSource, /res\\.once\\("close", abortPreviewIfDisconnected\\)/);
-  assert.match(archiveRoutesSource, /stopTrackedSevenZipStream\\(stream\\)/);
-  assert.match(organizeRoutesSource, /stopTrackedSevenZipStream\\(s\\)/);
+  const routes = `${archiveRoutesSource}\n${organizeRoutesSource}`;
+  const node7zCalls = routes.split("Seven.list(").length - 1 + routes.split("Seven.extractFull(").length - 1;
+  const trackedListCalls = routes.split("createTrackedSevenZipStream(() => Seven.list(").length - 1;
+  const trackedExtractCalls = routes.split("createTrackedSevenZipStream(() => Seven.extractFull(").length - 1;
+  assert.equal(node7zCalls, 5);
+  assert.equal(trackedListCalls + trackedExtractCalls, node7zCalls);
+  assert.ok(archiveRoutesSource.includes("peek7z(filePath: string, signal?: AbortSignal)"));
+  assert.ok(archiveRoutesSource.includes('res.once("close", abortPreviewIfDisconnected)'));
+  assert.ok(archiveRoutesSource.includes("stopTrackedSevenZipStream(stream)"));
+  assert.ok(organizeRoutesSource.includes("stopTrackedSevenZipStream(s)"));
 });
 
 test("shutdown terminates owned media subprocesses before the server exits", async () => {
