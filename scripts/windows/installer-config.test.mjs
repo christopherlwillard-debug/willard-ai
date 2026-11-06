@@ -281,7 +281,7 @@ test("source Setup and Repair automatically restore thumbnail media tools", () =
   assert.match(launcherCommon, /choco install ffmpeg -y --no-progress/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "Machine"\)/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "User"\)/);
-  assert.match(setupLauncher, /if \(Install-WillardMediaTools\)/);
+  assert.match(setupLauncher, /if \(\$entryTracked\) \{\s+Stop-TrackedProcesses \| Out-Null/);
   assert.match(
     setupLauncher,
     /Setup stopped before scans could create repeated thumbnail failures/,
@@ -1578,15 +1578,15 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
 
 test("developer launch, setup, repair, and update fail closed on unjournaled service listeners", () => {
   const portStart = launcherCommon.indexOf("function Get-DeveloperListeningPorts");
-  const portEnd = launcherCommon.indexOf("\\nfunction Get-PortOwnerPid", portStart);
+  const portEnd = launcherCommon.indexOf("\nfunction Get-PortOwnerPid", portStart);
   assert.ok(portStart >= 0 && portEnd > portStart, "Strict developer listener inspection must be shared.");
   const portInspection = launcherCommon.slice(portStart, portEnd);
-  assert.match(portInspection, /Get-NetTCPConnection -LocalPort \\$port -State Listen -ErrorAction Stop/);
+  assert.match(portInspection, /Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction Stop/);
   assert.match(portInspection, /could not verify whether Willard service port/);
   assert.match(portInspection, /missing or incomplete/);
 
   const stopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
-  const stopEnd = launcherCommon.indexOf("\\nfunction Get-LogTail", stopStart);
+  const stopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", stopStart);
   const stop = launcherCommon.slice(stopStart, stopEnd);
   assert.ok(stop.indexOf("Assert-NoUntrackedDeveloperServices $pids") >= 0);
   assert.ok(stop.indexOf("Get-DeveloperListeningPorts") > stop.indexOf("Wait-Process"));
@@ -1606,7 +1606,7 @@ test("developer launch, setup, repair, and update fail closed on unjournaled ser
   assert.match(setupLauncher, /if \\(\$entryTracked\\) \\{\\s+Stop-TrackedProcesses \\| Out-Null/);
 
   const repairTrackedStart = repairLauncher.indexOf("if ($tracked) {", repairGuard);
-  const repairTrackedEnd = repairLauncher.indexOf("\\n}\\n\\n# -- Helper programs", repairTrackedStart);
+  const repairTrackedEnd = repairLauncher.indexOf("\n}\n\n# -- Helper programs", repairTrackedStart);
   assert.ok(repairTrackedStart >= 0 && repairTrackedEnd > repairTrackedStart);
   const repairTrackedBlock = repairLauncher.slice(repairTrackedStart, repairTrackedEnd);
   assert.match(repairTrackedBlock, /Stop-TrackedProcesses/);
