@@ -10,6 +10,7 @@ process.env.DATABASE_URL ??= "postgres://cleanup-recovery-test.invalid/willard";
 
 const {
   appendTrashManifestEntry,
+  assertTrashFileIntegrity,
   manifestPath,
   readTrashManifest,
   removeTrashManifestEntry,
@@ -431,4 +432,59 @@ test("Trash GET route does not invoke permanent-retention cleanup", () => {
   const routeBody = cleanupRoute.slice(routeStart, routeEnd);
   assert.doesNotMatch(routeBody, /purgeExpiredTrashEntries/);
   assert.match(routeBody, /readTrashManifest/);
+});
+
+test("expired Trash integrity verification preserves changed and unverifiable files", async () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-integrity-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "photo.jpg");
+  const original = Buffer.from("original media bytes");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(trashPath, original);
+    const validEntry = {
+      originalPath: path.join(nasPath, "photo.jpg"),
+      trashPath,
+      sizeBytes: original.length,
+      contentHash: crypto.createHash("sha256").update(original).digest("hex"),
+    };
+    await assertTrashFileIntegrity(validEntry, trashPath);
+
+    fs.writeFileSync(trashPath, "tampered media bytes");
+    await assert.rejects(assertTrashFileIntegrity(validEntry, trashPath), /size does not match|hash does not match/);
+    assert.equal(fs.readFileSync(trashPath, "utf8"), "tampered media bytes");
+
+    await assert.rejects(
+      assertTrashFileIntegrity({ ...validEntry, contentHash: undefined }, trashPath),
+      /no valid SHA-256/,
+    );
+    assert.equal(fs.existsSync(trashPath), true);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("expired Trash integrity verification rejects symlinks and non-regular objects", async (context) => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-integrity-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "link.jpg");
+  const target = path.join(nasPath, "target.jpg");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(target, "preserve target");
+    try {
+      fs.symlinkSync(target, trashPath, "file");
+    } catch (error: any) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(
+      assertTrashFileIntegrity({ originalPath: target, trashPath, sizeBytes: 15, contentHash: "a".repeat(64) }, trashPath),
+      /not a regular file/,
+    );
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
 });
