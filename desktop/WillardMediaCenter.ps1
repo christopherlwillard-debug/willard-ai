@@ -281,16 +281,24 @@ function Get-PackagedServiceProcesses {
     if (-not $process) { continue }
     $executablePath = [string]$process.ExecutablePath
     $commandLine = [string]$process.CommandLine
-    if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
+    $roles = @()
+    if (-not [string]::IsNullOrWhiteSpace($commandLine)) {
+      if (Test-CommandLineContainsExactPath $commandLine $expectedApi) { $roles += "API" }
+      if (Test-CommandLineContainsExactPath $commandLine $expectedWeb) { $roles += "web" }
+    }
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+      if ($roles.Count -gt 0) {
+        throw "Windows found a Willard service entrypoint but could not verify its executable path."
+      }
       continue
     }
     try { $actualNode = [IO.Path]::GetFullPath($executablePath) } catch { continue }
     if (-not [string]::Equals($actualNode, $expectedNode, [StringComparison]::OrdinalIgnoreCase)) {
       continue
     }
-    $roles = @()
-    if (Test-CommandLineContainsExactPath $commandLine $expectedApi) { $roles += "API" }
-    if (Test-CommandLineContainsExactPath $commandLine $expectedWeb) { $roles += "web" }
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+      throw "Windows found the packaged Node runtime but could not inspect its command line to rule out an orphaned Willard service."
+    }
     if ($roles.Count -eq 0) { continue }
     $processId = 0
     if (-not [int]::TryParse([string]$process.ProcessId, [ref]$processId) -or $processId -le 0) {
