@@ -2224,18 +2224,18 @@ Before permanent deletion, retention now requires a regular non-symlink file, an
 ### Finding: filename searches treated wildcard characters as pattern syntax
 **Severity:** Medium (search correctness). **Workflow:** canonical media search through `GET /files/search`.
 
-**Source inspection:** `routes/files.ts` passed the user's query directly to Drizzle's `ilike` operator. PostgreSQL therefore interpreted `%` and `_` as wildcards rather than literal filename characters. The media-list route already had the intended behavior: it reuses `escapeLikePattern` and supplies an explicit PostgreSQL `ESCAPE` clause.
+**Source inspection:** `routes/files.ts` passed the user's query directly to Drizzle's `ilike` operator. PostgreSQL therefore interpreted `%` and `_` as wildcards rather than literal filename characters. It also trusted a TypeScript cast for scalar query parameters, so repeated `q`, `fileType`, `source`, `after`, or `before` parameters were not rejected at runtime. The media-list route already had the intended pattern behavior: it reuses `escapeLikePattern` and supplies an explicit PostgreSQL `ESCAPE` clause.
 
-**Fix in this batch:** Reused the existing `sql-like.ts` helper in the legacy-compatible file search route, applying the same escaped, case-insensitive substring semantics as media listing. No dependency or new abstraction was added.
+**Fix in this batch:** Reused the existing `sql-like.ts` helper in the legacy-compatible file search route, applying the same escaped, case-insensitive substring semantics as media listing. Replaced the unchecked query cast with the existing `parseOptionalQueryString` validator for all scalar text filters so repeated parameters fail with a clear 400 response. No dependency or new abstraction was added.
 
 **Regression coverage:**
-- Added a route contract assertion that `/files/search` escapes the user query and uses an explicit `ILIKE ... ESCAPE` clause.
+- Added route contract assertions that `/files/search` validates scalar text filters, escapes the user query, and uses an explicit `ILIKE ... ESCAPE` clause.
 - Extended the PostgreSQL-backed query regression to prove escaped `ILIKE` matches case-insensitively while literal wildcard lookalikes do not match.
 
 **Validation:** implementation and tests committed together. The Fast Validation workflow is the matching validation path; its result must be checked against the exact resulting branch head before this batch is marked target-tested.
 
-**Implementation commit:** `eb7874a085776b2cd58ac0f53b3931ce18622706`.
-**Regression-test commit:** `6d5ccbed42aac7886e9bb56f370624247b19494a`.
+**Implementation commits:** `eb7874a085776b2cd58ac0f53b3931ce18622706` (literal wildcard escaping); `8092dfeeb57f03a8d44b9478e11b4c1bd4c7e79e` (scalar query validation).
+**Regression-test commits:** `6d5ccbed42aac7886e9bb56f370624247b19494a` (wildcard semantics); `5820377ea0efe09cc6447acc02d1db21dc4563e2` (scalar query validation).
 
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
