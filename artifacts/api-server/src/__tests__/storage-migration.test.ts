@@ -439,3 +439,50 @@ test("copy accepts an already-updated database reference on a safe retry", async
   assert.equal(fs.readFileSync(destination, "utf8"), "source bytes");
   assert.equal(fs.readFileSync(source, "utf8"), "source bytes");
 });
+
+
+test("preview rejects nested or overlapping source and destination roots", async () => {
+  const paths = fixture();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: path.join(paths.source, "WillardAI", "nested-destination"),
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: paths.root,
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+});
+
+test("cleanup enforces protected namespaces from the namespace catalog, not manifest flags", async () => {
+  const paths = fixture();
+  const backup = path.join(paths.source, "WillardAI/ConversionBackups/original.jpg");
+  fs.writeFileSync(backup, "protected original");
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: fakeDatabase().connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+
+  const manifestFile = path.join(paths.manifests, `${manifest.id}.json`);
+  const tampered = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  const backupEntry = tampered.entries.find((entry: { namespace: string }) => entry.namespace === "conversion-backups");
+  assert.ok(backupEntry);
+  backupEntry.protected = false;
+  fs.writeFileSync(manifestFile, JSON.stringify(tampered));
+
+  await service.cleanup(manifest.id);
+  assert.equal(fs.readFileSync(backup, "utf8"), "protected original");
+});
