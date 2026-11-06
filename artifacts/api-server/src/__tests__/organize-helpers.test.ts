@@ -873,3 +873,19 @@ test("organization analysis claims and fences every write with its lease token",
   assert.ok((route.match(/eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/g) ?? []).length >= 3,
     "success and failure writes must be fenced by the analysis owner");
 });
+
+
+test("organization plan edits are serialized and release their claim on errors", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.patch("/organize/jobs/:id/plan"');
+  const end = source.indexOf('router.post("/organize/jobs/:id/preflight"', start);
+  assert.ok(start >= 0 && end > start, "plan route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /const \[claimedPlanEdit\]/);
+  assert.match(route, /isNull\(organizationJobsTable\.leaseToken\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, planEditToken\)/);
+  assert.match(route, /leaseToken: null/);
+  assert.match(route, /Plan update lost ownership/);
+  assert.match(route, /Release organization plan edit claims/);
+});
