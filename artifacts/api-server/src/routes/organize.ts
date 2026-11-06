@@ -1214,6 +1214,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 router.patch("/organize/jobs/:id/plan", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let planEditToken: string | null = null;
+  let planEditNasPath: string | null = null;
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1224,7 +1226,8 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
     }
 
     // Serialize plan edits against each other and against execution claims.
-    const planEditToken = crypto.randomUUID();
+    planEditToken = crypto.randomUUID();
+    planEditNasPath = job.nasPath;
     const [claimedPlanEdit] = await db.update(organizationJobsTable)
       .set({ leaseToken: planEditToken })
       .where(and(
@@ -1272,7 +1275,20 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
       .returning();
     if (!updated) { res.status(409).json({ error: "Plan update lost ownership. Refresh and try again." }); return; }
     res.json(publicOrganizationJob(updated));
-  } catch { res.status(500).json({ error: "Failed to update plan" }); }
+  } catch {
+    // Do not leave a plan-edit claim behind if validation or persistence fails.
+    // The token predicate prevents this cleanup from clearing a newer owner's claim.
+    if (typeof planEditToken === "string" && typeof planEditNasPath === "string") {
+      await db.update(organizationJobsTable)
+        .set({ leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, planEditNasPath),
+          eq(organizationJobsTable.leaseToken, planEditToken),
+        )).catch(() => {});
+    }
+    res.status(500).json({ error: "Failed to update plan" });
+  }
 });
 
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
