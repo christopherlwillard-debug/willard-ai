@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const LIBRARY_IDENTITY_FORMAT = "willard-library-identity";
@@ -111,9 +111,13 @@ export async function ensureLibraryIdentity(libraryRoot) {
   const temporary = `${markerPath}.${process.pid}.${randomUUID()}.partial`;
   await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   try {
-    await rename(temporary, markerPath);
+    // Hard-link publication is atomic and exclusive: rename() would replace
+    // an identity another concurrent startup had just created on POSIX.
+    await link(temporary, markerPath);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+  } finally {
+    await unlink(temporary).catch(() => {});
   }
   return readLibraryIdentity(root);
 }
