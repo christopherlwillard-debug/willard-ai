@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
-import { closePool, conversionJobsTable, db } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { closePool } from "@workspace/db";
 import { stopAiEnrichment } from "./ai-enrichment.ts";
 import { stopFaceRecognition } from "./face-recognition.ts";
 import { stopLibraryJobs } from "./library-engine/index.ts";
@@ -55,19 +54,16 @@ function closeHttpServer(server: Server | null): Promise<void> {
 }
 
 async function checkpointExternalJobs(): Promise<void> {
-  const now = new Date();
-  const conversion = await db.update(conversionJobsTable)
-    .set({ cancelledAt: now })
-    .where(eq(conversionJobsTable.status, "running"));
-  // Do not mark every executing organization job failed here. This process
-  // may be one of several API instances, and another instance may still own
-  // and be actively moving files for the same library. The job's lease
-  // heartbeat is the authority: after this process exits, recovery can reclaim
-  // it only once stage_updated_at becomes stale.
+  // Conversion and organization jobs use session-scoped database leases.
+  // Do not set cancelledAt or rewrite their status here: this process may be
+  // shutting down while another API instance still owns and runs those jobs.
+  // Once this process exits, its PostgreSQL connections release their leases
+  // and startup recovery can safely reclaim only the abandoned work.
   logger.info({
-    conversionJobs: conversion.rowCount ?? 0,
+    conversionJobsDeferredToLeaseExpiry: true,
     organizationJobsDeferredToLeaseExpiry: true,
-  }, "Checkpointed external jobs for shutdown");
+  }, "External jobs left untouched for lease-based recovery");
+
 }
 
 export interface ShutdownDependencies {
@@ -119,8 +115,8 @@ export function createShutdownCoordinator(
         bounded("thumbnail reconciliation", dependencies.stopThumbnailReconciliation(), timeoutMs),
       ]);
 
-      // These writes must happen before the pool is closed. Library scans retain
-      // their durable pause checkpoint; derived jobs receive a terminal signal.
+      // Library scans persist their pause checkpoint. Conversion and organization
+      // jobs are left untouched so another instance can keep running them.
       await bounded("job checkpoint", Promise.all([
         dependencies.checkpointExternalJobs(),
         dependencies.stopLibraryJobs(),
