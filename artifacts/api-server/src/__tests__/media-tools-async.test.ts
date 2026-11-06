@@ -72,10 +72,10 @@ test("conversion and thumbnail routes await FFmpeg instead of running it synchro
 });
 
 test("Optimize Center and media health probes use the shared shutdown-owned process runner", () => {
-  assert.match(optimizeSource, /runMediaToolAsync\\(\\s*"ffprobe"/);
-  assert.doesNotMatch(optimizeSource, /execFileAsync\\s*\\(/);
-  assert.match(mediaToolsSource, /function probeTool[\\s\\S]*?runMediaToolAsync\\(/);
-  assert.doesNotMatch(mediaToolsSource, /execFile\\(bin,\\s*\\["-version"\\]/);
+  assert.match(optimizeSource, /runMediaToolAsync\(\s*"ffprobe"/);
+  assert.doesNotMatch(optimizeSource, /execFileAsync\s*\(/);
+  assert.match(mediaToolsSource, /function probeTool[\s\S]*?runMediaToolAsync\(/);
+  assert.doesNotMatch(mediaToolsSource, /execFile\(bin,\s*\["-version"\]/);
 });
 
 test("directly spawned archive helpers share the shutdown process registry", async () => {
