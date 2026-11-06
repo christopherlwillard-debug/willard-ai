@@ -164,10 +164,8 @@ function getArchiveExt(filename: string): string {
   return path.extname(filename).replace(".", "").toLowerCase();
 }
 
-type TarCompression = "none" | "gzip" | "bzip2" | "xz";
-
-function getTarCompression(filename: string): TarCompression {
-  const f2","nef","arw","dng"];
+function getFileType(ext: string): string {
+  const img   = ["jpg","jpeg","png","gif","bmp","webp","heic","heif","tiff","raw","cr2","nef","arw","dng"];
   const vid   = ["mp4","mkv","avi","mov","wmv","flv","m4v","webm","mpeg","mpg","3gp"];
   const doc   = ["pdf","doc","docx","xls","xlsx","ppt","pptx","odt","ods","odp","txt","rtf","pages","numbers","key","epub","md"];
   const audio = ["mp3","flac","wav","aac","ogg","wma","m4a","aiff"];
