@@ -11,6 +11,7 @@ process.env.DATABASE_URL ??= "postgres://cleanup-recovery-test.invalid/willard";
 const {
   appendTrashManifestEntry,
   assertTrashFileIntegrity,
+  openValidatedTrashManifest,
   manifestPath,
   readTrashManifest,
   removeTrashManifestEntry,
@@ -550,4 +551,57 @@ test("manual restore validates destination parents without following symlinks", 
   assert.match(routeBody, /canonicalizePath\(nasPath\)/);
   assert.match(routeBody, /ensureDirectoryWithinRoot\(path\.dirname\(resolvedOriginalPath\), canonicalNasRoot\)/);
   assert.doesNotMatch(routeBody, /fs\.mkdirSync\(destinationDir,\s*\{\s*recursive:\s*true\s*\}\)/);
+});
+
+
+test("trash manifest descriptors reject final-component symlinks before I/O", (context) => {
+  const nasRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-open-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-open-outside-"));
+  const external = path.join(outsideRoot, "external.jsonl");
+  const link = path.join(nasRoot, "manifest-link.jsonl");
+  fs.writeFileSync(external, "preserve external data\\n");
+  try {
+    try {
+      fs.symlinkSync(external, link, "file");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+
+    assert.throws(() => openValidatedTrashManifest(link, "read"));
+    assert.throws(() => openValidatedTrashManifest(link, "append"));
+    assert.equal(fs.readFileSync(external, "utf8"), "preserve external data\\n");
+  } finally {
+    fs.rmSync(nasRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest descriptors reject hard-linked files before append", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-hardlink-"));
+  const external = path.join(root, "external.jsonl");
+  const manifest = path.join(root, "manifest.jsonl");
+  fs.writeFileSync(external, "preserve external data\\n");
+  try {
+    fs.linkSync(external, manifest);
+    assert.throws(() => openValidatedTrashManifest(manifest, "append"), /private, unlinked regular file/);
+    assert.equal(fs.readFileSync(external, "utf8"), "preserve external data\\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest reads and writes use validated file descriptors", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const recovery = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  assert.match(recovery, /O_NOFOLLOW/);
+  assert.match(recovery, /fs\\.fstatSync\\(fd\\)/);
+  assert.match(recovery, /fs\\.readFileSync\\(fd, "utf8"\\)/);
+  assert.match(recovery, /openValidatedTrashManifest\\(filePath, "append-existing"\\)/);
+  assert.doesNotMatch(recovery, /fs\\.openSync\\(filePath, "a"/);
+  assert.doesNotMatch(recovery, /fs\\.readFileSync\\(filePath, "utf8"/);
 });
