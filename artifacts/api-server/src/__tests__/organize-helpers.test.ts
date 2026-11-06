@@ -864,7 +864,9 @@ test("organization analysis claims and fences every write with its lease token",
   assert.ok(start >= 0 && end > start, "analysis route boundaries must exist");
   const route = source.slice(start, end);
   assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
-  assert.match(route, /const analysisLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(route, /let analysisLeaseToken = ""/);
+  assert.match(route, /analysisLeaseToken = crypto\.randomUUID\(\)/);
+  assert.ok(route.indexOf("analysisLeaseToken = crypto.randomUUID()") < route.indexOf("const [claimedAnalysis]"));
   assert.match(route, /eq\(organizationJobsTable\.status, job\.status\)/);
   assert.match(route, /eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/);
   assert.match(route, /const failAnalysis = async \(message: string\)/);

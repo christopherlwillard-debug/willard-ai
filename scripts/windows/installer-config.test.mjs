@@ -1626,7 +1626,12 @@ const auditInstallerLifecycleWorkflow = await readFile(
 
 test("audit installer lifecycle validation is isolated from release publishing", () => {
   assert.ok(auditInstallerLifecycleWorkflow.includes("pull_request:"));
-  assert.match(auditInstallerLifecycleWorkflow, /types:\s*\n\s*- opened\s*\n\s*- reopened\s*\n\s*- synchronize/);
+  assert.ok(auditInstallerLifecycleWorkflow.includes("- opened"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("- reopened"));
+  assert.equal(auditInstallerLifecycleWorkflow.includes("- synchronize"), false);
+  assert.ok(auditInstallerLifecycleWorkflow.includes("  push:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("      - audit/full-repository-review-2026-11"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("github.event.pull_request.head.ref"));
 
   assert.ok(auditInstallerLifecycleWorkflow.includes("audit/full-repository-review-2026-11"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("workflow_dispatch:"));

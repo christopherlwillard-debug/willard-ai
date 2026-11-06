@@ -131,6 +131,8 @@ jobs:
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalization-recovery-postgres.test.ts
 
       - name: Run targeted backend regressions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
         run: |
           node --experimental-strip-types --test \
             artifacts/api-server/src/__tests__/capacity-service.test.ts \

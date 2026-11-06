@@ -5,9 +5,35 @@ on:
     types:
       - opened
       - reopened
-      - synchronize
     branches:
       - main
+    paths:
+      - ".github/workflows/windows-installer-lifecycle-validation.yml"
+      - "installer/**"
+      - "desktop/WillardMediaCenter.ps1"
+      - "desktop/launcher-instance-lock.ps1"
+      - "desktop/desktop-web-server.mjs"
+      - "desktop/database-backup.mjs"
+      - "desktop/backup-credentials.mjs"
+      - "desktop/library-recovery.mjs"
+      - "desktop/release-contract.mjs"
+      - "scripts/windows/build-installer.ps1"
+      - "scripts/windows/build-release.mjs"
+      - "scripts/windows/compile-installer.ps1"
+      - "scripts/windows/installer-lifecycle-smoke.ps1"
+      - "scripts/windows/prepare-official-7zip.ps1"
+      - "scripts/windows/release-payload.mjs"
+      - "scripts/windows/validate-release.mjs"
+      - "artifacts/api-server/build.mjs"
+      - "artifacts/api-server/package.json"
+      - "artifacts/willard-ai/package.json"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "setup-db.cjs"
+  push:
+    branches:
+      - audit/full-repository-review-2026-11
     paths:
       - ".github/workflows/windows-installer-lifecycle-validation.yml"
       - "installer/**"
@@ -48,7 +74,7 @@ concurrency:
 
 jobs:
   lifecycle:
-    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/audit/full-repository-review-2026-11' }}
+    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'audit/full-repository-review-2026-11' && github.event.pull_request.base.ref == 'main') || github.ref == 'refs/heads/audit/full-repository-review-2026-11' }}
     runs-on: windows-latest
     timeout-minutes: 120
     env:
