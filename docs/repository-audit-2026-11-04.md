@@ -3513,3 +3513,42 @@ The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` befor
 - Windows installer lifecycle [run 42267809733](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809733): failed at prepared-phase recovery as detailed above. It is not a lifecycle pass.
 - These runs predate the diagnostic-harness commit `be8f472e55c82f15aae16af2ad33870960f82c33`; no test result is attributed to that commit until a matching run completes.
 - **Full CI:** not run. Fast Validation, Dependency Review, and the dedicated Windows installer lifecycle remain distinct scopes.
+
+
+## November 6 — packaged Windows install root overlaps the persistent data root
+
+### Confirmed Critical (P1): default installer path makes the self-updater move its own user data and recovery journal
+
+**Affected workflows:** Default per-user Windows installation, automatic self-update, interrupted-update recovery, local configuration/backup-credential preservation, and uninstall/repair.
+
+**Source evidence:**
+
+- `installer/WillardMediaCenter.iss` sets `DefaultDirName={localappdata}\Willard Media Center` (the default `{app}` path).
+- `desktop/WillardMediaCenter.ps1` derives `$InstallRoot` from the installed launcher path, but independently sets `$DataRoot = Join-Path $env:LOCALAPPDATA "Willard Media Center"`. Under the default installer path, these resolve to the same directory.
+- The launcher stores `$UpdateJournal` under `$DataRoot\updates\swap-journal.json` and keeps the local `.env`, logs, backup-protection material, and update staging under that same data root.
+- `Invoke-PackagedVersionSwap` writes the journal, then moves the entire `$InstallRoot` to a sibling backup before moving the release candidate into `$InstallRoot`. The candidate is a versioned application payload, not a copy of the user's persistent data.
+- The installer comment says user data is outside `{app}`, but that statement is false for the current default path.
+- The lifecycle fixture does not expose this collision: `scripts/windows/installer-lifecycle-smoke.ps1` sets `$InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\\$UserName"` while `$DataRoot` remains under the disposable user's `LOCALAPPDATA\Willard Media Center`. Its external-data preservation checks therefore run with distinct paths, unlike a normal default installation.
+
+**Root cause and impact:** The packaged installer uses the same per-user directory for the replaceable application tree and persistent data. During a self-update, moving `$InstallRoot` also moves the data root and the journal that the next launcher expects at the canonical `$DataRoot` path. If the process is interrupted after that move, the next launch starts from the new candidate tree, cannot find the journal at its expected path, and has no stable launcher outside the moved tree to discover/restore the backup. The previous backup can retain the old `.env`, local backup-protection credential, logs, and update journal, but those files are no longer at the paths the new installation reads. The external PostgreSQL database and media directory are separate; this finding concerns local configuration and recovery state, not a claim that those external stores were moved.
+
+**Status:** found; blocked pending a coordinated installer/data-layout migration. No product-path change was made in this batch because a partial path edit could strand existing installations or destroy the only recovery journal.
+
+**Safe implementation plan:**
+
+1. Define and enforce two distinct canonical paths: a versioned application payload directory and a stable per-user data directory. Reuse the existing `LOCALAPPDATA\Willard Media Center` location for persistent data only; put the replaceable payload in a separate child or sibling directory. Ensure the paths remain on the same volume where atomic sibling swaps are required.
+2. Move the update journal, download/staging area, backup-protection material, `.env`, and logs outside the replaceable payload. Validate journal paths against the canonical install parent and reject reparse-point/path redirection before any move or cleanup.
+3. Install a small version-independent bootstrap under the stable data root. Point Start Menu, desktop, first-run, repair, and recovery entry points at that bootstrap. It must recover from a missing live payload using only a validated external journal and sibling backup; it must not depend on a launcher inside the tree being moved.
+4. Design an explicit one-time migration for existing users whose legacy `{app}` and data root are identical. Stop the old services using the old install path, preserve every known data item (including unknown user-created files), install the new payload location, and retain the legacy tree/backup until the new launcher and health checks prove the migration succeeded. Do not infer that a directory is disposable merely because it is under the old `{app}`.
+5. Make uninstall stop services through the stable bootstrap, remove only the versioned application payload and shortcuts, and preserve the stable user data root by default. Any user-data wipe must be a separate explicit action with a clear warning.
+6. Change the Windows lifecycle test to install at the exact default path. Assert `InstallRoot` and `DataRoot` are distinct; verify `.env`, backup-protection marker, update journal, logs, external PostgreSQL marker, and media marker survive successful upgrade, each injected crash phase, repair, and uninstall. Include a legacy-layout migration fixture and standard-user ACL checks.
+
+**Remaining risk:** High and unresolved. The current default packaged install can strand its local configuration and recovery journal during an interrupted self-update. The previously documented stable-bootstrap issue and this install/data-root collision are related but distinct: fixing only the bootstrap without separating the persistent data root would still leave the journal and user data inside the replaceable tree.
+
+### Validation snapshot for the diagnostic-harness commit
+
+- Fast Validation [run 42274282530](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282530), code/test head `be8f472e55c82f15aae16af2ad33870960f82c33`: Linux `validate` job `128086474928` completed successfully. Typechecks/generated contracts, Expo/desktop checks, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization integration checks, and targeted backend regressions completed. The targeted batch reported 355 tests, 353 passed, 0 failed, and 2 skipped. The new lifecycle missing-launcher regression passed. The Windows archive/updater job `128087265574` was still running at this report update; no Windows result is claimed yet.
+- Windows installer lifecycle [run 42274282416](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282416), same code/test head: job `128086475632` was still compiling the unsigned installer; the installed lifecycle stages had not yet run.
+- Dependency Review [run 42274282218](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282218): production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- The latest branch head at this update is documentation-only commit `f8912e741e5a0960b52c3d3e6f3905410ebadba8`; matching workflows for that head were pending. Results above are attributed only to the exact code/test head `be8f472e55c82f15aae16af2ad33870960f82c33`.
+- **Full CI:** not run. Fast Validation, Dependency Review, and installed Windows lifecycle validation are separate scopes.
