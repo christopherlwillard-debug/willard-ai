@@ -2256,3 +2256,20 @@ The full recovery design for Replace requires durable backup intents, checksums,
 **Status:** Safety mitigation and source-contract regression committed. Test execution and matching CI are pending.
 
 **Product impact:** Replace is temporarily unavailable for collisions. This is an intentional safety restriction, not a completed Replace implementation. Restore Replace only after the durable backup/journal/resume/rollback design above is implemented and Windows/SMB crash tests pass.
+
+
+## 2026-11-06 follow-up — duplicate storage estimates overstate reclaimable space
+
+**Finding — Medium (product correctness):** Cleanup and the library scan summary estimated reclaimable duplicate storage as `(count - 1) × largest file size` for the summary, and as `(count - 1) × average file size` for detailed groups. These formulas are wrong when perceptually similar files have different sizes. The first overstates savings whenever the retained copy is the largest; the second can overstate or understate savings. The correct theoretical amount when keeping one copy is `SUM(size_bytes) - MAX(size_bytes)`.
+
+**Fix:** Updated both confirmed and unconfirmed duplicate summary queries to sum all candidate bytes and subtract the largest retained copy. Updated the detailed Cleanup endpoint to fetch each group's largest file size, calculate reclaimable bytes consistently, and sort groups using the corrected estimate. This keeps the existing API shape and database architecture.
+
+**Regression:** Added a focused source-contract test to the existing library consistency suite, asserting the SQL formula and the detailed endpoint calculation use the same definition. This is a targeted source-contract regression, not a PostgreSQL integration test.
+
+**Implementation commits:** helper `480fc48553a54d87a22a6bd943066728531e5a13`; route `0982bc6b1a0a90e9d37bea8998bd44010fd903f0`.
+**Test commit:** `afd1a41897cf6e83141272074eb703cd665a2b38`.
+**Validation:** Source inspection and regression addition complete. Test execution, typecheck, PostgreSQL-backed verification, and matching Fast Validation are pending on the resulting branch head.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Cleanup / library duplicate summary overstates reclaimable bytes for unequal-sized perceptual matches | fixed; targeted test pending | `<HELPER>`, `<ROUTE>`, `<TEST>` | Confirm with PostgreSQL-backed fixture covering 100, 60, and 40 byte candidates; browser summary and staging behavior remain to be integration-tested |
