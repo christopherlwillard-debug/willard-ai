@@ -2955,3 +2955,15 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 - Windows installer lifecycle [#87](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208095) failed as detailed above. The installer compiled, but the full installed-product lifecycle did not pass.
 - Dependency Review #999 passed on the preceding head. The new installer changes still require a fresh dependency-review result.
 - This audit branch remains separate from `main`; PR #2 remains open and draft. No production data, credentials, or release artifacts were changed.
+
+
+## November 6 — conversion crash recovery: partial staged results
+
+- **Finding — Medium (Optimize Center → execute/retry after a worker crash):** The execute route persists per-file counters as work progresses, but writes the per-file `resultJson` only after the entire conversion loop completes. If the process exits or a later database operation throws after one or more files have been successfully converted and verified, those staged files remain under `WillardAI/conversions/<jobId>` but their paths and verification records have not been durably stored. Startup recovery can mark the job failed, but cannot reconstruct which staged files were successful. The retry route clears `resultJson` and reuses the same job-level staging directory.
+- Originals remain untouched during this stage, so this does not establish loss of original media. It does mean completed conversion work can become inaccessible to the user and can leave unreferenced staged files; a retry can then encounter or overwrite files from the abandoned attempt.
+- **Status: found by source inspection; architecture required.** The safe design is already part of the conversion-worker fencing plan: create a unique staging directory per attempt, persist a durable per-file manifest/checkpoint before advancing the job, and make every checkpoint conditional on the current owner generation. Startup recovery must either restore a complete actionable result set or retain an explicit recovery record for the abandoned attempt. Do not simply clear the shared staging directory on retry while stale workers may still be alive.
+- This finding reinforces the existing high-severity FFmpeg/event-loop and worker-fencing work. No partial code workaround was applied.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Optimize Center → crash after successful staged files → retry | found; architecture required | documentation/investigation only | Result JSON is not checkpointed per file; staged successes can become orphaned, and retries reuse the same job-level staging directory. Requires attempt-scoped staging, durable per-file checkpoints, and worker fencing. |
