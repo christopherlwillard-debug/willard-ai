@@ -2168,3 +2168,25 @@ Organization already uses the same `FileMoveRecord`, `verifiedMove`, `moveFileNo
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Critical | Replace deletes an existing organization destination before journaling or preserving it | found / blocked | design review only; no code change | Requires move-kind journal extension, same-filesystem no-overwrite backup, resume/count compatibility, crash tests, and Windows/SMB integration |
+
+
+## 2026-11-06 follow-up — archive publication and Trash read-side effects
+
+### Finding: ZIP extraction could replace a destination created after preflight
+**Severity:** High (data integrity). **Workflow:** ZIP extraction during archive organization.
+**Status:** Fixed; focused regression added; CI validation pending.
+`writeArchiveFileAtomically` previously checked the destination and then called `renameSync`. On POSIX, rename can replace a regular file created after the check. The temporary file now publishes through the existing `moveFileNoReplace` helper, which uses exclusive creation semantics and refuses an existing destination. The helper is reused rather than duplicating platform-specific no-replace logic. A regression verifies that an existing regular file is preserved and the temporary extraction file is cleaned up.
+**Implementation:** `c9c85a52255624fca8ffb17108ea45d12f8c25aa`.
+**Test:** `12c3c601cdb7ff997feb1ca15ecb521d806ead8d`.
+**Remaining risk:** This focused regression covers an already-present regular destination; an orchestrated concurrent-writer test and full malicious-archive Windows integration remain outstanding.
+
+### Finding: reading the Trash page triggered permanent deletion
+**Severity:** High (unexpected destructive side effect). **Workflow:** Cleanup → Trash listing.
+**Status:** Fixed; route contract regression added; CI validation pending.
+The GET /cleanup/trash handler called `purgeExpiredTrashEntries`, so simply opening or refreshing the page could permanently remove files. The GET handler is now read-only and only reads the manifest. Existing startup recovery remains the retention-cleanup trigger; no new scheduler or dependency was introduced. A route-level source-contract test asserts that the GET handler does not invoke permanent-retention cleanup.
+**Implementation:** `d958b5b7c976c7b184618f755e2e060fc0a53175`.
+**Test:** `1ddfd33e8aac1cb024ddd336af15bf6f79e5129d`.
+**Remaining risk:** Expiration cleanup still lacks content-hash verification before permanent removal. The next retention batch must verify the trash object is a regular file, matches recorded size and a valid SHA-256, and remains inside the canonical trash root before deleting it. Missing or mismatched integrity metadata must be preserved for manual review. Startup-only execution also means expiration cleanup is not guaranteed to run until the next restart.
+
+### Validation record
+The two changes above are committed to `audit/full-repository-review-2026-11`. Focused regression tests were added but have not yet been executed in a local checkout or confirmed by the matching latest CI run. Do not mark this batch integration-tested or fully validated until the corresponding workflow results are available.
