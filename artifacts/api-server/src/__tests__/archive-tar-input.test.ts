@@ -84,7 +84,7 @@ test("official 7-Zip bzip2 TAR preview reads entries and removes its temporary i
   try {
     let sevenZip: string;
     try {
-      sevenZip = getSevenZipPath();
+      sevenZip = await getSevenZipPath();
     } catch {
       t.skip("official 7-Zip is not available on this runner");
       return;
@@ -109,7 +109,7 @@ test("official 7-Zip xz TAR preview reads entries and removes its temporary inpu
   try {
     let sevenZip: string;
     try {
-      sevenZip = getSevenZipPath();
+      sevenZip = await getSevenZipPath();
     } catch {
       t.skip("official 7-Zip is not available on this runner");
       return;
@@ -134,7 +134,7 @@ test("invalid compressed input fails and leaves no partial scratch TAR", async (
   try {
     let sevenZip: string;
     try {
-      sevenZip = getSevenZipPath();
+      sevenZip = await getSevenZipPath();
     } catch {
       t.skip("official 7-Zip is not available on this runner");
       return;
