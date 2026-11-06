@@ -1672,3 +1672,12 @@ test("installer lifecycle validation only runs for installer and packaging input
   assert.ok(auditInstallerLifecycleWorkflow.includes('"pnpm-lock.yaml"'));
 
 });
+
+
+test("installed lifecycle runner disables interactive pause prompts", () => {
+  const runnerStart = installedLifecycleSmoke.indexOf("$runnerContents = @'");
+  const runnerEnd = installedLifecycleSmoke.indexOf("\n'@", runnerStart);
+  assert.ok(runnerStart >= 0 && runnerEnd > runnerStart, "the generated lifecycle runner should exist");
+  const runner = installedLifecycleSmoke.slice(runnerStart, runnerEnd);
+  assert.match(runner, /\$env:WILLARD_NO_PAUSE = "1"/);
+});

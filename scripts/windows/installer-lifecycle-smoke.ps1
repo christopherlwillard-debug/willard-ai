@@ -174,6 +174,7 @@ param(
   [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure")][string]$Mode
 )
 $env:WILLARD_SKIP_UPDATE = "1"
+$env:WILLARD_NO_PAUSE = "1"
 $env:WILLARD_RECOVERY_EXPORT_PATH = '__RECOVERY_EXPORT_PATH__'
 $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = 'installer-lifecycle-recovery-passphrase'
 if ($Mode -eq "failure") { $env:WILLARD_SUPPRESS_STARTUP_DIALOG = "1" }
