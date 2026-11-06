@@ -19,11 +19,13 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { constants as fsConstants, existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
+  lstat,
   open as openFile,
+  realpath,
   readdir,
   readFile,
   rename,
@@ -99,6 +101,35 @@ function stableJson(value) {
 
 function sha256Bytes(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Read only a regular file, refusing final-component symlinks and replacement
+ * races. Backup manifests and encrypted dumps are untrusted input paths.
+ */
+export async function readRegularFileNoFollow(filePath, encoding) {
+  const initial = await lstat(filePath);
+  if (initial.isSymbolicLink() || !initial.isFile()) {
+    fail("Backup input must be a regular, non-symlink file.");
+  }
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(filePath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(filePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      fail("Backup input changed or became a symlink while opening.");
+    }
+    return await handle.readFile(encoding ? { encoding } : undefined);
+  } finally {
+    await handle.close();
+  }
 }
 
 function requireOption(options, name) {
@@ -577,11 +608,17 @@ function validateManifest(manifest) {
 }
 
 async function readBackup(backupDir) {
-  const manifestPath = path.join(backupDir, MANIFEST_FILE);
-  const manifest = validateManifest(JSON.parse(await readFile(manifestPath, "utf8").then((value) => value.replace(/^\uFEFF/, ""))));
-  const dumpPath = path.join(backupDir, manifest.dump.file);
-  if (path.dirname(dumpPath) !== path.resolve(backupDir)) fail("Backup dump path escapes its backup directory.");
-  const encrypted = await readFile(dumpPath);
+  const directoryStat = await lstat(backupDir);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    fail("Backup directory must be a regular, non-symlink directory.");
+  }
+  const directory = await realpath(backupDir);
+  const manifestPath = path.join(directory, MANIFEST_FILE);
+  const manifestText = await readRegularFileNoFollow(manifestPath, "utf8");
+  const manifest = validateManifest(JSON.parse(manifestText.replace(/^\uFEFF/, "")));
+  const dumpPath = path.join(directory, manifest.dump.file);
+  if (path.dirname(dumpPath) !== directory) fail("Backup dump path escapes its backup directory.");
+  const encrypted = await readRegularFileNoFollow(dumpPath);
   if (encrypted.length !== manifest.integrity.encryptedBytes) fail("Encrypted backup size does not match its manifest.");
   if (sha256Bytes(encrypted) !== manifest.integrity.encryptedSha256) {
     fail("Encrypted backup failed its SHA-256 integrity check.");
@@ -798,6 +835,10 @@ async function createBackup(options) {
   let snapshotHolder;
   try {
     await mkdir(outputRoot, { recursive: true });
+    const outputRootStat = await lstat(outputRoot);
+    if (outputRootStat.isSymbolicLink() || !outputRootStat.isDirectory()) {
+      fail("Backup output directory must be a regular, non-symlink directory.");
+    }
     snapshotHolder = await openDatabaseSnapshot(environment);
     const { snapshot } = snapshotHolder;
     const createdAt = new Date().toISOString();
@@ -888,16 +929,27 @@ async function createBackup(options) {
 }
 
 async function listBackupDirectories(outputRoot) {
-  const entries = await readdir(outputRoot, { withFileTypes: true }).catch((error) => {
+  let rootStat;
+  try {
+    rootStat = await lstat(outputRoot);
+  } catch (error) {
     if (error?.code === "ENOENT") return [];
     throw error;
-  });
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    fail("Backup output directory must be a regular, non-symlink directory.");
+  }
+  const outputRootReal = await realpath(outputRoot);
+  const entries = await readdir(outputRootReal, { withFileTypes: true });
   const backups = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith("backup-")) continue;
     try {
-      const manifest = validateManifest(JSON.parse(await readFile(path.join(outputRoot, entry.name, MANIFEST_FILE), "utf8")));
-      backups.push({ path: path.join(outputRoot, entry.name), manifest });
+      const candidatePath = path.join(outputRootReal, entry.name);
+      const candidateStat = await lstat(candidatePath);
+      if (candidateStat.isSymbolicLink() || !candidateStat.isDirectory()) continue;
+      const manifest = validateManifest(JSON.parse(await readRegularFileNoFollow(path.join(candidatePath, MANIFEST_FILE), "utf8")));
+      backups.push({ path: candidatePath, manifest });
     } catch {
       // Retention never deletes an unrecognized directory.
     }
