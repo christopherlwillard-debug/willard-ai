@@ -3767,3 +3767,42 @@ Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/w
 - **Ledger-only head `09217122be644e2fbea6168f70f7adb3f13088ef`:** Fast Validation [42297148800](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42297148800) Linux validation job passed; the matching Windows archive/updater smoke job was still running at this follow-up. Dependency Review [42297148813](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42297148813) passed the production advisory gate; installed dependency-graph audit skipped.
 - **Installed Windows lifecycle remains separate and unresolved:** run [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030) failed on earlier commit `347b8cdbd9c093aae216920d33c25a48f6009358` during prepared-phase recovery. The archive/updater smoke pass does not validate the installed-product recovery path.
 - **Full CI:** still not run; no full-repository CI workflow exists in this repository snapshot.
+
+
+## November 6 follow-up — node-7z subprocess ownership and archive-preview cancellation
+
+### Confirmed High (P1): 7-Zip archive commands could outlive their API owner
+
+**Affected workflows:** archive preview, archive analysis/preflight, safe archive extraction, API graceful shutdown, and retry/recovery after interrupted organization jobs.
+
+**Evidence and root cause traced through the pinned dependency and every production caller:**
+
+- The repository pins `node-7z@3.0.0`. Its `Lifecycle.run` implementation starts the binary with `child_process.spawn` (detached process by default) and stores the child on the returned stream's `_childProcess` property. `Seven.listen` attaches stream parsing but does not register the child with Willard AI's shared `activeMediaProcesses` owner.
+- `artifacts/api-server/src/routes/archives.ts` called `Seven.list` in `peek7z` without registering the child, without an AbortSignal, and without observing response disconnect. A client closing an archive preview therefore did not stop the 7-Zip process. When an unsafe link or path/budget violation was discovered, the code recorded `safetyError` but continued consuming the listing until 7-Zip exited.
+- `artifacts/api-server/src/routes/organize.ts` had three additional `Seven.list` validation calls and one `Seven.extractFull` call that also bypassed the shared process owner. The extraction writes only into the job's private staging directory; it must remain a server-owned operation rather than being cancelled merely because the SSE client disconnects. On shutdown, however, the process must be stopped so it cannot continue writing after its API owner exits and a later worker attempts recovery.
+
+**Fixes:**
+
+- `artifacts/api-server/src/lib/media-tools.ts` now exports `stopMediaProcess`, which applies the existing bounded SIGTERM-to-SIGKILL policy to one owned child. `stopActiveMediaTools` reuses that helper for every registered process.
+- `artifacts/api-server/src/lib/sevenzip.ts` now provides `createTrackedSevenZipStream`. It rejects new process starts during shutdown, registers the pinned node-7z stream's spawned child with the shared shutdown owner, and optionally binds an AbortSignal to bounded termination. `stopTrackedSevenZipStream` stops a listing as soon as validation rejects its metadata.
+- All five production node-7z calls are now wrapped: the archive preview listing, three organization/preflight listings, and the organization extraction.
+- The read-only archive preview binds its child to the HTTP response lifecycle. A disconnected client aborts the listing; the route does not attempt to write an error response after the connection has closed.
+- Unsafe 7-Zip metadata now terminates listing promptly instead of parsing the rest of an invalid archive. Organization extraction remains server-owned and is not tied to the SSE client's connection; it is registered for server shutdown and writes only to the job staging area.
+- Regression coverage exercises shared shutdown ownership, AbortSignal cancellation, and all production call sites. The official 7-Zip compatibility test now wraps real node-7z list/extract operations and asserts that the pinned library exposes the child process expected by the adapter.
+
+**Implementation/test commits:** `6ae4cfbd5a256a9b078806e2281b42e686825857` (bounded per-child termination); `3296c08443cc76b88a202246d40404c8a9f54f46` (node-7z process adapter); `ae2d24af05ddc2285a3ce11d3f45a2652566bd3d` (preview disconnect and early safety stop); `12adcc6d26e0bcefe1752cdd21b48be56f7465dc` (all organization calls); `1a6207fa12295a5d3547d9c5a5d0a99d47eacd11`, `2ade1d24e3a6a05a1d2ad8e915b2ce47245a1c01`, `50a265b3af72fe9aef150f27dea6e13dc9fcb44b`, and `7f541970dbaed5a07fadd123841544217a653cec` (unit, source-contract, and real-binary integration coverage).
+
+**Status:** fixed in source. Targeted tests and official-binary integration are pending the matching Fast Validation run for exact code/test head `7f541970dbaed5a07fadd123841544217a653cec`; no pass is claimed yet. The intermediate Fast Validation run [42301729288](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301729288) on earlier helper commit `6ae4cfb` passed Linux typechecks, generated contracts, PostgreSQL integration checks, and its targeted backend batch; its Windows smoke was still running at the last inspection and that run did not yet contain the final node-7z adapter/call-site changes. Fast Validation runs for intermediate commits were queue-replaced/cancelled as newer commits arrived; those cancellations are not test failures.
+
+**Exact latest-head CI snapshot:** Fast Validation [42301992363](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301992363) was pending on `7f541970dbaed5a07fadd123841544217a653cec`. Dependency Review [42301992365](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301992365) passed its production advisory gate on the same head; its separate installed dependency-graph audit was skipped. The latest installed Windows lifecycle result remains the earlier prepared-phase recovery failure [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030); this archive-process batch does not resolve the stable Windows bootstrap or install/data-root collision. Full CI was not run.
+
+**Remaining risk:** There is still no explicit durable user-cancel endpoint for a server-owned organization extraction, nor an operation-specific deadline for a connected but indefinitely stalled 7-Zip listing/extraction. The current change covers server shutdown, preview-client disconnect, and early rejection of unsafe listings. A user-facing destructive-job cancellation needs a durable job-state transition and lease-aware rollback design; it must not be implemented by tying extraction to the SSE connection. The adapter intentionally relies on the pinned node-7z 3.0.0 `_childProcess` runtime property, which is not declared by the package's TypeScript typings; the real-binary compatibility test guards that dependency contract.
+
+### Remaining prioritized risks after this batch
+
+- **Critical / blocked:** default Windows installer directory still overlaps persistent data; stable external bootstrap and legacy data migration require a coordinated design and installed-product lifecycle validation.
+- **High / architecture work:** conversion workers still need attempt-generation fencing, attempt-specific staging, and ownership-checked finalization after advisory-lock loss.
+- **High / architecture work:** organization worker takeover, NAS/SMB crash recovery, and the path-anchored no-follow move primitive remain open.
+- **High / blocked:** destructive Replace still needs a durable displaced-destination journal and restore workflow; do not re-enable it through a partial workaround.
+- **High / open:** explicit durable cancellation for server-owned organization jobs and operation-specific 7-Zip deadlines remain separate design items.
+- **Windows lifecycle:** prepared-phase recovery remains failed on the prior run; Fast Validation's Windows archive/updater smoke is not installed-product lifecycle validation.
