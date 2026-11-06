@@ -2516,3 +2516,10 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | Medium | Media viewer → modal focus escapes, nested dialog semantics and icon-only action names | fixed; target tests pending | this batch | Browser/assistive-technology integration and mobile touch/focus behavior remain unverified |
 
+
+
+## Organization library identity fencing
+- Confirmed analysis, preflight, dry-run, and execute each re-read active NAS settings after initially scoping the job to a library. A settings change between those reads could cause a job created for one library to validate or operate against another library's paths.
+- Added explicit canonical path equality checks against the job's persisted `nasPath` before analysis filesystem inspection, preflight, dry-run, and execution. Mismatch now returns a conflict rather than proceeding against a different library.
+- Added a route-level regression test covering all four paths. Commits: implementation `e64c95a58cedb8c9329b43adff7959dd2308ef51`; regression `90ab702fac81511a6699051d0dc21d159933ec60`.
+- Validation pending; the existing recovery suite should still be run against a real configured NAS path. This guard compares normalized path strings and does not establish filesystem identity across symlink or mount aliases.
