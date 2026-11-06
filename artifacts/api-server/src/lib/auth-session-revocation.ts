@@ -1,11 +1,11 @@
-import { pool } from "@workspace/db";
+import { pool, type PoolClient } from "@workspace/db";
 
 export interface SessionCredentialScope {
   settingsId: number;
   credentialVersion: string;
 }
 
-async function inTransaction(work: (client: any) => Promise<void>): Promise<void> {
+async function inTransaction(work: (client: PoolClient) => Promise<void>): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
