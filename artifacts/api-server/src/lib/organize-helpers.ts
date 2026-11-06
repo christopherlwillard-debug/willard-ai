@@ -33,8 +33,19 @@ export async function sha256File(filePath: string): Promise<string> {
     const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
     let stream: fs.ReadStream;
     try {
-      // createReadStream accepts a descriptor; openSync is where the
-      // platform-specific O_NOFOLLOW flag is applied.
+      // A supplied descriptor does not emit an "open" event, so validate the
+      // opened inode synchronously before handing it to the read stream.
+      const opened = fs.fstatSync(fd);
+      const current = fs.lstatSync(filePath);
+      if (
+        !opened.isFile() ||
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+        (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+      ) {
+        throw new Error("SHA-256 source changed or became a symlink while opening");
+      }
       stream = fs.createReadStream(filePath, { fd, autoClose: true });
     } catch (error) {
       fs.closeSync(fd);
@@ -50,25 +61,6 @@ export async function sha256File(filePath: string): Promise<string> {
       reject(error);
     };
 
-    // O_NOFOLLOW is enforced on platforms that support it. The descriptor
-    // identity check also detects replacement races on platforms without it.
-    stream.once("open", (fd) => {
-      try {
-        const opened = fs.fstatSync(fd);
-        const current = fs.lstatSync(filePath);
-        if (
-          !opened.isFile() ||
-          current.isSymbolicLink() ||
-          !current.isFile() ||
-          (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
-          (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
-        ) {
-          throw new Error("SHA-256 source changed or became a symlink while opening");
-        }
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
     stream.on("data", (chunk) => hash.update(chunk));
     stream.once("end", () => {
       if (settled) return;
