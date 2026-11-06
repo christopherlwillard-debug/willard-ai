@@ -554,6 +554,17 @@ test(
         targetUrl,
       ]);
       assert.equal(restored.stdout.trim(), "2:nas photo,family video");
+      const restoredMediaStates = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-c",
+        "SELECT count(*) || ':' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED') FROM media_files",
+        targetUrl,
+      ]);
+      assert.equal(restoredMediaStates.stdout.trim(), "3:1", "recycled and deleted catalog history remains while active media is verified");
       const recoveredKnowledge = await run(psqlBin, [
         "-X",
         "--no-password",
