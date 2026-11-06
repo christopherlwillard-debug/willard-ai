@@ -144,16 +144,16 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
 
 
 test("late session-store saves after password reset cannot restore authorization", () => {
-  assert.match(authSource, /sess\\.credentialSettingsId = settingsId/);
-  assert.match(authSource, /sess\\.credentialVersion = credentialVersion\\(expectedPasswordHash\\)/);
-  assert.match(appSource, /SELECT password_hash FROM app_settings WHERE id = \\$1/);
-  assert.match(appSource, /isSessionCredentialCurrent\\(sess\\.credentialVersion, currentPasswordHash\\)/);
+  assert.ok(authSource.includes("sess.credentialSettingsId = settingsId"));
+  assert.ok(authSource.includes("sess.credentialVersion = credentialVersion(expectedPasswordHash)"));
+  assert.ok(appSource.includes("SELECT password_hash FROM app_settings WHERE id = $1"));
+  assert.ok(appSource.includes("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)"));
+  const credentialCheck = appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)");
   assert.ok(
-    appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)") <
-      appSource.indexOf("next();", appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)")),
+    credentialCheck >= 0 && appSource.indexOf("next();", credentialCheck) > credentialCheck,
     "credential version must be checked before protected routes execute",
   );
   assert.ok(authSource.includes("sess->>'credentialSettingsId' = $1"));
   assert.ok(authSource.includes("sess->>'credentialVersion' = $2"));
-  assert.match(authSource, /isSessionCredentialCurrent\\(sess\\.credentialVersion, settings\\.passwordHash\\)/);
+  assert.ok(authSource.includes("isSessionCredentialCurrent(sess.credentialVersion, settings.passwordHash)"));
 });
