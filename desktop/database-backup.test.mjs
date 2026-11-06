@@ -1065,3 +1065,14 @@ test("backup and restore media inventories are scoped to the authenticated NAS r
   assert.match(restoreFlow, /await remapRestoredLibrary\(environment, manifest\.library\.root, targetLibrary\.root\)/);
   assert.match(restoreFlow, /await verifyRestoredLibraryInventory\(environment, manifest\.library, targetLibrary\)/);
 });
+
+test("database snapshot lease delegates lifecycle ownership to the shared process helper", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function openDatabaseSnapshot(environment)");
+  const end = source.indexOf("\\nfunction quoteIdentifier", start);
+  assert.ok(start >= 0 && end > start);
+  const lease = source.slice(start, end);
+  assert.match(lease, /waitForExportedSnapshot\\(child\\)/);
+  assert.match(lease, /releaseExportedSnapshot\\(child\\)/);
+  assert.doesNotMatch(lease, /setTimeout|child\\.once\\(["']close/);
+});
