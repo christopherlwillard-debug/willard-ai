@@ -1002,7 +1002,23 @@ async function pruneBackups(outputRoot, retentionDays, keep, secret) {
 
 async function cleanTarget(environment) {
   const output = await runSql(
-    "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')",
+    `SELECT
+      (SELECT count(*) FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_namespace
+        WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+          AND nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_extension WHERE extname <> 'plpgsql')`,
     environment,
     "Restore target safety check",
   );
