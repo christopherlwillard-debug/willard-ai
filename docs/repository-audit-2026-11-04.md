@@ -2412,3 +2412,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added source-contract regression coverage for the claim, token-fenced success/failure writes, and rejected archive reference cleanup.
 - Commits: route claim `5b92fa4834092b45d85bd89356af2651d15b27e8`, regression `da615b6663290e0781a0ebe00b7715b4a3d2cc92`, rejected-path cleanup `121dde95615d1257f17f55e5731e8eba2d533ca4`, and regression follow-up `a3e723b00b48c9f0099451c1038f67d84a85d993`.
 - Fast Validation is pending for the latest branch head. A crash during analysis can still leave an `analyzing` row requiring recovery; automatic stale-analysis reclamation remains open and should be handled separately from concurrent-request fencing.
+
+
+## Organization plan-edit concurrency fencing (latest)
+- Confirmed the plan-exclusion route only rejected `executing` jobs and wrote the updated plan by job ID alone. A plan edit could race another plan edit or a worker claim, and could overwrite newer state.
+- The route now rejects jobs in `executing`, `analyzing`, or `rolling_back`; atomically claims the row with a unique token only when no other lease exists; and persists the plan only while that token and the original status still match. The claim is cleared on success and best-effort cleared on errors without clearing a newer owner's token.
+- Added source-contract regression coverage for busy-state rejection, exclusive claim, owner-fenced persistence, and error cleanup.
+- Commits: implementation `b712ad812ddc183542165fa386d961b13ee6e210`, cleanup `5edb297f836ed3dfd8e038e4a9840426ecf59732`, type-safe claim state `9c53bddb35c9586e2df1a5003a5f827f651e2499`, regression `8484f62aee6ca005fa46e126438914b725c722f0`, and assertion correction `df35eddc11262468b55712394ccefb72c98d30fe`.
+- Validation is pending. The regression is a source-contract test; a PostgreSQL-backed concurrent PATCH test is still desirable.
