@@ -2771,3 +2771,6 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Optimize Center → active conversion and cancel | found; architecture required | no code change in this batch | Current synchronous FFmpeg calls still block the event loop; advisory-lock loss can leave a stale child running. |
+
+
+**Archive category UI follow-through:** The new `Audio Archive` category is now available in the Archive Library category filter. Added a UI contract regression in `scripts/ui-accessibility.test.mjs` so computed categories cannot silently become unfilterable. Commits: `b009f43cf026ac793ad489eb017cc5965a43545c` (filter option) and `598cf64b6480682f3b1e6e3a0cb67b527e2d7deb` (UI regression). The Fast Validation run #1202 predates these two commits; the next PR-triggered run must include the UI contract test. Validation remains pending.
