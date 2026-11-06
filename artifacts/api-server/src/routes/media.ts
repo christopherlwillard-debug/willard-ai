@@ -16,7 +16,7 @@ import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
 import { isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
-import { moveFileNoReplace } from "../lib/organize-helpers.ts";
+import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 
 const router = Router();
 
