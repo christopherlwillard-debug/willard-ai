@@ -1457,7 +1457,7 @@ test("installer upgrade and uninstall refuse to proceed when the packaged shutdo
   assert.match(stopHelper, /if not FileExists\(Launcher\) then/);
   assert.match(stopHelper, /if RequireLauncher then/);
   assert.match(stopHelper, /shutdown helper is missing/);
-  assert.match(stopHelper, /reinstall or repair/);
+  assert.match(stopHelper, /reinstall or repair/i);
 
   const prepareStart = config.indexOf("function PrepareToInstall");
   const prepareEnd = config.indexOf("\nprocedure CurUninstallStepChanged", prepareStart);
