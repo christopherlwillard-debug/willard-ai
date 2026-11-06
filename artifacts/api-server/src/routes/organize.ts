@@ -61,6 +61,11 @@ async function getScopedOrganizationJob(id: number, nasPath: string) {
   return job;
 }
 
+function publicOrganizationJob<T extends { leaseToken?: string | null }>(job: T) {
+  const { leaseToken: _leaseToken, ...publicJob } = job;
+  return publicJob;
+}
+
 /**
  * Treat persisted move journals as untrusted recovery input. Every recorded
  * path must remain inside the active NAS and every move must carry a verified
@@ -896,14 +901,14 @@ router.post("/organize/jobs", async (req, res) => {
     const [job] = await db.insert(organizationJobsTable)
       .values({ sourceType, sourcePath: canonicalSourcePath, archiveId: parsedArchiveId, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy, nasPath })
       .returning();
-    res.status(201).json(job);
+    res.status(201).json(job ? publicOrganizationJob(job) : job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }
 });
 
 router.get("/organize/jobs", async (_req, res) => {
   try {
     const jobs = await db.select().from(organizationJobsTable).orderBy(desc(organizationJobsTable.createdAt)).limit(50);
-    res.json(jobs);
+    res.json(jobs.map(publicOrganizationJob));
   } catch { res.status(500).json({ error: "Failed to list organize jobs" }); }
 });
 
@@ -915,7 +920,7 @@ router.get("/organize/jobs/:id", async (req, res) => {
     if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
     const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    res.json(job);
+    res.json(publicOrganizationJob(job));
   } catch { res.status(500).json({ error: "Failed to get organize job" }); }
 });
 
