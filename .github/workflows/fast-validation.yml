@@ -147,6 +147,7 @@ jobs:
             artifacts/api-server/src/__tests__/sevenzip-path.test.ts \
             artifacts/api-server/src/__tests__/archive-safety.test.ts \
             artifacts/api-server/src/__tests__/archive-tar-input.test.ts \
+            artifacts/api-server/src/__tests__/archive-classification.test.ts \
             artifacts/api-server/src/__tests__/storage-policy.test.ts \
             artifacts/api-server/src/__tests__/nas-storage-paths.test.ts \
             artifacts/api-server/src/__tests__/storage-migration.test.ts \
