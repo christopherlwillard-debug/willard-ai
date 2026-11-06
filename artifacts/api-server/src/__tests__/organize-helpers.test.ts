@@ -395,7 +395,7 @@ test("organization execution is claimed atomically before capacity reservation",
   assert.match(claimBlock, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
   assert.match(claimBlock, /eq\(organizationJobsTable\.status, "verified"\)/);
   assert.match(claimBlock, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
-  assert.match(source, /\.set\(\{ status: "verified", error: message, stageUpdatedAt: new Date\(\) \}\)/);
+  assert.match(source, /\.set\(\{ status: "verified", error: message, stageUpdatedAt: new Date\(\), leaseToken: null \}\)/);
 });
 
 test("rollbackMoves: preserves a new file at the original path instead of overwriting it", async () => {
@@ -418,7 +418,7 @@ test("organization resume and reset require a stale execution lease", () => {
   const source = fs.readFileSync(routePath, "utf8");
   assert.match(source, /ORGANIZATION_EXECUTION_LEASE_MS = 5 \* 60 \* 1000/);
   assert.match(source, /ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 \* 1000/);
-  assert.match(source, /startOrganizationJobHeartbeat\(id, nasPath\)/);
+  assert.match(source, /startOrganizationJobHeartbeat\(id, nasPath, executionLeaseToken\)/);
   assert.match(source, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
 
   const resetStart = source.indexOf('router.post("/organize/jobs/:id/reset"');
