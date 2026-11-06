@@ -1487,6 +1487,16 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   assert.match(identityReader, /could not verify the identity of Willard process/);
   assert.match(identityReader, /did not return enough identity information/);
   assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
+  assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate\)/);
+  const creationDateCheck = identityReader.indexOf("$expectedCreationDate");
+  const executableCheck = identityReader.indexOf("$executablePath");
+  assert.ok(creationDateCheck >= 0 && executableCheck > creationDateCheck,
+    "A recorded creation-time mismatch must prove PID reuse before path/command-line checks can fail closed.");
+
+  const processIdentityStart = launcher.indexOf("function Test-ProcessIdentity");
+  const processIdentityEnd = launcher.indexOf("\\nfunction Test-CommandLineContainsExactPath", processIdentityStart);
+  const processIdentity = launcher.slice(processIdentityStart, processIdentityEnd);
+  assert.match(processIdentity, /Get-ProcessIdentity \$tracked\.pid \$tracked\.creationDate/);
 });
 
 test("packaged launcher detects orphaned API and web processes before startup or shutdown", () => {
