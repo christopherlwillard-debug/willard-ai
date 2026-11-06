@@ -81,6 +81,10 @@ export async function withTarInput<T>(
         });
       })
     : Promise.resolve();
+  // A fast child failure can settle before stdout pipeline completion. Observe
+  // the rejection now, while still awaiting the original promise below so the
+  // decompressor error is propagated through the normal cleanup path.
+  void exit.catch(() => {});
 
   try {
     const limiter = createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes);
