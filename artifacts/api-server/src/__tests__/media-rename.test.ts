@@ -159,6 +159,8 @@ test("media rename route validates JSON name type and uses no-replace moves", ()
   assert.match(route, /isPortableMediaFileName\(newName\)/);
   assert.match(route, /\(from, to\) => moveFileNoReplace\(from, to\)/);
   assert.match(route, /if \(newRelPath === file\.relativePath\)/);
+  assert.match(route, /error instanceof MediaRenameConflictError/);
+  assert.match(route, /Media record changed during rename/);
   assert.match(route, /error\.code === "EEXIST"/);
   assert.match(route, /res\.status\(409\)\.json\(\{ error: "A file with that name already exists" \}\)/);
   const sourceCheck = route.indexOf("if (!fs.existsSync(oldAbs))");
