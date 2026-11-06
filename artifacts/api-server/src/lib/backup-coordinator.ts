@@ -42,20 +42,37 @@ let activeChild: ChildProcess | null = null;
 let retryFailures = 0;
 let nextRetryAt = 0;
 
-function terminateBackupProcessTree(child: ChildProcess): Promise<void> {
-  if (!child.pid) return Promise.resolve();
+function waitForBackupChildClose(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once("close", () => resolve()));
+}
+
+async function terminateBackupProcessTree(child: ChildProcess): Promise<void> {
+  if (!child.pid) return;
+  // Register the close wait before signaling so a fast exit cannot be missed.
+  const closed = waitForBackupChildClose(child);
   if (process.platform === "win32") {
-    return new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => resolve());
     });
+    await closed;
+    return;
   }
-  child.kill("SIGTERM");
-  const hardKill = setTimeout(() => child.kill("SIGKILL"), 2_000);
+
+  // POSIX children are spawned in their own process group. Signal the group,
+  // not just the Node wrapper, so descendants cannot keep backup pipes alive.
+  try { process.kill(-child.pid, "SIGTERM"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  const hardKill = setTimeout(() => {
+    try { process.kill(-child.pid!, "SIGKILL"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        logger.warn({ err: error, operation: "database_backup" }, "Backup process-group hard kill failed");
+      }
+    }
+  }, 2_000);
   hardKill.unref();
-  return new Promise((resolve) => child.once("close", () => {
-    clearTimeout(hardKill);
-    resolve();
-  }));
+  try { await closed; } finally { clearTimeout(hardKill); }
 }
 
 function dateString(value: Date | null | undefined): string | null {
@@ -163,20 +180,43 @@ function runBackupProcess(libraryPath: string): Promise<void> {
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        detached: process.platform !== "win32",
       },
     );
     activeChild = child;
-    const timeout = setTimeout(() => { void terminateBackupProcessTree(child); }, 30 * 60 * 1000);
-    timeout.unref();
+    const OUTPUT_TAIL_LIMIT = 8_192;
+    const appendTail = (current: string, chunk: unknown): string =>
+      (current + String(chunk)).slice(-OUTPUT_TAIL_LIMIT);
     let output = "";
     let errorOutput = "";
-    child.stdout.on("data", (chunk) => { output += String(chunk); });
-    child.stderr.on("data", (chunk) => { errorOutput += String(chunk); });
-    child.once("error", (error) => reject(error));
-    child.once("close", (code, signal) => {
+    let timedOut = false;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      void terminateBackupProcessTree(child).catch((error) => {
+        logger.error({ err: error, operation: "database_backup" }, "Backup timeout process-tree termination failed");
+      });
+    }, 30 * 60 * 1000);
+    timeout.unref();
+    child.stdout.on("data", (chunk) => { output = appendTail(output, chunk); });
+    child.stderr.on("data", (chunk) => { errorOutput = appendTail(errorOutput, chunk); });
+    const cleanup = (): void => {
       clearTimeout(timeout);
       if (activeChild === child) activeChild = null;
-      if (code === 0) {
+    };
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (timedOut) {
+        reject(new Error("Backup exceeded its 30-minute time limit; its process tree was terminated."));
+      } else if (code === 0) {
         logger.info({ operation: "database_backup", output: output.trim().slice(-300) }, "Verified NAS database backup created");
         resolve();
       } else {
