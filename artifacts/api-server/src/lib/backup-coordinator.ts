@@ -52,9 +52,26 @@ async function terminateBackupProcessTree(child: ChildProcess): Promise<void> {
   // Register the close wait before signaling so a fast exit cannot be missed.
   const closed = waitForBackupChildClose(child);
   if (process.platform === "win32") {
+    let taskkillError: Error | null = null;
     await new Promise<void>((resolve) => {
-      execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, () => resolve());
+      execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }, (error) => {
+        taskkillError = error;
+        resolve();
+      });
     });
+    if (taskkillError) {
+      // Do not leave the coordinator waiting forever if taskkill is missing,
+      // denied, or otherwise fails. Terminate the direct child as a fallback;
+      // report the tree-termination failure so operators know descendants
+      // could require manual cleanup.
+      try { child.kill("SIGKILL"); } catch (error) {
+        logger.error({ err: error, operation: "database_backup" }, "Backup child fallback termination failed");
+      }
+      await closed;
+      throw new Error("Windows taskkill could not terminate the backup process tree; the direct child was force-stopped.", {
+        cause: taskkillError,
+      });
+    }
     await closed;
     return;
   }
