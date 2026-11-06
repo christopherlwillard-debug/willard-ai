@@ -792,7 +792,7 @@ async function sourceLibrary(environment, snapshot = null) {
   if (!root) return null;
   const identity = await ensureLibraryIdentity(root);
   const countOutput = await runSnapshotSql(
-    "SELECT count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED')::text || E'\\t' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]')::text FROM media_files",
+    `SELECT count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED')::text || E'\\t' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]')::text FROM media_files WHERE nas_path = ${sqlLiteral(root)}`,
     environment,
     snapshot,
     "Library catalog identity inspection",
@@ -812,7 +812,7 @@ async function sourceLibrary(environment, snapshot = null) {
     fail("The library catalog returned an invalid media count.");
   }
   const sampleOutput = await runSnapshotSql(
-    "SELECT relative_path, lower(content_hash) FROM media_files WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]' ORDER BY relative_path LIMIT 32",
+    `SELECT relative_path, lower(content_hash) FROM media_files WHERE nas_path = ${sqlLiteral(root)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]' ORDER BY relative_path LIMIT 32`,
     environment,
     snapshot,
     "Library media identity sample",
@@ -1155,8 +1155,8 @@ async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
 async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary) {
   const activeScope = manifestLibrary.catalogInventoryScope === "active";
   const inventoryFilter = activeScope
-    ? " WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'"
-    : "";
+    ? ` WHERE nas_path = ${sqlLiteral(targetLibrary.root)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'`
+    : ` WHERE nas_path = ${sqlLiteral(targetLibrary.root)}`;
   const output = await runSql(
     `SELECT relative_path, lower(content_hash), last_scan_action FROM media_files${inventoryFilter} ORDER BY relative_path`,
     environment,
