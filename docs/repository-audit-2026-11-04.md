@@ -2851,3 +2851,25 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Fast Validation must run the regression on the final audit head; snapshot metadata is not a cross-platform file lock. |
+
+
+## November 6 follow-up — archive password-preview integrity and installer lifecycle fixture cleanup
+
+### Password-protected archive preview snapshot verification
+- **Finding — Medium (Archive Library → preview encrypted ZIP/7-Zip files):** The normal ZIP and 7-Zip listing completion paths verified the captured archive snapshot, but password/encryption error paths accepted and persisted a password-protected classification without that check. A file replaced or modified during inspection could therefore be classified from a different file than the one initially snapshotted.
+- **Fix:** The ZIP password-error branch now revalidates the captured archive snapshot before setting `isPasswordProtected`. The 7-Zip error branch performs the same check and rejects if the snapshot changed before resolving the preview. The existing fail-closed snapshot helper is reused.
+- **Regression:** Extended `archive-safety.test.ts` (already included in Fast Validation's targeted backend command) with assertions that both password-error branches verify the snapshot before accepting the protected result. The existing runtime helper test continues to verify that a changed source file is rejected.
+- **Commits:** implementation `a85dc983574acd95127d0062296a9f03b45e4551`; regression `68a183ff4af333671982bb4c9212a8d3adf78250`.
+- **Validation:** Source inspection confirms both checks. The regression has been added but has not yet been confirmed by a successful run on the final branch head. Fast Validation #1224 failed in a separate Windows installer contract assertion before reaching the targeted backend regression step; the newer run must execute `archive-safety.test.ts`.
+- **Remaining risk:** Snapshot metadata detects observable replacement/change using size, mtime, ctime, device, and inode; it is not a cross-platform file lock. Windows and SMB/NAS semantics still need integration coverage.
+
+### Windows interrupted-update lifecycle cleanup contract
+- **Finding — Medium (Windows installer lifecycle → recovery fixture validation):** Fast Validation #1224 failed in `scripts/windows/installer-config.test.mjs`. The test correctly asserted that interrupted-update fixtures use the accepted sibling candidate/backup naming scheme, but the lifecycle script's `finally` block still contained two obsolete cleanup expressions for the old `$InstallRoot.lifecycle-backup` and `$InstallRoot.lifecycle-candidate` paths. Those paths were no longer created by either recovery scenario, and their stale presence contradicted the updated fixture contract.
+- **Fix:** Removed the two obsolete cleanup expressions. The lifecycle script still removes its disposable install root; successful recovery asserts the candidate/journal cleanup, while failed runs preserve the unique temporary workspace for diagnostics. No production launcher/recovery behavior or process-identity guard was changed.
+- **Commit:** `3b063902d289a1d08bc7289221e79ee6900f604a`.
+- **Validation:** The failure is confirmed by the #1224 job log and source assertion. The source correction is committed; the existing installer-config regression and Windows lifecycle must run on the latest head before this is marked target-tested or integration-tested.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Confirm regression on latest Fast Validation; metadata snapshot is not a file lock. |
+| Medium | Windows installer → interrupted-update lifecycle fixture cleanup | fixed; target-test pending | `3b063902d289a1d08bc7289221e79ee6900f604a` | Confirm installer-config test and complete installed-product recovery lifecycle on latest head. |
