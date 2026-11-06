@@ -26,12 +26,12 @@ test("duplicate storage estimates exclude only one largest retained copy", () =>
   const summary = source("lib/duplicate-summary.ts");
   const cleanup = source("routes/cleanup.ts");
 
-  assert.match(summary, /SUM\\(size_bytes\\)\\s*-\\s*MAX\\(size_bytes\\) AS wasted/);
-  assert.match(summary, /SUM\\(m\\.size_bytes\\)\\s*-\\s*MAX\\(m\\.size_bytes\\) AS wasted/);
-  assert.doesNotMatch(summary, /COUNT\\(\\*\\)\\s*-\\s*1\\)\\s*\\*\\s*MAX/);
-  assert.match(cleanup, /largestFileSize:\\s*Number\\(r\\.largest_file_size\\)/);
-  assert.match(cleanup, /totalSize - raw\\.largestFileSize/);
-  assert.match(cleanup, /totalSize - g\\.largestFileSize/);
+  assert.match(summary, /SUM\(size_bytes\)\s*-\s*MAX\(size_bytes\) AS wasted/);
+  assert.match(summary, /SUM\(m\.size_bytes\)\s*-\s*MAX\(m\.size_bytes\) AS wasted/);
+  assert.doesNotMatch(summary, /COUNT\(\*\)\s*-\s*1\)\s*\*\s*MAX/);
+  assert.equal((cleanup.match(/largestFileSize:\s*Number\(r\.largest_file_size\)/g) ?? []).length, 2);
+  assert.match(cleanup, /totalSize - raw\.largestFileSize/);
+  assert.match(cleanup, /totalSize - g\.largestFileSize/);
 });
 
 test("catalog reconciliation remains metadata-only", () => {
