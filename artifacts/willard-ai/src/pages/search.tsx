@@ -316,8 +316,13 @@ export default function SearchPage() {
   }, [mediaTypeOverride, favoriteOnlyOverride]);
 
   const search = useMutation({
-    mutationFn: async ({ query, refine, previousIntent }: { query: string; refine: boolean; previousIntent: SearchIntent | null }) => {
-      const body: Record<string, unknown> = { query, filters: buildFilters() };
+    mutationFn: async ({ query, refine, previousIntent, filters }: {
+      query: string;
+      refine: boolean;
+      previousIntent: SearchIntent | null;
+      filters?: Record<string, unknown>;
+    }) => {
+      const body: Record<string, unknown> = { query, filters: filters ?? buildFilters() };
       if (refine && previousIntent) {
         body.refine = true;
         body.previousIntent = previousIntent;
@@ -419,24 +424,27 @@ export default function SearchPage() {
 
   const hasSession = response !== null && !similarOf;
 
-  const submit = useCallback((raw?: string, forceNew = false) => {
+  const submit = useCallback((raw?: string, forceNew = false, filters?: Record<string, unknown>) => {
     const q = (raw ?? input).trim();
     if (!q || search.isPending) return;
     const refine = hasSession && !forceNew;
-    search.mutate({ query: q, refine, previousIntent: refine ? response?.intent ?? null : null });
+    search.mutate({ query: q, refine, previousIntent: refine ? response?.intent ?? null : null, filters });
   }, [input, search, hasSession, response]);
 
   const submitSuggestion = useCallback((suggestion: string) => {
+    const filters = { ...(buildFilters() ?? {}) };
     if (suggestion.startsWith("Search all media")) {
       setTypeFilter("all");
       setMediaTypeOverride([]);
+      filters.mediaTypes = [];
     }
     if (suggestion.startsWith("Include non-favorites")) {
       setFavoriteOnly(false);
       setFavoriteOnlyOverride(false);
+      filters.favoriteOnly = false;
     }
-    submit(suggestion);
-  }, [submit]);
+    submit(suggestion, false, Object.keys(filters).length ? filters : undefined);
+  }, [buildFilters, submit]);
 
   const startOver = () => {
     setResponse(null);
