@@ -6,7 +6,7 @@ import type { SQL } from "drizzle-orm";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { reconcileLegacyCatalog } from "../lib/catalog-reconciliation";
-import { parseBoundedInteger, parseOptionalDate, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalDate, parseOptionalQueryString, RequestValidationError } from "../lib/request-validation.ts";
 import { escapeLikePattern } from "../lib/sql-like.ts";
 
 const router: IRouter = Router();
@@ -24,7 +24,12 @@ router.post("/files/reconcile-legacy", async (_req, res) => {
  */
 router.get("/files/search", async (req, res) => {
   try {
-    const { q, fileType, minSize, maxSize, after, before, source } = req.query as Record<string, string>;
+    const q = parseOptionalQueryString(req.query["q"], "q");
+    const fileType = parseOptionalQueryString(req.query["fileType"], "fileType");
+    const source = parseOptionalQueryString(req.query["source"], "source");
+    const after = parseOptionalQueryString(req.query["after"], "after");
+    const before = parseOptionalQueryString(req.query["before"], "before");
+    const minSize = req.query["minSize"];
     const lim = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 50 });
     const off = parseBoundedInteger(req.query["offset"], { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
     const minSizeValue = parseBoundedInteger(req.query["minSize"], { name: "minSize", min: 0, max: Number.MAX_SAFE_INTEGER, defaultValue: 0 });
