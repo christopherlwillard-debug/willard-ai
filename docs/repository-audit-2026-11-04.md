@@ -2322,3 +2322,6 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Organization execute/resume/rollback did not fence stale workers with unique ownership | implementation and source regression committed; runtime validation pending | commits listed above | Exercise stale-worker takeover while paused before/after every filesystem mutation on Linux, Windows, and SMB; verify only the current token owner can mutate and that all journal states recover |
+
+
+**Additional filesystem guard:** The follow-up review extended the ownership check to archive disposition moves into the processed folder and their attempted restoration, not just ordinary file routing. Commit `112b3b92be5fa0c86b27e793484f8f1dae405a91`. Rollback helper checks ownership again after potentially long hash operations and propagates lost-lease errors so the caller stops rather than continuing with later entries. Helper commits: `46021c6d328e1f547570a4c5e65331723b7aab4b`, `e5c794969447383aa5b44820013b48541cb810d7`.
