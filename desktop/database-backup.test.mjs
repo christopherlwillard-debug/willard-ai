@@ -530,6 +530,8 @@ test(
             (46, ${sqlLiteral(originalPath)}, ${sqlLiteral(path.dirname(originalPath))});
           CREATE TABLE library_activity (id integer PRIMARY KEY, nas_path text);
           INSERT INTO library_activity VALUES (47, ${sqlLiteral(nasRoot)});
+          CREATE TABLE media_scan_jobs (id integer PRIMARY KEY, nas_path text NOT NULL);
+          INSERT INTO media_scan_jobs VALUES (49, ${sqlLiteral(nasRoot)});
           CREATE TABLE organization_jobs (
             id integer PRIMARY KEY, nas_path text, source_path text, report_path text,
             plan_json jsonb, preflight_json jsonb, file_moves jsonb, report_json jsonb
@@ -774,6 +776,31 @@ test(
         recoveredEmptyJson.stdout.trim(),
         "object|array|0|object|array|0",
         "path remapping must preserve empty JSON objects and arrays, including nested values",
+      );
+      const remappedFaceAndScanPaths = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-F",
+        "|",
+        "-c",
+        `
+          SELECT f.crop_path, msj.nas_path
+          FROM faces f
+          CROSS JOIN media_scan_jobs msj
+          WHERE f.id = 31 AND msj.id = 49
+        `,
+        targetUrl,
+      ]);
+      assert.equal(
+        remappedFaceAndScanPaths.stdout.trim(),
+        [
+          path.join(reattachedNasRoot, "WillardAI", "cache", "faces", "31.webp"),
+          path.resolve(reattachedNasRoot),
+        ].join("|"),
+        "face crop and media scan history paths must follow the reattached NAS root",
       );
       assert.equal(
         createHash("sha256").update(await readFile(reattachedOriginalPath)).digest("hex"),
