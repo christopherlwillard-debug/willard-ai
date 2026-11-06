@@ -23,11 +23,55 @@ import * as crypto from "crypto";
  */
 export async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hash   = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data",  chunk => hash.update(chunk));
-    stream.on("end",   () => resolve(hash.digest("hex")));
-    stream.on("error", reject);
+    const initial = fs.lstatSync(filePath);
+    if (initial.isSymbolicLink() || !initial.isFile()) {
+      reject(new Error("SHA-256 source must be a regular, non-symlink file"));
+      return;
+    }
+
+    const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+    const stream = fs.createReadStream(filePath, {
+      flags: fs.constants.O_RDONLY | noFollow,
+    });
+    const hash = crypto.createHash("sha256");
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy();
+      reject(error);
+    };
+
+    // O_NOFOLLOW is enforced on platforms that support it. The descriptor
+    // identity check also detects replacement races on platforms without it.
+    stream.once("open", (fd) => {
+      try {
+        const opened = fs.fstatSync(fd);
+        const current = fs.lstatSync(filePath);
+        if (
+          !opened.isFile() ||
+          current.isSymbolicLink() ||
+          !current.isFile() ||
+          (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+          (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+        ) {
+          throw new Error("SHA-256 source changed or became a symlink while opening");
+        }
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(hash.digest("hex"));
+    });
+    stream.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
