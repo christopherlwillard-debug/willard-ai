@@ -142,3 +142,18 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
   assert.match(authSource, /const setupRateLimiter = rateLimit\(/);
 });
 
+
+test("late session-store saves after password reset cannot restore authorization", () => {
+  assert.match(authSource, /sess\\.credentialSettingsId = settingsId/);
+  assert.match(authSource, /sess\\.credentialVersion = credentialVersion\\(expectedPasswordHash\\)/);
+  assert.match(appSource, /SELECT password_hash FROM app_settings WHERE id = \\$1/);
+  assert.match(appSource, /isSessionCredentialCurrent\\(sess\\.credentialVersion, currentPasswordHash\\)/);
+  assert.ok(
+    appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)") <
+      appSource.indexOf("next();", appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)")),
+    "credential version must be checked before protected routes execute",
+  );
+  assert.ok(authSource.includes("sess->>'credentialSettingsId' = $1"));
+  assert.ok(authSource.includes("sess->>'credentialVersion' = $2"));
+  assert.match(authSource, /isSessionCredentialCurrent\\(sess\\.credentialVersion, settings\\.passwordHash\\)/);
+});

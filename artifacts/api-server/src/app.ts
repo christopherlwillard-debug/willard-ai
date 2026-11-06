@@ -28,7 +28,7 @@ import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-
 import { isShuttingDown } from "./lib/shutdown-state.ts";
 import { apiErrorHandler, apiNotFoundHandler } from "./lib/api-errors.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
-import { isSessionInactive } from "./lib/auth-session-guard.ts";
+import { isSessionCredentialCurrent, isSessionInactive } from "./lib/auth-session-guard.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost",
@@ -295,6 +295,46 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
     return;
   }
+  // A request that started before a password reset can finish afterward and
+  // connect-pg-simple may upsert its stale session again. Bind every session
+  // to the credential version that created it so a late save cannot restore
+  // authorization after password-change/recovery revocation.
+  const credentialSettingsId = sess.credentialSettingsId;
+  if (!Number.isSafeInteger(credentialSettingsId) || credentialSettingsId <= 0) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.warn({ err: error }, "Unable to destroy a session without credential ownership");
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session credentials are no longer valid. Please log in again." });
+    return;
+  }
+
+  let currentPasswordHash: string | null;
+  try {
+    const credential = await pool.query<{ password_hash: string | null }>(
+      "SELECT password_hash FROM app_settings WHERE id = $1",
+      [credentialSettingsId],
+    );
+    currentPasswordHash = credential.rows[0]?.password_hash ?? null;
+  } catch (error) {
+    req.log.error({ err: error, operation: "session_credential_check" }, "Unable to verify session credentials");
+    res.status(503).json({ error: "Session credentials could not be verified. Please retry." });
+    return;
+  }
+
+  if (!isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.warn({ err: error }, "Unable to destroy a session with revoked credentials");
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session revoked because account credentials changed. Please log in again." });
+    return;
+  }
+
   if (!_firstAuthSeen) {
     _firstAuthSeen = true;
     notifyUiConnected();

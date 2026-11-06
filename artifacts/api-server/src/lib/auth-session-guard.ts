@@ -1,3 +1,23 @@
+import { createHash } from "node:crypto";
+
+/**
+ * Store only a one-way fingerprint of the password hash in each session.
+ * A password change produces a new bcrypt hash, invalidating every old
+ * session even if an in-flight request later upserts its deleted session row.
+ */
+export function credentialVersion(passwordHash: unknown): string | null {
+  if (typeof passwordHash !== "string" || passwordHash.length === 0) return null;
+  return createHash("sha256").update(passwordHash, "utf8").digest("hex");
+}
+
+export function isSessionCredentialCurrent(sessionVersion: unknown, passwordHash: unknown): boolean {
+  const currentVersion = credentialVersion(passwordHash);
+  return typeof sessionVersion === "string" &&
+    /^[a-f0-9]{64}$/.test(sessionVersion) &&
+    currentVersion !== null &&
+    sessionVersion === currentVersion;
+}
+
 /**
  * Missing, malformed, or implausibly future activity timestamps must not
  * silently disable the server's inactivity timeout.

@@ -9,7 +9,7 @@ import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { logger } from "../lib/logger.ts";
-import { persistSessionUnderCredentialLock, type CredentialLock } from "../lib/auth-session-guard.ts";
+import { credentialVersion, isSessionCredentialCurrent, persistSessionUnderCredentialLock, type CredentialLock } from "../lib/auth-session-guard.ts";
 
 const router: IRouter = Router();
 
@@ -123,6 +123,9 @@ async function establishSessionForPassword(
     () => acquireCredentialLock(settingsId),
     async () => {
       await establishSession(req);
+      const sess = req.session as any;
+      sess.credentialSettingsId = settingsId;
+      sess.credentialVersion = credentialVersion(expectedPasswordHash);
       await saveSession(req);
     },
     () => destroySession(req),
@@ -254,7 +257,19 @@ router.get("/auth/status", async (req: Request, res: Response) => {
       return;
     }
     const sess = req.session as any;
-    res.json({ setup: false, authenticated: sess?.authenticated === true });
+    const authenticated =
+      sess?.authenticated === true &&
+      sess.credentialSettingsId === settings.id &&
+      isSessionCredentialCurrent(sess.credentialVersion, settings.passwordHash);
+    if (sess?.authenticated === true && !authenticated) {
+      try {
+        await destroySession(req);
+      } catch (error) {
+        logger.warn({ err: error, operation: "auth_status_session_cleanup" }, "Unable to remove a stale authentication session");
+      }
+      res.clearCookie("willard.sid");
+    }
+    res.json({ setup: false, authenticated });
   } catch {
     res.status(500).json({ error: "Failed to check auth status" });
   }
@@ -416,8 +431,15 @@ router.get("/auth/sessions", async (req: Request, res: Response) => {
   }
   try {
     const currentSid = req.sessionID;
+    const currentSession = req.session as any;
     const result = await pool.query<{ sid: string; sess: any; expire: Date }>(
-      `SELECT sid, sess, expire FROM session WHERE expire > NOW() ORDER BY (sess->>'createdAt') DESC NULLS LAST`
+      `SELECT sid, sess, expire
+         FROM session
+        WHERE expire > NOW()
+          AND sess->>'credentialSettingsId' = $1
+          AND sess->>'credentialVersion' = $2
+        ORDER BY (sess->>'createdAt') DESC NULLS LAST`,
+      [String(currentSession.credentialSettingsId), currentSession.credentialVersion],
     );
     const sessions = result.rows.map((row) => ({
       sid: row.sid,
