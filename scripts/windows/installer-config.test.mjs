@@ -1443,10 +1443,31 @@ test("uninstaller stops the application after confirmation and aborts if shutdow
   const stopHelperEnd = config.indexOf("\nfunction PrepareToInstall", stopHelperStart);
   const stopHelper = config.slice(stopHelperStart, stopHelperEnd);
   assert.match(uninstall, /CurUninstallStep = usUninstall/);
-  assert.match(uninstall, /StopWillardServices/);
+  assert.match(uninstall, /StopWillardServices\(True\)/);
   assert.match(uninstall, /SuppressibleMsgBox/);
   assert.match(uninstall, /Abort/);
   assert.match(stopHelper, /could not start its shutdown helper/);
+});
+
+test("installer upgrade and uninstall refuse to proceed when the packaged shutdown helper is missing", () => {
+  const stopHelperStart = config.indexOf("function StopWillardServices");
+  const stopHelperEnd = config.indexOf("\nfunction PrepareToInstall", stopHelperStart);
+  const stopHelper = config.slice(stopHelperStart, stopHelperEnd);
+  assert.match(stopHelper, /function StopWillardServices\(RequireLauncher: Boolean\)/);
+  assert.match(stopHelper, /if not FileExists\(Launcher\) then/);
+  assert.match(stopHelper, /if RequireLauncher then/);
+  assert.match(stopHelper, /shutdown helper is missing/);
+  assert.match(stopHelper, /reinstall or repair/);
+
+  const prepareStart = config.indexOf("function PrepareToInstall");
+  const prepareEnd = config.indexOf("\nprocedure CurUninstallStepChanged", prepareStart);
+  const prepare = config.slice(prepareStart, prepareEnd);
+  assert.ok(prepare.includes("FileExists(ExistingRuntime)"),
+    "Fresh installs may omit the old shutdown helper, but an existing packaged runtime must require it.");
+  assert.ok(prepare.includes("StopWillardServices(FileExists(ExistingRuntime))"));
+
+  const uninstall = config.slice(config.indexOf("procedure CurUninstallStepChanged"));
+  assert.match(uninstall, /StopWillardServices\(True\)/);
 });
 
 test("packaged process-state and WMI failures fail closed instead of hiding running services", () => {
