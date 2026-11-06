@@ -433,7 +433,9 @@ export function writeArchiveFileAtomically(
     fs.closeSync(fd);
     fd = undefined;
     assertSafeOutputFile(root, outputPath);
-    fs.renameSync(temporaryPath, outputPath);
+    // The final publication must be exclusive too: a file can appear after
+    // the preflight check, and POSIX rename would silently replace it.
+    moveFileNoReplace(temporaryPath, outputPath);
     assertSafeOutputFile(root, outputPath);
   } finally {
     if (fd !== undefined) {
