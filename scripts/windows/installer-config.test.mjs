@@ -1617,3 +1617,24 @@ test("developer launch, setup, repair, and update fail closed on unjournaled ser
   const updatePreparation = updater.indexOf("$candidate = New-CandidateDirectory $gitCommand");
   assert.ok(updateGuard >= 0 && updateGuard < updatePreparation, "Update must guard listeners before preparing a candidate.");
 });
+
+
+const auditInstallerLifecycleWorkflow = await readFile(
+  new URL("../../.github/workflows/windows-installer-lifecycle-validation.yml", import.meta.url),
+  "utf8",
+);
+
+test("audit installer lifecycle validation is isolated from release publishing", () => {
+  assert.ok(auditInstallerLifecycleWorkflow.includes("pull_request:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("audit/full-repository-review-2026-11"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("workflow_dispatch:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("contents: read"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("runs-on: windows-latest"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("build-installer.ps1"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("installer-lifecycle-smoke.ps1"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("PGPASSWORD"));
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /secrets\./);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY|WILLARD_WINDOWS_SIGNING_CERTIFICATE/);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /softprops\/action-gh-release|gh release create|upload-artifact/);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /contents:\s*write/);
+});
