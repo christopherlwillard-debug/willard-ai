@@ -1639,10 +1639,11 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       stopHeartbeat?.();
       stopHeartbeat = null;
       await db.update(organizationJobsTable)
-        .set({ status: "verified", error: message, stageUpdatedAt: new Date() })
+        .set({ status: "verified", error: message, stageUpdatedAt: new Date(), leaseToken: null })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, executionLeaseToken),
           eq(organizationJobsTable.status, "executing"),
         ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
@@ -1686,6 +1687,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           .returning({ id: organizationJobsTable.id });
         if (!owned) throw new Error("Organization worker lease was lost before its stage checkpoint.");
       } catch (e: any) {
+        if (e instanceof Error && e.message.includes("lease was lost")) throw e;
         opLog(`WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}`);
       }
     };
@@ -1865,7 +1867,6 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
       await assertOrganizationLease(id, nasPath, executionLeaseToken);
-      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
@@ -2095,6 +2096,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       error: recoveryError,
       fileMoves: fileMoves as any,
       completedAt: new Date(),
+      leaseToken: null,
     }).where(and(
       eq(organizationJobsTable.id, id),
       eq(organizationJobsTable.nasPath, cleanupNasPath),
@@ -2560,10 +2562,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       stopHeartbeat?.();
       stopHeartbeat = null;
       await db.update(organizationJobsTable)
-        .set({ status: job.status, lastStage: job.lastStage, stageUpdatedAt: job.stageUpdatedAt, error: message })
+        .set({ status: job.status, lastStage: job.lastStage, stageUpdatedAt: job.stageUpdatedAt, error: message, leaseToken: null })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, resumeLeaseToken),
           eq(organizationJobsTable.status, "executing"),
         ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
@@ -2587,6 +2590,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
           .returning({ id: organizationJobsTable.id });
         if (!owned) throw new Error("Organization resume worker lost its lease.");
       } catch (e: any) {
+        if (e instanceof Error && e.message.includes("lost its lease")) throw e;
         send("log", { message: `WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}` });
       }
     };
@@ -2725,6 +2729,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
+      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       newMoves[newMoves.length - 1] = record;
       moved++;
@@ -2840,6 +2845,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       status: "failed",
       fileMoves: retainedMoves as any,
       error: recoveryError,
+      leaseToken: null,
     }).where(and(
       eq(organizationJobsTable.id, id),
       eq(organizationJobsTable.nasPath, cleanupNasPath),
