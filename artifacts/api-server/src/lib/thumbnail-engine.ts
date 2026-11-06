@@ -532,6 +532,10 @@ export function clearThumbnailCache(nasPath: string): number {
   let deleted = 0;
   try {
     for (const file of fs.readdirSync(dir)) {
+      // Do not unlink a worker's inter-process lock or in-flight output.
+      // Removing a live lock would allow another process to acquire the same
+      // destination and publish concurrently.
+      if (isIncompleteThumbnailName(file)) continue;
       try {
         fs.rmSync(path.join(dir, file));
         deleted++;
