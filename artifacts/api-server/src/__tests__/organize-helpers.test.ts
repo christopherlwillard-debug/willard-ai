@@ -90,6 +90,24 @@ test("sha256File: throws for a missing file", async () => {
   );
 });
 
+test("sha256File: refuses symlink sources instead of hashing their targets", (t) => {
+  const target = writeFile(path.join(mkTmp("sha256-symlink-target"), "outside.txt"), "preserve target");
+  const link = path.join(mkTmp("sha256-symlink-link"), "linked.txt");
+  try {
+    fs.symlinkSync(target, link);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+  return assert.rejects(() => sha256File(link), /regular, non-symlink file/).then(() => {
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+  });
+});
+
 // ── 2. sha256Buffer ───────────────────────────────────────────────────────────
 
 test("sha256Buffer: consistent with sha256File for same content", async () => {
