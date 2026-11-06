@@ -3574,3 +3574,58 @@ The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` befor
 - Windows installer lifecycle [run 42274282416](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282416) remained in the unsigned installer build/compile step at the last inspection. It had not reached standard-user install, prepared-phase recovery, or uninstall; no installed-product result is claimed.
 - For the new workflow/test commit `bacce51da775563e3eaab04d2f079faa6b8de3d9`, Fast Validation [run 42275019531](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019531) was pending and Dependency Review [run 42275019537](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019537) had passed the advisory gate. No matching Fast Validation result is claimed yet.
 - **Full CI:** not run. These targeted Linux/Windows validation workflows and Dependency Review are not the full repository CI.
+
+
+## November 6 — bind authenticated sessions to the credential version
+
+### Confirmed High (P1): a late session-store upsert can resurrect a session after password reset
+
+**Affected workflows:** API authorization, login/session management, password change, recovery-key reset, session inventory, and destructive organization/optimization actions protected by one-time action tokens.
+
+**Evidence and root cause:**
+
+- artifacts/api-server/src/app.ts updates sess.lastSeenAt on every authenticated API request. Express-session persists modified sessions when the response finishes.
+- artifacts/api-server/src/lib/action-tokens.ts also mutates session.actionTokens and explicitly calls req.session.save(). Current callers include organization execute/resume and optimization execute.
+- The pinned connect-pg-simple@10.0.0 store's set() uses INSERT ... ON CONFLICT (sid) DO UPDATE. A late save can therefore recreate a session row after another request has deleted it.
+- artifacts/api-server/src/routes/auth.ts correctly updates the password and deletes all session rows in one transaction, but the global authorization middleware previously checked only the authenticated flag and inactivity timestamp. It did not bind a stored session to the password credential that created it.
+
+**Confirmed race:** Request A passes authentication and begins work. Request B changes the password or consumes the recovery key and commits DELETE FROM session. Request A then persists its modified session; the session store's upsert recreates the old row. A later request can load that row with authenticated=true and a fresh activity timestamp, defeating the intended session revocation.
+
+**Fix — commits:** implementation/tests a3e25f38c633b9635a359daa49f97df80dadf186; source-assertion correction fd99adc2c3fda0cef125ab68a763fe2acdacd0dd.
+
+- New sessions now store the settings-row id and a SHA-256 fingerprint of the current bcrypt password hash. The bcrypt hash itself is not copied into the session.
+- The global API authorization middleware checks the current database password hash against the session fingerprint before any protected route runs. Missing, malformed, or stale fingerprints are rejected and the stale session is destroyed; database verification failures fail closed with HTTP 503.
+- /auth/status now reports stale sessions as unauthenticated and clears their cookie.
+- /auth/sessions lists only sessions belonging to the current credential version, so a late-resaved but invalid session is not presented as active.
+- Existing sessions created before this change have no credential fingerprint and will be invalidated once after upgrade; users will need to log in again.
+- Added focused fingerprint/current-credential tests and a source-level regression that verifies the session stamp, API guard ordering, status behavior, and session-list filter.
+
+**Status:** fixed; target validation pending for the current branch head.
+
+**Remaining risk:** This prevents a late-saved session from being reused, but it does not cancel an operation that was already authorized and executing when the password changed. Such an in-flight request may finish; future requests using its old session are rejected. If password changes must immediately cancel already-running destructive work, that needs coordinated request/job cancellation and ownership fencing rather than a session-only patch.
+
+### Validation snapshot — credential-version fix
+
+- Fast Validation [run 42275249021](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275249021) passed on prior head 8ae002499d8ead4480b92e46ec74e9c6a290c142: Linux typecheck/generated-contract and targeted backend steps passed; Windows archive/updater smoke passed. This is baseline evidence only, not validation of the credential-version change.
+- Fast Validation [run 42284276873](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284276873) was started for implementation commit a3e25f38c633b9635a359daa49f97df80dadf186; its source-assertion test was corrected in the subsequent commit fd99adc2c3fda0cef125ab68a763fe2acdacd0dd. No result from the earlier run is attributed to the corrected head.
+- Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372360) is pending on corrected head fd99adc2c3fda0cef125ab68a763fe2acdacd0dd.
+- Dependency Review [run 42284372391](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372391) is in progress on the same corrected head.
+- **Full CI:** not run.
+
+## November 6 — prepared-phase Windows recovery failure confirmed by installed-product logs
+
+### High (P1): the installed product has no stable launcher when the live payload directory is moved
+
+**Affected workflow:** Windows self-update, interrupted-update recovery, and standard-user installed-product startup.
+
+**Evidence:** Windows installer lifecycle [run 42275010242](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275010242), push commit bacce51da775563e3eaab04d2f079faa6b8de3d9, job 128090382407, failed in the installed-product exercise after the unsigned installer compiled successfully. The exact log reports:
+
+**Lifecycle failure during prepared-phase update recovery:** Installed launcher is missing before start: C:\\WillardLifecycle\\wl_life_da6f085f\\desktop\\WillardMediaCenter.ps1
+
+The PR-triggered rerun [42274780057](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274780057), job 128092163188, failed at the same prepared-phase step with the same missing-launcher condition. The fail-fast check added to the lifecycle harness is working as intended; this is not a generic health-endpoint timeout or a false-positive test failure.
+
+**Root cause:** The test simulates the real interruption point after the previous installation directory has been moved to its backup but before the candidate is moved into the live path. The next start is still directed to the launcher inside the now-missing live directory. No stable bootstrap exists outside that replaceable directory to read the journal and restore the backup.
+
+**Status:** found; blocked pending the coordinated stable-bootstrap and install/data-root migration described in the preceding Windows path-collision finding.
+
+**Remaining risk:** The normal installed-product prepared-phase recovery remains broken. Installer compilation and Fast Validation's separate Windows archive/updater smoke do not establish installed-product lifecycle success.
