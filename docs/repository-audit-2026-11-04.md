@@ -3460,3 +3460,12 @@ The earlier finding under **“On-demand thumbnail generation still blocks the A
 - **Full CI:** not run.
 
 **Next batch:** Finish Fast Validation run 42266842331 on the new capacity code and verify the Windows capacity-probe step. Then let the latest Windows installer lifecycle run start; it must get beyond installed first startup now that the module parse defect is fixed. Continue with the stable external bootstrap design and attempt-fenced conversion worker architecture; do not weaken recovery tests.
+
+
+### Capacity-preflight validation update — target tests passed on Linux and Windows
+
+Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) on code head `60e18c7cf6bad3dd067f111854db5be6522c60f7` has now completed its Linux `validate` job 128061473992 successfully. The targeted backend batch reported 355 tests, 353 passed, 0 failed, and 2 skipped. The new tests passed explicitly: per-destination known/unknown capacity probe behavior, the real default `fs.promises.statfs` probe against the runner's platform filesystem, and the organization-preflight source contract.
+
+The same run's Windows `windows-archive-and-updater-smoke` job 128062355978 has passed its new **“Verify organization capacity probes on Windows”** step (step 10), including the real Windows temporary-filesystem `statfs` probe. All preceding Windows launcher, dependency-install, media, storage, NAS cleanup, conversion finalization, and official 7-Zip/TAR steps also passed. The final developer-updater preservation/rollback step was still in progress at this update, so the Windows job and overall Fast Validation run are not yet marked complete.
+
+**Status:** capacity fix is now target-tested on Linux and Windows; full Fast Validation completion remains pending. The separate Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still installing isolated PostgreSQL 16; it had not yet reached installer build or first-start/recovery testing.
