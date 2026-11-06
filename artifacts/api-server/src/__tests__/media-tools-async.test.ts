@@ -18,6 +18,8 @@ const thumbnailPath = fileURLToPath(new URL("../lib/thumbnail-engine.ts", import
 const thumbnailSource = readFileSync(thumbnailPath, "utf8");
 const runtimePath = fileURLToPath(new URL("../lib/conversion-runtime.ts", import.meta.url));
 const runtimeSource = readFileSync(runtimePath, "utf8");
+const mediaToolsPath = fileURLToPath(new URL("../lib/media-tools.ts", import.meta.url));
+const mediaToolsSource = readFileSync(mediaToolsPath, "utf8");
 
 test("long-running media tools leave the API event loop responsive", async () => {
   let eventLoopTicked = false;
@@ -67,6 +69,13 @@ test("conversion and thumbnail routes await FFmpeg instead of running it synchro
   assert.doesNotMatch(thumbnailSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(thumbnailSource, /await runMediaToolAsync\("ffmpeg"/);
   assert.match(thumbnailSource, /error = await generateVideoThumbnail/);
+});
+
+test("Optimize Center and media health probes use the shared shutdown-owned process runner", () => {
+  assert.match(optimizeSource, /runMediaToolAsync\\(\\s*"ffprobe"/);
+  assert.doesNotMatch(optimizeSource, /execFileAsync\\s*\\(/);
+  assert.match(mediaToolsSource, /function probeTool[\\s\\S]*?runMediaToolAsync\\(/);
+  assert.doesNotMatch(mediaToolsSource, /execFile\\(bin,\\s*\\["-version"\\]/);
 });
 
 test("directly spawned archive helpers share the shutdown process registry", async () => {
