@@ -6,7 +6,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
@@ -1691,6 +1691,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
+  activeConversionJobIds.add(id);
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
   let jobClaimed = false;
@@ -1731,7 +1732,14 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       return;
     }
     jobClaimed = true;
-    activeConversionJobIds.add(id);
+    if (isShuttingDown()) {
+      await db.update(conversionJobsTable)
+        .set({ status: "cancelled", cancelledAt: new Date(), completedAt: new Date(), error: "Server shutdown before conversion processing began." })
+        .where(and(eq(conversionJobsTable.id, id), eq(conversionJobsTable.status, "running")));
+      send("status", { stage: "cancelled", message: "Conversion cancelled because the server is shutting down.", progress: 0 });
+      res.end();
+      return;
+    }
 
     // Read current profile from settings for this run
     const settings = await getActiveAppSettings();
@@ -2064,10 +2072,8 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
-    if (jobClaimed) {
-      activeConversionJobIds.delete(id);
-      notifyConversionJobWaiters();
-    }
+    activeConversionJobIds.delete(id);
+    notifyConversionJobWaiters();
     if (jobLockClient) {
       try {
         await releaseConversionJobLock(jobLockClient, id);
