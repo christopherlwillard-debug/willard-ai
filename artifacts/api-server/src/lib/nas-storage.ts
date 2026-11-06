@@ -162,7 +162,8 @@ export function ensureDataDirectoryWithinRoot(
       throw new Error("Directory path contains a symlink or non-directory component.");
     }
     const resolved = canonicalizePath(current);
-    if (!isWithin(canonicalRoot, resolved)) {
+    const resolvedRelative = path.relative(canonicalRoot, resolved);
+    if (resolvedRelative === ".." || resolvedRelative.startsWith(`..${path.sep}`) || path.isAbsolute(resolvedRelative)) {
       throw new Error("Directory path resolves outside the configured library root.");
     }
   }
