@@ -165,6 +165,29 @@ try {
   } catch { $reusedPidRejected = $_.Exception.Message -match "API PID 34567" }
   Assert-True $reusedPidRejected "A reused PID with a different executable identity was incorrectly trusted."
 
+  $legacyCreationTimeRejected = $false
+  try {
+    Assert-NoUntrackedPackagedServices ([pscustomobject]@{
+      api = @{ pid = 34567; path = $Node; commandLine = $apiCommand }
+      web = $null
+    })
+  } catch { $legacyCreationTimeRejected = $_.Exception.Message -match "API PID 34567" }
+  Assert-True $legacyCreationTimeRejected "A legacy PID record without creation time was trusted as process ownership."
+
+  $script:MockPackagedProcesses = @(
+    [pscustomobject]@{
+      ProcessId = 34567
+      ExecutablePath = $Node
+      CommandLine = $apiCommand
+      CreationDate = ""
+    }
+  )
+  $missingCreationTimeRejected = $false
+  try { Assert-NoUntrackedPackagedServices $null } catch {
+    $missingCreationTimeRejected = $_.Exception.Message -match "could not verify its creation time"
+  }
+  Assert-True $missingCreationTimeRejected "A matching process without a verifiable creation time was accepted."
+
   $script:MockPackagedProcesses = @(
     [pscustomobject]@{
       ProcessId = 34569
