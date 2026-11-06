@@ -2502,3 +2502,17 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | High | Organize and Optimize conversion → verified move / rollback / startup recovery can follow a symlinked parent outside the active library | found; blocked for safe design | this documentation batch | Existing path checks are lexical plus final-component only; full parent-chain and race-safe filesystem confinement remain unresolved |
 
+## 2026-11-06 follow-up — media viewer keyboard accessibility
+
+**Finding — Medium (UI / accessibility):** The full-screen media viewer declared itself modal but did not contain keyboard focus or restore focus to the opening control. Its tag editor and delete confirmation overlays lacked complete dialog semantics and focus handling; the tag editor also allowed the viewer's global Escape handler to close the entire viewer. Several icon-only actions relied only on title text, the detail link nested a button inside an anchor, and ignored-folder/extension removal controls exposed only an X icon.
+
+**Fix:** Added a reusable focus-trap/restore helper for the viewer and its nested delete/tag dialogs; suspended the parent trap and hid the parent dialog from assistive technology while a nested dialog is active; kept auto-hidden controls visible while keyboard-focused; routed Escape to the active nested dialog; added dialog labels, descriptions, accessible action names and expanded state; replaced the nested anchor/button with a single labelled link; and labelled settings removal actions.
+
+**Regression:** Extended the UI accessibility source-contract suite for modal focus containment/restoration, nested dialog roles, Escape isolation, icon-only actions, valid navigation semantics, and settings removal labels.
+
+**Validation status:** UI source-contract and workspace typecheck are pending. These are static accessibility contracts; browser-level keyboard/screen-reader testing remains outstanding.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media viewer → modal focus escapes, nested dialog semantics and icon-only action names | fixed; target tests pending | this batch | Browser/assistive-technology integration and mobile touch/focus behavior remain unverified |
+
