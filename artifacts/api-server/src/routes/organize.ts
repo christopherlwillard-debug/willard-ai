@@ -1005,7 +1005,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
         .set({ status: "failed", error: message, leaseToken: null })
         .where(and(
           eq(organizationJobsTable.id, id),
-          eq(organizationJobsTable.nasPath, job.nasPath),
+          eq(organizationJobsTable.nasPath, analysisNasPath),
           eq(organizationJobsTable.leaseToken, analysisLeaseToken),
           eq(organizationJobsTable.status, "analyzing"),
         ));
@@ -1016,7 +1016,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1033,7 +1033,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1093,7 +1093,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           if (error instanceof CapacityAdmissionError) {
             await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1110,7 +1110,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1119,7 +1119,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.statSync(job.sourcePath).isDirectory()) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1197,7 +1197,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "planned", planJson, leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ))
@@ -1208,7 +1208,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error", leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       )).catch(() => {});
