@@ -304,12 +304,16 @@ function Get-PackagedServiceProcesses {
     if (-not [int]::TryParse([string]$process.ProcessId, [ref]$processId) -or $processId -le 0) {
       throw "Windows found a Willard service command line but could not verify its process ID."
     }
+    $creationDate = [string]$process.CreationDate
+    if ([string]::IsNullOrWhiteSpace($creationDate)) {
+      throw "Windows found a Willard service process but could not verify its creation time."
+    }
     [pscustomobject]@{
       pid = $processId
       roles = $roles
       path = $executablePath
       commandLine = $commandLine
-      creationDate = [string]$process.CreationDate
+      creationDate = $creationDate
     }
   }
 }
@@ -325,8 +329,10 @@ function Assert-NoUntrackedPackagedServices($tracked) {
       if ([int]$record.pid -ne [int]$candidate.pid) { continue }
       if (-not [string]::Equals([string]$record.path, [string]$candidate.path, [StringComparison]::OrdinalIgnoreCase)) { continue }
       if (-not [string]::Equals([string]$record.commandLine, [string]$candidate.commandLine, [StringComparison]::OrdinalIgnoreCase)) { continue }
-      if ($record.creationDate -and $candidate.creationDate -and
-        -not [string]::Equals([string]$record.creationDate, [string]$candidate.creationDate, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      # Legacy PID records without a creation time cannot prove ownership
+      # against PID reuse; treat the live process as untracked and fail closed.
+      if ([string]::IsNullOrWhiteSpace([string]$record.creationDate)) { continue }
+      if (-not [string]::Equals([string]$record.creationDate, [string]$candidate.creationDate, [StringComparison]::OrdinalIgnoreCase)) { continue }
       $owned = $true
       break
     }
