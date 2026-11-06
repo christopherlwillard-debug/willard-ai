@@ -106,6 +106,7 @@ const aiSearchSource = await readFile(
 );
 
 test("search suggestions treat SQL wildcard characters as literal text", () => {
+  assert.ok(aiSearchSource.includes("const like = buildSuggestionPattern(prefix);"));
   assert.equal(
     buildSuggestionPattern("  100%_\\Archive  "),
     "%100\\%\\_\\\\archive%",
