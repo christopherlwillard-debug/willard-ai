@@ -1582,7 +1582,7 @@ test("developer launch, setup, repair, and update fail closed on unjournaled ser
   assert.ok(portStart >= 0 && portEnd > portStart, "Strict developer listener inspection must be shared.");
   const portInspection = launcherCommon.slice(portStart, portEnd);
   assert.match(portInspection, /Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction Stop/);
-  assert.match(portInspection, /CategoryInfo\\.Category -eq \\[System\\.Management\\.Automation\\.ErrorCategory\\]::ObjectNotFound/);
+  assert.match(portInspection, /CategoryInfo\.Category -eq \[System\.Management\.Automation\.ErrorCategory\]::ObjectNotFound/);
   assert.match(portInspection, /could not verify whether Willard service port/);
   assert.match(portInspection, /missing or incomplete/);
 
