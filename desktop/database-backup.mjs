@@ -735,7 +735,7 @@ async function sourceLibrary(environment, snapshot = null) {
   if (!root) return null;
   const identity = await ensureLibraryIdentity(root);
   const countOutput = await runSnapshotSql(
-    "SELECT count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED')::text || E'\\t' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND content_hash ~ '^[a-fA-F0-9]{64}
+    "SELECT count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED')::text || E'\\t' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]')::text FROM media_files",
     environment,
     snapshot,
     "Library catalog identity inspection",
@@ -755,7 +755,7 @@ async function sourceLibrary(environment, snapshot = null) {
     fail("The library catalog returned an invalid media count.");
   }
   const sampleOutput = await runSnapshotSql(
-    "SELECT relative_path, lower(content_hash) FROM media_files WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND content_hash ~ '^[a-fA-F0-9]{64}
+    "SELECT relative_path, lower(content_hash) FROM media_files WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]' ORDER BY relative_path LIMIT 32",
     environment,
     snapshot,
     "Library media identity sample",
