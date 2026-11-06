@@ -340,8 +340,6 @@ exit $LASTEXITCODE
   }
   try { Remove-LocalUser -Name $UserName -ErrorAction SilentlyContinue } catch {}
   Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item ($InstallRoot + ".lifecycle-backup") -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item ($InstallRoot + ".lifecycle-candidate") -Recurse -Force -ErrorAction SilentlyContinue
   if ($script:LifecyclePassed) {
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
   } else {
