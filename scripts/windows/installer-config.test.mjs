@@ -1746,7 +1746,12 @@ test("audit installer lifecycle validation is isolated from release publishing",
   assert.ok(auditInstallerLifecycleWorkflow.includes("pull_request:"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("- opened"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("- reopened"));
-  assert.ok(auditInstallerLifecycleWorkflow.includes("- synchronize"));
+  const pullRequestTrigger = auditInstallerLifecycleWorkflow.slice(
+    auditInstallerLifecycleWorkflow.indexOf("  pull_request:"),
+    auditInstallerLifecycleWorkflow.indexOf("  push:"),
+  );
+  assert.doesNotMatch(pullRequestTrigger, /^\s+- synchronize\s*$/m,
+    "subsequent commits use the branch push trigger's per-commit path filter");
   assert.ok(auditInstallerLifecycleWorkflow.includes("scripts/windows/installer-config.test.mjs"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("  push:"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("      - audit/full-repository-review-2026-11"));

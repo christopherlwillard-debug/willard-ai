@@ -2,10 +2,13 @@ name: Windows installer lifecycle validation
 
 on:
   pull_request:
+    # Subsequent commits are covered by the branch push trigger below, whose
+    # path filter evaluates each pushed commit. A PR synchronize path filter
+    # evaluates the entire PR diff and would rerun this expensive Windows
+    # lifecycle build for docs-only audit-ledger commits.
     types:
       - opened
       - reopened
-      - synchronize
     branches:
       - main
     paths:
