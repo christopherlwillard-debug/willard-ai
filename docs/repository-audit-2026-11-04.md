@@ -2176,7 +2176,7 @@ Organization already uses the same `FileMoveRecord`, `verifiedMove`, `moveFileNo
 **Severity:** High (data integrity). **Workflow:** ZIP extraction during archive organization.
 **Status:** Fixed; focused regression added; CI validation pending.
 `writeArchiveFileAtomically` previously checked the destination and then called `renameSync`. On POSIX, rename can replace a regular file created after the check. The temporary file now publishes through the existing `moveFileNoReplace` helper, which uses exclusive creation semantics and refuses an existing destination. The helper is reused rather than duplicating platform-specific no-replace logic. A regression verifies that an existing regular file is preserved and the temporary extraction file is cleaned up.
-**Implementation:** `c9c85a52255624fca8ffb17108ea45d12f8c25aa`.
+**Implementation:** `c9c85a52255624fca8ffb17108ea45d12f8c25aa` (exclusive publication) and `644b3e0c75a57d5b0a519104d75fecf8092e266b` (shared helper import).
 **Test:** `12c3c601cdb7ff997feb1ca15ecb521d806ead8d`.
 **Remaining risk:** This focused regression covers an already-present regular destination; an orchestrated concurrent-writer test and full malicious-archive Windows integration remain outstanding.
 
