@@ -8,7 +8,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
-import { walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
+import { createConcurrencyLimiter, mapSettledWithConcurrency, walkForConversion, walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
@@ -376,34 +376,6 @@ const PER_FILE_EXTS = new Set(["jpg","jpeg","png","mp4","m4v","mov","mkv"]);
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
 
-function walkForConversion(
-  dir: string,
-  approvedExtSet: Set<string>,
-  results: Array<{ fullPath: string; ext: string }>,
-  skipDirs: Set<string>,
-): void {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to scan conversion directory "${dir}": ${reason}`);
-  }
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".") && !skipDirs.has(fullPath)) {
-        walkForConversion(fullPath, approvedExtSet, results, skipDirs);
-      }
-    } else if (entry.isFile()) {
-      const ext = path.extname(entry.name).slice(1).toLowerCase();
-      if (approvedExtSet.has(ext)) {
-        results.push({ fullPath, ext });
-      }
-    }
-  }
-}
-
 // ── Per-file JPEG characteristic analysis ─────────────────────────────────────
 
 /** Returns an array of identified issues. Empty array means the JPEG is already optimal — skip it. */
@@ -462,13 +434,16 @@ const LOSSLESS_CODECS = new Set(["prores", "prores_ks", "dnxhd", "dnxhr", "huffy
 const MODERN_CODECS   = new Set(["h264", "hevc", "av1", "vp9", "vp8"]);
 const LEGACY_IMG_CODECS = new Set(["mjpeg", "mpeg4", "msmpeg4v3", "wmv1", "wmv2", "wmv3", "rv30", "rv40", "h263", "svq3", "indeo3", "cinepak"]);
 
+// A process-wide cap prevents concurrent Optimize scans from spawning thousands of ffprobe children.
+const withVideoProbeSlot = createConcurrencyLimiter(4);
+
 async function detectVideoCodec(filePath: string): Promise<string | null> {
   try {
-    const { stdout } = await runMediaToolAsync(
+    const { stdout } = await withVideoProbeSlot(() => runMediaToolAsync(
       "ffprobe",
       ["-v", "quiet", "-print_format", "json", "-show_streams", filePath],
       { timeoutMs: 12_000, maxBufferBytes: 1024 * 1024 },
-    );
+    ));
     const data = JSON.parse(stdout) as { streams: Array<{ codec_type: string; codec_name: string }> };
     const vs   = data.streams.find(s => s.codec_type === "video");
     return vs?.codec_name ?? null;
@@ -925,7 +900,7 @@ router.get("/optimize/scan", async (req, res) => {
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
     const groups = new Map<string, ExtGroup>();
     const counter = { total: 0, limitReached: false };
-    walkForOptimize(nasPath, groups, OPTIMIZE_SCAN_MAX_FILES, counter, SKIP_DIRS);
+    await walkForOptimize(nasPath, groups, OPTIMIZE_SCAN_MAX_FILES, counter, SKIP_DIRS);
 
     const result = [];
     let totalSavingsBytes = 0;
@@ -934,6 +909,7 @@ router.get("/optimize/scan", async (req, res) => {
     // Results go into `fileDecisions` for use by the execute loop (codec override enforcement).
     // `jpegIssuesMap` and `detectedCodecMap` hold representative group-level data for UI display only.
     const enrichPromises: Promise<void>[] = [];
+    const videoProbeTasks: Array<{ path: string; ext: string; includeFileDecision: boolean }> = [];
     const jpegIssuesMap    = new Map<string, string[]>();  // ext → issues (for explainer text)
     const detectedCodecMap = new Map<string, string>();    // ext → codec (for group-level override)
     const pngAttentionMap  = new Map<string, string>();
@@ -1005,38 +981,40 @@ router.get("/optimize/scan", async (req, res) => {
       }
 
       if (ext === "mov" || ext === "mkv" || ext === "mp4" || ext === "m4v") {
-        // Per-file codec detection: analyze EVERY container file (not just one sample)
-        enrichPromises.push((async () => {
-          const codecResults = await Promise.allSettled(
-            paths.map(async (p) => {
-              const codec = await detectVideoCodec(p);
-              return { path: p, codec };
-            })
-          );
-          for (const r of codecResults) {
-            if (r.status === "fulfilled" && r.value.codec) {
-              const { path: p, codec } = r.value;
-              const codecRule = buildCodecOverride(codec, ext);
-              fileDecisions[p] = {
-                convert:   codecRule?.status === "convert",
-                targetExt: codecRule?.targetExt ?? (codecRule?.status === "convert" ? "mp4" : ext),
-                reasons:   [codecRule?.reason ?? `Codec: ${codec}`],
-                codec,
-              };
-              // Take the first codec found for group-level override display
-              if (!detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
-            }
-          }
-        })());
-
-        // Also run on the sample if paths was capped and sample file is not in paths
+        // Queue every per-file probe for one bounded worker pool below. The
+        // process-wide limiter also caps probes across simultaneous scan requests.
+        for (const filePath of paths) {
+          videoProbeTasks.push({ path: filePath, ext, includeFileDecision: true });
+        }
         if (samples.length > 0 && !paths.includes(samples[0].path)) {
-          enrichPromises.push((async () => {
-            const codec = await detectVideoCodec(samples[0].path);
-            if (codec && !detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
-          })());
+          videoProbeTasks.push({ path: samples[0].path, ext, includeFileDecision: false });
         }
       }
+    }
+
+    if (videoProbeTasks.length > 0) {
+      enrichPromises.push((async () => {
+        const codecResults = await mapSettledWithConcurrency(videoProbeTasks, 4, async (task) => ({
+          ...task,
+          codec: await detectVideoCodec(task.path),
+        }));
+        for (const result of codecResults) {
+          if (result.status !== "fulfilled" || !result.value.codec) continue;
+          const { path: filePath, ext, codec, includeFileDecision } = result.value;
+          if (includeFileDecision) {
+            const codecRule = buildCodecOverride(codec, ext);
+            fileDecisions[filePath] = {
+              convert: codecRule?.status === "convert",
+              targetExt: codecRule?.targetExt ?? (codecRule?.status === "convert" ? "mp4" : ext),
+              reasons: [codecRule?.reason ?? `Codec: ${codec}`],
+              codec,
+            };
+          }
+          // Results retain input order, so the first successful codec remains
+          // deterministic for the group-level explainer.
+          if (!detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
+        }
+      })());
     }
 
     // Run all per-file analysis in parallel (best-effort — individual failures are swallowed)
@@ -1753,7 +1731,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       path.resolve(path.join(nasPath, "WillardAI")),
     ]);
     const filesToConvert: Array<{ fullPath: string; ext: string }> = [];
-    walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, skipDirs);
+    await walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, SKIP_DIRS, skipDirs);
 
     const totalFiles = filesToConvert.length;
     await db.update(conversionJobsTable).set({ totalFiles }).where(eq(conversionJobsTable.id, id));
