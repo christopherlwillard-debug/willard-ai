@@ -1214,8 +1214,8 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 router.patch("/organize/jobs/:id/plan", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
-  let planEditToken: string | null = null;
-  let planEditNasPath: string | null = null;
+  let planEditToken = "";
+  let planEditNasPath = "";
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
@@ -1278,7 +1278,7 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
   } catch {
     // Do not leave a plan-edit claim behind if validation or persistence fails.
     // The token predicate prevents this cleanup from clearing a newer owner's claim.
-    if (typeof planEditToken === "string" && typeof planEditNasPath === "string") {
+    if (planEditToken && planEditNasPath) {
       await db.update(organizationJobsTable)
         .set({ leaseToken: null })
         .where(and(
