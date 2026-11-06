@@ -973,14 +973,36 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "Job is already being processed" }); return;
+    }
 
-    await db.update(organizationJobsTable).set({ status: "analyzing" }).where(eq(organizationJobsTable.id, id));
+    // Claim analysis with a unique owner token. Concurrent requests may both
+    // read the same prior status, but only one can transition it to analyzing.
+    // Every later write is fenced by this token so an older request cannot
+    // overwrite a newer plan or recovery state.
+    const analysisLeaseToken = crypto.randomUUID();
+    const [claimedAnalysis] = await db.update(organizationJobsTable)
+      .set({ status: "analyzing", leaseToken: analysisLeaseToken, error: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.status, job.status),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedAnalysis) {
+      res.status(409).json({ error: "This job changed while analysis was starting. Refresh and try again." }); return;
+    }
 
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
-      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(eq(organizationJobsTable.id, id));
+      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
     }
     try { resolveWithinRoot(job.sourcePath, nasPath); }
@@ -992,7 +1014,12 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     if (job.sourceType === "archive") {
       const archivePath = resolveActiveArchivePath(job.sourcePath, nasPath);
       if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "Archive file not found on disk" }); return;
       }
       if (job.archiveId) {
@@ -1044,7 +1071,12 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           }
         } catch (error) {
           if (error instanceof CapacityAdmissionError) {
-            await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(eq(organizationJobsTable.id, id));
+            await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
             res.status(507).json({ code: "CAPACITY_UNSAFE", error: "Insufficient safe storage capacity", message: error.message });
             return;
           }
@@ -1056,11 +1088,21 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       }
     } else {
       if (!fs.existsSync(job.sourcePath)) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "Source folder not found on disk" }); return;
       }
       if (!fs.statSync(job.sourcePath).isDirectory()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "sourcePath must be a directory for folder source jobs" }); return;
       }
       entries = walkDir(job.sourcePath).map(w => ({ path: w.relativePath, sizeBytes: w.sizeBytes, isDirectory: false, fileType: w.fileType }));
@@ -1132,14 +1174,24 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     };
 
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: "planned", planJson })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: "planned", planJson, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ))
       .returning();
     res.json(updated ? publicOrganizationJob(updated) : updated);
   } catch (err) {
     await db.update(organizationJobsTable)
-      .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error" })
-      .where(eq(organizationJobsTable.id, id)).catch(() => {});
+      .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error", leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      )).catch(() => {});
     res.status(500).json({ error: "Analysis failed" });
   }
 });
