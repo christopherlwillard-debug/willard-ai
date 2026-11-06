@@ -50,8 +50,8 @@ router.get("/files/search", async (req, res) => {
     conditions.push(eq(mediaFilesTable.nasPath, nasPath));
     conditions.push(activeMediaCondition);
     if (q) {
-      const searchPattern = \`%\${escapeLikePattern(q)}%\`;
-      conditions.push(sql\`\${mediaFilesTable.name} ILIKE \${searchPattern} ESCAPE E'\\\\'\`);
+      const searchPattern = `%${escapeLikePattern(q)}%`;
+      conditions.push(sql`${mediaFilesTable.name} ILIKE ${searchPattern} ESCAPE E'\\\\'`);
     }
     if (fileType && fileType !== "all") {
       conditions.push(eq(mediaFilesTable.mediaType, fileType === "image" ? "photo" : fileType));
