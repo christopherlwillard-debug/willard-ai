@@ -653,6 +653,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           try {
             // Publish without POSIX rename-overwrite semantics. A destination
             // created after the earlier conflict check is never replaced.
+            ensureDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
             publishing = true;
             moveFileNoReplace(partialPath, safeDestinationPath);
             partialCreated = false;
@@ -767,12 +768,13 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
       if (!namespace || namespace.protected || entry.protected || entry.state !== "verified") continue;
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
-      const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+      const sourceState = inspectRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+      const safeSourcePath = path.resolve(entry.sourcePath);
       const safeDestinationPath = assertRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
       // A previous cleanup attempt may have removed the source and crashed
       // before persisting its final manifest. The verified destination is the
       // recovery copy; accept that already-completed deletion idempotently.
-      if (!fs.existsSync(safeSourcePath)) {
+      if (sourceState === "missing") {
         const destinationHash = await hashFile(safeDestinationPath);
         if (destinationHash !== entry.sourceHash) {
           throw new Error("Original is missing and destination is not verified: " + entry.relativePath);
