@@ -30,9 +30,17 @@ export async function sha256File(filePath: string): Promise<string> {
     }
 
     const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-    const stream = fs.createReadStream(filePath, {
-      flags: fs.constants.O_RDONLY | noFollow,
-    });
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    let stream: fs.ReadStream;
+    try {
+      // createReadStream accepts a descriptor; openSync is where the
+      // platform-specific O_NOFOLLOW flag is applied.
+      stream = fs.createReadStream(filePath, { fd, autoClose: true });
+    } catch (error) {
+      fs.closeSync(fd);
+      reject(error);
+      return;
+    }
     const hash = crypto.createHash("sha256");
     let settled = false;
     const fail = (error: Error) => {
