@@ -103,51 +103,56 @@ function waitForMediaProcess(child: ChildProcess): Promise<void> {
  * so terminating them preserves originals and leaves incomplete work available
  * for recovery.
  */
+async function waitForMediaProcessWithin(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (!isMediaProcessRunning(child)) return true;
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      waitForMediaProcess(child).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Stop one owned media/archive child with the same bounded TERM-to-KILL policy used at shutdown. */
+export async function stopMediaProcess(
+  child: ChildProcess,
+  graceMs = MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS,
+): Promise<void> {
+  if (!isMediaProcessRunning(child)) return;
+  try {
+    child.kill("SIGTERM");
+  } catch (error) {
+    logger.warn({ err: error, pid: child.pid }, "Unable to request graceful media subprocess shutdown");
+  }
+  if (await waitForMediaProcessWithin(child, graceMs)) return;
+  if (!isMediaProcessRunning(child)) return;
+
+  try {
+    child.kill("SIGKILL");
+  } catch (error) {
+    logger.warn({ err: error, pid: child.pid }, "Unable to force-stop a media subprocess");
+  }
+  if (!await waitForMediaProcessWithin(child, 1_000) && isMediaProcessRunning(child)) {
+    logger.error({ pid: child.pid }, "Media subprocess remained active after forced shutdown");
+  }
+}
+
+/**
+ * Stop tracked media and archive subprocesses before the server closes its
+ * database and exits. These children write only staged/cache/scratch outputs,
+ * so terminating them preserves originals and leaves incomplete work available
+ * for recovery.
+ */
 export async function stopActiveMediaTools(graceMs = 2_000): Promise<void> {
   const active = [...activeMediaProcesses].filter(isMediaProcessRunning);
   if (active.length === 0) return;
-
-  const gracefulWait = Promise.all(active.map(waitForMediaProcess));
-  for (const child of active) {
-    try {
-      child.kill("SIGTERM");
-    } catch (error) {
-      logger.warn({ err: error }, "Unable to request graceful media subprocess shutdown");
-    }
-  }
-
-  let graceTimer: NodeJS.Timeout | null = null;
-  const exitedGracefully = await Promise.race([
-    gracefulWait.then(() => true),
-    new Promise<boolean>((resolve) => {
-      graceTimer = setTimeout(() => resolve(false), Math.max(0, graceMs));
-      graceTimer.unref?.();
-    }),
-  ]);
-  if (graceTimer) clearTimeout(graceTimer);
-  if (exitedGracefully) return;
-
-  const remaining = active.filter(isMediaProcessRunning);
-  for (const child of remaining) {
-    try {
-      child.kill("SIGKILL");
-    } catch (error) {
-      logger.warn({ err: error }, "Unable to force-stop a media subprocess");
-    }
-  }
-
-  if (remaining.length > 0) {
-    let forceTimer: NodeJS.Timeout | null = null;
-    await Promise.race([
-      Promise.all(remaining.map(waitForMediaProcess)),
-      new Promise<void>((resolve) => {
-        forceTimer = setTimeout(resolve, 1_000);
-        forceTimer.unref?.();
-      }),
-    ]);
-    if (forceTimer) clearTimeout(forceTimer);
-  }
-
+  await Promise.all(active.map((child) => stopMediaProcess(child, graceMs)));
   const stillRunning = active.filter(isMediaProcessRunning);
   if (stillRunning.length > 0) {
     logger.error({ count: stillRunning.length }, "Media subprocesses remained active after forced shutdown");
