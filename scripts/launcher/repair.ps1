@@ -11,6 +11,7 @@ $problems = @()
 
 # -- Clear stale state from a crashed previous run ----------------------------
 $tracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $tracked
 if ($tracked) {
     $apiAlive = Test-ProcessAlive $tracked.api
     $webAlive = Test-ProcessAlive $tracked.web
