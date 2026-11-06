@@ -2645,3 +2645,16 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Optimize → conversion execution/retry → staged output; finalize/replace/recycle/archive | blocked | documentation and investigation only | Stale workers may continue after advisory-lock loss and race a retry/finalizer; requires generation fencing, isolated staging, subprocess cancellation, migration, and fault-injection integration tests |
+
+
+## 2026-11-06 follow-up — Windows installer omitted the desktop web-server safety module
+
+**Finding — High (Windows first install / desktop service startup):** The standard-user Windows lifecycle run [#31](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42163707879) completed installer compilation and installation but failed during first startup. The installed `desktop/desktop-web-server.mjs` imports `./web-server-safety.mjs`; the release staging script copied the entry point but omitted that helper. The installed launcher consequently exited with `ERR_MODULE_NOT_FOUND` for `desktop/web-server-safety.mjs`, and the lifecycle smoke timed out waiting for the desktop service. The portable PostgreSQL recovery export was created successfully, so this failure occurred after the backup-helper omission had been corrected.
+
+**Fix:** The Windows release builder now stages `desktop/web-server-safety.mjs` beside `desktop/desktop-web-server.mjs`. The payload regression was broadened from the backup entry point alone to verify every direct relative `.mjs` import of both staged desktop runtime entry points (`desktop-web-server.mjs` and `database-backup.mjs`). The installer lifecycle workflow's PR and audit-branch push path filters now include the helper, and the workflow contract test requires both entries.
+
+**Validation status:** The defect is confirmed by the completed Windows job log, not inferred from source. Fast Validation #1156 and Dependency Review #919 passed on the previous head `e576488cb32e1c361ee45dbd2ab0b99d3dbc0a14`, before this correction; they do not validate these new changes. A new Fast Validation run and a full Windows installed-product lifecycle run must complete on the correction commit before this finding is marked target-tested or integration-tested. No full CI or release-readiness claim is made.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows clean install → desktop web service startup → local UI/API availability | fixed; targeted validation pending | this batch | The next lifecycle run must prove first startup, upgrade, recovery, diagnostics, and uninstall; Authenticode trust and SmartScreen reputation remain unverified |

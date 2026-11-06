@@ -102,21 +102,28 @@ test("payload manifests do not include their own generated file", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
-test("Windows release stages every helper imported by the PostgreSQL backup entry point", async () => {
+test("Windows release stages every local helper imported by its desktop runtime entry points", async () => {
   const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
-  const backupSource = await readFile(new URL("../../desktop/database-backup.mjs", import.meta.url), "utf8");
+  const entrypoints = [
+    "desktop/desktop-web-server.mjs",
+    "desktop/database-backup.mjs",
+  ];
   const stagedDesktopFiles = new Set(
     [...buildSource.matchAll(/copy\(path\.join\(root, "desktop\/([^"]+)"\)/g)].map((match) => match[1]),
   );
-  const importedHelpers = [
-    ...backupSource.matchAll(/from\s+["']\.\/([^"']+\.mjs)["']/g),
-  ].map((match) => match[1]);
 
-  assert.ok(importedHelpers.length > 0, "database backup must declare its local runtime helpers");
-  for (const helper of importedHelpers) {
-    assert.ok(
-      stagedDesktopFiles.has(helper),
-      "Windows installer does not stage desktop/" + helper + ", imported by database-backup.mjs",
-    );
+  for (const entrypoint of entrypoints) {
+    const source = await readFile(new URL("../../" + entrypoint, import.meta.url), "utf8");
+    const importedHelpers = [
+      ...source.matchAll(/from\s+["']\.\/([^"']+\.mjs)["']/g),
+    ].map((match) => match[1]);
+
+    assert.ok(importedHelpers.length > 0, entrypoint + " must declare its local runtime helpers");
+    for (const helper of importedHelpers) {
+      assert.ok(
+        stagedDesktopFiles.has(helper),
+        "Windows installer does not stage desktop/" + helper + ", imported by " + entrypoint,
+      );
+    }
   }
 });

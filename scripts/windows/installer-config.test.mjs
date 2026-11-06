@@ -735,6 +735,7 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /desktop\/database-backup\.mjs/);
   assert.match(releaseStager, /desktop\/database-backup\.mjs/);
+  assert.match(releaseStager, /desktop\/web-server-safety\.mjs/);
   assert.match(releaseValidator, /desktop\/backup-credentials\.mjs/);
   assert.match(releaseValidator, /desktop\/library-recovery\.mjs/);
   assert.match(releaseStager, /desktop\/backup-credentials\.mjs/);
@@ -1656,6 +1657,7 @@ test("installer lifecycle validation only runs for installer and packaging input
   assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/build-installer.ps1"'));
   assert.ok(auditInstallerLifecycleWorkflow.includes('"artifacts/api-server/package.json"'));
   assert.equal((auditInstallerLifecycleWorkflow.match(/"desktop\/postgres-snapshot-process\.mjs"/g) ?? []).length, 2);
+  assert.equal((auditInstallerLifecycleWorkflow.match(/"desktop\/web-server-safety\.mjs"/g) ?? []).length, 2);
   assert.ok(auditInstallerLifecycleWorkflow.includes('"pnpm-lock.yaml"'));
 
 });
