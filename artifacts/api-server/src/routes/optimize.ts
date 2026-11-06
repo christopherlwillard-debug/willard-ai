@@ -16,6 +16,7 @@ import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
 import { isShuttingDown } from "../lib/shutdown-state.ts";
+import { trackConversionRequest } from "../lib/conversion-runtime.ts";
 import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import {
   evaluateCapacity,
@@ -41,37 +42,6 @@ import {
 const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
-const activeConversionJobIds = new Map<number, number>();
-const activeConversionJobWaiters = new Set<() => void>();
-
-function notifyConversionJobWaiters(): void {
-  if (activeConversionJobIds.size !== 0) return;
-  for (const resolve of [...activeConversionJobWaiters]) resolve();
-}
-
-export async function stopActiveConversionJobs(timeoutMs = 8_000): Promise<void> {
-  if (activeConversionJobIds.size === 0) return;
-  await new Promise<void>((resolve) => {
-    let timer: NodeJS.Timeout | null = null;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      activeConversionJobWaiters.delete(finish);
-      resolve();
-    };
-    activeConversionJobWaiters.add(finish);
-    timer = setTimeout(finish, timeoutMs);
-    if (activeConversionJobIds.size === 0) finish();
-  });
-  if (activeConversionJobIds.size > 0) {
-    logger.warn({
-      jobIds: [...activeConversionJobIds.keys()],
-      timeoutMs,
-    }, "Some local conversion jobs did not finish before shutdown; their session locks will expire for recovery");
-  }
-}
 
 async function getActiveConversionJob(id: number) {
   const nasPath = (await getActiveLibraryContext())?.nasPath;
@@ -1698,7 +1668,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
-  activeConversionJobIds.set(id, (activeConversionJobIds.get(id) ?? 0) + 1);
+  const releaseConversionRequest = trackConversionRequest(id);
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
   let jobClaimed = false;
@@ -2079,10 +2049,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
-    const activeRequestsForJob = activeConversionJobIds.get(id) ?? 0;
-    if (activeRequestsForJob <= 1) activeConversionJobIds.delete(id);
-    else activeConversionJobIds.set(id, activeRequestsForJob - 1);
-    notifyConversionJobWaiters();
+    releaseConversionRequest();
     if (jobLockClient) {
       try {
         await releaseConversionJobLock(jobLockClient, id);
