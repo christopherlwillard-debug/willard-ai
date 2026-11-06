@@ -317,3 +317,19 @@ test("library job progress reconnects with one owned EventSource", () => {
   assert.match(connect, /nextSource\.removeEventListener\("jobs", handleJobs\)/);
   assert.match(connect, /reconnectTimer = setTimeout\(\(\) => \{[\s\S]*?reconnectTimer = null;[\s\S]*?connect\(\);/);
 });
+
+test("no-result search suggestions refine the current intent", () => {
+  const suggestionStart = searchPage.indexOf("response.suggestions.map((s) => (");
+  const suggestionEnd = searchPage.indexOf("\n                  ))}", suggestionStart);
+  assert.ok(suggestionStart >= 0 && suggestionEnd > suggestionStart, "no-result suggestions should be rendered");
+  const suggestionBlock = searchPage.slice(suggestionStart, suggestionEnd);
+  assert.match(suggestionBlock, /onClick=\{\(\) => submit\(s\)\}/);
+  assert.doesNotMatch(suggestionBlock, /submit\(s,\s*true\)/);
+
+  const submitStart = searchPage.indexOf("const submit = useCallback");
+  const submitEnd = searchPage.indexOf("\n  }, [input", submitStart);
+  assert.ok(submitStart >= 0 && submitEnd > submitStart, "search submit handler should exist");
+  const submitHandler = searchPage.slice(submitStart, submitEnd);
+  assert.match(submitHandler, /const refine = hasSession && !forceNew/);
+  assert.match(submitHandler, /previousIntent: refine \? response\?\.intent \?\? null : null/);
+});

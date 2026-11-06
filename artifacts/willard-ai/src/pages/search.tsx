@@ -569,7 +569,7 @@ export default function SearchPage() {
                 <p className="text-sm text-muted-foreground">Try instead:</p>
                 <div className="flex justify-center gap-2 flex-wrap">
                   {response.suggestions.map((s) => (
-                    <Button key={s} variant="outline" size="sm" onClick={() => submit(s, true)} data-testid="button-suggestion">
+                    <Button key={s} variant="outline" size="sm" onClick={() => submit(s)} data-testid="button-suggestion">
                       {s}
                     </Button>
                   ))}
