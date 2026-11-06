@@ -633,7 +633,7 @@ async function verifyConvertedFile(
   destPath: string,
   category = "image",
   isSameExt = true,
-  originalBytes: number,
+  originalBytes = 0,
   isRawSource = false,
 ): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
