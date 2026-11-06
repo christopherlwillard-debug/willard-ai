@@ -127,11 +127,11 @@ test("developer desktop launcher and local Vite servers bind only to loopback", 
 
 test("manual local API startup documents the explicit loopback-only first-run opt-in", () => {
   const manualSetup = localSetupSource.slice(localSetupSource.indexOf("## The manual way"));
-  assert.match(manualSetup, /\$env:HOST = "127\\.0\\.0\\.1"/);
-  assert.match(manualSetup, /\$env:WILLARD_LOCAL_SETUP = "true"/);
-  assert.match(manualSetup, /HOST=127\\.0\\.0\\.1 WILLARD_LOCAL_SETUP=true pnpm/);
-  assert.match(manualSetup, /do not use this bypass on a hosted server or behind a reverse/);
-  assert.match(manualSetup, /WILLARD_SETUP_TOKEN/);
+  assert.ok(manualSetup.includes('$env:HOST = "127.0.0.1"'));
+  assert.ok(manualSetup.includes('$env:WILLARD_LOCAL_SETUP = "true"'));
+  assert.ok(manualSetup.includes("HOST=127.0.0.1 WILLARD_LOCAL_SETUP=true pnpm"));
+  assert.ok(manualSetup.includes("do not use this bypass on a hosted server or behind a reverse"));
+  assert.ok(manualSetup.includes("WILLARD_SETUP_TOKEN"));
 });
 
 test("remote first-run setup requires an operator secret and rate-limits attempts", () => {
