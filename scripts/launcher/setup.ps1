@@ -9,8 +9,7 @@ Ensure-LogDir
 # unjournaled API or web service, and stop any fully tracked running copy.
 $entryTracked = Read-TrackedPids
 Assert-NoUntrackedDeveloperServices $entryTracked
-if ($entryTracked -and (($entryTracked.api -and (Test-ProcessAlive $entryTracked.api)) -or
-    ($entryTracked.web -and (Test-ProcessAlive $entryTracked.web)))) {
+if ($entryTracked) {
     Stop-TrackedProcesses | Out-Null
 }
 
