@@ -928,7 +928,14 @@ function Get-DeveloperListeningPorts {
         try {
             $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
         } catch {
-            throw "Windows could not verify whether Willard service port $port is free: $($_.Exception.Message)"
+            # Get-NetTCPConnection reports an empty filtered result as
+            # ObjectNotFound on supported Windows builds. That is a verified
+            # empty port, not a query failure.
+            if ($_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound) {
+                $connections = @()
+            } else {
+                throw "Windows could not verify whether Willard service port $port is free: $($_.Exception.Message)"
+            }
         }
         foreach ($connection in $connections) {
             $ownerPid = 0
