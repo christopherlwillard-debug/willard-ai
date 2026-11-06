@@ -2372,3 +2372,20 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added a regression assertion for the taskkill failure fallback and diagnostic.
 - Commits: implementation 234fef2e2ac488a4498df870757e234558ea5983; regression fecd59d13c947a38244bfb55877bebc956dee0c6; matcher correction 51be838f32b86d8eaf91312250c0c21e4ccf524c.
 - This is source-contract coverage only. Controlled Windows taskkill failure and descendant-process integration tests remain outstanding; the fallback cannot guarantee termination of grandchildren when Windows tree termination itself fails.
+
+## 2026-11-06 follow-up — non-publishing Windows installer lifecycle validation
+
+**Finding — High (Windows installation / upgrade reliability):** The repository already contained a comprehensive standard-user installer lifecycle smoke, but its only invocation was inside `.github/workflows/windows-release.yml`. That workflow requires production Authenticode and release-manifest signing material and has a separate publishing path. Running it for an audit would unnecessarily couple validation to production signing and release controls, so the clean-machine install, upgrade, interrupted-update recovery, diagnostics, and uninstall lifecycle remained blocked.
+
+**Correction:** Added `.github/workflows/windows-installer-lifecycle-validation.yml`, a separate Windows PR/manual validation path. It builds the installer from the audited source using the existing unsigned local-build mode, stages the official pinned Node and 7-Zip payloads through existing scripts, provisions disposable portable PostgreSQL, and runs the existing standard-user lifecycle smoke. The workflow has only `contents: read`, is scoped to the audit branch for manual dispatch, and contains no production secrets, release action, artifact publication, or write permission.
+
+**Coverage exercised by the existing lifecycle smoke:** standard-user first install and startup; upgrade to a newer compiled installer; preservation of external PostgreSQL, settings, and media; recovery from interrupted packaged update phases; database-failure diagnostics; and uninstall while services are running.
+
+**Regression:** Extended `scripts/windows/installer-config.test.mjs` to require the isolated workflow and reject production signing secrets, write permissions, release publishing, and artifact upload.
+
+**Validation status:** Workflow and regression are committed together. Fast Validation and the new Windows lifecycle workflow are pending; no Windows integration pass is claimed until the matching run completes. The workflow intentionally validates installer behavior without Authenticode trust or SmartScreen reputation, which remain separate release-readiness checks.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → clean standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall | fixed validation path; Windows integration pending | this batch | Matching Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
+
