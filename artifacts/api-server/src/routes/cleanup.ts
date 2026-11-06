@@ -103,6 +103,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         groupKey:        String(r.group_key),
         fileCount:       parseInt(r.file_count),
         totalSize:       Number(r.total_size),
+        largestFileSize: Number(r.largest_file_size),
         matchType:       "PERCEPTUAL_SIMILAR" as const,
         matchConfidence: Number(r.large_unconfirmed_count) > 0 ? 2 : 4,
         confirmationStatus: Number(r.large_unconfirmed_count) > 0
