@@ -931,3 +931,22 @@ test("organization analysis clears its lease on every failed terminal update", (
   assert.match(route, /if \(!updated\)[\s\S]*Analysis lost ownership before the plan could be saved/);
   assert.match(route, /if \(analysisClaimed\) await db\.update/);
 });
+
+
+test("organization analysis, preflight, dry-run, and execute stay on the job's library", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const sections = [
+    ['router.post("/organize/jobs/:id/analyze"', 'router.patch("/organize/jobs/:id/plan"'],
+    ['router.post("/organize/jobs/:id/preflight"', 'router.get("/organize/jobs/:id/dry-run"'],
+    ['router.get("/organize/jobs/:id/dry-run"', 'router.post("/organize/jobs/:id/execute-token"'],
+    ['router.get("/organize/jobs/:id/execute"', 'router.get("/organize/jobs/:id/resume"'],
+  ];
+  for (const [startMarker, endMarker] of sections) {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    assert.ok(start >= 0 && end > start, `route boundaries must exist: ${startMarker}`);
+    const route = source.slice(start, end);
+    assert.match(route, /path\.resolve\(nasPath\) !== path\.resolve\((?:analysisNasPath|job\.nasPath)\)/);
+    assert.match(route, /active library changed/i);
+  }
+});
