@@ -1239,7 +1239,7 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
       .set({ leaseToken: planEditToken })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, planEditNasPath),
         eq(organizationJobsTable.status, job.status),
         isNull(organizationJobsTable.leaseToken),
       ))
@@ -1275,7 +1275,7 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
       .set({ status: "planned", planJson: updatedPlan, preflightJson: null, leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, planEditNasPath),
         eq(organizationJobsTable.leaseToken, planEditToken),
         eq(organizationJobsTable.status, job.status),
       ))
@@ -1329,7 +1329,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       .set({ leaseToken: preflightLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, preflightNasPath),
         eq(organizationJobsTable.status, job.status),
         isNull(organizationJobsTable.leaseToken),
       ))
