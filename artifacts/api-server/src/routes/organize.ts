@@ -1014,7 +1014,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
-      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(and(
+      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing.", leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
@@ -1031,7 +1031,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     if (job.sourceType === "archive") {
       const archivePath = resolveActiveArchivePath(job.sourcePath, nasPath);
       if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(and(
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found", leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
@@ -1091,7 +1091,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           }
         } catch (error) {
           if (error instanceof CapacityAdmissionError) {
-            await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(and(
+            await db.update(organizationJobsTable).set({ status: "failed", error: error.message, leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
@@ -1108,7 +1108,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       }
     } else {
       if (!fs.existsSync(job.sourcePath)) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(and(
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found", leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
@@ -1117,7 +1117,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
         res.status(422).json({ error: "Source folder not found on disk" }); return;
       }
       if (!fs.statSync(job.sourcePath).isDirectory()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(and(
+        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job", leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
@@ -1202,9 +1202,14 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
         eq(organizationJobsTable.status, "analyzing"),
       ))
       .returning();
-    res.json(updated ? publicOrganizationJob(updated) : updated);
+    if (!updated) {
+      res.status(409).json({ error: "Analysis lost ownership before the plan could be saved. Refresh and try again." });
+      return;
+    }
+    analysisClaimed = false;
+    res.json(publicOrganizationJob(updated));
   } catch (err) {
-    await db.update(organizationJobsTable)
+    if (analysisClaimed) await db.update(organizationJobsTable)
       .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error", leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
