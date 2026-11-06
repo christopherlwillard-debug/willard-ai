@@ -3052,3 +3052,38 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 |---|---|---|---|---|
 | High | Windows installer → stop API/web service tree after first startup or upgrade | fixed diagnostic gap; targeted validation pending | pending commit | Must observe taskkill result on next Windows lifecycle run; process still must be stopped safely. |
 | Medium | Windows developer launcher → stop tracked service tree | fixed diagnostic gap; targeted validation pending | pending commit | Windows process-ownership smoke and targeted contract tests must pass. |
+
+## November 6 — Windows service-stop race and cleanup API responsiveness
+
+### Confirmed Windows stop race — fixed, targeted-tested; lifecycle validation pending
+
+The Windows lifecycle runs on the preceding test-harness commit exposed a repeatable stop failure in both first-start and post-upgrade flows. taskkill.exe returned success and reported that the tracked Node processes had been terminated, but the immediate Win32_Process identity query still returned the same tracked PID. A later stop attempt succeeded after the stale WMI process record disappeared. The stop routine therefore treated a terminated service as still running and aborted the installer lifecycle.
+
+The packaged launcher and developer launcher now poll the exact tracked process identity for up to five additional seconds after the existing process wait. The identity check still includes the recorded executable path, command line, and creation date; an unverified or genuinely surviving process remains a fail-closed error. This does not weaken process ownership checks.
+
+The same batch corrected two stale test contracts: the lifecycle stage assertion now checks the stage helper actually used by the smoke script, and the developer process-identity assertion now inspects Test-ProcessIdentity rather than the preceding Get-ProcessIdentity function block.
+
+- Diagnostic/test-harness commit: 42f57a36fbb48c8dbe89a954ad6e9ad6d746a03c
+- Product stop-race fix and regression-contract commit: bdb60bd57f425cf2392fe09958c33868a7145397
+- Fast Validation #1251: validate job completed successfully, including TypeScript/generated contracts, release/storage contracts, Windows archive/updater smoke, and targeted backend regressions. The workflow run was still finalizing when this section was written.
+- Dependency Review #1014: passed.
+- Windows installer lifecycle #111 and #112: running against the fix; neither is counted as a pass yet.
+
+Remaining risk: the five-second WMI visibility grace still needs the complete installed-product lifecycle run to confirm it is sufficient. The prepared-phase updater recovery entrypoint problem remains open and still requires a stable bootstrap outside the swapped installation directory.
+
+### New confirmed performance finding — Windows cleanup blocks the API event loop
+
+Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the Windows Recycle Bin branch calls spawnSync("powershell", ...) inside the per-file cleanup loop, with a 30-second timeout and up to 500 file IDs accepted by the request. Each synchronous call blocks the API event loop, so a slow or stuck Recycle Bin operation can stall unrelated API requests; a large cleanup batch repeats that risk for every file.
+
+- Severity: Medium (API responsiveness / cleanup workflow).
+- Status: found; no code change in this batch.
+- Planned fix: use the existing Node child-process async pattern with a bounded timeout, pass the path as environment data rather than interpolating it into PowerShell source, and preserve the current per-file PREPARED/MOVING/FAILED/FILESYSTEM_MOVED journal transitions. Add focused runner-injection and route-contract tests.
+- Remaining risk: until changed, Windows cleanup can temporarily block all API request handling while PowerShell runs.
+
+### Prioritized ledger delta
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows launcher stop; installer upgrade/uninstall | fixed; targeted-tested; lifecycle validation pending | bdb60bd57f425cf2392fe09958c33868a7145397 | Full installed-product lifecycle #111/#112 not yet confirmed |
+| Medium | Windows cleanup / Recycle Bin | found | pending | Synchronous PowerShell call can block the API event loop for up to 30 seconds per file |
+| High | Prepared-phase updater recovery | found; architectural plan documented | existing audit findings | Stable bootstrap is still required; do not treat the packaged in-directory recovery routine as reachable when the install directory is absent |
