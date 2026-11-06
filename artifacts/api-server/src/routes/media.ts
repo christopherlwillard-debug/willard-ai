@@ -15,7 +15,7 @@ import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandl
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
-import { isPortableMediaFileName, renameFileWithPersistence } from "../lib/media-rename.ts";
+import { isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
 import { moveFileNoReplace } from "../lib/organize-helpers.ts";
 
 const router = Router();
@@ -409,6 +409,10 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     );
     res.json(updated);
   } catch (error) {
+    if (error instanceof MediaRenameConflictError) {
+      res.status(409).json({ error: "Media record changed during rename. Refresh the library and try again." });
+      return;
+    }
     if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
       res.status(409).json({ error: "A file with that name already exists" });
       return;
