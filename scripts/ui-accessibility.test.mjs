@@ -66,7 +66,7 @@ function openingTagAt(source, start, description) {
     if (quote !== null) {
       if (escaped) {
         escaped = false;
-      } else if (character === "\\\\") {
+      } else if (character === "\\") {
         escaped = true;
       } else if (character === quote) {
         quote = null;
