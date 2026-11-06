@@ -20,24 +20,24 @@ function dependencies(events: string[], options: { hangingStep?: string } = {}) 
     stopFaceRecognition: step("face"),
     stopThumbnailReconciliation: step("reconcile"),
     stopLibraryJobs: step("jobs"),
-    checkpointExternalJobs: step("checkpoint"),
+    stopActiveConversionJobs: step("conversions"),
     closeHttpServer: async () => { events.push("http"); },
     closePool: async () => { events.push("pool"); },
   };
 }
 
-test("shutdown does not cancel conversion or organization jobs owned by another API instance", () => {
+test("shutdown drains only this instance's conversion requests and never cancels remote jobs", async () => {
   const source = readFileSync(new URL("../lib/shutdown.ts", import.meta.url), "utf8");
-  const start = source.indexOf("async function checkpointExternalJobs");
-  const end = source.indexOf("export interface ShutdownDependencies", start);
-  assert.ok(start >= 0 && end > start, "shutdown checkpoint function must remain inspectable");
-  const checkpoint = source.slice(start, end);
+  const optimize = readFileSync(new URL("../routes/optimize.ts", import.meta.url), "utf8");
 
-  assert.equal(checkpoint.includes("db.update(organizationJobsTable)"), false);
-  assert.equal(checkpoint.includes("db.update(conversionJobsTable)"), false);
-  assert.match(checkpoint, /organizationJobsDeferredToLeaseExpiry/);
-  assert.match(checkpoint, /conversionJobsDeferredToLeaseExpiry/);
-  assert.match(checkpoint, /another API instance still owns and runs those jobs/);
+  assert.doesNotMatch(source, /db\.update\(organizationJobsTable\)/);
+  assert.doesNotMatch(source, /db\.update\(conversionJobsTable\)/);
+  assert.match(source, /dependencies\.stopActiveConversionJobs\(\)/);
+  assert.match(optimize, /const activeConversionJobIds = new Set<number>\(\)/);
+  assert.match(optimize, /activeConversionJobIds\.add\(id\)/);
+  assert.match(optimize, /activeConversionJobIds\.delete\(id\)/);
+  assert.match(optimize, /isShuttingDown\(\)/);
+  assert.match(optimize, /export async function stopActiveConversionJobs/);
 });
 
 test("shutdown is idempotent and closes resources in dependency order", async () => {
@@ -52,9 +52,9 @@ test("shutdown is idempotent and closes resources in dependency order", async ()
   assert.strictEqual(events.at(-2), "http");
   assert.strictEqual(events.at(-1), "pool");
   assert.ok(events.indexOf("jobs:done") < events.indexOf("http"));
-  assert.ok(events.indexOf("checkpoint:done") < events.indexOf("http"));
-  assert.ok(events.indexOf("monitor:done") < events.indexOf("checkpoint:start"));
-  assert.ok(events.indexOf("reconcile:done") < events.indexOf("checkpoint:start"));
+  assert.ok(events.indexOf("conversions:done") < events.indexOf("http"));
+  assert.ok(events.indexOf("monitor:done") < events.indexOf("jobs:start"));
+  assert.ok(events.indexOf("reconcile:done") < events.indexOf("jobs:start"));
 });
 
 test("a stuck shutdown step is bounded and later resources still close", async () => {
