@@ -3417,3 +3417,16 @@ The source diff traced this to an incomplete refactor of `openDatabaseSnapshot`:
 - **Full CI:** not run. Fast Validation, Dependency Review, and Windows installer lifecycle remain distinct validation scopes.
 
 **Next batch:** Verify the active Fast Validation run survives the next commit and completes its Windows archive/updater smoke; verify the newest lifecycle run starts and reaches installed first startup. Then address the stable external Windows bootstrap design and continue the generation-fenced conversion-worker work. Do not treat the cancelled Windows job as passed.
+
+
+## November 6 status correction — thumbnail subprocesses are already asynchronous
+
+The earlier finding under **“On-demand thumbnail generation still blocks the API event loop”** is stale for the current audit branch and should not be treated as an open defect.
+
+**Current source evidence:** `artifacts/api-server/src/lib/thumbnail-engine.ts` imports `runMediaToolAsync` and `formatMediaToolExecutionError`; video, PDF, and FFmpeg image-fallback generation all await the shared runner (current source lines 241–312). The file contains no `spawnSync` call. Video frame scratch output is removed in a `finally` path, and the existing per-thumbnail lock plus atomic publish path remains in place.
+
+**Regression coverage:** `artifacts/api-server/src/__tests__/media-tools-async.test.ts` asserts the thumbnail engine does not use synchronous FFmpeg spawning and that video/PDF generation awaits the asynchronous runner. The thumbnail cache/publication suite also exercises concurrent requests, corrupt cache replacement, partial cleanup, and cache reuse.
+
+**Validation:** Fast Validation run [42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345), Linux `validate` job 128056974463, passed the targeted backend batch (351 tests: 349 passed, 0 failed, 2 skipped). The Windows archive/updater job in the same run was still in progress at this snapshot; no Windows result is claimed.
+
+**Status:** fixed; target-tested on Linux. The async refactor is already part of the existing PR diff; its exact introducing commit was not isolated during this pass, and no new thumbnail code was changed. Keep request-abort/per-thumbnail cancellation and process-tree ownership as separate remaining design questions; the current fix covers event-loop responsiveness and shared shutdown ownership, not attempt-scoped cancellation.
