@@ -696,7 +696,7 @@ test(
         ]);
         const expectedRemapRow = [probe.target, probe.expectedCache, probe.expectedMedia, probe.expectedMedia].join("|");
         assert.deepEqual(
-          remapped.stdout.trim().split(/\\r?\\n/),
+          remapped.stdout.trim().split(/\r?\n/),
           [expectedRemapRow, expectedRemapRow, expectedRemapRow],
           "path remapping must update active, recycled, and deleted media rows",
         );
