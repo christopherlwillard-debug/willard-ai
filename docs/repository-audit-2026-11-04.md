@@ -3469,3 +3469,14 @@ Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/w
 The same run's Windows `windows-archive-and-updater-smoke` job 128062355978 has passed its new **“Verify organization capacity probes on Windows”** step (step 10), including the real Windows temporary-filesystem `statfs` probe. All preceding Windows launcher, dependency-install, media, storage, NAS cleanup, conversion finalization, and official 7-Zip/TAR steps also passed. The final developer-updater preservation/rollback step was still in progress at this update, so the Windows job and overall Fast Validation run are not yet marked complete.
 
 **Status:** capacity fix is now target-tested on Linux and Windows; full Fast Validation completion remains pending. The separate Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still installing isolated PostgreSQL 16; it had not yet reached installer build or first-start/recovery testing.
+
+
+### Final Fast Validation result — both Linux and Windows jobs passed
+
+Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) on exact code head `60e18c7cf6bad3dd067f111854db5be6522c60f7` completed successfully: Linux `validate` job 128061473992 and Windows `windows-archive-and-updater-smoke` job 128062355978 both concluded `success`.
+
+The Windows job completed its developer-updater preservation/rollback step. Its final log confirms: `Windows updater smoke passed: full-version update, preservation, and rollback.` The run also passed the new Windows organization-capacity step, official 7-Zip symlink metadata and compressed TAR preview checks, storage/NAS cleanup checks, conversion finalization no-overwrite/rollback checks, and launcher/media subprocess checks.
+
+**Status:** the organization destination-capacity fix is target-tested on Linux and Windows; the full Fast Validation workflow passed for this code head. This is not full-repository CI and does not test a real disconnected SMB/NAS mount. The latest branch head is a later documentation-only commit, so this pass is attributed to code head `60e18c7cf6bad3dd067f111854db5be6522c60f7`, not the later ledger commit.
+
+The dedicated Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still in its installer build/compile step. It had not yet run standard-user install, installed first startup, prepared-phase recovery, diagnostics, or uninstall. No lifecycle result is claimed.
