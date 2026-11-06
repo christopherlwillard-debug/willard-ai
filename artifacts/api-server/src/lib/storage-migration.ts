@@ -163,7 +163,7 @@ async function defaultHashFile(filePath: string): Promise<string> {
   return sha256File(filePath);
 }
 
-async function copyFileFromNoFollowDescriptor(sourcePath: string, destinationHandle: fs.promises.FileHandle): Promise<void> {
+async function copyFileFromNoFollowDescriptor(sourcePath: string, destinationHandle: Awaited<ReturnType<typeof fs.promises.open>>): Promise<void> {
   const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
   const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | noFollow);
   try {
