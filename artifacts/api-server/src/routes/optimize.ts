@@ -53,7 +53,10 @@ export async function stopActiveConversionJobs(timeoutMs = 8_000): Promise<void>
   if (activeConversionJobIds.size === 0) return;
   await new Promise<void>((resolve) => {
     let timer: NodeJS.Timeout | null = null;
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       if (timer) clearTimeout(timer);
       activeConversionJobWaiters.delete(finish);
       resolve();
@@ -64,7 +67,7 @@ export async function stopActiveConversionJobs(timeoutMs = 8_000): Promise<void>
   });
   if (activeConversionJobIds.size > 0) {
     logger.warn({
-      jobIds: [...activeConversionJobIds],
+      jobIds: [...activeConversionJobIds.keys()],
       timeoutMs,
     }, "Some local conversion jobs did not finish before shutdown; their session locks will expire for recovery");
   }
