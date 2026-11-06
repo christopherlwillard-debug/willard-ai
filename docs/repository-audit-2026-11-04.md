@@ -2605,4 +2605,4 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
-| Medium | Cleanup → trash manifest listing, recycle journal append, and removal tombstones | fixed; targeted tests pending | `8a3336f88595aa424ba6d42904fbd9cb1263bb27` (implementation); `90dbb868fd7a5ec3d6067a3c6e75e40b5d033f43` (regressions) | Ancestor-directory replacement remains a separate descriptor-relative traversal design issue; Windows/SMB filesystem behavior and the matching Fast Validation run remain to be verified |
+| Medium | Cleanup → trash manifest listing, recycle journal append, and removal tombstones | fixed; targeted tests pending | `8a3336f88595aa424ba6d42904fbd9cb1263bb27` (implementation); `90dbb868fd7a5ec3d6067a3c6e75e40b5d033f43` (regressions); `46e82eb09f422d9516842bf843f282c2dc335bce` (corrected source-contract matchers) | Ancestor-directory replacement remains a separate descriptor-relative traversal design issue; Windows/SMB filesystem behavior and the matching Fast Validation run remain to be verified |
