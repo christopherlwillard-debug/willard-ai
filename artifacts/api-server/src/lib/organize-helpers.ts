@@ -260,11 +260,15 @@ export async function verifiedMove(
 export async function rollbackMoves(
   moves:  FileMoveRecord[],
   logFn?: (msg: string) => void,
+  beforeEachMove?: () => Promise<void>,
 ): Promise<number> {
   const log = logFn ?? (() => {});
   let rolledBack = 0;
 
   for (const mv of [...moves].reverse()) {
+    // Lease checks must escape the per-file recovery catch. A stale worker
+    // must stop immediately rather than treating lost ownership as a file error.
+    await beforeEachMove?.();
     try {
       // A malformed or stale journal must never be allowed to unlink a file
       // when both sides resolve to the same path. On Windows, compare paths
