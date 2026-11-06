@@ -438,6 +438,7 @@ function RunConversionsDialog({
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
         setRunError((body as any).error ?? "Failed to start conversion");
+        setPhase("done");
         return;
       }
       const job = await resp.json();
@@ -495,6 +496,7 @@ function RunConversionsDialog({
       });
     } catch (err: any) {
       setRunError(err.message ?? "Failed to start conversion");
+      setPhase("done");
     }
   }
 
