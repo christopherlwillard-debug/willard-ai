@@ -2903,3 +2903,11 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Medium | Windows installer → interrupted-update lifecycle fixture cleanup | target-tested | `3b063902d289a1d08bc7289221e79ee6900f604a` | Installer lifecycle #83 still needs to finish its installed-product recovery sequence. |
 | Medium | Fast Validation → Search filter UI contract parser | target-tested | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Static UI contracts do not replace browser keyboard/screen-reader testing. |
 
+
+
+## Thumbnail cache clearing preserves in-flight work (2026-11-06)
+
+- Confirmed the thumbnail cache clearing function removed every directory entry, including lock, temporary WebP, and FFmpeg frame files owned by active workers. Removing a live inter-process lock can let another API process acquire the same destination and generate/publish concurrently; deleting an in-flight output can also make the original worker fail.
+- Cache clearing now removes completed cache entries only and leaves lock/partial artifacts in place for their owning worker and existing cleanup policy.
+- Added a regression test that creates a completed thumbnail plus simulated active lock, temporary WebP, and FFmpeg frame files; it verifies the completed derivative is cleared while all in-flight artifacts remain.
+- Targeted test and CI validation are pending. This change does not resolve stale-lock recovery after a crashed worker; that remains an open operational concern.
