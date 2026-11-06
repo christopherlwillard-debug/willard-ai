@@ -10,6 +10,8 @@ import { EventEmitter } from "node:events";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
+const drizzleModule = await import("drizzle-orm");
+
 type WatchCallback = (event: string, filename: string) => void;
 
 const oldPath = "/library/old";
@@ -27,11 +29,13 @@ const appSettingsTable = {
 const db = {
   select: () => ({
     from: () => ({
-      limit: async () => [{
-        nasPath: configuredPath,
-        indexingPaused: false,
-        watcherPollIntervalSeconds: 300,
-      }],
+      orderBy: () => ({
+        limit: async () => [{
+          nasPath: configuredPath,
+          indexingPaused: false,
+          watcherPollIntervalSeconds: 300,
+        }],
+      }),
     }),
   }),
 };
@@ -48,6 +52,14 @@ mock.module("fs", {
   },
 });
 mock.module("@workspace/db", { namedExports: { db, appSettingsTable } });
+mock.module("drizzle-orm", {
+  namedExports: {
+    ...drizzleModule,
+    asc: () => null,
+    desc: () => null,
+    isNotNull: () => null,
+  },
+});
 mock.module("../lib/nas-storage.ts", {
   namedExports: {
     checkNasReachableAsync: async (nasPath: string) => ({ online: true, path: nasPath }),

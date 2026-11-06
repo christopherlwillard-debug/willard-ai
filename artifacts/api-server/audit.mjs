@@ -6,6 +6,30 @@ import { fileURLToPath } from "node:url";
 const apiServerDirectory = path.dirname(fileURLToPath(import.meta.url));
 const workspaceDirectory = path.resolve(apiServerDirectory, "../..");
 const testDirectory = path.join(apiServerDirectory, "src", "__tests__");
+const auditDatabaseUrl = process.env.WILLARD_AUDIT_DATABASE_URL?.trim();
+const auditApiUrlValue = process.env.WILLARD_AUDIT_API_URL?.trim();
+
+if (process.env.WILLARD_AUDIT_DATABASE_IS_DISPOSABLE !== "1" || !auditDatabaseUrl || !auditApiUrlValue) {
+  throw new Error(
+    "[backend-audit] Refusing to use the app database. Run the disposable audit wrapper or provide an isolated local database and API URL.",
+  );
+}
+
+const auditDatabase = new URL(auditDatabaseUrl);
+const auditApiUrl = new URL(auditApiUrlValue);
+const localHosts = new Set(["localhost", "127.0.0.1"]);
+if (!["postgres:", "postgresql:"].includes(auditDatabase.protocol) || !localHosts.has(auditDatabase.hostname)) {
+  throw new Error("[backend-audit] The audit database must be a local PostgreSQL instance.");
+}
+if (auditApiUrl.protocol !== "http:" || !localHosts.has(auditApiUrl.hostname)) {
+  throw new Error("[backend-audit] The audit API must be an explicitly configured local HTTP service.");
+}
+
+const testEnvironment = {
+  ...process.env,
+  DATABASE_URL: auditDatabaseUrl,
+  WILLARD_API_URL: auditApiUrl.origin,
+};
 const apiTestFiles = readdirSync(testDirectory)
   .filter((name) => name.endsWith(".test.ts"))
   .sort()
@@ -61,7 +85,7 @@ function runTestFile(testFile) {
       ],
       {
         cwd: testWorkingDirectory,
-        env: process.env,
+        env: testEnvironment,
         stdio: "inherit",
         windowsHide: false,
       },

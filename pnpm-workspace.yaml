@@ -36,7 +36,7 @@ catalog:
   tailwind-merge: ^3.3.1
   tailwindcss: ^4.1.14
   tsx: 4.22.4
-  vite: ^7.3.2
+  vite: ^7.3.7
   wouter: ^3.3.5
   zod: ^4.6.6
 
@@ -68,6 +68,9 @@ overrides:
   source-map-js: 1.2.2
   compression: 1.8.2
   decode-uri-component: 0.5.1
+  fast-copy: 4.1.0
+  fast-uri: 3.1.9
+  postcss-selector-parser: 6.1.5
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   'brace-expansion@<1.1.21': 1.1.21
   'brace-expansion@>=2.0.0 <2.1.7': 2.1.7

@@ -243,6 +243,42 @@ test("finalization persists each move intent before mutation and checkpoints its
   }
 });
 
+test("finalization does not move files after filesystem ownership is lost", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const staged = write(path.join(f.stagingDir, "photos", "portrait.jpg"), "converted bytes");
+    let ownsFiles = true;
+
+    await assert.rejects(
+      () => finalizeConversionFiles({
+        ...input(f, "replace", [
+          { filePath: original, stagedPath: staged, status: "success" },
+        ]),
+        onMoveIntent: () => { ownsFiles = false; },
+        assertOwnership: () => {
+          if (!ownsFiles) throw new Error("filesystem ownership was lost");
+        },
+      }),
+      (error: unknown) =>
+        error instanceof ConversionFinalizationError &&
+        !error.rollbackComplete &&
+        /ownership was lost/.test(error.message),
+    );
+
+    assert.equal(fs.readFileSync(original, "utf8"), "original bytes");
+    assert.equal(fs.readFileSync(staged, "utf8"), "converted bytes");
+    assert.equal(fs.existsSync(path.join(f.root, "photos", "portrait.jpg")), false);
+    assert.equal(
+      fs.existsSync(path.join(f.stagingDir, ".originals", "photos", "portrait.png")),
+      false,
+      "the backup directory may be prepared while owned, but the original must not move after ownership is lost",
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("startup recovery restores an original moved after its durable intent checkpoint", async () => {
   const f = fixture();
   try {

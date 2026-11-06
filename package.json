@@ -15,7 +15,7 @@
     "test:release-contracts": "node --test desktop/release-contract.test.mjs scripts/artifact-sources.test.mjs scripts/windows/release-payload.test.mjs scripts/windows/installer-config.test.mjs scripts/windows/storage-conformance.test.mjs",
     "test:ui-contracts": "node --test scripts/ui-accessibility.test.mjs",
     "test:routed": "node scripts/run-routed-workflows.mjs",
-    "audit:backend": "pnpm --filter @workspace/api-server run audit"
+    "audit:backend": "node scripts/backend-audit-disposable.mjs"
   },
   "private": true,
   "devDependencies": {

@@ -41,6 +41,8 @@ export interface ConversionFinalizeInput {
   onMoveIntent?: (move: FileMoveRecord) => void | Promise<void>;
   /** Persist the verified result after each filesystem mutation. */
   onMoveComplete?: (move: FileMoveRecord) => void | Promise<void>;
+  /** Cross-process ownership check, run immediately before each move. */
+  assertOwnership?: () => void;
 }
 
 export interface ConversionFinalizeOutcome {
@@ -117,6 +119,7 @@ async function moveAndTrack(
   beforeMoveHook: ConversionFinalizeInput["beforeMoveHook"],
   onMoveIntent: ConversionFinalizeInput["onMoveIntent"],
   onMoveComplete: ConversionFinalizeInput["onMoveComplete"],
+  assertOwnership: ConversionFinalizeInput["assertOwnership"],
   kind: "backup" | "publish",
 ): Promise<void> {
   const index = moves.length;
@@ -136,6 +139,7 @@ async function moveAndTrack(
 
   try {
     await beforeMoveHook?.({ from, to, kind, index });
+    assertOwnership?.();
     const record = await verifiedMove(from, to, { expectedSourceHash: expectedHash });
     moves[index] = record;
     // If this checkpoint fails, the pre-move intent is still durable and the
@@ -249,6 +253,7 @@ export async function finalizeConversionFiles(
     const outcomes: ConversionFinalizeOutcome[] = [];
     for (const plan of plans) {
       if (plan.backupPath && plan.originalHash) {
+        input.assertOwnership?.();
         ensureDirectoryWithinRoot(path.dirname(plan.backupPath), input.nasPath);
         await moveAndTrack(
           plan.originalPath,
@@ -258,6 +263,7 @@ export async function finalizeConversionFiles(
           input.beforeMoveHook,
           input.onMoveIntent,
           input.onMoveComplete,
+          input.assertOwnership,
           "backup",
         );
       }
@@ -272,6 +278,7 @@ export async function finalizeConversionFiles(
         input.beforeMoveHook,
         input.onMoveIntent,
         input.onMoveComplete,
+        input.assertOwnership,
         "publish",
       );
       outcomes.push({
@@ -285,10 +292,11 @@ export async function finalizeConversionFiles(
   } catch (error) {
     let rollbackCount = 0;
     try {
+      input.assertOwnership?.();
       rollbackCount = await rollbackMoves(moves);
     } catch {
       // The per-file verification below determines whether manual recovery is
-      // still required; never discard the staging directory on this path.
+      // still required. If ownership was lost, do not mutate files during rollback.
     }
     const recoveryMoves = await findUnrestoredMoves(moves);
     const rollbackComplete = recoveryMoves.length === 0 && rollbackCount === moves.length;

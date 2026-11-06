@@ -33,7 +33,9 @@ import { rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers.ts";
 import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
 import {
   acquireConversionJobLock,
+  acquireConversionFilesystemJobLock,
   releaseConversionJobLock,
+  type ConversionFilesystemJobLock,
   type ConversionJobLockClient,
 } from "../lib/conversion-job-lock.ts";
 
@@ -1355,6 +1357,7 @@ router.post("/optimize/conversion/:jobId/action", async (req: any, res) => {
 
 async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
   let jobLockClient: ConversionJobLockClient | null = null;
+  let filesystemJobLock: ConversionFilesystemJobLock | null = null;
   let lockJobId: number | null = null;
   try {
     const id = parsePositiveIntegerParam(req.params.id);
@@ -1377,6 +1380,11 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
 
     const job = await getActiveConversionJob(id);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    filesystemJobLock = acquireConversionFilesystemJobLock(job.nasPath, id);
+    if (!filesystemJobLock) {
+      res.status(409).json({ error: "Another conversion worker still owns the NAS files for this job." });
+      return;
+    }
     if (job.status !== "awaiting_action") {
       res.status(409).json({ error: `Job is not awaiting action (current status: ${job.status})` });
       return;
@@ -1403,6 +1411,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // A previous process may have stopped after persisting a move intent. Reconcile
     // that journal under the job lock before allowing another finalization attempt.
     if (Array.isArray(resultData.finalizationJournal) && resultData.finalizationJournal.length > 0) {
+      filesystemJobLock.assertOwned();
       const recovery = await recoverConversionFinalizationMoves(resultData.finalizationJournal, nasPath);
       const recoveryMessage = recovery.complete
         ? "An interrupted finalization was rolled back safely; you may retry."
@@ -1463,6 +1472,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
 
     const finalizationJournal: FileMoveRecord[] = [];
     const checkpointFinalizationMove = async (move: FileMoveRecord, completed: boolean): Promise<void> => {
+      filesystemJobLock!.assertOwned();
       if (completed) {
         const index = finalizationJournal.findIndex((entry) => entry.from === move.from && entry.to === move.to);
         if (index < 0) throw new Error("Finalization completion has no persisted move intent");
@@ -1498,6 +1508,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         trashBase,
         archiveBase,
         files: resultData.files,
+        assertOwnership: () => filesystemJobLock!.assertOwned(),
         onMoveIntent: (move) => checkpointFinalizationMove(move, false),
         onMoveComplete: (move) => checkpointFinalizationMove(move, true),
       });
@@ -1547,6 +1558,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     )).returning({ id: conversionJobsTable.id });
 
     if (!completedJob) {
+      filesystemJobLock.assertOwned();
       const restored = await rollbackMoves(finalized.moves);
       if (restored !== finalized.moves.length) {
         logger.error({
@@ -1581,6 +1593,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // intentionally last; a cleanup failure leaves extra recoverable bytes.
     try {
       if (resultData.stagingDir && fs.existsSync(resultData.stagingDir)) {
+        filesystemJobLock.assertOwned();
         assertWithinRoot(resultData.stagingDir, nasPath);
         fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
       }
@@ -1592,6 +1605,11 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Finalize failed" });
   } finally {
+    if (filesystemJobLock) {
+      try { filesystemJobLock.release(); } catch (error) {
+        logger.error({ err: error, jobId: lockJobId }, "Unable to release conversion filesystem ownership");
+      }
+    }
     if (jobLockClient && lockJobId !== null && Number.isSafeInteger(lockJobId)) {
       try {
         await releaseConversionJobLock(jobLockClient, lockJobId);
@@ -1660,6 +1678,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
+  let filesystemJobLock: ConversionFilesystemJobLock | null = null;
   let jobClaimed = false;
   try {
     jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
@@ -1671,6 +1690,12 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
     const job = await getActiveConversionJob(id);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
+    filesystemJobLock = acquireConversionFilesystemJobLock(job.nasPath, id);
+    if (!filesystemJobLock) {
+      send("error", { message: "Another conversion worker still owns the NAS files for this job." });
+      res.end();
+      return;
+    }
     if (job.status === "running") { send("error", { message: "Job is already running" }); res.end(); return; }
     if (job.status === "done" || job.status === "failed" || job.status === "cancelled") {
       send("error", { message: `Job already ${job.status}` }); res.end(); return;
@@ -1758,6 +1783,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       path.join(getWillardAIDir(nasPath), "conversions", String(id)),
       nasPath,
     );
+    filesystemJobLock.assertOwned();
 
     let succeeded = 0, failed = 0, skipped = 0;
     const results: Array<{
@@ -1793,6 +1819,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
       if (currentJob?.cancelledAt) break;
       const { fullPath, ext } = filesToConvert[i];
+      filesystemJobLock.assertOwned();
 
       if (previouslyConverted.has(path.resolve(fullPath))) {
         skipped++;
@@ -1914,6 +1941,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const stagedDir  = path.join(stagingDir, path.dirname(relPath));
       const stagedPath = path.join(stagedDir, `${stem}.${targetExt}`);
 
+      filesystemJobLock.assertOwned();
       ensureDirectoryWithinRoot(stagedDir, nasPath);
 
       // ── Convert to staging area (original untouched) ─────────────────────────
@@ -1925,9 +1953,13 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       } else {
         convertError = `Unsupported category for conversion: ${category}`;
       }
+      filesystemJobLock.assertOwned();
 
       if (convertError) {
-        try { if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath); } catch { /* best effort */ }
+        try {
+          filesystemJobLock.assertOwned();
+          if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath);
+        } catch { /* best effort; never clean up without current filesystem ownership */ }
         failed++;
         results.push({ filePath: fullPath, status: "failed", error: convertError });
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
@@ -1939,7 +1971,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const isRawSrc = RAW_EXTS.has(ext);
       const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes, isRawSrc);
       if (!verification.passed) {
-        try { if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath); } catch { /* best effort */ }
+        try {
+          filesystemJobLock.assertOwned();
+          if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath);
+        } catch { /* best effort; never clean up without current filesystem ownership */ }
         const isRegression = verification.failedCheck?.includes("not smaller");
         if (isRegression) {
           skipped++;
@@ -2018,6 +2053,11 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
+    if (filesystemJobLock) {
+      try { filesystemJobLock.release(); } catch (error) {
+        logger.error({ err: error, jobId: id }, "Unable to release conversion filesystem ownership");
+      }
+    }
     if (jobLockClient) {
       try {
         await releaseConversionJobLock(jobLockClient, id);

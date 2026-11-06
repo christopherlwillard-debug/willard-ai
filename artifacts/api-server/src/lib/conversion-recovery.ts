@@ -1,6 +1,10 @@
 import { db, pool, conversionJobsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
-import { acquireConversionJobLock, releaseConversionJobLock } from "./conversion-job-lock.ts";
+import {
+  acquireConversionFilesystemJobLock,
+  acquireConversionJobLock,
+  releaseConversionJobLock,
+} from "./conversion-job-lock.ts";
 import { recoverConversionFinalizationMoves } from "./conversion-finalize.ts";
 import type { FileMoveRecord } from "./organize-helpers.ts";
 
@@ -15,7 +19,10 @@ export const INTERRUPTED_CONVERSION_ERROR =
  * rolling restart cannot mark another process's active conversion as failed.
  */
 export async function recoverInterruptedConversionJobs(): Promise<number> {
-  const runningJobs = await db.select({ id: conversionJobsTable.id })
+  const runningJobs = await db.select({
+    id: conversionJobsTable.id,
+    nasPath: conversionJobsTable.nasPath,
+  })
     .from(conversionJobsTable)
     .where(eq(conversionJobsTable.status, "running"));
 
@@ -24,6 +31,17 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
     const lockClient = await acquireConversionJobLock(job.id, () => pool.connect());
     if (!lockClient) continue;
 
+    let filesystemLock;
+    try {
+      filesystemLock = acquireConversionFilesystemJobLock(job.nasPath, job.id);
+    } catch (error) {
+      try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
+      throw error;
+    }
+    if (!filesystemLock) {
+      try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
+      continue;
+    }
     try {
       const [updated] = await db.update(conversionJobsTable)
         .set({ status: "failed", error: INTERRUPTED_CONVERSION_ERROR })
@@ -34,6 +52,7 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
         .returning({ id: conversionJobsTable.id });
       if (updated) recovered++;
     } finally {
+      try { filesystemLock.release(); } catch { /* preserve uncertain ownership */ }
       // The helper discards the client if it cannot verify the unlock.
       try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
     }
@@ -60,6 +79,17 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
     const lockClient = await acquireConversionJobLock(job.id, () => pool.connect());
     if (!lockClient) continue;
 
+    let filesystemLock;
+    try {
+      filesystemLock = acquireConversionFilesystemJobLock(job.nasPath, job.id);
+    } catch (error) {
+      try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
+      throw error;
+    }
+    if (!filesystemLock) {
+      try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
+      continue;
+    }
     try {
       const [current] = await db.select({ resultJson: conversionJobsTable.resultJson })
         .from(conversionJobsTable)
@@ -102,6 +132,7 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
       // Keep the durable journal untouched if recovery or its database
       // checkpoint fails. A later startup/request can safely retry it.
     } finally {
+      try { filesystemLock.release(); } catch { /* preserve uncertain ownership */ }
       try { await releaseConversionJobLock(lockClient, job.id); } catch { /* connection was discarded */ }
     }
   }

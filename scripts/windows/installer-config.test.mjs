@@ -563,7 +563,7 @@ test("Windows release publication is preceded by every required quality gate", (
 
   assert.equal(
     rootPackage.scripts["audit:backend"],
-    "pnpm --filter @workspace/api-server run audit",
+    "node scripts/backend-audit-disposable.mjs",
   );
   assert.match(backendAudit, /cleanup-execute\.test\.ts/);
   assert.match(backendAudit, /dashboard-after-scan\.test\.ts/);

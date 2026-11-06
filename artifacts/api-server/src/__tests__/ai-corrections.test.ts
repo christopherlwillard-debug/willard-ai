@@ -11,6 +11,8 @@ import { after, before, test, mock } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 
+const drizzleModule = await import("drizzle-orm");
+
 const ai = {
   description: "A cat sitting beside a window",
   tags: ["cat", "summer"],
@@ -93,13 +95,23 @@ const pool = {
 const db = {
   select: () => ({
     from: () => ({
-      limit: async () => [settings],
+      orderBy: () => ({
+        limit: async () => [settings],
+      }),
     }),
   }),
 };
 
 const appSettingsTable = { nasPath: Symbol("nasPath") };
 mock.module("@workspace/db", { namedExports: { db, pool, appSettingsTable } });
+mock.module("drizzle-orm", {
+  namedExports: {
+    ...drizzleModule,
+    asc: () => null,
+    desc: () => null,
+    isNotNull: () => null,
+  },
+});
 mock.module("../lib/ai-enrichment.ts", {
   namedExports: {
     AI_VERSION: 3,

@@ -12,6 +12,8 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
+const drizzleModule = await import("drizzle-orm");
+
 const nasPath = "/mnt/nas/photos";
 let probeResults: Array<{ online: boolean; path: string; message: string }> = [];
 let activeType: "THUMBNAILS" | "SCAN" = "THUMBNAILS";
@@ -28,16 +30,26 @@ const appSettingsTable = {
 const db = {
   select: () => ({
     from: () => ({
-      limit: async () => [{
-        nasPath,
-        indexingPaused: false,
-        lastScanAt: null,
-      }],
+      orderBy: () => ({
+        limit: async () => [{
+          nasPath,
+          indexingPaused: false,
+          lastScanAt: null,
+        }],
+      }),
     }),
   }),
 };
 
 mock.module("@workspace/db", { namedExports: { db, appSettingsTable } });
+mock.module("drizzle-orm", {
+  namedExports: {
+    ...drizzleModule,
+    asc: () => null,
+    desc: () => null,
+    isNotNull: () => null,
+  },
+});
 mock.module("../lib/nas-storage.ts", {
   namedExports: {
     checkNasReachableAsync: async () =>

@@ -224,9 +224,10 @@ function getTarCompression(filename: string): TarCompression {
  * but not bzip2 or xz; those formats are decompressed with argument-array
  * child processes so archive filenames are never interpreted by a shell.
  *
- * The scratch directory is caller-owned. Compressed archive bytes must never
- * be decompressed into the OS temp directory because the result can be large
- * and is part of a NAS-required media operation.
+ * The caller owns the staging area. Keep the compressed-TAR scratch file beside
+ * it, on the same NAS, but outside the extracted tree that is verified below.
+ * Never decompress into OS temp: the output can be large and this operation
+ * requires NAS storage.
  */
 async function withTarInput<T>(
   archivePath: string,
@@ -238,7 +239,10 @@ async function withTarInput<T>(
   if (compression === "none") return callback(archivePath, {});
   if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
 
-  const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
+  const tarPath = path.join(
+    path.dirname(path.resolve(scratchDir)),
+    ".willard-input-" + crypto.randomUUID() + ".tar",
+  );
   const child = compression === "gzip" ? null : spawn(compression === "bzip2" ? "bzip2" : "xz", ["-dc", "--", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
   child?.stderr?.setEncoding("utf8");

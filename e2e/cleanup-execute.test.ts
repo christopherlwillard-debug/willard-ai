@@ -168,7 +168,10 @@ function queryDb(sql: string): string {
 // ─── State shared across tests ──────────────────────────────────────────────
 
 /** Temp NAS dir lives under the workspace so it shares the btrfs volume with the app. */
-const TEMP_NAS_BASE = path.join(process.cwd(), ".tmp-cleanup-test");
+const TEMP_NAS_BASE = path.join(
+  process.env["WILLARD_TEST_ROOT"] ?? process.cwd(),
+  ".tmp-cleanup-test",
+);
 
 let tempNasDir = "";
 let originalNasPath = "";
