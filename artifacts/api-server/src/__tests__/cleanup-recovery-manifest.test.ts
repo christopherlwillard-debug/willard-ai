@@ -538,3 +538,16 @@ test("cleanup execute and startup recovery fence recycled media by canonical fil
   assert.match(reconcile, /relative_path = \$\{canonical\.relativePath\}/);
   assert.match(reconcile, /content_hash IS NOT DISTINCT FROM \$\{canonical\.contentHash\}/);
 });
+
+
+test("manual restore validates destination parents without following symlinks", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const routeStart = cleanupRoute.indexOf('router.post("/cleanup/restore"');
+  const routeEnd = cleanupRoute.indexOf('router.get("/cleanup/history"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart);
+  const routeBody = cleanupRoute.slice(routeStart, routeEnd);
+  assert.match(routeBody, /canonicalizePath\(nasPath\)/);
+  assert.match(routeBody, /ensureDirectoryWithinRoot\(path\.dirname\(resolvedOriginalPath\), canonicalNasRoot\)/);
+  assert.doesNotMatch(routeBody, /fs\.mkdirSync\(destinationDir,\s*\{\s*recursive:\s*true\s*\}\)/);
+});
