@@ -885,11 +885,13 @@ router.get("/optimize/scan", async (req, res) => {
   try {
     const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const library = await getActiveLibraryContext();
-    const nasPath = library?.nasPath;
-    let nasDirectoryAvailable = false;
-    if (nasPath) {
-      try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
+    if (!library || !library.nasPath.trim()) {
+      res.status(400).json({ error: "NAS path is not configured or not accessible" });
+      return;
     }
+    const nasPath = library.nasPath;
+    let nasDirectoryAvailable = false;
+    try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
     if (!nasDirectoryAvailable) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
