@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: fast-validation-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve long-running Linux/Windows validation when a newer audit commit is pushed.
+  cancel-in-progress: false
 
 jobs:
   validate:
