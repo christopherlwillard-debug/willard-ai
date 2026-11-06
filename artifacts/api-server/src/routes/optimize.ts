@@ -4,8 +4,6 @@ import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
@@ -39,7 +37,6 @@ import {
   type ConversionJobLockClient,
 } from "../lib/conversion-job-lock.ts";
 
-const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
 
@@ -467,9 +464,11 @@ const LEGACY_IMG_CODECS = new Set(["mjpeg", "mpeg4", "msmpeg4v3", "wmv1", "wmv2"
 
 async function detectVideoCodec(filePath: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("ffprobe", [
-      "-v", "quiet", "-print_format", "json", "-show_streams", filePath,
-    ], { timeout: 12_000 });
+    const { stdout } = await runMediaToolAsync(
+      "ffprobe",
+      ["-v", "quiet", "-print_format", "json", "-show_streams", filePath],
+      { timeoutMs: 12_000, maxBufferBytes: 1024 * 1024 },
+    );
     const data = JSON.parse(stdout) as { streams: Array<{ codec_type: string; codec_name: string }> };
     const vs   = data.streams.find(s => s.codec_type === "video");
     return vs?.codec_name ?? null;
