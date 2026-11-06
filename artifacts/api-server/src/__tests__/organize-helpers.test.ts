@@ -905,3 +905,16 @@ test("organization preflight holds and releases the execution row lease", () => 
   assert.match(route, /preflightClaimed && preflightLeaseToken && preflightNasPath/);
   assert.match(route, /Preflight lost ownership/);
 });
+
+
+test("sha256File validates an already-open descriptor before reading from it", () => {
+  const source = fs.readFileSync(new URL("../lib/organize-helpers.ts", import.meta.url), "utf8");
+  const start = source.indexOf("export async function sha256File");
+  const end = source.indexOf("\n/**", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /const opened = fs\.fstatSync\(fd\)/);
+  assert.match(implementation, /const current = fs\.lstatSync\(filePath\)/);
+  assert.ok(implementation.indexOf("fs.fstatSync(fd)") < implementation.indexOf("fs.createReadStream(filePath, { fd"));
+  assert.doesNotMatch(implementation, /stream\.once\("open"/);
+});
