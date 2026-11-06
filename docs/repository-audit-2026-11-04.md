@@ -2028,11 +2028,11 @@ This means the new corrupt-journal and WMI-error protections are useful but do n
 - Partial API-only journal with a live web process.
 - PID reuse with a different executable identity.
 - Unrelated Node process and a path-prefix lookalike.
-- CIM query failure, missing command line for the packaged Node runtime, and missing executable path for a matching entrypoint.
+- CIM query failure, missing command line for the packaged Node runtime, missing executable path for a matching entrypoint, and missing process creation time. Legacy journal records without creation time are not trusted to prove ownership against PID reuse.
 - Source-contract checks that discovery is read-only and runs before startup decisions and before journal-based shutdown.
 
-**Implementation commits:** `78902ad4c15f520886d26ad90cc5066a8dfdd8ee`, `ddcb2c726b0a5e11bab71422323897289e668237`, `cf538676f511e40b54a56c8fa5e9d2c7d9e45a4b`.
-**Test commits:** `18cd7ac09159458b7c99edab6d48faf5e7f02c0a`, `fd9df23d33e921b2cf9bf8946eb7ebb01cbec15b`, `13f97b0678d2196017cc6fd2689c3b3d9243dfea`, `eb5742ee5b15e365491c3f10d866438f91c2d8f5`.
+**Implementation commits:** `78902ad4c15f520886d26ad90cc5066a8dfdd8ee`, `ddcb2c726b0a5e11bab71422323897289e668237`, `cf538676f511e40b54a56c8fa5e9d2c7d9e45a4b`, `9a1abb920654d9b4fd160208cf894134fe5ae803`.
+**Test commits:** `18cd7ac09159458b7c99edab6d48faf5e7f02c0a`, `fd9df23d33e921b2cf9bf8946eb7ebb01cbec15b`, `7ef1095e054636a225e08de0886c540a8ece9a5d`, `13f97b0678d2196017cc6fd2689c3b3d9243dfea`, `eb5742ee5b15e365491c3f10d866438f91c2d8f5`, `29e9cd0b5f2779a57a05ba118e71cb154d35c721`.
 
 **Status:** implementation and focused regression cases committed; target validation pending the matching branch-head CI run. The Windows smoke exercises the production PowerShell functions with synthetic process records; it does not launch or terminate a real orphan process.
 
