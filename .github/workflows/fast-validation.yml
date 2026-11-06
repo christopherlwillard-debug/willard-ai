@@ -266,6 +266,9 @@ jobs:
       - name: Verify media conversion subprocesses do not block the event loop on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-tools-async.test.ts
 
+      - name: Verify Optimize Center scans yield and bound codec probes on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/optimize-scan.test.ts
+
       - name: Run storage migration concurrency and no-overwrite regressions on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-migration.test.ts
 
