@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const setupSource = fs.readFileSync(path.join(repoRoot, "setup-db.cjs"), "utf8");
+const localSetupSource = fs.readFileSync(path.join(repoRoot, "LOCAL_SETUP.md"), "utf8");
 const authSource = fs.readFileSync(
   path.join(repoRoot, "artifacts/api-server/src/routes/auth.ts"),
   "utf8",
@@ -122,6 +123,15 @@ test("developer desktop launcher and local Vite servers bind only to loopback", 
   assert.ok(startup >= 0 && host > startup && localSetup > host && apiStart > localSetup, "developer API host and local setup capability must be set before the process starts");
   assert.match(viteConfigSource, /const serverHost = isReplit \? "0\.0\.0\.0" : "127\.0\.0\.1"/);
   assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
+});
+
+test("manual local API startup documents the explicit loopback-only first-run opt-in", () => {
+  const manualSetup = localSetupSource.slice(localSetupSource.indexOf("## The manual way"));
+  assert.match(manualSetup, /\$env:HOST = "127\\.0\\.0\\.1"/);
+  assert.match(manualSetup, /\$env:WILLARD_LOCAL_SETUP = "true"/);
+  assert.match(manualSetup, /HOST=127\\.0\\.0\\.1 WILLARD_LOCAL_SETUP=true pnpm/);
+  assert.match(manualSetup, /do not use this bypass on a hosted server or behind a reverse/);
+  assert.match(manualSetup, /WILLARD_SETUP_TOKEN/);
 });
 
 test("remote first-run setup requires an operator secret and rate-limits attempts", () => {
