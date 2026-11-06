@@ -808,6 +808,47 @@ test(
       );
       await assert.rejects(readFile(optionalCache), /ENOENT/);
 
+      await assert.rejects(
+        runCli([
+          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+          "--confirm-library-id", manifest.library.libraryId,
+        ], {
+          WILLARD_RESTORE_DATABASE_URL: targetUrl,
+          WILLARD_BACKUP_PASSPHRASE: passphrase,
+        }),
+        /not empty/,
+      );
+      const recoveryJournal = path.join(
+        reattachedNasRoot,
+        "WillardAI",
+        "config",
+        "recovery-attempts",
+        `${manifest.integrity.encryptedSha256}.json`,
+      );
+      const completeJournalBytes = await readFile(recoveryJournal);
+      const resumable = JSON.parse(completeJournalBytes.toString("utf8"));
+      resumable.state = "REMAP_FAILED";
+      await writeFile(recoveryJournal, `${JSON.stringify(resumable, null, 2)}\n`);
+      await assert.rejects(
+        runCli([
+          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+          "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
+        ], {
+          WILLARD_RESTORE_DATABASE_URL: targetUrl,
+          WILLARD_BACKUP_PASSPHRASE: passphrase,
+        }),
+        /journal authentication failed/,
+      );
+      await writeFile(recoveryJournal, completeJournalBytes);
+      await runCli([
+        "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+        "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
+      ], {
+        WILLARD_RESTORE_DATABASE_URL: targetUrl,
+        WILLARD_BACKUP_PASSPHRASE: passphrase,
+      });
+      assert.equal(JSON.parse(await readFile(recoveryJournal, "utf8")).state, "COMPLETE");
+
       for (const probe of [
         {
           source: "Z:\\",
@@ -879,46 +920,7 @@ test(
         );
       }
 
-      await assert.rejects(
-        runCli([
-          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-          "--confirm-library-id", manifest.library.libraryId,
-        ], {
-          WILLARD_RESTORE_DATABASE_URL: targetUrl,
-          WILLARD_BACKUP_PASSPHRASE: passphrase,
-        }),
-        /not empty/,
-      );
-      const recoveryJournal = path.join(
-        reattachedNasRoot,
-        "WillardAI",
-        "config",
-        "recovery-attempts",
-        `${manifest.integrity.encryptedSha256}.json`,
-      );
-      const completeJournalBytes = await readFile(recoveryJournal);
-      const resumable = JSON.parse(completeJournalBytes.toString("utf8"));
-      resumable.state = "REMAP_FAILED";
-      await writeFile(recoveryJournal, `${JSON.stringify(resumable, null, 2)}\n`);
-      await assert.rejects(
-        runCli([
-          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-          "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
-        ], {
-          WILLARD_RESTORE_DATABASE_URL: targetUrl,
-          WILLARD_BACKUP_PASSPHRASE: passphrase,
-        }),
-        /journal authentication failed/,
-      );
-      await writeFile(recoveryJournal, completeJournalBytes);
-      await runCli([
-        "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-        "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
-      ], {
-        WILLARD_RESTORE_DATABASE_URL: targetUrl,
-        WILLARD_BACKUP_PASSPHRASE: passphrase,
-      });
-      assert.equal(JSON.parse(await readFile(recoveryJournal, "utf8")).state, "COMPLETE");
+
 
       await cp(backupDir, tamperedBackup, { recursive: true });
       const tamperedFile = path.join(tamperedBackup, "database.dump.enc");
@@ -1028,6 +1030,14 @@ test("restore target safety checks schemas, relations, routines, types, and exte
 });
 
 
+
+
+test("NAS reattachment remaps face crop and media scan history roots", async () => {
+  const source = await readFile(new URL("./library-recovery.mjs", import.meta.url), "utf8");
+  assert.match(source, /\["faces", "crop_path", "prefix"\]/);
+  assert.match(source, /\["media_scan_jobs", "nas_path", "exact"\]/);
+});
+
 test("backup and restore media inventories are scoped to the authenticated NAS root", async () => {
   const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
   const sourceStart = source.indexOf("async function sourceLibrary");
@@ -1041,5 +1051,17 @@ test("backup and restore media inventories are scoped to the authenticated NAS r
   const restoreEnd = source.indexOf("\nfunction sqlLiteral", restoreStart);
   assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
   const restoreInventory = source.slice(restoreStart, restoreEnd);
-  assert.match(restoreInventory, /nas_path = \$\{sqlLiteral\(targetLibrary\.root\)\}/);
+  assert.match(restoreInventory, /catalogRoot = targetLibrary\.root/);
+  assert.match(restoreInventory, /normalizeLibraryRoot\(catalogRoot\)/);
+  assert.match(restoreInventory, /nas_path = \$\{sqlLiteral\(canonicalCatalogRoot\)\}/);
+
+  const restoreFlowStart = source.indexOf("async function restoreBackup");
+  const restoreFlowEnd = source.indexOf("\nasync function verifyBackup", restoreFlowStart);
+  assert.ok(restoreFlowStart >= 0 && restoreFlowEnd > restoreFlowStart);
+  const restoreFlow = source.slice(restoreFlowStart, restoreFlowEnd);
+  assert.match(restoreFlow, /recoveryJournalState === "COMPLETE"/);
+  assert.match(restoreFlow, /catalogRootBeforeRemap[\s\S]*?manifest\.library\.root/);
+  assert.match(restoreFlow, /await verifyRestoredLibraryInventory\([\s\S]*?catalogRootBeforeRemap/);
+  assert.match(restoreFlow, /await remapRestoredLibrary\(environment, manifest\.library\.root, targetLibrary\.root\)/);
+  assert.match(restoreFlow, /await verifyRestoredLibraryInventory\(environment, manifest\.library, targetLibrary\)/);
 });
