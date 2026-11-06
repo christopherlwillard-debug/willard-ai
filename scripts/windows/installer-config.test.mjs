@@ -1770,6 +1770,14 @@ test("audit installer lifecycle validation is isolated from release publishing",
   assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "artifacts\/willard-ai\/\*\*"$/m);
 });
   
+test("audit installer lifecycle validation is not cancelled by subsequent PR updates", () => {
+  const concurrencyStart = auditInstallerLifecycleWorkflow.indexOf("concurrency:");
+  const jobsStart = auditInstallerLifecycleWorkflow.indexOf("jobs:", concurrencyStart);
+  const concurrency = auditInstallerLifecycleWorkflow.slice(concurrencyStart, jobsStart);
+  assert.ok(concurrency.includes("cancel-in-progress: false"));
+  assert.ok(!concurrency.includes("cancel-in-progress: true"));
+});
+
 test("installer lifecycle validation only runs for installer and packaging inputs", () => {
   assert.ok(auditInstallerLifecycleWorkflow.includes('"installer/**"'));
   assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/build-installer.ps1"'));
