@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
+import { getSevenZipPath } from "../lib/sevenzip.ts";
 import * as tar from "tar";
 
 import {
@@ -78,40 +79,50 @@ test("gzip-compressed TAR preview reads entries and removes its temporary input"
   }
 });
 
-test("bzip2-compressed TAR preview reads entries and removes its temporary input", async (t) => {
+test("official 7-Zip bzip2 TAR preview reads entries and removes its temporary input", async (t) => {
   const root = makeRoot();
   try {
-    const tarPath = await createTarFixture(root);
-    const packed = spawnSync("bzip2", ["-c", tarPath], { maxBuffer: 2 * 1024 * 1024 });
-    if (packed.error?.code === "ENOENT") {
-      t.skip("bzip2 is not installed on this runner");
+    let sevenZip: string;
+    try {
+      sevenZip = getSevenZipPath();
+    } catch {
+      t.skip("official 7-Zip is not available on this runner");
       return;
     }
-    assert.equal(packed.status, 0, packed.stderr.toString());
+    const tarPath = await createTarFixture(root);
     const archivePath = path.join(root, "fixture.tar.bz2");
+    const packed = spawnSync(sevenZip, ["a", "-tbzip2", archivePath, tarPath], {
+      cwd: root,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    assert.equal(packed.status, 0, packed.stderr.toString());
     const scratchDir = path.join(root, "scratch");
     fs.mkdirSync(scratchDir);
-    fs.writeFileSync(archivePath, packed.stdout);
     await assertPreviewListsPayload(archivePath, "fixture.tar.bz2", scratchDir);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("xz-compressed TAR preview reads entries and removes its temporary input", async (t) => {
+test("official 7-Zip xz TAR preview reads entries and removes its temporary input", async (t) => {
   const root = makeRoot();
   try {
-    const tarPath = await createTarFixture(root);
-    const packed = spawnSync("xz", ["-c", tarPath], { maxBuffer: 2 * 1024 * 1024 });
-    if (packed.error?.code === "ENOENT") {
-      t.skip("xz is not installed on this runner");
+    let sevenZip: string;
+    try {
+      sevenZip = getSevenZipPath();
+    } catch {
+      t.skip("official 7-Zip is not available on this runner");
       return;
     }
-    assert.equal(packed.status, 0, packed.stderr.toString());
+    const tarPath = await createTarFixture(root);
     const archivePath = path.join(root, "fixture.tar.xz");
+    const packed = spawnSync(sevenZip, ["a", "-txz", archivePath, tarPath], {
+      cwd: root,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    assert.equal(packed.status, 0, packed.stderr.toString());
     const scratchDir = path.join(root, "scratch");
     fs.mkdirSync(scratchDir);
-    fs.writeFileSync(archivePath, packed.stdout);
     await assertPreviewListsPayload(archivePath, "fixture.tar.xz", scratchDir);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -121,15 +132,17 @@ test("xz-compressed TAR preview reads entries and removes its temporary input", 
 test("invalid compressed input fails and leaves no partial scratch TAR", async (t) => {
   const root = makeRoot();
   try {
+    let sevenZip: string;
+    try {
+      sevenZip = getSevenZipPath();
+    } catch {
+      t.skip("official 7-Zip is not available on this runner");
+      return;
+    }
     const archivePath = path.join(root, "broken.tar.xz");
     const scratchDir = path.join(root, "scratch");
     fs.mkdirSync(scratchDir);
     fs.writeFileSync(archivePath, "not an xz stream");
-    const probe = spawnSync("xz", ["--version"], { stdio: "ignore" });
-    if (probe.error?.code === "ENOENT") {
-      t.skip("xz is not installed on this runner");
-      return;
-    }
     await assert.rejects(
       withTarInput(archivePath, "broken.tar.xz", scratchDir, async () => undefined),
     );
