@@ -2523,3 +2523,17 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added explicit canonical path equality checks against the job's persisted `nasPath` before analysis filesystem inspection, preflight, dry-run, and execution. Mismatch now returns a conflict rather than proceeding against a different library.
 - Added a route-level regression test covering all four paths. Commits: implementation `e64c95a58cedb8c9329b43adff7959dd2308ef51`; regression `90ab702fac81511a6699051d0dc21d159933ec60`.
 - Validation pending; the existing recovery suite should still be run against a real configured NAS path. This guard compares normalized path strings and does not establish filesystem identity across symlink or mount aliases.
+
+## 2026-11-06 follow-up — installer lifecycle validation must run on PR updates
+
+**Finding — High (Windows installer validation coverage):** The isolated standard-user installer lifecycle workflow listened only for pull-request `opened` and `reopened` events. Pull request #2 was already open when this workflow was added, so later commits to the same PR could not trigger the clean-install, upgrade, interrupted-update, diagnostics, and uninstall smoke through the normal pull-request event. The existing source-contract test explicitly required `synchronize` to be absent. Although manual dispatch was available, the normal audit branch update path silently skipped this expensive but important Windows integration check.
+
+**Fix:** Added the `synchronize` pull-request event while retaining the focused path filter for installer and packaging inputs. The workflow remains read-only, uses an unsigned local test installer, and has no production signing secrets, release publishing, artifact upload, or write permission. The workflow file itself remains in the path filter, so this correction triggers the lifecycle validation on the next PR synchronization without changing production or release configuration.
+
+**Regression:** Updated the installer configuration contract to require `opened`, `reopened`, and `synchronize` together. Existing assertions still enforce read-only permissions and isolation from production signing and release publishing.
+
+**Validation status:** Source inspection confirms the event and path-filter correction. The installer contract regression is included in Fast Validation; the current matching run must complete before target-tested is claimed. The Windows lifecycle run triggered by this workflow change is pending; no installed-product integration pass is claimed yet.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall validation skipped on later PR commits | fixed; target test and Windows integration pending | this batch | Matching Fast Validation and Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
