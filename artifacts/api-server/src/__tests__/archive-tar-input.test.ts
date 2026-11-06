@@ -144,5 +144,5 @@ test("archive preview uses shared bounded decompression and rejects partial pars
   assert.match(routeSource, /peekTar\(archivePath, archive\.filename, nasPath\)/);
   assert.match(routeSource, /shouldTreatAsStandaloneCompressedFile\(archive\.filename, entries\.length, failureKind\)/);
   assert.match(routeSource, /Never persist a partial listing as a successful archive preview/);
-  assert.match(routeSource, /throw new Error\(`Archive preview failed: \\?\$\{error\}`\)/);
+  assert.ok(routeSource.includes('throw new Error(`Archive preview failed: ${error}`)'));
 });
