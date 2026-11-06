@@ -2201,3 +2201,19 @@ Before permanent deletion, retention now requires a regular non-symlink file, an
 **Implementation:** `20f19bde27af5e3c0515b2c295ca7e5e1a54ba94`.
 **Tests:** `72cc15b5d52737b413cc8e2a4e78771dbe2eda5d` covers valid files, changed content, missing hashes, and symlink preservation.
 **Remaining risk:** Filesystem deletion and database/manifest reconciliation still span separate durability domains. A crash after unlink but before database and tombstone updates requires additional recovery handling. Startup currently triggers retention cleanup once after launch; no recurring scheduler was added.
+
+
+## 2026-11-06 follow-up — fail-closed Trash retention identity checks
+
+### Finding: retention could delete a file before confirming its canonical media row still represented that exact recycled item
+
+**Severity:** High (data loss and stale-manifest handling). **Workflow:** Cleanup → local Trash retention.
+
+**Fix:** Retention now refuses to proceed when the trash file is already missing, the manifest has no canonical media ID, or the matching canonical row is absent/not in the recycled state/does not resolve to the manifest's original path. It validates the file's size and SHA-256 only after the canonical identity check, then unlinks it and requires exactly one canonical row deletion before writing the manifest tombstone. This prevents an ambiguous missing file or stale manifest from silently deleting unrelated/restored database state.
+
+**Implementation:** `61b0923b38a87ad5ed6d9b618a306b31d7a29a74`.
+**Regression:** `33c2960910506b6b54e5b75aa7e713b947ed25e9` adds a source-order contract test for the fail-closed guards.
+
+**Validation:** Regression added; no local test execution or matching branch-head CI result confirmed.
+
+**Remaining critical risk:** This does not close the cross-resource crash window. A process can still stop after the verified file unlink and before canonical-row deletion/tombstone append. The next safe step is a durable permanent-delete intent and restart reconciliation, likely requiring a new operation type/status and coordinated schema migration. Until that is implemented, any resulting missing-file entry is now preserved for manual review rather than silently finalized.
