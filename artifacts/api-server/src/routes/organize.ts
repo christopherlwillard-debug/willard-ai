@@ -2301,8 +2301,9 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     // Rollback moves files and changes the recovery journal. Claim it only
     // after the previous worker is failed or its heartbeat has expired.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    const rollbackLeaseToken = crypto.randomUUID();
     const [claimedRollback] = await db.update(organizationJobsTable)
-      .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date() })
+      .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date(), leaseToken: rollbackLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -2322,9 +2323,10 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
       res.status(409).json({ error: "This job is still running. Wait for its heartbeat to expire before rolling it back." });
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, "rolling_back");
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, rollbackLeaseToken, "rolling_back");
 
     const logs: string[] = [];
+    await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
     const rolledBack = await rollbackMoves(moves, line => logs.push(line));
     const isComplete = rolledBack === moves.length;
 
@@ -2336,9 +2338,11 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
         ? `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`
         : `Partial rollback: only ${rolledBack}/${moves.length} move(s) reversed — manual intervention may be required.`,
       completedAt: isComplete ? new Date() : null,
+      leaseToken: null,
     }).where(and(
       eq(organizationJobsTable.id, id),
       eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, rollbackLeaseToken),
       eq(organizationJobsTable.status, "rolling_back"),
     ));
 
@@ -2347,10 +2351,11 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     if (nasPath) {
       try {
         await db.update(organizationJobsTable)
-          .set({ status: "failed", error: e.message ?? "Rollback failed", stageUpdatedAt: new Date() })
+          .set({ status: "failed", error: e.message ?? "Rollback failed", stageUpdatedAt: new Date(), leaseToken: null })
           .where(and(
             eq(organizationJobsTable.id, id),
             eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, rollbackLeaseToken),
             eq(organizationJobsTable.status, "rolling_back"),
           ));
       } catch (persistError) {
