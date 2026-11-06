@@ -441,9 +441,15 @@ router.post("/cleanup/execute", async (req, res) => {
           continue;
         }
         const currentContentHash = await sha256File(filePath);
-        if (typeof file.contentHash === "string" && /^[a-f0-9]{64}$/i.test(file.contentHash) && currentContentHash.toLowerCase() !== file.contentHash.toLowerCase()) {
-          errors.push(`File ID ${fileId}: source content changed since indexing; refresh the library before cleanup`);
-          continue;
+        if (file.contentHash != null) {
+          if (typeof file.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(file.contentHash)) {
+            errors.push(`File ID ${fileId}: indexed content hash is invalid; refresh the library before cleanup`);
+            continue;
+          }
+          if (currentContentHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+            errors.push(`File ID ${fileId}: source content changed since indexing; refresh the library before cleanup`);
+            continue;
+          }
         }
 
         const operationId = randomUUID();
