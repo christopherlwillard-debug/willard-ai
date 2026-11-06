@@ -58,6 +58,8 @@ type MediaToolExecutionError = Error & {
 
 const activeMediaProcesses = new Set<ChildProcess>();
 
+const MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS = 2_000;
+
 export function assertMediaProcessStartAllowed(): void {
   if (!isShuttingDown()) return;
   const failure = new Error("Cannot start an external media/archive subprocess while the API server is shutting down.") as MediaToolExecutionError;
@@ -169,16 +171,21 @@ export function runMediaToolAsync(
   }
   return new Promise((resolve, reject) => {
     let child: ChildProcess | null = null;
-    const removeChild = () => {
+    let timeoutEscalationTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+    const cleanup = () => {
+      if (timeoutEscalationTimer) clearTimeout(timeoutEscalationTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (child) activeMediaProcesses.delete(child);
     };
     child = execFile(bin, args, {
       encoding: "utf8",
       timeout: options.timeoutMs,
+      killSignal: "SIGTERM",
       maxBuffer: options.maxBufferBytes ?? 1024 * 1024,
       windowsHide: true,
     }, (error, stdout, stderr) => {
-      removeChild();
+      cleanup();
       if (error) {
         const failure = error as MediaToolExecutionError;
         failure.stdout = String(stdout ?? "");
@@ -192,8 +199,27 @@ export function runMediaToolAsync(
       });
     });
     activeMediaProcesses.add(child);
-    child.once("close", removeChild);
-    child.once("error", removeChild);
+    child.once("close", cleanup);
+    child.once("error", cleanup);
+
+    // execFile sends SIGTERM at timeoutMs but waits for the child to close.
+    // Escalate if a tool ignores that signal so a hung encoder cannot retain
+    // the request and its process indefinitely.
+    if (options.timeoutMs > 0) {
+      timeoutEscalationTimer = setTimeout(() => {
+        if (!child?.pid || !isMediaProcessRunning(child)) return;
+        forceKillTimer = setTimeout(() => {
+          if (!child?.pid || !isMediaProcessRunning(child)) return;
+          try {
+            child.kill("SIGKILL");
+          } catch (error) {
+            logger.warn({ err: error }, "Unable to force-stop a timed-out media subprocess");
+          }
+        }, MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS);
+        forceKillTimer.unref?.();
+      }, options.timeoutMs + 100);
+      timeoutEscalationTimer.unref?.();
+    }
   });
 }
 
