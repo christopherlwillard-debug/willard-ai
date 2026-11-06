@@ -404,12 +404,48 @@ router.post("/cleanup/execute", async (req, res) => {
           errors.push(`File ID ${fileId}: stored path is outside the configured library`);
           continue;
         }
-        if (!fs.existsSync(filePath)) {
-          errors.push(`File ID ${fileId}: not found on disk (${filePath})`);
+        // Resolve the lexical database path under the canonical library root
+        // and inspect every component without following symlinks. A stale media
+        // row must never recycle a different in-library file reached through a
+        // newly substituted symlink.
+        const canonicalRoot = canonicalizePath(nasPath);
+        const lexicalPath = path.resolve(canonicalRoot, file.relativePath.replace(/[\\/]/g, path.sep));
+        const relativeToRoot = path.relative(canonicalRoot, lexicalPath);
+        if (!relativeToRoot || relativeToRoot === ".." || relativeToRoot.startsWith(".." + path.sep) || path.isAbsolute(relativeToRoot)) {
+          errors.push(`File ID ${fileId}: stored path is not a regular child of the configured library`);
+          continue;
+        }
+        let currentPath = canonicalRoot;
+        const components = relativeToRoot.split(path.sep).filter(Boolean);
+        let sourceStat: fs.Stats;
+        try {
+          for (let index = 0; index < components.length; index += 1) {
+            currentPath = path.join(currentPath, components[index]!);
+            const info = fs.lstatSync(currentPath);
+            if (info.isSymbolicLink()) throw new Error("Stored media path contains a symbolic link");
+            if (index < components.length - 1 && !info.isDirectory()) throw new Error("Stored media path has a non-directory parent");
+            if (index === components.length - 1 && !info.isFile()) throw new Error("Stored media path is not a regular file");
+            if (index === components.length - 1) sourceStat = info;
+          }
+        } catch (error) {
+          errors.push(`File ID ${fileId}: ${error instanceof Error ? error.message : "source file is unavailable"}`);
+          continue;
+        }
+        if (path.resolve(filePath) !== path.resolve(lexicalPath)) {
+          errors.push(`File ID ${fileId}: stored path resolved through a link or changed canonical location`);
+          continue;
+        }
+        const sizeBytes = file.sizeBytes ?? 0;
+        if (sourceStat!.size !== Number(sizeBytes)) {
+          errors.push(`File ID ${fileId}: source size changed since indexing; refresh the library before cleanup`);
+          continue;
+        }
+        const currentContentHash = await sha256File(filePath);
+        if (typeof file.contentHash === "string" && /^[a-f0-9]{64}$/i.test(file.contentHash) && currentContentHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+          errors.push(`File ID ${fileId}: source content changed since indexing; refresh the library before cleanup`);
           continue;
         }
 
-        const sizeBytes = file.sizeBytes ?? 0;
         const operationId = randomUUID();
         let trashPath: string | null = null;
         await db.execute(sql`
@@ -460,7 +496,7 @@ router.post("/cleanup/execute", async (req, res) => {
             originalPath: filePath,
             trashPath,
             sizeBytes,
-            contentHash:  file.contentHash ?? undefined,
+            contentHash:  currentContentHash,
             expiresAt:    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           });
           await db.execute(sql`UPDATE cleanup_operations SET status = 'MANIFESTED', updated_at = NOW() WHERE operation_id = ${operationId}`);
@@ -472,6 +508,11 @@ router.post("/cleanup/execute", async (req, res) => {
           UPDATE media_files
           SET last_scan_action = 'RECYCLED'
           WHERE id = ${fileId} AND nas_path = ${nasPath}
+            AND relative_path = ${file.relativePath}
+            AND size_bytes IS NOT DISTINCT FROM ${file.sizeBytes}
+            AND content_hash IS NOT DISTINCT FROM ${file.contentHash}
+            AND last_scan_action IS DISTINCT FROM 'DELETED'
+            AND last_scan_action IS DISTINCT FROM 'RECYCLED'
         `);
         if (Number(restoredRow.rowCount ?? restoredRow.rows.length) !== 1) {
           throw new Error("File moved to trash but its canonical media row could not be marked RECYCLED");
