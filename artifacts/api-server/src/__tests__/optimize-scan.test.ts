@@ -9,6 +9,7 @@ import {
   mapSettledWithConcurrency,
   walkForConversion,
   walkForOptimize,
+  type OptimizeConversionFile,
   type OptimizeExtGroup,
 } from "../lib/optimize-scan.ts";
 
@@ -189,7 +190,7 @@ test("conversion scan filters extensions and skips hidden, internal, and backup 
     fs.writeFileSync(path.join(f.root, "WillardAI", "internal.mov"), "internal");
     fs.writeFileSync(path.join(f.root, "nested", "keep.mov"), "video");
 
-    const results: Array<{ fullPath: string; ext: string }> = [];
+    const results: OptimizeConversionFile[] = [];
     await walkForConversion(
       f.root,
       new Set(["mp4", "mov"]),
@@ -203,6 +204,7 @@ test("conversion scan filters extensions and skips hidden, internal, and backup 
       path.join(f.root, "nested", "keep.mov"),
     ]));
     assert.deepEqual(new Set(results.map((item) => item.ext)), new Set(["mp4", "mov"]));
+    assert.deepEqual(results.map((item) => item.sizeBytes), [5, 5]);
   } finally {
     f.cleanup();
   }
@@ -279,6 +281,10 @@ test("Optimize scan and conversion routes use asynchronous traversal and bounded
   assert.match(optimizeRouteSource, /await withVideoProbeSlot\(\(\) => runMediaToolAsync\(/);
   assert.match(optimizeRouteSource, /mapSettledWithConcurrency\(videoProbeTasks, 4/);
   assert.doesNotMatch(optimizeScanSource, /readdirSync|lstatSync/);
+  assert.doesNotMatch(optimizeRouteSource, /\\bfs\\.(?:existsSync|statSync|lstatSync|readdirSync|readFileSync|writeFileSync|mkdirSync|rmSync|unlinkSync)\\b/);
+  assert.match(optimizeRouteSource, /async function readScanCache/);
+  assert.match(optimizeRouteSource, /await fs\\.promises\\.readFile/);
+  assert.match(optimizeRouteSource, /await fs\\.promises\\.writeFile/);
 });
 
 test("scan-limit state is cached, returned by the API, and warned about in Optimize Center", () => {
