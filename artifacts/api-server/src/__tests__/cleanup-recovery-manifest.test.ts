@@ -599,9 +599,9 @@ test("trash manifest reads and writes use validated file descriptors", () => {
   const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const recovery = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
   assert.match(recovery, /O_NOFOLLOW/);
-  assert.match(recovery, /fs\\.fstatSync\\(fd\\)/);
-  assert.match(recovery, /fs\\.readFileSync\\(fd, "utf8"\\)/);
-  assert.match(recovery, /openValidatedTrashManifest\\(filePath, "append-existing"\\)/);
-  assert.doesNotMatch(recovery, /fs\\.openSync\\(filePath, "a"/);
-  assert.doesNotMatch(recovery, /fs\\.readFileSync\\(filePath, "utf8"/);
+  assert.match(recovery, /fs\.fstatSync\(fd\)/);
+  assert.match(recovery, /fs\.readFileSync\(fd, "utf8"\)/);
+  assert.match(recovery, /openValidatedTrashManifest\(filePath, "append-existing"\)/);
+  assert.doesNotMatch(recovery, /fs\.openSync\(filePath, "a"/);
+  assert.doesNotMatch(recovery, /fs\.readFileSync\(filePath, "utf8"/);
 });
