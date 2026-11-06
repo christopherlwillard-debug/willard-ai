@@ -2276,3 +2276,21 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 
 **Implementation follow-up:** The detailed endpoint now carries `largest_file_size` through both exact-hash and perceptual group mappings; the focused regression checks both mappings and the aggregate/per-group calculations. Commits: `8b5bbcc79e6ee18107eb4db62b8bc2716b13da02` (mapping correction), `d6c5ca028ed74f209bcd7e4425f2753be7cede74` (assertion correction). These follow-ups were made after source review caught a missing perceptual mapping and overly escaped assertions before validation; they are included in the pending validation head.
+
+
+## 2026-11-06 follow-up — cancelled conversions with successful staging remain actionable
+
+**Finding — High (workflow correctness / stranded staged output):** The conversion execute handler preserved successfully converted staging files after cancellation, but persisted the job as `cancelled`. The finalization endpoint accepts only `awaiting_action`, so a user could not apply Recycle, Replace, Keep Both, or Archive to those already verified outputs. The UI/API exposed preserved files without a supported path to finish the operation.
+
+**Fix:** A cancelled run with one or more successful staged conversions now transitions to `awaiting_action`, which is the state accepted by the existing finalization and recovery paths. The job retains `cancelledAt` and records `resultJson.cancelled` so cancellation is not lost. A cancelled run with no successful staged files remains `cancelled`. The SSE status message distinguishes the two cases.
+
+**Regression:** Added `optimize-cancel-finalization.test.ts`, a source-contract test for the cancelled/successful and cancelled/no-success branches. This test is added but has not yet been executed.
+
+**Implementation:** `00311e42e9adf6017ee48e8e7d2f3aa20a8de10e`.
+**Test:** `c81fa89f6d76386c468fba5da1413af8ae627d56`.
+
+**Validation status:** Test execution, API integration test, and matching Fast Validation are pending. The regression asserts the status contract; it does not yet exercise a live cancellation mid-conversion. A follow-up integration test should cancel after the first verified file and prove the action endpoint accepts the job and finalizes only the staged successes.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Cancelled conversion with successful staged outputs could not be finalized | fixed in route; source-contract regression added; validation pending | implementation `00311e42`; test `c81fa89f` | Live mid-run cancellation/finalization integration coverage and matching CI pending |
