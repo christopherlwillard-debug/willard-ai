@@ -166,7 +166,7 @@ function runBackupProcess(libraryPath: string): Promise<void> {
       },
     );
     activeChild = child;
-    const timeout = setTimeout(() => child.kill("SIGTERM"), 30 * 60 * 1000);
+    const timeout = setTimeout(() => { void terminateBackupProcessTree(child); }, 30 * 60 * 1000);
     timeout.unref();
     let output = "";
     let errorOutput = "";
