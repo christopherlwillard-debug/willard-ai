@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream } from "node:fs";
-import { canonicalizePath, resolveWithinRoot } from "./nas-storage.ts";
+import { canonicalizePath, ensureDirectoryWithinRoot, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
@@ -117,6 +117,29 @@ function relativeFor(sourceRoot: string, filePath: string): string {
   return path.relative(safeRoot(sourceRoot), safeRoot(filePath)).split(path.sep).join("/");
 }
 
+function assertRegularFileWithoutSymlinks(filePath: string, root: string): string {
+  const canonicalRoot = canonicalizePath(root);
+  const target = path.resolve(filePath);
+  const relative = path.relative(canonicalRoot, target);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("Migration file path is not a child of its configured root.");
+  }
+  const components = relative.split(path.sep).filter(Boolean);
+  let current = canonicalRoot;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]!);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error("Migration file path contains a symbolic link.");
+    if (index < components.length - 1 && !stat.isDirectory()) {
+      throw new Error("Migration file path contains a non-directory parent.");
+    }
+    if (index === components.length - 1 && !stat.isFile()) {
+      throw new Error("Migration source or destination is not a regular file.");
+    }
+  }
+  return target;
+}
+
 function destinationFor(destinationRoot: string, relativePath: string): string {
   const result = safeRoot(path.join(destinationRoot, relativePath));
   if (!isWithin(destinationRoot, result)) throw new Error(`Destination path escapes migration root: ${relativePath}`);
@@ -136,7 +159,27 @@ async function defaultHashFile(filePath: string): Promise<string> {
 async function walkFiles(root: string, onUnsafe: (filePath: string, reason: string) => void): Promise<string[]> {
   const files: string[] = [];
   if (!fs.existsSync(root)) return files;
+  try {
+    const rootStat = await fs.promises.lstat(root);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      onUnsafe(root, "Migration namespace root is a symlink or is not a regular directory.");
+      return files;
+    }
+  } catch (error) {
+    onUnsafe(root, error instanceof Error ? error.message : String(error));
+    return files;
+  }
   const visit = async (directory: string): Promise<void> => {
+    try {
+      const directoryStat = await fs.promises.lstat(directory);
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+        onUnsafe(directory, "Migration directory changed to a symlink or non-directory during scan.");
+        return;
+      }
+    } catch (error) {
+      onUnsafe(directory, error instanceof Error ? error.message : String(error));
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(directory, { withFileTypes: true });
@@ -420,10 +463,21 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         let destinationHash: string | null = null;
         let destinationExists = false;
         try {
-          const destinationStat = await fs.promises.stat(destinationPath);
-          destinationExists = destinationStat.isFile();
-          if (destinationExists) destinationHash = await hashFile(destinationPath);
-        } catch { /* destination is absent */ }
+          const destinationStat = await fs.promises.lstat(destinationPath);
+          destinationExists = true;
+          if (destinationStat.isFile() && !destinationStat.isSymbolicLink()) {
+            destinationHash = await hashFile(destinationPath);
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            entries.push({
+              id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
+              sizeBytes: stat.size, sourceHash, destinationHash: null, referenceCount: 0, references: [],
+              protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
+            });
+            continue;
+          }
+        }
         const fileReferences = referencesForPath(references, sourceRoot, sourcePath);
         entries.push({
           id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
@@ -534,13 +588,16 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         if (entry.state === "verified") continue;
         const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
         const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
-        if (!fs.existsSync(safeSourcePath)) {
+        try {
+          assertRegularFileWithoutSymlinks(safeSourcePath, manifest.sourceRoot);
+        } catch (error) {
           entry.state = "missing";
-          entry.error = "Source is no longer available.";
+          entry.error = error instanceof Error ? error.message : "Source is no longer a regular file.";
           throw new Error(entry.error);
         }
         if (fs.existsSync(safeDestinationPath)) {
           try {
+            assertRegularFileWithoutSymlinks(safeDestinationPath, manifest.destinationRoot);
             const existingHash = await hashFile(safeDestinationPath);
             if (existingHash === entry.sourceHash) {
               entry.destinationHash = existingHash;
@@ -555,7 +612,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           throw new Error(entry.error);
         }
         const partialPath = `${safeDestinationPath}.${manifest.id}.${crypto.randomUUID()}.partial`;
-        await fs.promises.mkdir(path.dirname(safeDestinationPath), { recursive: true });
+        ensureDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
         resolveWithinRoot(partialPath, manifest.destinationRoot);
         resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
         let partialCreated = false;
@@ -691,8 +748,8 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
       if (!namespace || namespace.protected || entry.protected || entry.state !== "verified") continue;
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
-      const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
-      const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+      const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+      const safeDestinationPath = assertRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
       // A previous cleanup attempt may have removed the source and crashed
       // before persisting its final manifest. The verified destination is the
       // recovery copy; accept that already-completed deletion idempotently.
