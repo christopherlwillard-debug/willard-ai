@@ -452,12 +452,13 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         destinationCandidates.add(safeRoot(destinationPath));
         let stat: fs.Stats;
         try {
-          stat = await fs.promises.stat(sourcePath);
+          stat = await fs.promises.lstat(sourcePath);
+          if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Source is not a regular file.");
         } catch (error) {
           entries.push({
             id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
             sizeBytes: 0, sourceHash: null, destinationHash: null, referenceCount: 0, references: [],
-            protected: namespace.protected, state: "missing", error: error instanceof Error ? error.message : String(error),
+            protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
           });
           continue;
         }
@@ -594,18 +595,26 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     try {
       for (const entry of manifest.entries) {
         if (entry.state === "verified") continue;
-        const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
-        resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
-        const safeDestinationPath = path.resolve(entry.destinationPath);
+        let safeSourcePath: string;
         try {
-          // The helper checks the lexical path before any filesystem read;
-          // canonicalizing first would hide an in-root symlink target.
+          // Check the lexical path before any filesystem read; canonicalizing
+          // first would hide an in-root symlink target.
+          safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
         } catch (error) {
           entry.state = "missing";
           entry.error = error instanceof Error ? error.message : "Source is no longer a regular file.";
           throw new Error(entry.error);
         }
-        const destinationState = inspectRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+        const safeDestinationPath = path.resolve(entry.destinationPath);
+        let destinationState: "missing" | "regular";
+        try {
+          destinationState = inspectRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        } catch (error) {
+          entry.state = "conflict";
+          entry.error = error instanceof Error ? error.message : "Destination is not a regular file.";
+          throw new Error(entry.error);
+        }
         if (destinationState === "regular") {
           try {
             const existingHash = await hashFile(safeDestinationPath);
