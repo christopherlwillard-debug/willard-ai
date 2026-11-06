@@ -46,6 +46,10 @@ const optimizePage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/optimize.tsx", import.meta.url),
   "utf8",
 );
+const settingsPage = await readFile(
+  new URL("../artifacts/willard-ai/src/pages/settings.tsx", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -255,4 +259,38 @@ test("media detail streaming and optimize scans honor the configured application
   assert.equal(mediaDetailPage.includes('const streamUrl = `/api/media/file/${file.id}/stream`;'), false);
   assert.ok(optimizePage.includes('const url = apiUrl(force ? "/optimize/scan?force=true" : "/optimize/scan");'));
   assert.equal(optimizePage.includes('const url = force ? "/api/optimize/scan?force=true" : "/api/optimize/scan";'), false);
+});
+
+
+test("media viewer is a keyboard-contained modal with accessible media actions", () => {
+  assert.ok(mediaViewer.includes("function useDialogFocusTrap"));
+  assert.ok(mediaViewer.includes("dialog.addEventListener(\"keydown\", onKeyDown)"));
+  assert.ok(mediaViewer.includes("if (previousFocus?.isConnected) previousFocus.focus()"));
+  assert.ok(mediaViewer.includes("useDialogFocusTrap(containerRef, { focusContainer: true, suspendRef: nestedDialogOpenRef })"));
+  assert.ok(mediaViewer.includes("aria-hidden={nestedDialogOpenRef.current}"));
+  assert.ok(mediaViewer.includes("onFocusCapture={showControls}"));
+  assert.ok(mediaViewer.includes("if (showRename || showDelete || showTags) return;"));
+  assert.ok(mediaViewer.includes('aria-label="Zoom out"'));
+  assert.ok(mediaViewer.includes('aria-label="Zoom in"'));
+  assert.ok(mediaViewer.includes('aria-label={"Edit tags for " + file.name}'));
+  assert.ok(mediaViewer.includes('aria-label={"Close viewer for " + file.name}'));
+  assert.ok(mediaViewer.includes('aria-label={showFilm ? "Hide filmstrip" : "Show filmstrip"}'));
+  assert.ok(mediaViewer.includes("aria-expanded={showFilm}"));
+  assert.ok(mediaViewer.includes('aria-label={"Open details for " + file.name}'));
+  assert.equal(mediaViewer.includes('<button title="Open detail page"'), false);
+});
+
+test("nested media dialogs expose semantic roles, labels, and focus handling", () => {
+  assert.ok(mediaViewer.includes('role="alertdialog"'));
+  assert.ok(mediaViewer.includes('aria-labelledby="media-delete-title"'));
+  assert.ok(mediaViewer.includes('aria-describedby="media-delete-description"'));
+  assert.ok(mediaViewer.includes('aria-labelledby="media-tags-title"'));
+  assert.ok(mediaViewer.includes('aria-label="New tag"'));
+  assert.ok(mediaViewer.includes("useDialogFocusTrap(dialogRef, { initialFocusRef: inputRef })"));
+  assert.ok(mediaViewer.includes('role="alert" aria-live="assertive"'));
+});
+
+test("settings ignored-folder and ignored-extension removals have accessible names", () => {
+  assert.ok(settingsPage.includes('aria-label={"Remove ignored folder " + f}'));
+  assert.ok(settingsPage.includes('aria-label={"Remove ignored extension " + e}'));
 });
