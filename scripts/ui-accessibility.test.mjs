@@ -55,13 +55,44 @@ const libraryJobStreamHook = await readFile(
   "utf8",
 );
 
+function openingTagAt(source, start, description) {
+  assert.ok(start >= 0, `Expected opening JSX tag for: ${description}`);
+  let braceDepth = 0;
+  let quote = null;
+  let escaped = false;
+
+  for (let index = start + 1; index < source.length; index++) {
+    const character = source[index];
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (character === "\"" || character === "'" || character === "`") {
+      quote = character;
+    } else if (character === "{") {
+      braceDepth++;
+    } else if (character === "}") {
+      braceDepth--;
+    } else if (character === ">" && braceDepth === 0) {
+      return source.slice(start, index + 1);
+    }
+  }
+
+  assert.fail(`Expected a complete opening JSX tag for: ${description}`);
+}
+
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
   assert.notEqual(index, -1, `Expected control marker: ${needle}`);
   const start = searchPage.lastIndexOf("<", index);
-  const end = searchPage.indexOf(">", index);
-  assert.ok(start >= 0 && end > start, `Expected opening JSX tag for: ${needle}`);
-  return searchPage.slice(start, end + 1);
+  return openingTagAt(searchPage, start, needle);
 }
 
 test("search controls expose accessible names and toggle state", () => {
@@ -350,9 +381,7 @@ test("search filter controls can explicitly clear inherited media and favorite c
   assert.match(searchPage.slice(typeSelectStart, typeSelectEnd), /setMediaTypeOverride\(value === "all" \? \[\] : \[value\]\)/);
 
   const favoriteButtonStart = searchPage.lastIndexOf("<Button", searchPage.indexOf('data-testid="button-favorite-filter"'));
-  const favoriteButtonEnd = searchPage.indexOf(">", favoriteButtonStart);
-  assert.ok(favoriteButtonStart >= 0 && favoriteButtonEnd > favoriteButtonStart);
-  const favoriteButton = searchPage.slice(favoriteButtonStart, favoriteButtonEnd);
+  const favoriteButton = openingTagAt(searchPage, favoriteButtonStart, "favorites filter button");
   assert.match(favoriteButton, /setFavoriteOnlyOverride\(next\)/);
 
   const suggestionStart = searchPage.indexOf("const submitSuggestion = useCallback");
