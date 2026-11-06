@@ -1013,6 +1013,10 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
+    if (path.resolve(nasPath) !== path.resolve(analysisNasPath)) {
+      await failAnalysis("The active library changed while analysis was starting");
+      res.status(409).json({ error: "The active library changed. Refresh and retry analysis." }); return;
+    }
     if (!nasPath || !path.isAbsolute(nasPath)) {
       await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing.", leaseToken: null }).where(and(
         eq(organizationJobsTable.id, id),
@@ -1326,6 +1330,10 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running preflight." }); return;
     }
 
+    if (path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      res.status(409).json({ error: "The active library changed. Refresh the job before running preflight." }); return;
+    }
+
     // Hold the same row lease used by execution so preflight cannot finish
     // late and reset a worker's status back to verified/planned.
     preflightLeaseToken = crypto.randomUUID();
@@ -1567,6 +1575,10 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
 
+    if (!job.nasPath || !nasPath || !path.isAbsolute(nasPath) || path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      res.status(409).json({ error: "The active library changed. Refresh the job before running the dry run." }); return;
+    }
+
     const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
 
     // ── Stage 1: Blank destination detection (blocking in preflight, warning here) ──
@@ -1767,6 +1779,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
+    }
+    if (!job.nasPath || path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      send("error", { message: "The active library changed. Refresh the job before executing." }); res.end(); return;
     }
     cleanupNasPath = nasPath;
     let canonicalJobSourcePath: string;
