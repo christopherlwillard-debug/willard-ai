@@ -1053,6 +1053,11 @@ async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
     try {
       bytes = await readFile(candidate);
     } catch {
+      // Legacy manifests sampled all media rows, including recycled/deleted
+      // catalog entries. Defer those missing-path decisions until after the
+      // database is restored and its row state is available. Active-scope
+      // manifests can fail immediately because their samples are active only.
+      if (manifestLibrary.catalogInventoryScope !== "active") continue;
       fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
     }
     if (sha256Bytes(bytes) !== sample.sha256) {
@@ -1062,11 +1067,12 @@ async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
 }
 
 async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary) {
-  const inventoryFilter = manifestLibrary.catalogInventoryScope === "active"
+  const activeScope = manifestLibrary.catalogInventoryScope === "active";
+  const inventoryFilter = activeScope
     ? " WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'"
     : "";
   const output = await runSql(
-    `SELECT relative_path, lower(content_hash) FROM media_files${inventoryFilter} ORDER BY relative_path`,
+    `SELECT relative_path, lower(content_hash), last_scan_action FROM media_files${inventoryFilter} ORDER BY relative_path`,
     environment,
     "Restored canonical media inventory",
   );
@@ -1079,7 +1085,8 @@ async function verifyRestoredLibraryInventory(environment, manifestLibrary, targ
       `${manifestLibrary.catalogMediaCount}.`,
     );
   }
-  for (const [relativePath, expectedHash] of rows) {
+  for (const [relativePath, expectedHash, lastScanAction] of rows) {
+    if (!activeScope && (lastScanAction === "DELETED" || lastScanAction === "RECYCLED")) continue;
     if (
       !relativePath ||
       path.isAbsolute(relativePath) ||
