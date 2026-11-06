@@ -198,7 +198,7 @@ export function canDeleteOrganizationJob(status: string, fileMoves: unknown): bo
 export async function verifiedMove(
   from: string,
   to:   string,
-  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; beforeMove?: () => Promise<void>; beforeRestore?: () => Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
 ): Promise<FileMoveRecord> {
   // Hash before moving; an unreadable source must never be moved.
   const sourceHash = await sha256File(from);
@@ -208,6 +208,9 @@ export async function verifiedMove(
   let destinationCreated = false;
 
   try {
+    // Re-check the fencing token after hashing, immediately before the
+    // irreversible filesystem mutation.
+    await opts?.beforeMove?.();
     // A concurrent job may have created the destination after its conflict
     // check. Never let rename semantics overwrite that independent file.
     moveFileNoReplace(from, to);
@@ -233,6 +236,7 @@ export async function verifiedMove(
     // destination rather than deleting the only remaining copy.
     if (destinationCreated && !fs.existsSync(from) && fs.existsSync(to)) {
       try {
+        await opts?.beforeRestore?.();
         moveFileNoReplace(to, from);
       } catch (restoreError) {
         throw new AggregateError(
