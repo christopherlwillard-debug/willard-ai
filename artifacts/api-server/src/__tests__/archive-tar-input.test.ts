@@ -143,9 +143,18 @@ test("invalid compressed input fails and leaves no partial scratch TAR", async (
     const scratchDir = path.join(root, "scratch");
     fs.mkdirSync(scratchDir);
     fs.writeFileSync(archivePath, "not an xz stream");
-    await assert.rejects(
-      withTarInput(archivePath, "broken.tar.xz", scratchDir, async () => undefined),
-    );
+    const unhandledRejections: unknown[] = [];
+    const captureUnhandled = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", captureUnhandled);
+    try {
+      await assert.rejects(
+        withTarInput(archivePath, "broken.tar.xz", scratchDir, async () => undefined),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(unhandledRejections, [], "fast decompressor failures must be observed immediately");
+    } finally {
+      process.off("unhandledRejection", captureUnhandled);
+    }
     assert.deepEqual(fs.readdirSync(scratchDir), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
