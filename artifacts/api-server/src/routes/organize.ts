@@ -295,9 +295,10 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
       if (validationError) throw validationError;
     });
   } else if (SEVENZIP_EXTS.has(ext)) {
+    const sevenZipPath = await getSevenZipPath();
     let validationError: Error | undefined;
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+      const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
           const info = getSevenZipEntryInfo(d);
@@ -374,9 +375,10 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
         if (validationError) throw validationError;
       });
     } else if (SEVENZIP_EXTS.has(ext)) {
+      const sevenZipPath = await getSevenZipPath();
       let validationError: Error | undefined;
       await new Promise<void>((resolve, reject) => {
-        const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+        const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
           const info = getSevenZipEntryInfo(entry);
@@ -647,13 +649,14 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     });
 
   } else if (SEVENZIP_EXTS.has(ext)) {
+    const sevenZipPath = await getSevenZipPath();
     const filePaths: string[] = [];
     let sevenZipCrcCount = 0;
     const sevenZipBudget = createArchiveBudget();
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+      const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
       let failed = false;
       const fail = (error: unknown) => {
         if (failed) return;
@@ -687,7 +690,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     await new Promise<void>((resolve, reject) => {
       const s = Seven.extractFull(archivePath, stagingDir, {
-        $bin: getSevenZipPath(),
+        $bin: sevenZipPath,
         overwrite: "a",
         // Never let 7-Zip materialize archive-provided symbolic links. The
         // metadata preflight below rejects known link entries; this explicit
