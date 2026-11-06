@@ -285,6 +285,8 @@ export default function SearchPage() {
   const [selected, setSelected] = useState<ResultItem | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [mediaTypeOverride, setMediaTypeOverride] = useState<string[] | null>(null);
+  const [favoriteOnlyOverride, setFavoriteOnlyOverride] = useState<boolean | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -308,10 +310,10 @@ export default function SearchPage() {
 
   const buildFilters = useCallback(() => {
     const f: Record<string, unknown> = {};
-    if (typeFilter !== "all") f.mediaTypes = [typeFilter];
-    if (favoriteOnly) f.favoriteOnly = true;
+    if (mediaTypeOverride !== null) f.mediaTypes = mediaTypeOverride;
+    if (favoriteOnlyOverride !== null) f.favoriteOnly = favoriteOnlyOverride;
     return Object.keys(f).length ? f : undefined;
-  }, [typeFilter, favoriteOnly]);
+  }, [mediaTypeOverride, favoriteOnlyOverride]);
 
   const search = useMutation({
     mutationFn: async ({ query, refine, previousIntent }: { query: string; refine: boolean; previousIntent: SearchIntent | null }) => {
@@ -383,6 +385,11 @@ export default function SearchPage() {
     onSuccess: (data: SearchResponse) => {
       setResponse(data);
       setSimilarOf(null);
+      const savedMediaTypes = data.intent?.mediaTypes ?? [];
+      setTypeFilter(savedMediaTypes.length === 1 ? savedMediaTypes[0] : "all");
+      setFavoriteOnly(data.intent?.favoriteOnly === true);
+      setMediaTypeOverride(null);
+      setFavoriteOnlyOverride(null);
       setTrail([{ query: data.query, refined: false, resultCount: data.results.length }]);
       qc.invalidateQueries({ queryKey: ["saved-searches"] });
     },
@@ -419,11 +426,27 @@ export default function SearchPage() {
     search.mutate({ query: q, refine, previousIntent: refine ? response?.intent ?? null : null });
   }, [input, search, hasSession, response]);
 
+  const submitSuggestion = useCallback((suggestion: string) => {
+    if (suggestion.startsWith("Search all media")) {
+      setTypeFilter("all");
+      setMediaTypeOverride([]);
+    }
+    if (suggestion.startsWith("Include non-favorites")) {
+      setFavoriteOnly(false);
+      setFavoriteOnlyOverride(false);
+    }
+    submit(suggestion);
+  }, [submit]);
+
   const startOver = () => {
     setResponse(null);
     setTrail([]);
     setSimilarOf(null);
     setInput("");
+    setTypeFilter("all");
+    setFavoriteOnly(false);
+    setMediaTypeOverride(null);
+    setFavoriteOnlyOverride(null);
     inputRef.current?.focus();
   };
 
@@ -472,7 +495,10 @@ export default function SearchPage() {
             data-testid="input-search"
           />
         </div>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
+        <Select value={typeFilter} onValueChange={(value) => {
+          setTypeFilter(value);
+          setMediaTypeOverride(value === "all" ? [] : [value]);
+        }}>
           <SelectTrigger aria-label="Filter by media type" className="w-36" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
           <SelectContent>
             {MEDIA_TYPE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
@@ -482,7 +508,11 @@ export default function SearchPage() {
           type="button"
           variant={favoriteOnly ? "default" : "outline"}
           size="icon"
-          onClick={() => setFavoriteOnly((v) => !v)}
+          onClick={() => {
+            const next = !favoriteOnly;
+            setFavoriteOnly(next);
+            setFavoriteOnlyOverride(next);
+          }}
           aria-label="Filter favorites only"
           aria-pressed={favoriteOnly}
           title="Favorites only"
@@ -569,7 +599,7 @@ export default function SearchPage() {
                 <p className="text-sm text-muted-foreground">Try instead:</p>
                 <div className="flex justify-center gap-2 flex-wrap">
                   {response.suggestions.map((s) => (
-                    <Button key={s} variant="outline" size="sm" onClick={() => submit(s)} data-testid="button-suggestion">
+                    <Button key={s} variant="outline" size="sm" onClick={() => submitSuggestion(s)} data-testid="button-suggestion">
                       {s}
                     </Button>
                   ))}

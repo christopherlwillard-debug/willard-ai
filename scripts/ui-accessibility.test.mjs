@@ -333,3 +333,36 @@ test("no-result search suggestions refine the current intent", () => {
   assert.match(submitHandler, /const refine = hasSession && !forceNew/);
   assert.match(submitHandler, /previousIntent: refine \? response\?\.intent \?\? null : null/);
 });
+
+test("search filter controls can explicitly clear inherited media and favorite constraints", () => {
+  const buildStart = searchPage.indexOf("const buildFilters = useCallback");
+  const buildEnd = searchPage.indexOf("\n  const search = useMutation", buildStart);
+  assert.ok(buildStart >= 0 && buildEnd > buildStart, "search filter builder should exist");
+  const build = searchPage.slice(buildStart, buildEnd);
+  assert.match(build, /mediaTypeOverride !== null/);
+  assert.match(build, /favoriteOnlyOverride !== null/);
+  assert.match(build, /f\.mediaTypes = mediaTypeOverride/);
+  assert.match(build, /f\.favoriteOnly = favoriteOnlyOverride/);
+
+  const typeSelectStart = searchPage.indexOf("<Select value={typeFilter}");
+  const typeSelectEnd = searchPage.indexOf("</Select>", typeSelectStart);
+  assert.ok(typeSelectStart >= 0 && typeSelectEnd > typeSelectStart);
+  assert.match(searchPage.slice(typeSelectStart, typeSelectEnd), /setMediaTypeOverride\(value === "all" \? \[\] : \[value\]\)/);
+
+  const favoriteButtonStart = searchPage.lastIndexOf("<Button", searchPage.indexOf('data-testid="button-favorite-filter"'));
+  const favoriteButtonEnd = searchPage.indexOf(">", favoriteButtonStart);
+  assert.ok(favoriteButtonStart >= 0 && favoriteButtonEnd > favoriteButtonStart);
+  const favoriteButton = searchPage.slice(favoriteButtonStart, favoriteButtonEnd);
+  assert.match(favoriteButton, /setFavoriteOnlyOverride\(next\)/);
+
+  const suggestionStart = searchPage.indexOf("const submitSuggestion = useCallback");
+  const suggestionEnd = searchPage.indexOf("\n  const startOver", suggestionStart);
+  assert.ok(suggestionStart >= 0 && suggestionEnd > suggestionStart);
+  const suggestion = searchPage.slice(suggestionStart, suggestionEnd);
+  assert.match(suggestion, /setMediaTypeOverride\(\[\]\)/);
+  assert.match(suggestion, /setFavoriteOnlyOverride\(false\)/);
+  assert.match(suggestion, /submit\(suggestion\)/);
+
+  assert.match(searchPage, /setMediaTypeOverride\(null\)/);
+  assert.match(searchPage, /setFavoriteOnlyOverride\(null\)/);
+});

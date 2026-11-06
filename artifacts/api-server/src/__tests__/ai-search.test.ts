@@ -177,3 +177,9 @@ test("search suggestions treat SQL wildcard characters as literal text", () => {
   );
   assert.match(aiSearchSource, /term LIKE \$2 ESCAPE E'\\\\\\\\'/);
 });
+test("explicit UI media and favorite filter values can clear inherited constraints", () => {
+  assert.match(searchRouteSource, /if \(Array\.isArray\(f\.mediaTypes\)\) \{\s*intent\.mediaTypes = f\.mediaTypes\.map\(String\)\.slice\(0, 6\);\s*\}/);
+  assert.match(searchRouteSource, /if \(typeof f\.favoriteOnly === "boolean"\) intent\.favoriteOnly = f\.favoriteOnly;/);
+  assert.doesNotMatch(searchRouteSource, /Array\.isArray\(f\.mediaTypes\) && f\.mediaTypes\.length/);
+  assert.doesNotMatch(searchRouteSource, /if \(f\.favoriteOnly === true\)/);
+});

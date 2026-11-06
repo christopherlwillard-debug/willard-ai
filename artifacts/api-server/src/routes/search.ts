@@ -105,10 +105,10 @@ router.post("/search/ai", async (req, res) => {
     // filters override whatever the language parse inferred.
     const f = req.body?.filters;
     if (f && typeof f === "object") {
-      if (Array.isArray(f.mediaTypes) && f.mediaTypes.length) {
+      if (Array.isArray(f.mediaTypes)) {
         intent.mediaTypes = f.mediaTypes.map(String).slice(0, 6);
       }
-      if (f.favoriteOnly === true) intent.favoriteOnly = true;
+      if (typeof f.favoriteOnly === "boolean") intent.favoriteOnly = f.favoriteOnly;
       if (f.dateFrom !== undefined || f.dateTo !== undefined) {
         try {
           const dates = parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined);
