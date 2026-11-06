@@ -1976,10 +1976,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           const processedDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "archive-index", "processed"), nasPath);
           const dest = path.join(processedDir, path.basename(job.sourcePath));
           dispositionSourceHash = await sha256File(job.sourcePath);
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
           moveFileNoReplace(job.sourcePath, dest);
           const destinationHash = await sha256File(dest);
           if (destinationHash !== dispositionSourceHash) {
             try {
+              await assertOrganizationLease(id, nasPath, executionLeaseToken);
               moveFileNoReplace(dest, job.sourcePath);
             } catch (restoreError) {
               throw new Error("Archive move checksum verification failed and the archive could not be restored: " + (restoreError instanceof Error ? restoreError.message : String(restoreError)));
