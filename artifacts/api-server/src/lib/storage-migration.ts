@@ -562,8 +562,15 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   }
 
   async function copy(id: string): Promise<StorageMigrationManifest> {
-    return withMigrationLock(id, async (client) => {
+    const initialManifest = await get(id);
+    if (initialManifest.cleanupConfirmed || initialManifest.state === "CLEANED") {
+      throw new Error("This migration is in cleanup state and cannot be copied.");
+    }
+    if (initialManifest.conflicts || initialManifest.unsafeFiles || initialManifest.missingFiles) {
+      throw new Error("Resolve conflicts, unsafe files, and missing sources before copying.");
+    }
 
+    return withMigrationLock(id, async (client) => {
     const manifest = await get(id);
     if (manifest.cleanupConfirmed || manifest.state === "CLEANED") throw new Error("This migration is in cleanup state and cannot be copied.");
     if (manifest.conflicts || manifest.unsafeFiles || manifest.missingFiles) throw new Error("Resolve conflicts, unsafe files, and missing sources before copying.");
