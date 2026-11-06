@@ -6,7 +6,7 @@ import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable }
 import { eq, and, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { canonicalizePath, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { parseBoundedInteger, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
@@ -386,6 +386,34 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     return;
   }
 
+  // Resolve the stored relative path component-by-component without
+  // following descendant symlinks. resolveLibraryPath intentionally returns
+  // a canonical path, so checking only oldAbs would hide a symlinked catalog
+  // path and rename its target instead of the catalog entry.
+  try {
+    const lexicalRoot = path.resolve(nasPath);
+    const normalizedRelative = file.relativePath.replace(/[\\/]/g, path.sep);
+    const lexicalSource = path.resolve(lexicalRoot, normalizedRelative);
+    const relativeSource = path.relative(lexicalRoot, lexicalSource);
+    if (!relativeSource || relativeSource === ".." || relativeSource.startsWith(".." + path.sep) || path.isAbsolute(relativeSource)) {
+      throw new Error("Stored media path is not a regular child of the configured library");
+    }
+    let currentPath = canonicalizePath(nasPath);
+    const components = relativeSource.split(path.sep).filter(Boolean);
+    for (let index = 0; index < components.length; index += 1) {
+      currentPath = path.join(currentPath, components[index]!);
+      const stat = fs.lstatSync(currentPath);
+      if (stat.isSymbolicLink()) throw new Error("Stored media path contains a symbolic link");
+      if (index < components.length - 1 && !stat.isDirectory()) throw new Error("Stored media path has a non-directory parent");
+      if (index === components.length - 1 && !stat.isFile()) throw new Error("Stored media path is not a regular file");
+    }
+    if (path.resolve(currentPath) !== path.resolve(oldAbs)) {
+      throw new Error("Stored media path changed canonical location");
+    }
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : "Source file is not a regular library file" });
+    return;
+  }
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
   if (newRelPath === file.relativePath) {
     res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
