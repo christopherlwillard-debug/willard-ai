@@ -3013,3 +3013,15 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 |---|---|---|---|---|
 | High | Windows installer → stop packaged services after upgrade | fixed; targeted validation pending | `158f4cc7ac66f29a084e017270808b14cdba446a` | Must pass Windows installed-product lifecycle; WMI creation timestamp must remain available and match exactly. |
 | Medium | Windows launcher → report stop failure without blocking modal | fixed; targeted validation pending | pending commit | Windows lifecycle must verify a failed stop returns promptly and preserves diagnostics/state. |
+
+## November 6 — Media Center accessibility and control semantics
+
+- **Finding — Medium (Media Center → search, filters, folder navigation, status banners, and view controls):** Source inspection found several icon-only buttons without accessible names (dismiss, close details, clear search, folder disclosure, grid/list, and refresh), a search input and sort select without explicit labels, and toggle-like tag/type/folder/view controls that did not expose their selected state. The folder disclosure control was also rendered as an enabled button for folders with no children.
+- **Fix:** Added explicit accessible names, pressed/expanded state, and native disabled state for non-expandable folder disclosures. Search and sort controls now have labels. Tag, media-type, current-folder, and view-mode choices expose their selected state. Dismiss/close actions identify the notification or file context.
+- **Regression coverage:** Extended the UI accessibility contract suite with assertions for all of these Media Center controls. This is static source-contract coverage; browser keyboard and screen-reader verification remains a separate milestone.
+- **Commit:** pending commit.
+- **Remaining risk:** This batch covers the audited Media Center controls, not every page or a full assistive-technology session. Browser-level accessibility checks and manual screen-reader verification remain open.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media Center → accessible names and state for search, filters, folder tree, status actions, and view controls | fixed; targeted validation pending | pending commit | Must pass UI contract tests; browser keyboard and screen-reader testing still required. |

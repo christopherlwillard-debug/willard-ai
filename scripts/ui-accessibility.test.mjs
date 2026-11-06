@@ -175,6 +175,27 @@ test("Explorer sorting, navigation, and errors are accessible", () => {
 });
 
 
+test("Media Center search, filters, folder navigation, and status actions are accessible", () => {
+  assert.ok(mediaPage.includes('aria-label="Search media files"'));
+  assert.ok(mediaPage.includes('aria-label="Sort media files"'));
+  assert.ok(mediaPage.includes('aria-label="Clear media search"'));
+  assert.ok(mediaPage.includes("aria-pressed={selectedTags.includes(tag.name)}"));
+  assert.ok(mediaPage.includes("aria-pressed={activeType === key}"));
+  assert.ok(mediaPage.includes("aria-pressed={selectedFolder === null}"));
+  assert.ok(mediaPage.includes('aria-label="Dismiss scan summary"'));
+  assert.ok(mediaPage.includes('aria-label="Dismiss thumbnail completion message"'));
+  assert.ok(mediaPage.includes('aria-label={isThumbs ? "Dismiss thumbnail completion message" : "Dismiss scan completion message"}'));
+  assert.ok(mediaPage.includes('aria-label={"Dismiss " + noun.toLowerCase() + " " + progress.status.toLowerCase() + " notification"}'));
+  assert.ok(mediaPage.includes('aria-label={"Close details for " + file.name}'));
+  assert.ok(mediaPage.includes('aria-label={hasChildren ? (expanded ? "Collapse" : "Expand") + " folder " + node.name : "No subfolders in " + node.name}'));
+  assert.ok(mediaPage.includes("aria-expanded={hasChildren ? expanded : undefined}"));
+  assert.ok(mediaPage.includes('aria-label="Grid view"'));
+  assert.ok(mediaPage.includes('aria-label="List view"'));
+  assert.ok(mediaPage.includes('aria-label="Refresh media files"'));
+  assert.ok(mediaPage.includes('aria-pressed={viewMode === "grid"}'));
+  assert.ok(mediaPage.includes('aria-pressed={viewMode === "list"}'));
+});
+
 test("media rename dialog is labelled, announces errors, and traps keyboard focus", () => {
   assert.ok(mediaViewer.includes('role="dialog"'));
   assert.ok(mediaViewer.includes('aria-modal="true"'));
