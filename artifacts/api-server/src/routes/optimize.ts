@@ -6,7 +6,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawnSync, execFile } from "child_process";
 import { promisify } from "util";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolError } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
@@ -15,6 +15,7 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
+import { isShuttingDown } from "../lib/shutdown-state.ts";
 import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import {
   evaluateCapacity,
@@ -40,6 +41,34 @@ import {
 const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
+const activeConversionJobIds = new Set<number>();
+const activeConversionJobWaiters = new Set<() => void>();
+
+function notifyConversionJobWaiters(): void {
+  if (activeConversionJobIds.size !== 0) return;
+  for (const resolve of [...activeConversionJobWaiters]) resolve();
+}
+
+export async function stopActiveConversionJobs(timeoutMs = 8_000): Promise<void> {
+  if (activeConversionJobIds.size === 0) return;
+  await new Promise<void>((resolve) => {
+    let timer: NodeJS.Timeout | null = null;
+    const finish = () => {
+      if (timer) clearTimeout(timer);
+      activeConversionJobWaiters.delete(finish);
+      resolve();
+    };
+    activeConversionJobWaiters.add(finish);
+    timer = setTimeout(finish, timeoutMs);
+    if (activeConversionJobIds.size === 0) finish();
+  });
+  if (activeConversionJobIds.size > 0) {
+    logger.warn({
+      jobIds: [...activeConversionJobIds],
+      timeoutMs,
+    }, "Some local conversion jobs did not finish before shutdown; their session locks will expire for recovery");
+  }
+}
 
 async function getActiveConversionJob(id: number) {
   const nasPath = (await getActiveLibraryContext())?.nasPath;
@@ -1639,6 +1668,10 @@ router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
  * Streams events: status | file_done | summary | error
  */
 router.get("/optimize/jobs/:id/execute", async (req, res) => {
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "The server is shutting down; retry conversion after it restarts." });
+    return;
+  }
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
 
@@ -1668,6 +1701,11 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       res.end();
       return;
     }
+    if (isShuttingDown()) {
+      send("error", { message: "The server is shutting down; retry conversion after it restarts." });
+      res.end();
+      return;
+    }
 
     const job = await getActiveConversionJob(id);
     if (!job) { send("error", { message: "Job not found" }); res.end(); return; }
@@ -1693,6 +1731,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       return;
     }
     jobClaimed = true;
+    activeConversionJobIds.add(id);
 
     // Read current profile from settings for this run
     const settings = await getActiveAppSettings();
@@ -1791,7 +1830,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     for (let i = 0; i < filesToConvert.length; i++) {
       const [currentJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-      if (currentJob?.cancelledAt) break;
+      if (currentJob?.cancelledAt || isShuttingDown()) break;
       const { fullPath, ext } = filesToConvert[i];
 
       if (previouslyConverted.has(path.resolve(fullPath))) {
@@ -1977,13 +2016,13 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       // converted and verified, preserving all completed staged files.
       const [afterFileJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-      if (afterFileJob?.cancelledAt) break;
+      if (afterFileJob?.cancelledAt || isShuttingDown()) break;
     }
 
     const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
     const [finishedJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
       .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-    const wasCancelled = Boolean(finishedJob?.cancelledAt);
+    const wasCancelled = Boolean(finishedJob?.cancelledAt) || isShuttingDown();
     // A cancelled run may still have completed, verified staged outputs. Keep
     // those outputs actionable: finalize accepts awaiting_action jobs, while
     // cancelledAt and resultJson.cancelled preserve the user's cancellation.
@@ -2025,6 +2064,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("error", { message: e.message ?? "Conversion failed" });
     res.end();
   } finally {
+    if (jobClaimed) {
+      activeConversionJobIds.delete(id);
+      notifyConversionJobWaiters();
+    }
     if (jobLockClient) {
       try {
         await releaseConversionJobLock(jobLockClient, id);
