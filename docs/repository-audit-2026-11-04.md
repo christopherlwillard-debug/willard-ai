@@ -2303,3 +2303,22 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added `artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts` to guard both SSE paths and reconnect state mapping.
 - UI commit: `d8f186b0a91d9b915c1f595c8e718caa1c5bf7aa`; regression commit: `2a3d48a9f997764356c8baae7aaaeedbad1c6f12`.
 - Validation is pending on the current branch head. The new test is source-contract coverage; a browser-level cancellation/reconnect test remains desirable.
+
+
+## 2026-11-06 high-severity follow-up — organization workers lacked durable ownership fencing
+
+**Finding — High (data integrity / competing workers):** Organization execution, resume, and rollback previously relied on a shared status plus a heartbeat timestamp. A worker reclaimed after a stale heartbeat could use the same `executing` status as the old worker. The old worker's heartbeat and checkpoint writes were scoped by job ID/status rather than a unique ownership identity, so a resumed stale process could continue moving files or overwrite the replacement worker's recovery journal.
+
+**Correction:** Added nullable `organization_jobs.lease_token` and schema version 3 migration. Each execute, resume, and rollback claim generates a cryptographically random token. Heartbeats, stage checkpoints, move-intent writes, verified-move writes, completion, and terminal failure transitions are now conditional on the current token and expected state. Lost-lease workers stop instead of rolling back files owned by another worker. Tokens are cleared on terminal or capacity-admission release transitions.
+
+**Filesystem fencing:** `verifiedMove` accepts ownership checks after source hashing and immediately before moving, plus before its local restoration path. `rollbackMoves` accepts an ownership callback, checks before each file and before rollback filesystem mutations, and propagates lost-lease errors instead of treating them as ordinary file failures. Execute, resume, and Recovery Center rollback pass the active token guard.
+
+**Regression coverage:** Updated the schema bootstrap test to require the existing-install migration and added a source-contract test covering the schema field, unique tokens for all three workflows, token-conditional updates, and filesystem guard hooks.
+
+**Implementation commits:** schema `652cc6847b1da08e4be670cf3cabe77473921866`; bootstrap migration `0521dfb83be1c490b856671f19fc736f7f8884d6`; bootstrap test `0624e9bcec71aa5bfd22af2ddae4777ecc2b1b5c`; execution fencing `967639a456096a4b3e006a5944268f22af1f3b3a`; resume fencing `0d390fe2884d866a6f1b84a4ff0c5bcdcb1ded89`; rollback fencing `71747fd2c868bd4faf40c6ee4323cfd847ce72c2`; lease transition hardening `1094788dc6d64e7b9270113fd18420af881fb0a5`; rollback helper guard `244b96a688c64c45985489cf18fc66ea7f6c6dc7`; verified-move fencing `ce3de5ccc8a6cc6fc908921ac9fd6636b68662f6`; route guard integration `56edcbf9cc80d32e194b6b0bab42b477163c2b36`; regression contract `12ff609b4ba725757a07984492c946d5d4d374f7`; rollback mutation guard `46021c6d328e1f547570a4c5e65331723b7aab4b`; lost-lease propagation `e5c794969447383aa5b44820013b48541cb810d7`.
+
+**Validation:** Source inspection and regression additions complete. Matching CI, TypeScript validation, PostgreSQL migration execution, multi-process takeover tests, Windows/SMB crash injection, and full end-to-end recovery are pending. A worker can still be interrupted during a multi-step filesystem primitive; the durable intent journal and subsequent recovery remain essential. Do not treat source-contract checks as proof of crash safety.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Organization execute/resume/rollback did not fence stale workers with unique ownership | implementation and source regression committed; runtime validation pending | commits listed above | Exercise stale-worker takeover while paused before/after every filesystem mutation on Linux, Windows, and SMB; verify only the current token owner can mutate and that all journal states recover |
