@@ -270,6 +270,62 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
     return;
   }
 
+  if (op.mediaFileId === null) {
+    await markNeedsReview(op.operationId, "Cleanup operation has no canonical media row");
+    return;
+  }
+
+  const canonicalResult = await db.execute(sql`
+    SELECT relative_path AS "relativePath", last_scan_action AS "lastScanAction",
+           size_bytes AS "sizeBytes", content_hash AS "contentHash"
+      FROM media_files
+     WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+     LIMIT 1
+  `);
+  const canonical = canonicalResult.rows[0] as {
+    relativePath?: string;
+    lastScanAction?: string | null;
+    sizeBytes?: number | string | null;
+    contentHash?: string | null;
+  } | undefined;
+  if (!canonical || typeof canonical.relativePath !== "string") {
+    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row is missing");
+    return;
+  }
+  if (canonical.lastScanAction === "DELETED") {
+    await markNeedsReview(op.operationId, "Canonical media row was deleted independently; trash file preserved for review");
+    return;
+  }
+  let canonicalSource: string;
+  try {
+    canonicalSource = resolveLibraryPath(op.nasPath, canonical.relativePath);
+  } catch {
+    await markNeedsReview(op.operationId, "Canonical media row contains an invalid library path");
+    return;
+  }
+  if (!samePath(canonicalSource, source)) {
+    await markNeedsReview(op.operationId, "Canonical media path changed during cleanup; trash file preserved for review");
+    return;
+  }
+
+  const trashStat = fs.lstatSync(trash);
+  if (trashStat.isSymbolicLink() || !trashStat.isFile()) {
+    await markNeedsReview(op.operationId, "Cleanup trash destination is not a regular file");
+    return;
+  }
+  const expectedSize = Number(canonical.sizeBytes ?? op.sizeBytes ?? 0);
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || trashStat.size !== expectedSize ||
+      (op.sizeBytes !== null && Number(op.sizeBytes) !== expectedSize)) {
+    await markNeedsReview(op.operationId, "Trash file size no longer matches the canonical media row");
+    return;
+  }
+  const actualHash = await sha256File(trash);
+  if (typeof canonical.contentHash === "string" && /^[a-f0-9]{64}$/i.test(canonical.contentHash) &&
+      actualHash.toLowerCase() !== canonical.contentHash.toLowerCase()) {
+    await markNeedsReview(op.operationId, "Trash file hash no longer matches the canonical media row");
+    return;
+  }
+
   const { entries } = readTrashManifest(op.nasPath);
   if (!entries.some((entry) => {
     try { return samePath(resolveTrashPath(entry.trashPath, trashRoot(op.nasPath)), trash); }
@@ -278,25 +334,26 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
     appendTrashManifestEntry(op.nasPath, {
       ts: new Date().toISOString(),
       nasPath: op.nasPath,
-      mediaFileId: op.mediaFileId ?? undefined,
+      mediaFileId: op.mediaFileId,
       originalPath: source,
       trashPath: trash,
-      sizeBytes: Number(op.sizeBytes ?? 0),
+      sizeBytes: expectedSize,
+      contentHash: actualHash,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       recoveredByStartup: true,
     });
   }
 
-  if (op.mediaFileId === null) {
-    await markNeedsReview(op.operationId, "Cleanup operation has no canonical media row");
-    return;
-  }
   const updated = await db.execute(sql`
     UPDATE media_files SET last_scan_action = 'RECYCLED'
-    WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+     WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+       AND relative_path = ${canonical.relativePath}
+       AND size_bytes IS NOT DISTINCT FROM ${canonical.sizeBytes}
+       AND content_hash IS NOT DISTINCT FROM ${canonical.contentHash}
+       AND last_scan_action IS DISTINCT FROM 'DELETED'
   `);
   if (affectedRows(updated) !== 1) {
-    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row is missing");
+    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row changed during recovery");
     return;
   }
   await purgeDerivedDataForMedia(op.nasPath, [op.mediaFileId]);
