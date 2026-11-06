@@ -415,6 +415,23 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     return;
   }
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
+  try {
+    const sourceStat = fs.lstatSync(oldAbs);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isFile() || sourceStat.size !== Number(file.sizeBytes ?? 0)) {
+      res.status(409).json({ error: "Source file no longer matches the indexed media record. Refresh the library and try again." });
+      return;
+    }
+    if (typeof file.contentHash === "string" && /^[a-f0-9]{64}$/i.test(file.contentHash)) {
+      const sourceHash = await sha256File(oldAbs);
+      if (sourceHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+        res.status(409).json({ error: "Source file contents changed since indexing. Refresh the library and try again." });
+        return;
+      }
+    }
+  } catch {
+    res.status(409).json({ error: "Source file could not be verified. Refresh the library and try again." });
+    return;
+  }
   if (newRelPath === file.relativePath) {
     res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
     return;
@@ -429,7 +446,12 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
         const [row] = await db
           .update(mediaFilesTable)
           .set({ name: newName, relativePath: newRelPath })
-          .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+          .where(and(
+            eq(mediaFilesTable.id, id),
+            eq(mediaFilesTable.nasPath, nasPath),
+            eq(mediaFilesTable.relativePath, file.relativePath),
+            ACTIVE_MEDIA,
+          ))
           .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
         return row;
       },
