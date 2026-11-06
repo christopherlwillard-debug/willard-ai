@@ -2837,3 +2837,17 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Search → refine → clear media type or favorites filter | fixed; targeted validation pending | `b0b75d489dab5e99b623616156601938948bc2fa` | Fast Validation must execute the route and UI regressions on the current head. |
+
+
+## Password-protected archive preview snapshot integrity — November 6
+
+- **Finding — Medium (Archive Library → preview encrypted ZIP/7-Zip files):** Source inspection confirmed that the normal ZIP and 7-Zip listing completion paths call `assertArchiveFileUnchanged`, but their password/encryption error paths accepted and persisted a password-protected classification without the same snapshot check. A file replaced or modified while the library was inspecting it could therefore be recorded as password-protected based on a different file than the one initially snapshotted.
+- **Fix:** The ZIP password-error branch now revalidates the captured archive snapshot before setting `isPasswordProtected`. The 7-Zip error branch performs the same check and rejects if the snapshot changed before resolving the preview. The existing fail-closed snapshot helper and archive size/path checks are reused; no new dependency or alternate integrity mechanism was added.
+- **Regression:** Extended `archive-safety.test.ts` (already included in Fast Validation's targeted backend regression command) with source-contract assertions that both ZIP and 7-Zip password-error paths perform snapshot verification before accepting the protected result. The existing helper regression for source replacement continues to cover the snapshot helper's runtime behavior.
+- **Commits:** implementation `a85dc983574acd95127d0062296a9f03b45e4551`; regression `68a183ff4af333671982bb4c9212a8d3adf78250`.
+- **Validation:** Source inspection confirms the two previously missing checks are now present. The new regression has been added to an existing Fast Validation test file, but no targeted test, integration test, Windows test, or full CI result is yet confirmed for this commit. The PR-triggered Fast Validation run must execute the updated `archive-safety.test.ts` before this finding can be marked target-tested.
+- **Remaining risk:** The check detects changes observable through size, mtime, ctime, device, and inode snapshots. It does not lock a file against all concurrent writers; a stronger open-descriptor-based archive lifecycle would be a separate design. Windows and SMB timestamp/identity semantics still require platform integration coverage.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Fast Validation must run the regression on the final audit head; snapshot metadata is not a cross-platform file lock. |
