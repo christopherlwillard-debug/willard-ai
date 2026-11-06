@@ -45,7 +45,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
 
     // ── 1. Exact-hash groups ────────────────────────────────────────────────
     const exactHashGroups = await db.execute(sql`
-      SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size
+      SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size, MAX(size_bytes) as largest_file_size
       FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath}
          AND content_hash IS NOT NULL
@@ -60,6 +60,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         m.quick_fingerprint AS group_key,
         COUNT(*) AS file_count,
          SUM(m.size_bytes) AS total_size,
+        MAX(m.size_bytes) AS largest_file_size,
          COUNT(*) FILTER (
            WHERE m.content_hash IS NULL
              AND m.size_bytes > ${DUPLICATE_CONFIRMATION_LIMIT_BYTES}
@@ -82,6 +83,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       groupKey: string;
       fileCount: number;
       totalSize: number;
+      largestFileSize: number;
       matchType: "HASH_IDENTICAL" | "PERCEPTUAL_SIMILAR";
       matchConfidence: number;
       confirmationStatus: "CONFIRMED" | "UNCONFIRMED_FINGERPRINT" | "UNCONFIRMED_LARGE";
@@ -92,6 +94,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         groupKey:        String(r.group_key),
         fileCount:       parseInt(r.file_count),
         totalSize:       Number(r.total_size),
+        largestFileSize: Number(r.largest_file_size),
         matchType:       "HASH_IDENTICAL" as const,
         matchConfidence: 5,
         confirmationStatus: "CONFIRMED" as const,
@@ -107,14 +110,14 @@ router.get("/cleanup/duplicates", async (req, res) => {
           : "UNCONFIRMED_FINGERPRINT" as const,
       })),
     ].sort((a, b) => {
-      const wastedA = (a.fileCount - 1) * (a.totalSize / a.fileCount);
-      const wastedB = (b.fileCount - 1) * (b.totalSize / b.fileCount);
+      const wastedA = a.totalSize - a.largestFileSize;
+      const wastedB = b.totalSize - b.largestFileSize;
       return wastedB - wastedA;
     });
 
     const totalGroups      = allRaw.length;
     const totalWastedBytes = allRaw.reduce((sum, g) => {
-      return sum + Math.round((g.fileCount - 1) * (g.totalSize / g.fileCount));
+      return sum + Math.max(0, g.totalSize - g.largestFileSize);
     }, 0);
 
     // Apply pagination to the merged list
@@ -182,7 +185,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       }
 
       const wastedBytes = raw.fileCount > 1
-        ? Math.round((raw.fileCount - 1) * (raw.totalSize / raw.fileCount))
+        ? Math.max(0, raw.totalSize - raw.largestFileSize)
         : 0;
 
       return {
