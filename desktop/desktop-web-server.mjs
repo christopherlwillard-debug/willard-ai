@@ -62,7 +62,7 @@ const server = http.createServer((request, response) => {
   // Bind to loopback AND validate the HTTP authority. Loopback binding alone
   // does not stop DNS-rebinding pages from sending a hostile Host header to
   // this local service and reaching its API proxy.
-  if (!isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port)) {
+  if (!isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port, request.headers["sec-fetch-site"])) {
     return sendError(response, 403, "Untrusted local request host.");
   }
   if (!request.url) return sendError(response, 400, "Bad request.");
