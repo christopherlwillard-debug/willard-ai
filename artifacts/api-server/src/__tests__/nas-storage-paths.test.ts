@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cleanTempDir, ensureDirectoryWithinRoot, getTempDir } from "../lib/nas-storage.ts";
+import { cleanTempDir, ensureDataDirectoryWithinRoot, ensureDirectoryWithinRoot, getTempDir } from "../lib/nas-storage.ts";
 
 function makeTempRoot(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -218,4 +218,43 @@ test("organize logs, reports, and startup cache use root-checked directory creat
   assert.match(organizeRoute, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "logs"\), nasPath\)/);
   assert.match(organizeRoute, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "reports"\), nasPath\)/);
   assert.match(jobEngine, /ensureDirectoryWithinRoot\(path\.join\(getWillardAIDir\(nasPath\), "cache"\), nasPath\)/);
+});
+
+
+test("ensureDataDirectoryWithinRoot preserves existing folder permissions", () => {
+  const root = makeTempRoot("willard-data-root-");
+  try {
+    const existing = path.join(root, "WillardAI", "Photos");
+    fs.mkdirSync(existing, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") fs.chmodSync(existing, 0o700);
+
+    const created = ensureDataDirectoryWithinRoot(path.join(existing, "2026", "June"), root);
+    assert.equal(created, path.join(existing, "2026", "June"));
+    assert.ok(fs.statSync(created).isDirectory());
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(existing).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(path.join(existing, "2026")).mode & 0o777, 0o755);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureDataDirectoryWithinRoot rejects symlinked destination parents without creating outside folders", () => {
+  const root = makeTempRoot("willard-data-root-");
+  const outside = makeTempRoot("willard-data-outside-");
+  try {
+    const parent = path.join(root, "WillardAI", "Photos");
+    fs.mkdirSync(path.dirname(parent), { recursive: true });
+    fs.symlinkSync(outside, parent, process.platform === "win32" ? "junction" : "dir");
+
+    assert.throws(
+      () => ensureDataDirectoryWithinRoot(path.join(parent, "2026"), root),
+      /symlink|outside/,
+    );
+    assert.equal(fs.existsSync(path.join(outside, "2026")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
