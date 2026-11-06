@@ -2345,7 +2345,7 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
 
     // Only mark rolled_back when ALL moves were reversed.
     // Partial rollback keeps failed status so the user knows manual intervention is needed.
-    await db.update(organizationJobsTable).set({
+    const [updatedRollback] = await db.update(organizationJobsTable).set({
       status: isComplete ? "rolled_back" : "failed",
       error: isComplete
         ? `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`
@@ -2357,7 +2357,11 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
       eq(organizationJobsTable.nasPath, nasPath),
       eq(organizationJobsTable.leaseToken, rollbackLeaseToken),
       eq(organizationJobsTable.status, "rolling_back"),
-    ));
+    )).returning({ id: organizationJobsTable.id });
+    if (!updatedRollback) {
+      res.status(409).json({ error: "Rollback worker lost ownership before its final recovery status could be saved. The recovery journal remains available." });
+      return;
+    }
 
     res.json({ ok: isComplete, rolledBack, total: moves.length, partial: !isComplete, logs });
   } catch (e: any) {
