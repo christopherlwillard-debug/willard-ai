@@ -645,6 +645,21 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   );
 });
 
+test("local installer build fails closed when staging or validation fails", () => {
+  const helperStart = localBuildInstaller.indexOf("function Invoke-NodeBuildStep");
+  const helperEnd = localBuildInstaller.indexOf("\\n}", helperStart);
+  const helper = localBuildInstaller.slice(helperStart, helperEnd + 2);
+  assert.match(helper, /& node \\(Join-Path \\$PSScriptRoot \\$scriptName\\)/);
+  assert.match(helper, /\\$exitCode = \\$LASTEXITCODE/);
+  assert.match(helper, /if \\(\\$exitCode -ne 0\\)/);
+  assert.match(localBuildInstaller, /Invoke-NodeBuildStep "build-release\\.mjs"/);
+  assert.match(localBuildInstaller, /Invoke-NodeBuildStep "validate-release\\.mjs"/);
+  assert.ok(
+    localBuildInstaller.indexOf('Invoke-NodeBuildStep "validate-release.mjs"') <
+      localBuildInstaller.indexOf('& (Join-Path $PSScriptRoot "compile-installer.ps1")'),
+  );
+});
+
 test("installer compilation stops on warnings", () => {
   assert.match(installerCompiler, /ISCC\.exe/);
   assert.doesNotMatch(installerCompiler, /--messages-jsonl/);
@@ -744,7 +759,14 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /validateReleaseManifest/);
   assert.match(releaseValidator, /sha256.*match/i);
   assert.match(releaseValidator, /sharp.*package\.json/);
-  assert.match(releaseValidator, /sharpManifest\.version !== "0\.35\.2"/);
+  assert.match(
+    releaseValidator,
+    /sourceSharpPackage = path\.join\(root, "artifacts", "api-server", "node_modules", "sharp", "package\.json"\)/,
+  );
+  assert.match(
+    releaseValidator,
+    /packagedSharpManifest\.version !== sourceSharpManifest\.version/,
+  );
 });
 
 test("release validation gates high and critical image parser advisories in both runtime graphs", () => {
