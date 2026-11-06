@@ -3602,7 +3602,7 @@ The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` befor
 
 **Status:** fixed; target validation pending for the current branch head.
 
-**Remaining risk:** This prevents a late-saved session from being reused, but it does not cancel an operation that was already authorized and executing when the password changed. Such an in-flight request may finish; future requests using its old session are rejected. If password changes must immediately cancel already-running destructive work, that needs coordinated request/job cancellation and ownership fencing rather than a session-only patch.
+**Remaining risk:** The credential fingerprint closes late-save resurrection after password change/recovery, but it does not protect explicit logout or targeted session revocation. Those routes still delete session rows without a durable revocation tombstone; a concurrent request can upsert the same SID with the unchanged credential fingerprint and make it valid again. This separate High (P1) finding is documented below. Already-authorized in-flight operations can also finish; cancellation needs request/job fencing.
 
 ### Validation snapshot — credential-version fix
 
@@ -3629,3 +3629,51 @@ The PR-triggered rerun [42274780057](https://github.com/christopherlwillard-debu
 **Status:** found; blocked pending the coordinated stable-bootstrap and install/data-root migration described in the preceding Windows path-collision finding.
 
 **Remaining risk:** The normal installed-product prepared-phase recovery remains broken. Installer compilation and Fast Validation's separate Windows archive/updater smoke do not establish installed-product lifecycle success.
+
+
+## November 6 — explicit logout and session revocation can be undone by late session-store upserts
+
+### Confirmed High (P1): deletion-only revocation has no durable tombstone
+
+**Affected workflows:** Logout, revoke one device/session, revoke all other sessions, session inventory, and any in-flight authenticated request that persists session state after revocation.
+
+**Evidence and root cause:**
+
+- The session middleware configures rolling cookies with a seven-day maximum age and the global API guard mutates lastSeenAt on every authenticated request.
+- The organization/optimization action-token helper also mutates the session and explicitly persists it during protected operations.
+- The pinned connect-pg-simple store can recreate a deleted row through its INSERT ... ON CONFLICT (sid) DO UPDATE set operation.
+- POST /auth/logout calls req.session.destroy(), while DELETE /auth/sessions/:sid and DELETE /auth/sessions delete rows directly. None records a durable revocation marker.
+- The credential-version fix above changes only when the password hash changes. Logout and individual/all-other-session revocation leave that fingerprint unchanged.
+
+**Confirmed race:** Request A loads a session and passes the global guard. Request B logs out or revokes that SID and deletes the session row. Request A then completes and saves its modified session. The store can insert the old SID again. Because its password credential fingerprint is still current, a later request can pass the new credential-version check. The same issue affects an in-flight request from a device revoked through the session-management screen.
+
+**Status:** found; blocked pending a durable revocation design. No partial delete-only workaround was applied.
+
+**Safe implementation plan:**
+
+1. Add an idempotently created revoked_sessions table alongside the existing session table in setup-db.cjs. Use SID as the primary key, record revoked_at, and index expiry/cleanup metadata.
+2. For logout, insert the current SID tombstone before destroying the session. For revoke-one, insert the target SID tombstone and delete its row in one transaction. For revoke-others, insert tombstones for every target SID and delete those rows in the same transaction while preserving the current SID.
+3. Keep tombstones effective even if a late session-store upsert recreates the session row. The global auth guard must check both credential version and the SID tombstone before routing; /auth/status and /auth/sessions must apply the same revocation state.
+4. Retain tombstones until the maximum session lifetime plus a safety grace has elapsed and no session row for that SID remains. A cleanup job must not remove a marker merely because the original session row was deleted; a late upsert may still recreate it.
+5. Add PostgreSQL integration tests that load a session, revoke it, deliberately perform a late store set/upsert, and prove that the SID remains unauthorized. Also verify that revoke-others preserves the current session and that logout cannot be undone.
+6. If marker persistence fails, fail closed and do not return a successful revocation response.
+
+**Remaining risk:** Until this is implemented, logout and targeted session revocation can be undone by an already-running request that saves afterward. Password change/recovery revocation is protected by the credential fingerprint, but explicit session revocation is not.
+
+## November 6 — validation failures diagnosed and audit checks stabilized
+
+### Test-harness failure 1: over-escaped source assertions
+
+Fast Validation [run 42284276873](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284276873) failed on implementation commit a3e25f38c633b9635a359daa49f97df80dadf186 because the new source-contract regression used over-escaped regular expressions and therefore did not match the intended source text. The failure was in the regression assertion, not the application code. Commit fd99adc2c3fda0cef125ab68a763fe2acdacd0dd replaced those patterns with literal includes and explicit ordering checks.
+
+### Test-harness failure 2: PostgreSQL advisory-lock disconnect test raced server teardown
+
+Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372360) failed at the PostgreSQL conversion advisory-lock integration test. The test called pg.PoolClient.release(true) and immediately attempted to reacquire the session lock. The logs show the assertion failed about 23 ms later because PostgreSQL had not yet observed the asynchronous socket teardown. The product lock implementation was not changed. Commit 7e185ba807503bf7975af6c58e994c75f4ac71e0 adds a bounded five-second poll at 25 ms intervals so the integration test verifies eventual release rather than assuming synchronous server-side disconnect processing.
+
+### Exact validation evidence
+
+- Fast Validation [run 42284573101](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284573101) completed successfully on documentation head 80546a9a825e51076f7f512d9987521ece8873ad, which contains the credential-version implementation and corrected source assertions. Linux validation job 128122474396 passed workspace typechecks and generated-contract checks; its targeted suite reported 358 tests, 356 passed, 0 failed, 2 skipped. The PostgreSQL advisory-lock and conversion-finalization integration steps passed. Windows archive/updater smoke job 128123281575 passed, including 20 PowerShell script parses, launcher/process ownership, Windows organization capacity, media rename, conversion rollback, official Windows 7-Zip, compressed TAR preview, updater journal, and developer updater preservation/rollback.
+- Fast Validation [run 42284916889](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284916889) is running on code/test head 7e185ba807503bf7975af6c58e994c75f4ac71e0. Linux validation job 128124598990 passed the same 358-test suite (356 passed, 0 failed, 2 skipped), including the bounded advisory-lock disconnect test and credential-version regressions. Windows archive/updater smoke job 128125482533 was still running at the last inspection; the overall run is not yet marked passed.
+- Dependency Review [run 42284917015](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284917015) passed on code/test head 7e185ba807503bf7975af6c58e994c75f4ac71e0. The production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- No dedicated full-CI workflow exists in .github/workflows at this branch head. The available workflows are dependency refresh, dependency review, Fast Validation, Windows installer lifecycle validation, and Windows release. Full CI was not run; the release workflow was not invoked.
+
