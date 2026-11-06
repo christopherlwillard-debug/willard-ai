@@ -26,10 +26,11 @@ export function waitForExportedSnapshot(child, {
       callback(value);
     };
     const stopChild = () => {
-      if (stopping || childClosed) return;
+      if (stopping || childClosed || !isSnapshotHolderRunning(child)) return;
       stopping = true;
       try { child.kill("SIGTERM"); } catch { /* process may already have exited */ }
       killTimer = setTimeout(() => {
+        if (!isSnapshotHolderRunning(child)) return;
         try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }
       }, killGraceMs);
       killTimer.unref?.();
