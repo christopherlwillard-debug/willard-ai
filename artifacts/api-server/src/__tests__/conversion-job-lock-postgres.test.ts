@@ -33,8 +33,17 @@ test("PostgreSQL advisory locks serialize independent conversion workers and rel
     held.release(true);
     held = null;
 
-    held = await acquireConversionJobLock(jobId, () => pool.connect());
-    assert.ok(held, "lock should be available after the owning connection is destroyed");
+    // pg.PoolClient.release(error) starts asynchronous socket teardown. The
+    // PostgreSQL backend releases its session lock when it observes that
+    // disconnect, so poll briefly instead of assuming the server processes it
+    // before the next pool.connect() returns.
+    const releaseDeadline = Date.now() + 5_000;
+    do {
+      held = await acquireConversionJobLock(jobId, () => pool.connect());
+      if (held) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (Date.now() < releaseDeadline);
+    assert.ok(held, "lock should become available after the owning connection is destroyed");
     await releaseConversionJobLock(held, jobId);
     held = null;
   } finally {
