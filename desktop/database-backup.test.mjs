@@ -943,3 +943,16 @@ test("backup manifest uses the canonical authenticated active-library settings r
     /SELECT nas_path FROM app_settings ORDER BY \(password_hash IS NOT NULL\) DESC, id ASC LIMIT 1/,
   );
 });
+
+
+test("secure plaintext backup cleanup refuses symlink targets", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function secureRemove");
+  const end = source.indexOf("\nasync function sourceDatabaseName", start);
+  assert.ok(start >= 0 && end > start);
+  const cleanup = source.slice(start, end);
+  assert.match(cleanup, /const info = await lstat\(filePath\)/);
+  assert.match(cleanup, /info\.isSymbolicLink\(\) \|\| !info\.isFile\(\)/);
+  assert.match(cleanup, /fsConstants\.O_RDWR \| noFollow/);
+  assert.match(cleanup, /current\.isSymbolicLink\(\)/);
+});
