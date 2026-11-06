@@ -1574,3 +1574,37 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   assert.match(startServices, /Stop-LauncherStartedProcessHandle \$webProc/);
   assert.match(startServices, /Stop-LauncherStartedProcessHandle \$apiProc/);
 });
+
+
+test("developer launch, setup, repair, and update fail closed on unjournaled service listeners", () => {
+  const portStart = launcherCommon.indexOf("function Get-DeveloperListeningPorts");
+  const portEnd = launcherCommon.indexOf("\\nfunction Get-PortOwnerPid", portStart);
+  assert.ok(portStart >= 0 && portEnd > portStart, "Strict developer listener inspection must be shared.");
+  const portInspection = launcherCommon.slice(portStart, portEnd);
+  assert.match(portInspection, /Get-NetTCPConnection -LocalPort \\$port -State Listen -ErrorAction Stop/);
+  assert.match(portInspection, /could not verify whether Willard service port/);
+  assert.match(portInspection, /missing or incomplete/);
+
+  const stopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
+  const stopEnd = launcherCommon.indexOf("\\nfunction Get-LogTail", stopStart);
+  const stop = launcherCommon.slice(stopStart, stopEnd);
+  assert.ok(stop.indexOf("Assert-NoUntrackedDeveloperServices $pids") >= 0);
+  assert.ok(stop.indexOf("Get-DeveloperListeningPorts") > stop.indexOf("Wait-Process"));
+  assert.ok(stop.indexOf("Get-DeveloperListeningPorts") < stop.indexOf("Clear-TrackedPids"));
+
+  const startGuard = developerLauncher.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const recovery = developerLauncher.indexOf("Recover-InterruptedDeveloperUpdate");
+  assert.ok(startGuard >= 0 && startGuard < recovery, "Start must guard listeners before update recovery.");
+
+  const repairGuard = repairLauncher.indexOf("Assert-NoUntrackedDeveloperServices $tracked");
+  const repairMutation = repairLauncher.indexOf("Install-WillardMediaTools");
+  assert.ok(repairGuard >= 0 && repairGuard < repairMutation, "Repair must guard listeners before repair mutations.");
+
+  const setupGuard = setupLauncher.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const setupMutation = setupLauncher.indexOf("Install-WillardMediaTools");
+  assert.ok(setupGuard >= 0 && setupGuard < setupMutation, "Setup must guard listeners before setup mutations.");
+
+  const updateGuard = updater.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const updatePreparation = updater.indexOf("New-CandidateDirectory");
+  assert.ok(updateGuard >= 0 && updateGuard < updatePreparation, "Update must guard listeners before preparing a candidate.");
+});
