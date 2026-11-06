@@ -882,7 +882,14 @@ router.post("/organize/jobs", async (req, res) => {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
     }
     const resolvedDisposition = sourceType === "archive" ? requestedDisposition : "keep";
-    const resolvedPolicy = parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing");
+    if (conflictPolicy === "replace") {
+      res.status(400).json({
+        error: "Replace is temporarily unavailable until existing destination files can be backed up and recovered safely. Choose Rename or Keep Existing.",
+        code: "REPLACE_RECOVERY_UNAVAILABLE",
+      });
+      return;
+    }
+    const resolvedPolicy = parseAllowedString(conflictPolicy, ["keep_existing", "rename", "skip"], "keep_existing");
     if (!resolvedPolicy) {
       res.status(400).json({ error: "Invalid conflictPolicy" }); return;
     }
