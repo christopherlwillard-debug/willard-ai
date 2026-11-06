@@ -2,9 +2,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { createReadStream } from "node:fs";
 import { canonicalizePath, ensureDataDirectoryWithinRoot, resolveWithinRoot } from "./nas-storage.ts";
-import { moveFileNoReplace } from "./organize-helpers.ts";
+import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
 export const STORAGE_MIGRATION_NAMESPACES = [
@@ -159,13 +158,9 @@ function destinationFor(destinationRoot: string, relativePath: string): string {
 }
 
 async function defaultHashFile(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(hash.digest("hex")));
-  });
+  // Share the no-follow descriptor implementation used by file moves and
+  // cleanup so a symlink swap cannot redirect migration hashing.
+  return sha256File(filePath);
 }
 
 async function walkFiles(root: string, onUnsafe: (filePath: string, reason: string) => void): Promise<string[]> {
