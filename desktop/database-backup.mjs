@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import {
   DURABLE_JSON_COLUMNS,
   DURABLE_PATH_COLUMNS,
+  ensureLibraryDirectory,
   ensureLibraryIdentity,
   normalizeLibraryRoot,
   readLibraryIdentity,
@@ -941,14 +942,13 @@ async function cleanTarget(environment) {
   }
 }
 
-function recoveryJournalPath(targetRoot, manifest) {
-  return path.join(
-    normalizeLibraryRoot(targetRoot),
-    "WillardAI",
-    "config",
-    "recovery-attempts",
-    `${manifest.integrity.encryptedSha256}.json`,
+async function recoveryJournalPath(targetRoot, manifest, create = false) {
+  const directory = await ensureLibraryDirectory(
+    targetRoot,
+    path.join("WillardAI", "config", "recovery-attempts"),
+    create,
   );
+  return path.join(directory, `${manifest.integrity.encryptedSha256}.json`);
 }
 
 function recoveryJournalKey(manifest, secret) {
@@ -987,7 +987,7 @@ async function createRecoveryTargetIdentity(environment, manifest) {
 }
 
 async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity, state, detail = null) {
-  const filePath = recoveryJournalPath(targetRoot, manifest);
+  const filePath = await recoveryJournalPath(targetRoot, manifest, true);
   const authenticated = {
     format: 1,
     backupSha256: manifest.integrity.encryptedSha256,
@@ -998,7 +998,7 @@ async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity
     detail,
   };
   const journal = { ...authenticated, hmacSha256: signRecoveryJournal(authenticated, manifest, secret) };
-  await mkdir(path.dirname(filePath), { recursive: true });
+  // ensureLibraryDirectory rejects NAS symlinks before journal publication.
   const temporary = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.partial`;
   await writeFile(temporary, `${JSON.stringify(journal, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, filePath);
@@ -1008,7 +1008,7 @@ async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity
 async function validateRecoveryJournal(targetRoot, manifest, secret, environment) {
   let journal;
   try {
-    journal = JSON.parse(await readFile(recoveryJournalPath(targetRoot, manifest), "utf8"));
+    journal = JSON.parse(await readFile(await recoveryJournalPath(targetRoot, manifest), "utf8"));
   } catch {
     fail("Recovery resume refused: no matching recovery journal exists on the attached NAS.");
   }
