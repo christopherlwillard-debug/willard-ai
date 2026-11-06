@@ -3087,6 +3087,9 @@ Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the W
 | High | Windows launcher stop; installer upgrade/uninstall | fixed; targeted-tested; lifecycle validation pending | bdb60bd57f425cf2392fe09958c33868a7145397 | Full installed-product lifecycle #111/#112 not yet confirmed |
 | Medium | Windows cleanup / Recycle Bin | fixed; target-tested | `04c7823558d9ab4d9d4b6274479861b0be24e883` | Asynchronous bounded PowerShell execution is covered by Fast Validation; actual Windows Recycle Bin runtime behavior and 500-file request duration remain unverified |
 | High | Prepared-phase updater recovery | found; architectural plan documented | existing audit findings | Stable bootstrap is still required; do not treat the packaged in-directory recovery routine as reachable when the install directory is absent |
+| High | Media conversion and thumbnail event-loop blocking | fixed; target-tested; integration-tested | `71bc9720cb953f1db4fdaf378de7b305e1d477bd`, `42564462587aef12e423ab34a63061a2e25bb2e2`, test correction `01c44d2851ed5841eab6b521d819ac37023dc66b` | Full CI not run; installed Windows lifecycle remains pending |
+| Medium | Media subprocess shutdown race | found; follow-up required | none | A new FFmpeg child can start after the shutdown process snapshot; reject new children once shutdown begins |
+| Medium | 7-Zip version resolution on API request paths | found; follow-up required | none | Synchronous 10-second version probes repeat in archive routes and can block unrelated API requests |
 
 
 ## November 6 — Windows cleanup Recycle Bin execution moved off the API event loop
@@ -3118,3 +3121,45 @@ Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the W
 - Dependency Review [run 42226785435](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785435): **passed**. Its separate installed-dependency-graph job was skipped.
 - Windows installer lifecycle [run 42226785436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785436): **failed** at prepared-phase update recovery after the unsigned installer build/compile and earlier install/upgrade/swap-recovery stages succeeded. The failure exposes the missing stable bootstrap described above; it is not a successful installed-product lifecycle.
 - **Full CI:** not run/passed. No claim of full-repository validation is made.
+
+
+## November 6 — API media conversion and thumbnail subprocesses moved off the event loop
+
+- **Severity: High. Affected workflows:** media optimization/conversion (video, RAW-image and generic image fallback), thumbnail generation (video, PDF and FFmpeg image fallback), and all unrelated API traffic while those operations run.
+- **Root cause confirmed by source inspection:** `artifacts/api-server/src/routes/optimize.ts` invoked `spawnSync("ffmpeg")` from the request/SSE path for video conversion (up to a one-hour timeout), RAW-image conversion (five minutes), and generic image fallback (five minutes). `artifacts/api-server/src/lib/thumbnail-engine.ts` also used synchronous FFmpeg for video frame extraction, frame-to-WebP conversion, PDF thumbnails, and image fallback (15–30 seconds). Because these operations execute on the single Node API event loop, health checks, cancellation requests, and unrelated API routes could not run until the current child process returned.
+- **Fix:** commits `71bc9720cb953f1db4fdaf378de7b305e1d477bd` and `42564462587aef12e423ab34a63061a2e25bb2e2` replace request-path FFmpeg `spawnSync` calls with the shared asynchronous `execFile` runner. Existing operation timeouts remain bounded; output capture is capped at 1 MiB; FFmpeg runs noninteractively with error-only logging. Video conversion is awaited, and video/PDF/image thumbnail paths now await the same runner. The existing Sharp image path remains unchanged.
+- **Process ownership:** the runner registers each child process. The existing conversion shutdown hook now terminates tracked FFmpeg children with SIGTERM and escalates to SIGKILL after a bounded grace period before draining active conversion requests. This includes thumbnail FFmpeg children, not only conversion jobs.
+- **Regression coverage:** `media-tools-async.test.ts` verifies that the event loop continues ticking while a child runs, process timeouts are enforced, missing FFmpeg remains actionable, conversion and thumbnail routes no longer use synchronous FFmpeg, and shutdown terminates an owned child. The test also runs on Windows.
+- **Validation on exact head `01c44d2851ed5841eab6b521d819ac37023dc66b`:**
+  - Fast Validation [run 42249163822](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163822): **passed**. Linux `validate` job passed typecheck/generated contracts, desktop/release/storage checks, PostgreSQL media filters, conversion advisory-lock and finalization-recovery integration checks, and targeted backend regressions. The targeted run reported **345 tests, 343 passed, 0 failed, 2 skipped**.
+  - The same Fast Validation run's Windows `windows-archive-and-updater-smoke` job **passed**, including the new asynchronous media-process test, storage migration/no-overwrite, NAS temp cleanup, conversion finalization, official Windows 7-Zip symlink metadata, compressed TAR preview, updater journal writes, and developer updater preservation/rollback.
+  - Dependency Review [run 42249163854](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163854): **passed**. Its separate installed-dependency-graph audit was skipped.
+  - Windows installer lifecycle [run 42249163671](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163671): **in progress** at this ledger update. The preceding completed lifecycle run [42237900458](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42237900458) failed in prepared-phase recovery as documented below.
+  - **Full CI:** not run/passed. The above is targeted plus selected Windows/PostgreSQL integration validation, not full-repository CI.
+- **Status:** fixed; target-tested; integration-tested. Not fully validated until the installed-product lifecycle and full CI are complete.
+- **Remaining risk:** the process registry takes a snapshot when shutdown starts, but `runMediaToolAsync` does not yet reject a new child after `markShuttingDown`. An in-flight thumbnail request could reach its FFmpeg step after the snapshot and create a late child. Add a shutdown-state guard and regression before treating process ownership as fully closed.
+
+## November 6 — Synchronous 7-Zip version probing remains on archive request paths
+
+- **Severity: Medium. Affected workflows:** 7z/RAR/CAB/ISO catalog/inspection and extraction, plus compressed TAR input that invokes 7-Zip.
+- **Evidence:** `artifacts/api-server/src/lib/sevenzip.ts` implements `readSevenZipVersion` with `spawnSync(candidate, ["i"], { timeout: 10_000 })`. `getSevenZipPath` calls `resolveSevenZipPath` every time and has no process-lifetime cache. Source inspection found four calls in `routes/organize.ts`, plus request-path calls in `routes/archives.ts` and `lib/archive-tar-input.ts`. Each call can repeat the binary version probe; a slow, broken, or unavailable configured/PATH candidate can block the API event loop for up to ten seconds per candidate and per call.
+- **Status:** found; no behavior change applied in this batch.
+- **Safe next step:** add an asynchronous version probe using the existing tracked child-process runner, cache the verified result for the process lifetime, and resolve once per archive operation so list/preflight/extract reuse one verified path. Keep the existing minimum-version and candidate-precedence rules. Add tests for configured/packaged/PATH precedence, unsupported versions, negative resolution, caching, timeout, and event-loop responsiveness. Update the async archive callers to await the resolver rather than inserting a partial sync cache.
+- **Remaining risk:** first-time or repeated archive operations can still stall all API requests while the synchronous 7-Zip version probe runs.
+
+## November 6 — Media child-process shutdown still has a late-spawn race
+
+- **Severity: Medium. Affected workflow:** graceful API shutdown during an active thumbnail or conversion request.
+- **Evidence:** `stopActiveMediaTools` snapshots the active child set and terminates that snapshot. `shutdown.ts` marks the application as shutting down before invoking the conversion shutdown hook, but `runMediaToolAsync` currently does not consult `isShuttingDown()`. A thumbnail request already between its frame-extraction and encoding stages could start another FFmpeg child after the shutdown snapshot. That child would not be part of the first termination pass.
+- **Status:** found; no partial workaround applied in this batch.
+- **Safe fix:** have `runMediaToolAsync` reject new subprocess creation after `markShuttingDown`; preserve the existing active-child termination and request-drain order. Add a regression that marks shutdown, verifies a new child is rejected, and verifies existing children still terminate. Preserve the distinct error messages for timeout, shutdown termination, and max-buffer overflow.
+- **Remaining risk:** a late FFmpeg child could outlive the API shutdown path and continue writing a staged/cache derivative.
+
+### Validation snapshot for code head `01c44d2851ed5841eab6b521d819ac37023dc66b`
+
+- Branch comparison: `audit/full-repository-review-2026-11` is **1323 commits ahead and 1 behind** `main`; no rebase or branch switch was performed. Base commit observed: `694a055aeb10a41ee8e98f5b776faef89cbd449d`.
+- PR #2 remains **open / draft**, based on `main`, with 188 changed files. No review threads were returned.
+- Fast Validation [run 42249163822](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163822): **passed** on this exact head.
+- Dependency Review [run 42249163854](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163854): **passed** on this exact head; installed dependency graph audit skipped.
+- Windows installer lifecycle [run 42249163671](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163671): **still in progress** at this snapshot. Do not count it as passed.
+- **Full CI:** not run. No full-repository validation claim is made.
