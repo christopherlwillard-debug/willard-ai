@@ -325,7 +325,7 @@ function RunConversionsDialog({
           const data = JSON.parse(e.data) as ConversionSummary;
           setSummary(data);
           if (existingJobId !== undefined) setFinalizeJobId(existingJobId);
-          setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
+          setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
           es?.close();
           esRef.current = null;
         });
@@ -396,7 +396,7 @@ function RunConversionsDialog({
           total: job.totalFiles ?? prev?.total ?? 0,
           message: job.status === "running" ? "Connection interrupted — tracking saved progress…" : (prev?.message ?? ""),
         }));
-        if (job.status === "done" || job.status === "cancelled" || job.status === "failed") {
+        if (job.status === "done" || job.status === "awaiting_action" || job.status === "cancelled" || job.status === "failed") {
           recoveryFailuresRef.current = 0;
           const result = (job.resultJson ?? {}) as any;
           setSummary({
@@ -409,7 +409,7 @@ function RunConversionsDialog({
             cancelled: job.status === "cancelled",
           });
           if (job.status === "failed") setRunError(job.error ?? "Conversion failed");
-          setPhase(job.status === "done" && (job.succeededFiles ?? 0) > 0 ? "awaiting_action" : "done");
+          setPhase(job.status === "awaiting_action" ? "awaiting_action" : "done");
           return;
         }
         recoveryFailuresRef.current = 0;
@@ -469,7 +469,7 @@ function RunConversionsDialog({
         const data = JSON.parse(e.data) as ConversionSummary & { jobId?: number };
         setSummary(data);
         if (data.jobId) setFinalizeJobId(data.jobId);
-        setPhase(!data.cancelled && data.succeeded > 0 ? "awaiting_action" : "done");
+        setPhase(data.succeeded > 0 ? "awaiting_action" : "done");
         es.close();
         esRef.current = null;
       });
@@ -568,7 +568,7 @@ function RunConversionsDialog({
               : phase === "running"
               ? "Conversion in progress — cancel stops after the current file finishes."
               : summary?.cancelled
-              ? "Conversion cancelled. Completed files remain safely staged; originals were not changed."
+              ? "Conversion cancelled. Completed files remain safely staged; choose what to do with the originals."
               : summary?.succeeded
               ? "Conversion verified. Choose what to do with your originals."
               : "Conversion complete. Originals were safely recycled after verification."}
