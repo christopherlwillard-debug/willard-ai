@@ -38,8 +38,8 @@ type FileVisitor = (fullPath: string) => Promise<boolean> | boolean;
 
 /**
  * Walk a media tree without blocking the API event loop. Directory entries are
- * revalidated with lstat before recursion so a directory replaced by a symlink
- * after readdir is never followed. A false visitor result stops the whole walk.
+ * revalidated with lstat immediately before recursion to reject entries that
+ * have already become symlinks. A false visitor result stops the whole walk.
  */
 async function walkMediaDirectories(
   directory: string,
