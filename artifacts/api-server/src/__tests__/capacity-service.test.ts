@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as os from "node:os";
 import {
   evaluateCapacity,
+  probeFilesystemCapacity,
   getCapacityStatus,
   releaseCapacity,
   reserveCapacity,
@@ -156,4 +158,38 @@ test("capacity status exposes active reservations without exposing paths", async
   } finally {
     restore();
   }
+});
+
+test("per-destination capacity probe reuses the shared asynchronous provider", async () => {
+  const restore = setCapacityProbeForTests(async (target, targetPath) =>
+    snapshot(target, targetPath, 9 * GiB),
+  );
+  try {
+    const result = await probeFilesystemCapacity("/nas/nested-mount");
+    assert.equal(result.target, "nas");
+    assert.equal(result.path, "/nas/nested-mount");
+    assert.equal(result.known, true);
+    assert.equal(result.freeBytes, 9 * GiB);
+  } finally {
+    restore();
+  }
+});
+
+test("per-destination capacity probe preserves an unknown result", async () => {
+  const restore = setCapacityProbeForTests(async (target, targetPath) =>
+    snapshot(target, targetPath, null),
+  );
+  try {
+    const result = await probeFilesystemCapacity("/nas/offline-mount");
+    assert.equal(result.known, false);
+    assert.equal(result.freeBytes, null);
+  } finally {
+    restore();
+  }
+});
+
+test("default asynchronous filesystem probe reads the current platform filesystem", async () => {
+  const result = await probeFilesystemCapacity(os.tmpdir());
+  assert.equal(result.known, true, result.error ?? "filesystem capacity was not reported");
+  assert.ok(Number.isFinite(result.freeBytes) && (result.freeBytes ?? -1) >= 0);
 });
