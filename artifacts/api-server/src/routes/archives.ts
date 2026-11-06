@@ -10,6 +10,7 @@ import * as fs from "fs";
 import { randomUUID } from "node:crypto";
 import Seven from "node-7z";
 import { getSevenZipPath } from "../lib/sevenzip.ts";
+import { getFileTypeFromName, computeCategoryFromContent } from "../lib/archive-classification.ts";
 import {
   archiveByIdScope,
   archiveScope,
@@ -46,41 +47,6 @@ const router: IRouter = Router();
 const ZIP_EXTS = new Set(["zip"]);
 const TAR_EXTS = new Set(["tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "tar.gz", "tar.bz2", "tar.xz"]);
 const BINARY_ONLY_EXTS = new Set(["rar", "7z", "cab", "iso"]);
-
-function getFileTypeFromName(filename: string): string {
-  const ext = path.extname(filename).replace(".", "").toLowerCase();
-  if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "raw"].includes(ext)) return "image";
-  if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "m4v", "webm", "mpg"].includes(ext)) return "video";
-  if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt"].includes(ext)) return "document";
-  if (["zip", "rar", "7z", "tar", "gz", "bz2"].includes(ext)) return "archive";
-  if (["exe", "msi", "dmg", "pkg", "deb", "rpm", "sh", "bat", "app"].includes(ext)) return "software";
-  return "other";
-}
-
-function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean): string {
-  if (isPasswordProtected) return "Password Protected";
-  const files = entries.filter(e => !e.isDirectory);
-  if (files.length === 0) return "Unknown";
-
-  const counts: Record<string, number> = { image: 0, video: 0, document: 0, archive: 0, software: 0, other: 0 };
-  for (const e of files) {
-    const t = e.fileType ?? "other";
-    counts[t] = (counts[t] || 0) + 1;
-  }
-
-  const total = files.length;
-  const hasNested = counts.archive > 0;
-
-  if (hasNested && counts.archive / total > 0.25) return "Nested Archives";
-  if (counts.image / total > 0.55) return "Photo Archive";
-  if (counts.video / total > 0.45) return "Video Archive";
-  if (counts.document / total > 0.45) return "Document Backup";
-  if (counts.software / total > 0.35) return "Software";
-
-  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  if (counts[topType] / total < 0.4) return "Mixed";
-  return "General";
-}
 
 async function peekTar(
   filePath: string,
