@@ -546,3 +546,43 @@ test("preview marks a destination symlink unsafe instead of treating its target 
   await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
   assert.equal(fs.readFileSync(other, "utf8"), "same bytes");
 });
+
+
+test("preview rejects selected source and destination roots that are symlinks", async (context) => {
+  const paths = fixture();
+  const sourceAlias = path.join(paths.root, "source-alias");
+  const destinationAlias = path.join(paths.root, "destination-alias");
+  try {
+    try {
+      fs.symlinkSync(paths.source, sourceAlias, "dir");
+      fs.symlinkSync(paths.destination, destinationAlias, "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        context.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+
+    const service = createStorageMigrationService({ manifestDir: paths.manifests });
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: sourceAlias,
+        destinationRoot: path.join(paths.root, "new-destination"),
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: paths.source,
+        destinationRoot: destinationAlias,
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+  } finally {
+    fs.rmSync(paths.root, { recursive: true, force: true });
+  }
+});
