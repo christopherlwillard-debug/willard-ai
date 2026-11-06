@@ -24,3 +24,11 @@ test("cancelled conversion with successful staged files opens finalization choic
   assert.match(source, /setPhase\(job\.status === "awaiting_action" \? "awaiting_action" : "done"\)/);
   assert.match(source, /choose what to do with the originals/);
 });
+
+test("Optimize dialog exits running state when starting a conversion fails", () => {
+  const source = fs.readFileSync(pagePath, "utf8");
+  const start = source.slice(source.indexOf("async function startConversion()"), source.indexOf("async function handleFinalize"));
+
+  assert.match(start, /if \(!resp\.ok\)[\s\S]*?setRunError\([\s\S]*?setPhase\("done"\)/);
+  assert.match(start, /catch \(err: any\)[\s\S]*?setRunError\([\s\S]*?setPhase\("done"\)/);
+});
