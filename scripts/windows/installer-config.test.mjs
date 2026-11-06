@@ -1637,4 +1637,17 @@ test("audit installer lifecycle validation is isolated from release publishing",
   assert.doesNotMatch(auditInstallerLifecycleWorkflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY|WILLARD_WINDOWS_SIGNING_CERTIFICATE/);
   assert.doesNotMatch(auditInstallerLifecycleWorkflow, /softprops\/action-gh-release|gh release create|upload-artifact/);
   assert.doesNotMatch(auditInstallerLifecycleWorkflow, /contents:\s*write/);
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/installer-lifecycle-smoke.ps1"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"desktop/WillardMediaCenter.ps1"'));
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "scripts\/windows\/\*\*"$/m);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "artifacts\/api-server\/\*\*"$/m);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "artifacts\/willard-ai\/\*\*"$/m);
+});
+  
+test("installer lifecycle validation only runs for installer and packaging inputs", () => {
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"installer/**"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/build-installer.ps1"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"artifacts/api-server/package.json"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"pnpm-lock.yaml"'));
+
 });
