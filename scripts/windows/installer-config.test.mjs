@@ -1797,6 +1797,27 @@ test("installed lifecycle runner disables interactive pause prompts", () => {
   assert.match(runner, /\$env:WILLARD_NO_PAUSE = "1"/);
 });
 
+test("installed lifecycle launcher invocation fails fast when the packaged launcher is missing", () => {
+  const helperStart = installedLifecycleSmoke.indexOf("function Invoke-InstalledLauncher");
+  const helperEnd = installedLifecycleSmoke.indexOf("\nfunction Stop-InstalledWillard", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, "the installed launcher helper should exist");
+  const helper = installedLifecycleSmoke.slice(helperStart, helperEnd);
+  const pathCheck = helper.indexOf("Test-Path -LiteralPath $launcher -PathType Leaf");
+  const invocation = helper.indexOf("Invoke-AsLifecycleUser");
+  assert.ok(pathCheck >= 0 && invocation > pathCheck, "the parent must check the packaged launcher before spawning PowerShell");
+  assert.match(helper, /Installed launcher is missing before/);
+
+  const runnerStart = installedLifecycleSmoke.indexOf("$runnerContents = @'");
+  const runnerEnd = installedLifecycleSmoke.indexOf("\n'@", runnerStart);
+  assert.ok(runnerStart >= 0 && runnerEnd > runnerStart, "the generated lifecycle runner should exist");
+  const runner = installedLifecycleSmoke.slice(runnerStart, runnerEnd);
+  const runnerPathCheck = runner.indexOf("Test-Path -LiteralPath $Launcher -PathType Leaf");
+  const runnerLaunch = runner.indexOf("& $Launcher");
+  assert.match(runner, /\$ErrorActionPreference = "Stop"/);
+  assert.ok(runnerPathCheck >= 0 && runnerLaunch > runnerPathCheck, "the child runner must reject a missing launcher before invocation");
+  assert.match(runner, /Installed launcher is missing:/);
+});
+
 test("packaged interrupted-update lifecycle fixtures use the accepted sibling path contract", () => {
   assert.ok(launcher.includes(".candidate-[0-9a-fA-F-]{36}"));
   assert.ok(launcher.includes(".previous-.+-\\d{14}"));

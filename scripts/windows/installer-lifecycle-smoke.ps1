@@ -104,6 +104,9 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
 
 function Invoke-InstalledLauncher($mode, $label) {
   $launcher = Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"
+  if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+    throw "Installed launcher is missing before '$mode': $launcher"
+  }
   $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -Mode $mode"
   return Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") $argumentLine $label
 }
@@ -179,6 +182,10 @@ param(
   [Parameter(Mandatory = $true)][string]$Launcher,
   [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure")][string]$Mode
 )
+$ErrorActionPreference = "Stop"
+if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
+  throw "Installed launcher is missing: $Launcher"
+}
 $env:WILLARD_SKIP_UPDATE = "1"
 $env:WILLARD_NO_PAUSE = "1"
 $env:WILLARD_RECOVERY_EXPORT_PATH = '__RECOVERY_EXPORT_PATH__'
