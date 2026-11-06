@@ -44,15 +44,68 @@ function affectedRows(result: unknown): number {
   return Array.isArray(queryResult.rows) ? queryResult.rows.length : 0;
 }
 
+const TRASH_MANIFEST_FILE_ERROR = "Trash manifest must be a private, unlinked regular file inside the configured library.";
+
+type TrashManifestOpenMode = "read" | "append" | "append-existing";
+
+/**
+ * Open the manifest once, validate the opened inode, and perform all I/O
+ * through that descriptor. A path-only lstat followed by open/readFile can
+ * follow a symlink swapped into place between the two operations.
+ *
+ * O_NOFOLLOW blocks the final-component swap on platforms that support it.
+ * The descriptor/path identity and link-count checks are retained as a
+ * portable defense on platforms where Node does not expose O_NOFOLLOW.
+ */
+export function openValidatedTrashManifest(filePath: string, mode: TrashManifestOpenMode): number {
+  const noFollow = (fs.constants as any).O_NOFOLLOW ?? 0;
+  const writeFlags = fs.constants.O_WRONLY | fs.constants.O_APPEND;
+  let fd: number;
+
+  if (mode === "append") {
+    try {
+      // Create atomically when absent; never create through an existing link.
+      fd = fs.openSync(
+        filePath,
+        writeFlags | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+        0o600,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      fd = fs.openSync(filePath, writeFlags | noFollow);
+    }
+  } else {
+    fd = fs.openSync(filePath, mode === "read" ? fs.constants.O_RDONLY | noFollow : writeFlags | noFollow);
+  }
+
+  try {
+    const opened = fs.fstatSync(fd);
+    const current = fs.lstatSync(filePath);
+    if (
+      !opened.isFile() || opened.nlink > 1 ||
+      current.isSymbolicLink() || !current.isFile() || current.nlink > 1 ||
+      opened.dev !== current.dev || opened.ino !== current.ino
+    ) {
+      throw new Error(TRASH_MANIFEST_FILE_ERROR);
+    }
+    if (mode !== "read") {
+      try { fs.fchmodSync(fd, 0o600); } catch { /* best effort on ACL-managed filesystems */ }
+    }
+    return fd;
+  } catch (error) {
+    try { fs.closeSync(fd); } catch { /* preserve the validation error */ }
+    throw error;
+  }
+}
+
 export function manifestPath(nasPath: string): string {
   const logsDir = ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", "logs"), nasPath);
   const filePath = path.join(logsDir, "trash-manifest.jsonl");
   try {
     const info = fs.lstatSync(filePath);
     if (info.isSymbolicLink() || !info.isFile() || info.nlink > 1) {
-      throw new Error("Trash manifest must be a private, unlinked regular file inside the configured library.");
+      throw new Error(TRASH_MANIFEST_FILE_ERROR);
     }
-    try { fs.chmodSync(filePath, 0o600); } catch { /* best effort on filesystems with ACL-managed permissions */ }
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw error;
   }
@@ -127,8 +180,19 @@ function samePath(left: string, right: string): boolean {
 
 export function readTrashManifest(nasPath: string): { lines: string[]; entries: TrashManifestEntry[] } {
   const filePath = manifestPath(nasPath);
-  if (!fs.existsSync(filePath)) return { lines: [], entries: [] };
-  const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
+  let fd: number;
+  try {
+    fd = openValidatedTrashManifest(filePath, "read");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { lines: [], entries: [] };
+    throw error;
+  }
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(fd, "utf8").split("\n").filter(Boolean);
+  } finally {
+    fs.closeSync(fd);
+  }
   const root = trashRoot(nasPath);
   const normalizeTrashKey = (value: string) => {
     try { return pathKey(resolveTrashPath(value, root)); }
@@ -175,14 +239,13 @@ export function readTrashManifest(nasPath: string): { lines: string[]; entries: 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
   const filePath = manifestPath(nasPath);
   resolveTrashPath(entry.trashPath, trashRoot(nasPath));
-  const fd = fs.openSync(filePath, "a", 0o600);
+  const fd = openValidatedTrashManifest(filePath, "append");
   try {
     fs.writeSync(fd, JSON.stringify(entry) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
 }
 
 /**
@@ -226,14 +289,13 @@ export function removeTrashManifestEntry(nasPath: string, targetTrashPath: strin
     trashPath: resolvedTarget,
     removedAt: new Date().toISOString(),
   };
-  const fd = fs.openSync(filePath, "a", 0o600);
+  const fd = openValidatedTrashManifest(filePath, "append-existing");
   try {
     fs.writeSync(fd, JSON.stringify(tombstone) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
   return true;
 }
 
