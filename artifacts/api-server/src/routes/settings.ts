@@ -190,7 +190,6 @@ router.put("/settings", async (req, res) => {
       }
       try {
         bootstrapWillardAIDir(normalizedNasPath);
-        nasLogStream.setNasPath(normalizedNasPath).catch(() => {});
         logger.info({ nasPath: normalizedNasPath }, "WillardAI directory bootstrapped on NAS");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
@@ -213,6 +212,12 @@ router.put("/settings", async (req, res) => {
 
     if (normalizedNasPath && normalizedNasPath !== existing.nasPath) {
       invalidateNasPathCache();
+      // Switch the background log destination only after the new library path
+      // has been committed. A failed settings write must leave the old stream
+      // attached to the still-active library.
+      nasLogStream.setNasPath(normalizedNasPath).catch((error) => {
+        logger.warn({ err: error, nasPath: normalizedNasPath }, "Unable to switch NAS log stream after library settings update");
+      });
     }
 
     if (normalizedNasPath && normalizedNasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
