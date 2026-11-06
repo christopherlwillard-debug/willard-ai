@@ -353,31 +353,51 @@ export async function purgeExpiredTrashEntries(nasPath: string): Promise<Expired
       continue;
     }
     try {
-      if (fs.existsSync(trashPath)) {
-        await assertTrashFileIntegrity(entry, trashPath);
-        fs.unlinkSync(trashPath);
-      }
-      if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
-      if (entry.mediaFileId != null) {
-        const canonical = await db.execute(sql`
-          SELECT id
-            FROM media_files
-           WHERE id = ${Number(entry.mediaFileId)}
-             AND nas_path = ${nasPath}
-             AND last_scan_action = 'RECYCLED'
-             AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
-                 REPLACE(${entry.originalPath}, chr(92), '/')
-           LIMIT 1
-        `);
-        if (affectedRows(canonical) === 1) {
-          await purgeDerivedDataForMedia(nasPath, [Number(entry.mediaFileId)]);
-          await db.execute(sql`
-            DELETE FROM media_files
-             WHERE id = ${Number(entry.mediaFileId)}
-               AND nas_path = ${nasPath}
-               AND last_scan_action = 'RECYCLED'
-          `);
+      // A missing trash object is ambiguous: it may have been moved, manually
+      // removed, or lost during an interrupted retention run. Without a
+      // durable permanent-delete intent, never infer that it is safe to erase
+      // the canonical row or hide its manifest record.
+      const trashStat = (() => {
+        try { return fs.lstatSync(trashPath); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
         }
+      })();
+      if (!trashStat) {
+        throw new Error("expired trash file is missing without a durable deletion record; preserving canonical data for review");
+      }
+      if (entry.mediaFileId == null) {
+        throw new Error("expired trash entry has no canonical media ID; preserving it for review");
+      }
+      // Verify the canonical row before touching the only recoverable file.
+      // A stale manifest must never cause an unrelated or already-restored
+      // media row to be deleted as part of retention.
+      const canonical = await db.execute(sql`
+        SELECT id
+          FROM media_files
+         WHERE id = ${Number(entry.mediaFileId)}
+           AND nas_path = ${nasPath}
+           AND last_scan_action = 'RECYCLED'
+           AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
+               REPLACE(${entry.originalPath}, chr(92), '/')
+         LIMIT 1
+      `);
+      if (affectedRows(canonical) !== 1) {
+        throw new Error("canonical recycled media row does not match this trash entry; preserving file for review");
+      }
+      await assertTrashFileIntegrity(entry, trashPath);
+      fs.unlinkSync(trashPath);
+      if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
+      await purgeDerivedDataForMedia(nasPath, [Number(entry.mediaFileId)]);
+      const deleted = await db.execute(sql`
+        DELETE FROM media_files
+         WHERE id = ${Number(entry.mediaFileId)}
+           AND nas_path = ${nasPath}
+           AND last_scan_action = 'RECYCLED'
+      `);
+      if (affectedRows(deleted) !== 1) {
+        throw new Error("trash file was removed but canonical row changed during retention; manual recovery is required");
       }
       removeTrashManifestEntry(nasPath, trashPath, `expiry-${randomUUID()}`);
       result.permanentlyRemoved++;
