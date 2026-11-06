@@ -3480,3 +3480,36 @@ The Windows job completed its developer-updater preservation/rollback step. Its 
 **Status:** the organization destination-capacity fix is target-tested on Linux and Windows; the full Fast Validation workflow passed for this code head. This is not full-repository CI and does not test a real disconnected SMB/NAS mount. The latest branch head is a later documentation-only commit, so this pass is attributed to code head `60e18c7cf6bad3dd067f111854db5be6522c60f7`, not the later ledger commit.
 
 The dedicated Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still in its installer build/compile step. It had not yet run standard-user install, installed first startup, prepared-phase recovery, diagnostics, or uninstall. No lifecycle result is claimed.
+
+
+## November 6 — Windows prepared-phase lifecycle failure reproduced; test harness now fails fast on missing launcher
+
+### Confirmed High (P1): installed recovery cannot start after the entire versioned install directory is moved
+
+**Affected workflow:** Windows installer upgrade recovery after interruption in the `prepared` phase, specifically the interval after the previous install tree has been moved to its sibling backup and before the new candidate is activated.
+
+**Evidence and root cause:** Windows installer lifecycle run [42267809733](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809733), exact tested head `e8b42bba1b31890f7cf28b9e39e3b73493cf9567`, job `128067482740`, completed the unsigned installer build, standard-user install, first start, upgrade, post-upgrade start, and simulated `swapped`-phase recovery. It then failed in **prepared-phase update recovery** at `scripts/windows/installer-lifecycle-smoke.ps1:295`, timing out while waiting for `http://127.0.0.1:8080/api/healthz`.
+
+The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` before invoking the installed launcher. The recovery launcher remains at `$InstallRoot\desktop\WillardMediaCenter.ps1`, inside the directory that has just been moved. There is no stable executable bootstrap outside that tree to read the journal and restore the backup. This confirms the previously documented product recovery gap; the prepared-phase test is not to be weakened or skipped.
+
+**Status:** blocked pending the stable external bootstrap architecture. **Commit:** none for the product recovery design. **Remaining risk:** a power loss in this update window can leave the installed product unable to start its own recovery. Preserve the existing path-containment, journal validation, no-overwrite, and prior-version health-check rules in the eventual implementation.
+
+### Fixed — Medium: lifecycle test harness masked a missing launcher as a later health timeout
+
+**Affected workflow:** Windows installed-product lifecycle diagnostics, especially missing-tree recovery tests.
+
+**Evidence and root cause:** `Invoke-InstalledLauncher` constructed the launcher path and immediately spawned PowerShell. The generated child runner invoked `& $Launcher` without first verifying that the packaged launcher existed and without setting a fail-fast error preference. When the install tree was absent, the harness could proceed to its 150-second HTTP health wait and report a timeout instead of identifying the missing executable at the point of invocation.
+
+**Fix:** The parent helper now checks the exact launcher path with `Test-Path -LiteralPath ... -PathType Leaf` before spawning the child. The generated runner repeats that check and sets `$ErrorActionPreference = "Stop"`, so a path disappearing between the parent check and child launch also fails immediately with an explicit path diagnostic. This is a test-harness reliability fix only; it does **not** implement or claim to fix the missing stable product bootstrap.
+
+**Regression coverage:** `scripts/windows/installer-config.test.mjs` asserts both fail-closed guards and that each guard runs before the launcher invocation.
+
+**Commit:** `be8f472e55c82f15aae16af2ad33870960f82c33`. **Status:** fixed; targeted/Windows validation pending for this exact commit. **Remaining risk:** the actual prepared-phase recovery remains blocked as described above.
+
+### Validation snapshot before the diagnostic-harness commit
+
+- Fast Validation [run 42267810148](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267810148) on `e8b42bba1b31890f7cf28b9e39e3b73493cf9567`: Linux `validate` job `128065982436` passed; Windows `windows-archive-and-updater-smoke` job `128066736846` passed. The Linux job included typechecks/generated contracts, Expo/desktop safety, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization checks, and the targeted backend regression batch. The Windows job included launcher parsing, startup ownership, organization capacity, media rename/process responsiveness, storage migration, NAS cleanup, conversion rollback, official 7-Zip link metadata, compressed TAR preview, and updater preservation/rollback.
+- Dependency Review [run 42267809670](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809670): production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- Windows installer lifecycle [run 42267809733](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809733): failed at prepared-phase recovery as detailed above. It is not a lifecycle pass.
+- These runs predate the diagnostic-harness commit `be8f472e55c82f15aae16af2ad33870960f82c33`; no test result is attributed to that commit until a matching run completes.
+- **Full CI:** not run. Fast Validation, Dependency Review, and the dedicated Windows installer lifecycle remain distinct scopes.
