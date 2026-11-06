@@ -2939,15 +2939,15 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 - Fixed the version-drift check to compare the packaged sharp manifest with the actually resolved API-runtime sharp manifest, rather than a stale hard-coded patch version.
 - Added a checked Node-step wrapper in `build-installer.ps1` that throws on a non-zero exit from both release staging and release validation, before installer compilation can run.
 - Added regression assertions for resolved-version parity and fail-closed command ordering.
-- **Commits:** validator `d324bba29bbcfb38609cf1e9ce563bda21e184fb`; build gate `5edd4460866e95dbd0ce557aa3b145e08d436525`; tests `693bf789c5ec9657892a59b61cbef1559d1e2221` and correction `dfcae31e1e906c340f1659e41a3e9e9bd9cff856`. These changes are committed; their new targeted CI validation is pending.
+- **Commits:** validator `5d32957d24155a10a33695fa7de9b509ca89cfe2`; build gate `487391fc852b9dd359a60e80960f86bb0b057cf1`; tests `693bf789c5ec9657892a59b61cbef1559d1e2221` and correction `dfcae31e1e906c340f1659e41a3e9e9bd9cff856`. These changes are committed. Fast Validation #1242 has passed its Linux validation job and Windows archive/updater smoke; the Windows installer build also completed successfully in lifecycle run #97. The full installed-product lifecycle portion of #97 had not completed at this report update, so it is not counted as a lifecycle pass.
 
 ### Prioritized findings ledger update
 
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Windows updater → restart after crash between install-root rename and candidate activation | found / architecture blocked | — | Normal shortcuts target a launcher inside the temporarily absent install root. Requires a stable out-of-root bootstrap and a lifecycle test that launches through the real shortcut target. |
-| High | Windows installer build → release staging/validation failure handling | fixed | `5edd4460866e95dbd0ce557aa3b145e08d436525` | Await Fast Validation and Windows installer lifecycle on the new head; do not claim the gate is CI-validated yet. |
-| Medium | Windows release payload → sharp version parity | fixed | `d324bba29bbcfb38609cf1e9ce563bda21e184fb` | Await Fast Validation and a Windows package build to confirm source and staged manifests agree. |
+| High | Windows installer build → release staging/validation failure handling | target-tested | `487391fc852b9dd359a60e80960f86bb0b057cf1` | Source-contract regression and normal Windows build passed; an injected non-zero Node-step failure still needs a direct PowerShell behavior test. |
+| Medium | Windows release payload → sharp version parity | integration-tested | `5d32957d24155a10a33695fa7de9b509ca89cfe2` | The Windows release staging/validation/compile step passed; the full installed-product lifecycle remains separately open. |
 
 ### Validation snapshot
 
@@ -2985,3 +2985,11 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 |---|---|---|---|---|
 | Medium | Media Library → on-demand video/PDF/fallback thumbnail | found; architecture required | documentation/investigation only | Synchronous FFmpeg calls can block the API event loop for up to 30 seconds per request. |
 | Medium | Organize → per-destination disk-space preflight | found; architecture required | documentation/investigation only | Synchronous `df`/filesystem probes can block on NAS; Windows treats an unavailable per-destination check as non-blocking. Requires an async bounded provider and an explicit unknown state. |
+
+
+### Validation follow-up — November 6, current audit head
+
+- Fast Validation [#1242](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932344) completed successfully on audit head `a9870292e38d6a2e5a596e03447088d1c36a5ad4` (run attempt 1). Both jobs passed: Linux validation/typecheck/release-storage contracts/PostgreSQL conversion checks/targeted backend regressions, and Windows archive/updater smoke including no-overwrite, storage migration, NAS temp cleanup, conversion finalization rollback, official 7-Zip symlink metadata, TAR preview, and updater preservation/rollback.
+- Dependency Review [#1005](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932307) passed on the same audit head.
+- Windows installer lifecycle [#97](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932341) successfully completed the unsigned installer build/compile step, which exercises the corrected resolved-sharp check and fail-closed build wrapper. Its standard-user lifecycle step was still running at the time of this update. Do not count the lifecycle as passed; run #87 already failed at prepared-phase recovery, and the stable-bootstrap defect remains open.
+- No full-repository CI matrix was run. The successful Fast Validation workflow is broad targeted/integration validation, not a claim that every workflow or installed-product scenario passed.
