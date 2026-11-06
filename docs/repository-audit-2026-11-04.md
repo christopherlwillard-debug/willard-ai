@@ -2096,3 +2096,35 @@ This requires coordinated release-stager, Inno Setup, and Windows integration ch
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Upgrade from an older installed launcher may still leave an orphan service because Inno invokes the old `-Stop` before copying the new detector | found / blocked | none | Needs an installer-embedded verifier and real Windows upgrade lifecycle test |
+
+
+## 2026-11-06 follow-up — developer launcher must not update over orphaned service listeners
+
+### Finding: missing or partial developer process journal could let setup, repair, or update proceed while an old service remained active
+
+**Severity:** High (installer/developer lifecycle, file consistency, and update reliability).
+**Affected workflows:** Developer Start, Setup, Repair, Update, and tracked-service shutdown.
+
+**Source inspection:** `scripts/launcher/common.ps1` returned success from `Stop-TrackedProcesses` when `willard.pids.json` was missing, and the repair path could clear a stale process journal without checking whether a descendant service still owned either application port. The previous `Test-PortFree` and `Get-PortOwnerPid` helpers used `-ErrorAction SilentlyContinue`; a Windows TCP-query failure could therefore look like an unused port.
+
+**Fix in this batch:**
+- Added one shared strict listener query for the developer API (8080) and web app (5000) ports. Query failures or invalid owner PIDs now fail closed rather than looking like an empty result.
+- Start, Setup, Repair, and Update inspect the process journal and refuse to proceed when a listener exists but the journal is missing or incomplete.
+- Setup now routes any existing journal through the shared stop path before changing dependencies or database state.
+- Repair no longer clears a stale journal directly. It uses the shared stop path, which verifies both application ports are no longer listening before clearing ownership state.
+- The shared stop path retains its journal if a listener remains after tracked processes have been stopped.
+- Added a Windows smoke test for missing journal, partial journal, TCP-query failure, and a listener that remains after tracked processes exit. Added source-contract coverage and wired the smoke test into Fast Validation's Windows job.
+
+**Implementation commits:** `89ff7db50dd63d6c4abe27dc998e995704214793` (shared strict listener inspection), `a609d14f5fda684794cc28679e49d4ffee2d2746` (Start guard), `82ab2bba58781a6c80e6bed78b59436c84e4f458` and `31e57268a455df450e2cbce8438a749fcf262534` (Setup guard and tracked stop), `be03828c6ab41873bd8f630a58653e48d2f8c72e` and `bb4f695ca805f827146c0f8aeb8620345143b830` (Repair guard and no blind journal clearing), `fd216718fa1f665835b6720b024f2f05b4d08f12` (Update guard).
+
+**Regression and CI commits:** `e70039663400b160efb19cd875b64ffd940066df`, `671939f174b3bc2f64db613dac1b47b9462cf36d`, `16e5138be6e53816cb1ccc841de20fa7ce681771`, and `318cb2c8dc945520ed042b956da128c425519d9d`; source-assertion correction `ca070d4bc0b1bafecc3a25d839050e9f9697f1c6`.
+
+**Status:** implementation committed; targeted PowerShell smoke and source-contract tests added; matching Fast Validation run is pending. No Windows test result is claimed yet.
+
+**Remaining risk:** This is a conservative listener-based guard, not complete process-tree fencing. It detects services that have already bound ports 8080 or 5000. It does not close the process-start-before-listen race, prove ownership of every background child, or serialize a second independent developer launcher that starts between the check and filesystem swap. A durable process-tree ownership design (for example, a Windows Job Object plus a shared lifecycle lock) remains a separate architectural follow-up. If Windows cannot inspect the TCP listener state, the operation stops rather than proceeding.
+
+### Prioritized findings ledger — developer service ownership
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Start, Setup, Repair, or Update could miss a live service when the developer PID journal was missing/partial; TCP-query errors could look like free ports | fixed; target validation pending | implementation: `89ff7db5`, `a609d14f`, `82ab2bba`, `31e57268`, `be03828c`, `bb4f695c`, `fd216718`; tests/CI: `671939f1`, `16e5138b`, `318cb2c8`, `ca070d4b` | Await Windows smoke and Fast Validation; process-start-before-listen race and concurrent launcher fencing remain open |
