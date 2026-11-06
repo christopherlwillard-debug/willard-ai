@@ -2083,7 +2083,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     }
 
     // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
-    const rolledBack = await rollbackMoves(fileMoves, line => opLog(line));
+    const rolledBack = await rollbackMoves(fileMoves, line => opLog(line), () => assertOrganizationLease(id, cleanupNasPath, executionLeaseToken));
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
@@ -2329,7 +2329,7 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
 
     const logs: string[] = [];
     await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
-    const rolledBack = await rollbackMoves(moves, line => logs.push(line));
+    const rolledBack = await rollbackMoves(moves, line => logs.push(line), () => assertOrganizationLease(id, nasPath, rollbackLeaseToken));
     const isComplete = rolledBack === moves.length;
 
     // Only mark rolled_back when ALL moves were reversed.
@@ -2730,6 +2730,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
 
       await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       newMoves[newMoves.length - 1] = record;
       moved++;
@@ -2832,7 +2833,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     }
 
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
-    const rolledBack = await rollbackMoves(newMoves, () => {});
+    const rolledBack = await rollbackMoves(newMoves, () => {}, () => assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken));
     const resumeRollbackComplete = rolledBack === newMoves.length;
     // Only discard this pass's journal when every new move was restored and
     // checksum-verified. Keep all records if rollback is partial so Recovery
