@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 process.env.DATABASE_URL ??= "postgres://shutdown-test.invalid/willard";
@@ -24,6 +25,17 @@ function dependencies(events: string[], options: { hangingStep?: string } = {}) 
     closePool: async () => { events.push("pool"); },
   };
 }
+
+test("shutdown does not invalidate organization worker leases owned by another API instance", () => {
+  const source = readFileSync(new URL("../lib/shutdown.ts", import.meta.url), "utf8");
+  const start = source.indexOf("async function checkpointExternalJobs");
+  const end = source.indexOf("export interface ShutdownDependencies", start);
+  assert.ok(start >= 0 && end > start, "shutdown checkpoint function must remain inspectable");
+  const checkpoint = source.slice(start, end);
+
+  assert.doesNotMatch(checkpoint, /update\\(organizationJobsTable\\)/);
+  assert.match(checkpoint, /organizationJobsDeferredToLeaseExpiry/);
+});
 
 test("shutdown is idempotent and closes resources in dependency order", async () => {
   const events: string[] = [];
