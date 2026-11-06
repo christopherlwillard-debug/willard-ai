@@ -1493,6 +1493,25 @@ test("installer upgrade and uninstall refuse to proceed when the packaged shutdo
   assert.match(uninstall, /StopWillardServices\(True\)/);
 });
 
+test("packaged stop failures are non-modal and do not retry unsafe shutdown", () => {
+  const catchStart = launcher.indexOf("\\n} catch {\\n  $startupError = $_");
+  assert.ok(catchStart >= 0, "The packaged launcher failure handler must be present.");
+  const catchBlock = launcher.slice(catchStart);
+  const stopBranch = catchBlock.slice(0, catchBlock.indexOf("  $servicesStopped = $true"));
+  assert.match(stopBranch, /if \(\$args -contains "-Stop"\)/);
+  assert.match(stopBranch, /Report-StopFailure/);
+  assert.match(stopBranch, /Exit-WillardLauncherMutex/);
+  assert.match(stopBranch, /exit 1/);
+  assert.doesNotMatch(stopBranch, /Stop-Services|Report-StartupFailure|MessageBox/);
+
+  const reportStart = launcher.indexOf("function Report-StopFailure");
+  const reportEnd = launcher.indexOf("\\nfunction Read-Version", reportStart);
+  const report = launcher.slice(reportStart, reportEnd);
+  assert.match(report, /could not stop safely/i);
+  assert.match(report, /services state file/);
+  assert.doesNotMatch(report, /MessageBox|Read-Host/);
+});
+
 test("packaged process-state and WMI failures fail closed instead of hiding running services", () => {
   const pidStart = launcher.indexOf("function Read-Pids {");
   const pidEnd = launcher.indexOf("\nfunction Get-ProcessIdentity", pidStart);
@@ -1509,7 +1528,10 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   assert.match(identityReader, /could not verify the identity of Willard process/);
   assert.match(identityReader, /did not return enough identity information/);
   assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
-  assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate\)/);
+  assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
+  assert.match(identityReader, /Windows did not return a process creation time/);
+  assert.match(identityReader, /\$expectedCreationDate -and[\s\S]*\$expectedPath/);
+  assert.match(identityReader, /\$expectedCreationDate -and[\s\S]*\$expectedCommandLine/);
   const creationDateCheck = identityReader.indexOf("$expectedCreationDate");
   const executableCheck = identityReader.indexOf("$executablePath");
   assert.ok(creationDateCheck >= 0 && executableCheck > creationDateCheck,
@@ -1518,7 +1540,7 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   const processIdentityStart = launcher.indexOf("function Test-ProcessIdentity");
   const processIdentityEnd = launcher.indexOf("\nfunction Test-CommandLineContainsExactPath", processIdentityStart);
   const processIdentity = launcher.slice(processIdentityStart, processIdentityEnd);
-  assert.match(processIdentity, /Get-ProcessIdentity \$tracked\.pid \$tracked\.creationDate/);
+  assert.match(processIdentity, /Get-ProcessIdentity \$tracked\.pid \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
 });
 
 test("packaged launcher detects orphaned API and web processes before startup or shutdown", () => {

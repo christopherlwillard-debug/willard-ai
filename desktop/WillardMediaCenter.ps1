@@ -178,6 +178,19 @@ function Report-StartupFailure($message) {
     }
   } catch {}
 }
+function Report-StopFailure($message) {
+  $failureLog = Join-Path $LogRoot "startup-failure.log"
+  $details = @(
+    "Willard Media Center could not stop safely.",
+    "Time: $((Get-Date).ToString("o"))",
+    "Reason: $message",
+    "Logs: $LogRoot",
+    "Next: Keep the services state file and inspect the listed process before retrying. Do not delete the state file while a Willard service may still be running."
+  )
+  try { $details | Set-Content $failureLog -Encoding UTF8 } catch {}
+  Fail $message
+  Write-Host "  Diagnostics: $failureLog" -ForegroundColor DarkGray
+}
 function Read-Version {
   if (-not (Test-Path $VersionFile)) { return "0.0.0" }
   try {
@@ -224,7 +237,7 @@ function Read-Pids {
     throw "The Willard services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard processes remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
   }
 }
-function Get-ProcessIdentity($processId, $expectedCreationDate) {
+function Get-ProcessIdentity($processId, $expectedCreationDate, $expectedPath, $expectedCommandLine) {
   if (-not $processId) { return $null }
   try {
     $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
@@ -233,18 +246,37 @@ function Get-ProcessIdentity($processId, $expectedCreationDate) {
   }
   if (-not $process) { return $null }
   $currentCreationDate = [string]$process.CreationDate
-  # A recorded creation time is the first safe PID-reuse discriminator. If
-  # Windows has already recycled the PID, the new process is not ours even if
-  # its executable/command-line fields are protected or temporarily unavailable.
+  if ([string]::IsNullOrWhiteSpace($currentCreationDate)) {
+    throw "Windows did not return a process creation time for Willard process $processId."
+  }
+  # A recorded creation time is the primary PID-reuse discriminator. If
+  # Windows has recycled the PID, the new process is not ours even if WMI
+  # omits optional executable/command-line fields.
   if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
-    -not [string]::IsNullOrWhiteSpace($currentCreationDate) -and
     -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
     return $null
   }
   $executablePath = [string]$process.ExecutablePath
   $commandLine = [string]$process.CommandLine
-  if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
-    throw "Windows did not return enough identity information to safely manage Willard process $processId."
+  # Some Windows/WMI process queries return the PID and creation time but omit
+  # one or both optional identity fields. Reuse the persisted values only after
+  # the exact recorded creation time has matched; PID + creation time identifies
+  # the same process, while a missing creation time still fails closed above.
+  if ([string]::IsNullOrWhiteSpace($executablePath)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+      -not [string]::IsNullOrWhiteSpace([string]$expectedPath)) {
+      $executablePath = [string]$expectedPath
+    } else {
+      throw "Windows did not return an executable path for Willard process $processId."
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($commandLine)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+      -not [string]::IsNullOrWhiteSpace([string]$expectedCommandLine)) {
+      $commandLine = [string]$expectedCommandLine
+    } else {
+      throw "Windows did not return a command line for Willard process $processId."
+    }
   }
   return @{
     pid = [int]$process.ProcessId
@@ -255,7 +287,7 @@ function Get-ProcessIdentity($processId, $expectedCreationDate) {
 }
 function Test-ProcessIdentity($tracked) {
   if (-not $tracked) { return $false }
-  $current = Get-ProcessIdentity $tracked.pid $tracked.creationDate
+  $current = Get-ProcessIdentity $tracked.pid $tracked.creationDate $tracked.path $tracked.commandLine
   if (-not $current -or -not $tracked.path -or -not $tracked.commandLine) { return $false }
   return ($current.path -eq $tracked.path -and $current.commandLine -eq $tracked.commandLine -and
     (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
@@ -920,6 +952,13 @@ try {
   $script:LauncherMutex = $null
 } catch {
   $startupError = $_
+  if ($args -contains "-Stop") {
+    Close-LoadingScreen
+    Report-StopFailure $startupError.Exception.Message
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
+    exit 1
+  }
   $servicesStopped = $true
   try {
     Stop-Services
