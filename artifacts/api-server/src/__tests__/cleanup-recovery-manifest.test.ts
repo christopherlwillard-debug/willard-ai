@@ -488,3 +488,25 @@ test("expired Trash integrity verification rejects symlinks and non-regular obje
     fs.rmSync(nasPath, { recursive: true, force: true });
   }
 });
+
+
+test("trash retention requires a present file and matching recycled canonical row before unlink", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  const start = recoverySource.indexOf("export async function purgeExpiredTrashEntries");
+  const end = recoverySource.indexOf("\nasync function reconcileRestoreOperation", start);
+  assert.ok(start >= 0 && end > start, "retention function should remain discoverable");
+  const retention = recoverySource.slice(start, end);
+  const missingGuard = retention.indexOf("expired trash file is missing without a durable deletion record");
+  const canonicalLookup = retention.indexOf("SELECT id", missingGuard);
+  const canonicalGuard = retention.indexOf("canonical recycled media row does not match this trash entry", canonicalLookup);
+  const integrityCheck = retention.indexOf("await assertTrashFileIntegrity(entry, trashPath)", canonicalGuard);
+  const unlink = retention.indexOf("fs.unlinkSync(trashPath)", integrityCheck);
+  assert.ok(missingGuard >= 0, "missing files must be preserved for manual review");
+  assert.ok(canonicalLookup > missingGuard, "canonical state must be checked before file deletion");
+  assert.ok(canonicalGuard > canonicalLookup, "a stale or restored row must block retention");
+  assert.ok(integrityCheck > canonicalGuard, "file integrity must be checked after canonical identity");
+  assert.ok(unlink > integrityCheck, "the only recoverable file must not be unlinked before all guards pass");
+  assert.match(retention, /entry\.mediaFileId == null/);
+  assert.match(retention, /affectedRows\(deleted\) !== 1/);
+});
