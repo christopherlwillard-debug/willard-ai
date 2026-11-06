@@ -58,6 +58,22 @@ type MediaToolExecutionError = Error & {
 
 const activeMediaProcesses = new Set<ChildProcess>();
 
+export function assertMediaProcessStartAllowed(): void {
+  if (!isShuttingDown()) return;
+  const failure = new Error("Cannot start an external media/archive subprocess while the API server is shutting down.") as MediaToolExecutionError;
+  failure.code = "ERR_SERVER_SHUTTING_DOWN";
+  throw failure;
+}
+
+/** Register a directly spawned archive/media child with the shared shutdown owner. */
+export function trackActiveMediaProcess(child: ChildProcess): () => void {
+  activeMediaProcesses.add(child);
+  const removeChild = () => activeMediaProcesses.delete(child);
+  child.once("close", removeChild);
+  child.once("error", removeChild);
+  return removeChild;
+}
+
 function isMediaProcessRunning(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
 }
@@ -145,10 +161,10 @@ export function runMediaToolAsync(
   args: string[],
   options: MediaToolExecutionOptions,
 ): Promise<MediaToolExecutionResult> {
-  if (isShuttingDown()) {
-    const failure = new Error("Cannot start a media subprocess while the API server is shutting down.") as MediaToolExecutionError;
-    failure.code = "ERR_SERVER_SHUTTING_DOWN";
-    return Promise.reject(failure);
+  try {
+    assertMediaProcessStartAllowed();
+  } catch (error) {
+    return Promise.reject(error);
   }
   return new Promise((resolve, reject) => {
     let child: ChildProcess | null = null;
