@@ -3321,3 +3321,34 @@ Those children were not in the shared active-process registry and were not rejec
 - **Comparison with main:** 1,351 commits ahead, 1 behind.
 - **Full CI:** not run. Fast Validation and the Windows archive/updater smoke are not the complete installer lifecycle or full-repository CI.
 - **Next batch:** resolve the external stable Windows bootstrap and rerun the full lifecycle workflow; then continue node-7z ownership/cancellation and conversion attempt-fencing. Keep read-only archive-preview cancellation distinct from server-owned destructive Organize jobs.
+
+
+## November 6 — desktop database backup module parse failure and startup recovery regression
+
+### Fixed — Critical (P1): malformed snapshot-release refactor prevented desktop startup and backup operations
+
+**Affected workflows:** Installed Windows first startup and portable recovery-export creation; PostgreSQL backup/restore helper loading; Linux Fast Validation database-backup tests. This is a desktop packaging/runtime defect, not a production database or credential change.
+
+**Evidence and root cause:** Fast Validation run [42258840028](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840028), job 128033213739, reached the release/storage-contract step and failed when Node parsed `desktop/database-backup.mjs` at line 372: `SyntaxError: Unexpected token ')'`. The installed Windows lifecycle run [42258840104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840104), job 128034365366, independently reproduced the same parser error in the installed copy at `C:\\WillardLifecycle\\...\\desktop\\database-backup.mjs:372`. The installer compiled and installed, but first startup could not create the required portable recovery export and never reached the API health check or prepared-phase recovery scenario.
+
+The source diff traced this to an incomplete refactor of `openDatabaseSnapshot`: the function had been changed to delegate snapshot acquisition and release to `waitForExportedSnapshot` and `releaseExportedSnapshot`, but the tail of the old inline timeout/close callback remained after the new `release()` method. The orphaned `}, 3000);` and child-close callback made the entire ES module unparsable. This was a real installed-product blocker, not a test-only failure.
+
+**Fix:** Removed the obsolete callback fragment. `openDatabaseSnapshot` now returns the snapshot lease with a valid `release()` method that delegates to the existing shared process owner. No new process registry, dependency, or alternate timeout path was added.
+
+**Regression coverage:** Added a focused source-contract test to `desktop/database-backup.test.mjs` verifying that the snapshot lease uses the shared acquire/release helpers and contains no stale inline timeout or child-close listener. The existing database-backup test module also imports the production module, so Node module parsing is exercised before the suite runs. The shared process helper retains its timeout, SIGTERM/SIGKILL escalation, close-race, output-bound, and stdin-error tests.
+
+**Implementation/test commits:** `7c21a3e080af6f65c406dd673de903f06ea1da9b` (production syntax fix); `90358602bb8f01649c58bb9f0a9e78ba8039bf92` (initial regression test); `6665e37c92f034d6125ee0613be7283517444010` (corrected regression assertions).
+
+**Status:** fixed; CI validation pending on the corrected code/test head. The previous Fast Validation failure was diagnosed as a source syntax defect, not an environment or dependency-install failure.
+
+### Validation evidence and remaining risk
+
+- **Fast Validation [run 42258840028](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840028), code head `767a1632822b2e5f03209632154e4aed203050cd`:** failed at `pnpm run test:database-backup`. Workspace typechecks/generated contracts, Expo CLI config, and desktop web-server safety checks completed before the failure. The database-backup module failed to parse; the separate snapshot-process tests reported 11 passed and 1 failed (the module-load failure). Later validation steps were skipped.
+- **Windows installer lifecycle [run 42258840104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840104), same code head:** installer build and install completed, then first startup failed at the same syntax error. The required portable recovery export was not created and the API health check was never reached. This run therefore does not validate or invalidate the separate prepared-phase recovery scenario.
+- **Dependency Review [run 42258840118](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840118), same code head:** passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- **Corrected code/test head `6665e37c92f034d6125ee0613be7283517444010`:** Fast Validation run [42265234092](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234092) was in progress; Windows installer lifecycle run [42265234139](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234139) was pending; Dependency Review run [42265234216](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234216) was queued. No pass is claimed for these runs at this snapshot.
+- **Full CI:** not run. Fast Validation, Dependency Review, and the dedicated Windows lifecycle workflow are separate scopes and do not constitute full-repository CI.
+
+**Remaining high-priority risks:** The previously confirmed stable-bootstrap gap remains unresolved: prepared-phase recovery cannot launch when the entire install directory has been moved because the recovery launcher and shortcuts are inside that directory. The current lifecycle failure occurred before that scenario, so the bootstrap fix remains blocked and unvalidated. The node-7z child ownership/cancellation and conversion attempt-fencing findings remain open as documented above.
+
+**Next batch:** Confirm the new Fast Validation run, then rerun the installed Windows lifecycle through first startup, upgrade, prepared-phase recovery, standard-user permissions, and uninstall. Preserve the prepared-phase scenario; do not weaken the test. If startup proceeds, diagnose the next actual lifecycle failure before designing the stable external bootstrap. Continue the node-7z process ownership/cancellation work after the installer blocker is isolated.
