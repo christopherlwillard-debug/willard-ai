@@ -537,7 +537,7 @@ test(
           INSERT INTO organization_jobs VALUES
             (48, ${sqlLiteral(nasRoot)}, ${sqlLiteral(originalPath)},
              ${sqlLiteral(path.join(nasRoot, "WillardAI", "reports", "organize.json"))},
-             ${sqlLiteral(JSON.stringify({ source: originalPath }))}::jsonb,
+             ${sqlLiteral(JSON.stringify({ source: originalPath, emptyObject: {}, emptyArray: [], nested: { emptyObject: {}, emptyArray: [] } }))}::jsonb,
              ${sqlLiteral(JSON.stringify({ root: nasRoot }))}::jsonb,
              ${sqlLiteral(JSON.stringify([{ from: originalPath, to: path.join(nasRoot, "organized", "family.jpg") }]))}::jsonb,
              ${sqlLiteral(JSON.stringify({ report: path.join(nasRoot, "WillardAI", "reports", "organize.json") }))}::jsonb);
@@ -747,6 +747,33 @@ test(
           "PAUSED:photos/family.jpg",
           "family Alex",
         ]).join("|"),
+      );
+      const recoveredEmptyJson = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-F",
+        "|",
+        "-c",
+        `
+          SELECT
+            jsonb_typeof(plan_json -> 'emptyObject'),
+            jsonb_typeof(plan_json -> 'emptyArray'),
+            jsonb_array_length(plan_json -> 'emptyArray'),
+            jsonb_typeof(plan_json #> '{nested,emptyObject}'),
+            jsonb_typeof(plan_json #> '{nested,emptyArray}'),
+            jsonb_array_length(plan_json #> '{nested,emptyArray}')
+          FROM organization_jobs
+          WHERE id = 48
+        `,
+        targetUrl,
+      ]);
+      assert.equal(
+        recoveredEmptyJson.stdout.trim(),
+        "object|array|0|object|array|0",
+        "path remapping must preserve empty JSON objects and arrays, including nested values",
       );
       assert.equal(
         createHash("sha256").update(await readFile(reattachedOriginalPath)).digest("hex"),

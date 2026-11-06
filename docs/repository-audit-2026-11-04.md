@@ -2537,3 +2537,18 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Windows installer → standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall validation skipped on later PR commits | fixed; target test and Windows integration pending | this batch | Matching Fast Validation and Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
+
+## 2026-11-06 follow-up — database recovery remapping must verify both roots and preserve empty JSON
+
+**Finding — High (data recovery and catalog integrity):** The live PostgreSQL backup drill failed during restore to a reattached NAS. After `pg_restore`, catalog rows still correctly referenced the original NAS root, but `verifyRestoredLibraryInventory` queried using the new target root before the durable path-remap transaction ran. The recovery therefore reported zero rows against an authenticated backup count of one and refused a valid restore. The same ordering would also block a resume from the authenticated `RESTORED` or `REMAP_FAILED` journal state. Separately, the recursive JSONB path-remap function returned SQL NULL for empty objects and arrays because `jsonb_object_agg` and `jsonb_agg` return NULL on empty input; this silently changed durable metadata during otherwise successful remaps.
+
+**Fix:** Inventory verification now checks the source-root catalog while reading the actual media from the attached target NAS, performs the transactional remap, then verifies the target-root catalog again. A recovery journal already marked `COMPLETE` is verified against the target root when resumed, while interrupted pre-remap states continue to use the source root. Recursive JSONB remapping now preserves empty objects as `{}` and empty arrays as `[]` at every nesting level.
+
+**Regression:** Extended the PostgreSQL-backed recovery drill to restore a library at a different root, resume an authenticated completed recovery, and assert that nested empty JSON objects/arrays survive path remapping. This is the exact integration test that failed in Fast Validation; it has not yet been rerun against the fix.
+
+**Validation status:** Source inspection confirms the source/target verification order and NULL-safe JSONB recursion. Fast Validation previously passed typecheck, generated contracts, Expo config, and desktop web-server safety, then failed at `test:database-backup` with `restored catalog has 0 media rows but the authenticated backup records 1`. The matching database-backup integration rerun and Windows installer lifecycle rerun are pending. No restore integration pass is claimed.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Encrypted PostgreSQL backup → restore to reattached NAS → durable path remap → resume recovery | fixed; targeted integration pending | this batch | Matching Linux PostgreSQL restore drill and Windows installed lifecycle must pass; real NAS/SMB remount, filesystem alias, and crash-at-each-remap-boundary validation remain |
+| High | NAS recovery path remap → JSONB durable metadata preservation | fixed; targeted integration pending | this batch | PostgreSQL integration must confirm nested empty values survive across all durable JSON columns |

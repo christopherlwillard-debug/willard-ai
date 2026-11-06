@@ -1152,11 +1152,12 @@ async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
   }
 }
 
-async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary) {
+async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary, catalogRoot = targetLibrary.root) {
   const activeScope = manifestLibrary.catalogInventoryScope === "active";
+  const canonicalCatalogRoot = normalizeLibraryRoot(catalogRoot);
   const inventoryFilter = activeScope
-    ? ` WHERE nas_path = ${sqlLiteral(targetLibrary.root)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'`
-    : ` WHERE nas_path = ${sqlLiteral(targetLibrary.root)}`;
+    ? ` WHERE nas_path = ${sqlLiteral(canonicalCatalogRoot)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'`
+    : ` WHERE nas_path = ${sqlLiteral(canonicalCatalogRoot)}`;
   const output = await runSql(
     `SELECT relative_path, lower(content_hash), last_scan_action FROM media_files${inventoryFilter} ORDER BY relative_path`,
     environment,
@@ -1235,9 +1236,15 @@ DECLARE
 BEGIN
   CASE jsonb_typeof(input)
     WHEN 'object' THEN
-      RETURN (SELECT jsonb_object_agg(key, pg_temp.willard_remap_jsonb(value)) FROM jsonb_each(input));
+      RETURN COALESCE(
+        (SELECT jsonb_object_agg(key, pg_temp.willard_remap_jsonb(value)) FROM jsonb_each(input)),
+        '{}'::jsonb
+      );
     WHEN 'array' THEN
-      RETURN (SELECT jsonb_agg(pg_temp.willard_remap_jsonb(value)) FROM jsonb_array_elements(input));
+      RETURN COALESCE(
+        (SELECT jsonb_agg(pg_temp.willard_remap_jsonb(value)) FROM jsonb_array_elements(input)),
+        '[]'::jsonb
+      );
     WHEN 'string' THEN
       text_value := input #>> '{}';
       IF ${
@@ -1333,6 +1340,7 @@ async function restoreBackup(options) {
   await assertTargetCompatibility(environment, manifest);
   let targetEmpty = true;
   let recoveryTargetIdentity = null;
+  let recoveryJournalState = null;
   try {
     await cleanTarget(environment);
   } catch (error) {
@@ -1340,6 +1348,7 @@ async function restoreBackup(options) {
     if (!options["resume-recovery"] || !manifest.library || !targetLibrary) throw error;
     const journal = await validateRecoveryJournal(targetLibrary.root, manifest, secret, environment);
     recoveryTargetIdentity = journal.targetIdentity;
+    recoveryJournalState = journal.state;
     const currentFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, currentFacts);
   }
@@ -1381,7 +1390,18 @@ async function restoreBackup(options) {
       }
     }
     if (manifest.library && targetLibrary) {
-      await verifyRestoredLibraryInventory(environment, manifest.library, targetLibrary);
+      // A fresh or interrupted restore still has the source NAS path in the
+      // restored catalog. A completed recovery journal means the path remap
+      // was already committed, so a resume must verify against the target.
+      const catalogRootBeforeRemap = recoveryJournalState === "COMPLETE"
+        ? targetLibrary.root
+        : manifest.library.root;
+      await verifyRestoredLibraryInventory(
+        environment,
+        manifest.library,
+        targetLibrary,
+        catalogRootBeforeRemap,
+      );
       try {
         await remapRestoredLibrary(environment, manifest.library.root, targetLibrary.root);
       } catch (error) {
@@ -1395,6 +1415,8 @@ async function restoreBackup(options) {
         ).catch(() => {});
         throw error;
       }
+      // Verify the canonical inventory again after the durable path remap.
+      await verifyRestoredLibraryInventory(environment, manifest.library, targetLibrary);
     }
     const actualFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, actualFacts);
