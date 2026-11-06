@@ -2458,3 +2458,16 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added a regression assertion that age-only lock stealing remains absent and the bounded timeout remains present.
 - Commits: implementation `b0d469423cd5d010576f7a243b337045e9026868`; regression `ccaa8105b10fe7a996d0d974fbee92751151728f`.
 - Validation is pending; this source-contract test does not replace a multi-process NAS/SMB lock integration test.
+
+## 2026-11-06 follow-up — recovery drill foreign-library fixture
+
+**Finding — Medium (CI reliability / backup recovery validation):** Fast Validation exposed a failure in the database recovery drill: it called ensureLibraryIdentity with a foreign-library path that had never been created. The production helper correctly requires an existing library root and failed at realpath with ENOENT before the test reached its foreign-library identity assertion. This was a test-fixture defect, not evidence of a recovery product failure.
+
+**Fix:** Create the disposable foreign NAS root before asking the recovery helper to initialize its library identity. The existing test still verifies that recovery refuses a backup attached to a different library identity.
+
+**Validation status:** The exact failing test is part of the release/storage-contract validation step. The fixture correction is committed; a matching successful run is pending.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Backup recovery drill → foreign-library identity fixture failed before reaching the intended assertion | fixed; target test pending | this batch | The recovery drill still needs a successful matching CI run; Windows installed-PostgreSQL path remains separately covered by the installer lifecycle workflow |
+
