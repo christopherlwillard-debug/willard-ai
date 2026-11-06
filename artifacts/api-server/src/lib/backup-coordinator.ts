@@ -232,7 +232,7 @@ function runBackupProcess(libraryPath: string): Promise<void> {
       settled = true;
       cleanup();
       if (timedOut) {
-        reject(new Error("Backup exceeded its 30-minute time limit; its process tree was terminated."));
+        reject(new Error("Backup exceeded its 30-minute time limit; process-tree termination was attempted. Check server logs if cleanup remains incomplete."));
       } else if (code === 0) {
         logger.info({ operation: "database_backup", output: output.trim().slice(-300) }, "Verified NAS database backup created");
         resolve();
