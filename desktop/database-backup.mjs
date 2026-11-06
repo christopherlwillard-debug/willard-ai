@@ -42,6 +42,7 @@ import {
   ensureLibraryDirectory,
   ensureLibraryIdentity,
   normalizeLibraryRoot,
+  readLibraryFileNoFollow,
   readLibraryIdentity,
   validateRecoveryAttachment,
 } from "./library-recovery.mjs";
@@ -1100,21 +1101,19 @@ async function validateRecoveryJournal(targetRoot, manifest, secret, environment
 
 async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
   for (const sample of manifestLibrary.mediaSamples) {
-    const candidate = path.resolve(targetLibrary.root, sample.relativePath);
-    const relative = path.relative(targetLibrary.root, candidate);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      fail(`Recovery refused: invalid sampled media path ${sample.relativePath}.`);
-    }
     let bytes;
     try {
-      bytes = await readFile(candidate);
-    } catch {
+      bytes = await readLibraryFileNoFollow(targetLibrary.root, sample.relativePath);
+    } catch (error) {
       // Legacy manifests sampled all media rows, including recycled/deleted
-      // catalog entries. Defer those missing-path decisions until after the
-      // database is restored and its row state is available. Active-scope
-      // manifests can fail immediately because their samples are active only.
-      if (manifestLibrary.catalogInventoryScope !== "active") continue;
-      fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
+      // catalog entries. Defer only genuinely missing paths until the restored
+      // database can identify their row state. Symlinks and unsafe paths always
+      // fail closed, regardless of the manifest generation.
+      if (error?.code === "ENOENT" && manifestLibrary.catalogInventoryScope !== "active") continue;
+      if (error?.code === "ENOENT") {
+        fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
+      }
+      fail(`Recovery refused: sampled canonical media path is unsafe or unreadable: ${sample.relativePath}.`);
     }
     if (sha256Bytes(bytes) !== sample.sha256) {
       if (manifestLibrary.catalogInventoryScope !== "active") continue;
@@ -1152,16 +1151,11 @@ async function verifyRestoredLibraryInventory(environment, manifestLibrary, targ
     ) {
       fail("Recovery refused: the restored catalog contains an invalid canonical media identity.");
     }
-    const candidate = path.resolve(targetLibrary.root, relativePath);
-    const relative = path.relative(targetLibrary.root, candidate);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      fail(`Recovery refused: invalid catalog media path ${relativePath}.`);
-    }
     let bytes;
     try {
-      bytes = await readFile(candidate);
+      bytes = await readLibraryFileNoFollow(targetLibrary.root, relativePath);
     } catch {
-      fail(`Recovery refused: cataloged original is missing from the attached NAS: ${relativePath}.`);
+      fail(`Recovery refused: cataloged original is missing or unsafe on the attached NAS: ${relativePath}.`);
     }
     if (sha256Bytes(bytes) !== expectedHash) {
       fail(`Recovery refused: cataloged original hash does not match the attached NAS: ${relativePath}.`);
