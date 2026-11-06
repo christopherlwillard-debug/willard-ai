@@ -2044,3 +2044,35 @@ This means the new corrupt-journal and WMI-error protections are useful but do n
 |---|---|---|---|---|
 | High | Packaged launcher may miss API/web processes when `services.json` is missing or only partially written | fixed; target validation pending | implementation: `cf538676`; regression tests: `fd9df23d` | Matching Fast Validation and Windows smoke pending; full installed installer lifecycle remains separate |
 | High | Developer launcher may miss an orphan when its process journal is missing or partial | found / blocked for next batch | not fixed | Needs exact process-tree ownership for Node API and pnpm/Vite web process; do not kill by port or process name |
+
+
+## 2026-11-06 follow-up — do not uninstall or upgrade past a missing shutdown helper
+
+### Finding: Inno Setup silently skipped service shutdown when the launcher file was missing
+
+**Severity:** High (installer lifecycle and orphaned service risk).
+**Affected workflows:** In-place installer upgrade and uninstall.
+
+**Source inspection:** `installer/WillardMediaCenter.iss` previously called `StopWillardServices` only when `{app}\desktop\WillardMediaCenter.ps1` existed. If the installed launcher had been deleted or a prior installation was partially damaged while the Node services remained active, the helper returned success without attempting shutdown. Inno Setup could then replace or remove the payload while the old service processes continued running.
+
+**Fix in this batch:**
+- `StopWillardServices` now accepts an explicit `RequireLauncher` flag and returns an actionable error if the shutdown helper is missing when it is required.
+- A fresh install is still allowed when no previous packaged Node runtime exists.
+- An in-place upgrade requires the launcher whenever the existing packaged Node runtime is present; it stops before payload deletion if the helper is missing.
+- Uninstall always requires the launcher and aborts before removing the installation if shutdown cannot be attempted or verified.
+- The recovery message directs the user to reinstall/repair the same installation to restore the helper before retrying.
+
+**Regression coverage:** Added source-contract tests for the fresh-install exception, existing-runtime upgrade guard, and unconditional uninstall requirement.
+
+**Implementation commit:** `36c715dd2e9ea72c95e317534558b9fd15aa0e92`.
+**Test commits:** `08759c294e886ab686ccda71b31543859290fd72`, `acd8d8822feb60fcf256d5b27e5d323bd46495e9`.
+
+**Status:** source-reviewed and regression assertions committed; matching Fast Validation pending. The Inno Setup script has not yet been compiled or exercised by the real standard-user installer lifecycle on this branch.
+
+**Remaining risk:** This guard intentionally blocks upgrade/uninstall when the shutdown helper is missing, even if no services are currently running. That is safer than silently proceeding, but the user must repair the launcher first. Full installer compile, fresh install, upgrade, running-service uninstall, and external-data preservation remain required integration validation.
+
+### Prioritized findings ledger — installer shutdown helper
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Inno Setup previously proceeded when the packaged shutdown helper was missing | fixed; source-contract tested | `36c715dd`; tests: `acd8d882` | Inno compilation and real standard-user lifecycle integration pending |
