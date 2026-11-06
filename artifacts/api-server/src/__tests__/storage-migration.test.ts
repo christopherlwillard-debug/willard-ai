@@ -398,3 +398,44 @@ test("copy pauses and preserves originals when a database reference changed afte
   assert.equal((await service.get(manifest.id)).state, "PAUSED");
   await assert.rejects(() => service.confirmCleanup(manifest.id), /only after the migration/);
 });
+
+
+test("copy accepts an already-updated database reference on a safe retry", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/already-updated.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/already-updated.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        if (text.includes("SELECT thumbnail_path AS value FROM media_files")) {
+          return { rows: [{ value: destination }], rowCount: 1 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 45,
+      value: source,
+    }],
+  });
+
+  const copied = await service.copy(manifest.id);
+  assert.equal(copied.state, "VERIFIED");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes");
+});
