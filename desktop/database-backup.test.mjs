@@ -458,6 +458,7 @@ test(
       await writeFile(recycledTrashPath, recycledBytes);
       await writeFile(optionalCache, "rebuildable thumbnail");
       await writeFile(localModelCache, "rebuildable model cache");
+      await mkdir(foreignNasRoot, { recursive: true });
       await ensureLibraryIdentity(foreignNasRoot);
       await run(psqlBin, [
         "-X",
