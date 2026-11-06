@@ -399,6 +399,10 @@ router.post(
       logger.info({ destPath }, "Branding logo uploaded");
       res.json(sanitizeSettings(updated));
     } catch (err) {
+      if (typeof err === "object" && err !== null && "status" in err && err.status === 409) {
+        res.status(409).json({ error: err instanceof Error ? err.message : "Branding logo changed during upload." });
+        return;
+      }
       logger.error({ err }, "Failed to upload logo");
       res.status(500).json({ error: "Failed to upload logo" });
     }
