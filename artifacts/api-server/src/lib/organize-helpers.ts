@@ -327,7 +327,10 @@ export async function rollbackMoves(
               continue;
             }
           }
-        } catch { /* normal no-replace move below will preserve any conflict */ }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("lease")) throw error;
+          /* normal no-replace move below will preserve any conflict */
+        }
       }
 
       // Never hash or move a symlink/FIFO/device as though it were the
@@ -376,7 +379,6 @@ export async function rollbackMoves(
       if (!restoredStat.isFile() || restoredStat.isSymbolicLink()) {
         try {
           await beforeEachMove?.();
-          await beforeEachMove?.();
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; entry returned to destination`);
         } catch (preserveError: any) {
@@ -391,6 +393,7 @@ export async function rollbackMoves(
       const restoredHash = await sha256File(mv.from);
       if (restoredHash !== mv.sourceHash) {
         try {
+          await beforeEachMove?.();
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; unverified file returned to destination`);
         } catch (preserveError: any) {
@@ -402,6 +405,7 @@ export async function rollbackMoves(
       rolledBack++;
       log(`ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
     } catch (re: any) {
+      if (re instanceof Error && re.message.includes("lease")) throw re;
       log(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);
     }
   }
