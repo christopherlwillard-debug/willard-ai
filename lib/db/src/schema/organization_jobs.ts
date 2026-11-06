@@ -19,6 +19,7 @@ export const organizationJobsTable = pgTable("organization_jobs", {
   error: text("error"),
   lastStage: text("last_stage"),
   stageUpdatedAt: timestamp("stage_updated_at"),
+  leaseToken: text("lease_token"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
 });
