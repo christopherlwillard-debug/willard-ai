@@ -9,7 +9,7 @@ import { stopLibraryWatcher } from "./library-watcher.ts";
 import { stopThumbnailReconciliation } from "./library-engine/index.ts";
 import { logger } from "./logger.ts";
 import { markShuttingDown } from "./shutdown-state.ts";
-import { stopActiveConversionJobs } from "../routes/optimize.ts";
+import { stopActiveConversionJobs } from "./conversion-runtime.ts";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
