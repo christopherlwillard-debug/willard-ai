@@ -5,7 +5,6 @@ import { eq, desc, inArray, or, and, isNull, isNotNull, lt, sql } from "drizzle-
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawnSync } from "child_process";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
@@ -39,6 +38,7 @@ import {
   reserveCapacity,
   releaseCapacity,
   evaluateCapacity,
+  probeFilesystemCapacity,
   CapacityAdmissionError,
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
@@ -232,18 +232,10 @@ function crc32(buf: Buffer): number {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-/** Safe disk-free check — uses spawnSync with argument array; no shell interpolation. */
-function getDiskFreeBytes(dirPath: string): number | null {
-  try {
-    const checkDir = fs.existsSync(dirPath) ? dirPath : path.dirname(dirPath);
-    const result = spawnSync("df", ["-B1", checkDir], { encoding: "utf8", stdio: "pipe" });
-    if (result.status !== 0 || !result.stdout) return null;
-    const lines = result.stdout.trim().split("\n");
-    if (lines.length < 2) return null;
-    const fields = lines[1].trim().split(/\s+/);
-    const n = parseInt(fields[3] ?? "");
-    return isNaN(n) ? null : n;
-  } catch { return null; }
+/** Read destination free space through the shared asynchronous filesystem probe. */
+async function getDiskFreeBytes(dirPath: string): Promise<number | null> {
+  const snapshot = await probeFilesystemCapacity(dirPath);
+  return snapshot.known ? snapshot.freeBytes : null;
 }
 
 
@@ -1381,20 +1373,33 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     });
     const seenFs = new Set<string>();
     for (const dest of uniqueDests) {
-      const checkDir = fs.existsSync(dest) ? dest : path.dirname(dest);
+      let checkDir = dest;
+      try {
+        await fs.promises.stat(checkDir);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          checkDir = path.dirname(dest);
+        } else {
+          checks.push({
+            name: `Disk space (${path.basename(dest)})`,
+            ok: false,
+            detail: "Destination filesystem could not be inspected",
+          });
+          continue;
+        }
+      }
       let fsKey = checkDir;
-      try { fsKey = fs.realpathSync(checkDir); } catch { /* best effort */ }
+      try { fsKey = await fs.promises.realpath(checkDir); } catch { /* best effort */ }
       if (seenFs.has(fsKey)) continue;
       seenFs.add(fsKey);
-      const free = getDiskFreeBytes(checkDir);
-      let diskOk = true;
-      let diskDetail = "Check unavailable on this system";
-      if (free !== null) {
-        diskOk = free >= totalBytes;
-        diskDetail = diskOk
+      const free = await getDiskFreeBytes(checkDir);
+      const diskOk = free !== null && free >= totalBytes;
+      const diskDetail = free === null
+        ? "Filesystem free space could not be measured"
+        : diskOk
           ? `Need ${(totalBytes / 1e9).toFixed(2)} GB, ${(free / 1e9).toFixed(2)} GB free`
           : `Need ${(totalBytes / 1e9).toFixed(2)} GB but only ${(free / 1e9).toFixed(2)} GB free`;
-      }
       checks.push({ name: `Disk space (${path.basename(dest)})`, ok: diskOk, detail: diskDetail });
     }
 
