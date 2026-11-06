@@ -2128,3 +2128,43 @@ This requires coordinated release-stager, Inno Setup, and Windows integration ch
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Start, Setup, Repair, or Update could miss a live service when the developer PID journal was missing/partial; TCP-query errors could look like free ports | fixed; target validation pending | implementation: `89ff7db5`, `a609d14f`, `82ab2bba`, `31e57268`, `be03828c`, `bb4f695c`, `fd216718`; tests/CI: `671939f1`, `16e5138b`, `318cb2c8`, `ca070d4b` | Await Windows smoke and Fast Validation; process-start-before-listen race and concurrent launcher fencing remain open |
+
+
+## 2026-11-06 architecture review — durable organization Replace recovery
+
+### Confirmed critical finding
+
+Both normal organization execution and resume still call `fs.unlinkSync(destFile)` when `conflictPolicy === "replace"`, before a journal entry describes the existing destination. A failure or process crash after that unlink can permanently lose the pre-existing destination file. This is distinct from the already-fixed no-replace race in `verifiedMove`: exclusive publication protects a destination that appears concurrently, but it does not preserve the file intentionally removed by the Replace policy.
+
+**Affected workflows:** Organize → Execute, Organize → Resume, Recovery Center rollback, and completed-job verification.
+**Severity:** Critical (user media/data loss).
+**Status:** found / blocked for an architectural change; no partial filesystem workaround applied.
+
+### Existing architecture that can be reused
+
+Conversion finalization already provides a useful pattern:
+- `finalizeConversionFiles` persists each move intent before mutation through `onMoveIntent`.
+- It stores the original in a recoverable backup location before publishing converted output.
+- It verifies both moves and records the result through `onMoveComplete`.
+- `recoverConversionFinalizationMoves` replays the shared checksum-verified rollback helper after restart.
+
+Organization already uses the same `FileMoveRecord`, `verifiedMove`, `moveFileNoReplace`, and `rollbackMoves` primitives. This is preferable to creating another journal system, but organization has different resume and plan-count invariants that must be updated deliberately.
+
+### Safe implementation plan
+
+1. Add an explicit move kind (ordinary source move versus replacement backup) and a stable association to the source relative path. Preserve compatibility with existing journal records that do not have the new field; treat those as ordinary moves.
+2. For each Replace collision, compute the existing destination's SHA-256 and reserve a unique backup path in the same destination directory/filesystem. Persist the backup intent before changing the destination. Do not use `unlinkSync` to discard the old file.
+3. Prefer a no-overwrite same-filesystem backup operation that preserves the original file's inode metadata. If the filesystem/NAS does not support the required operation, fail closed for that file rather than silently falling back to a metadata-losing copy. Test the actual supported Windows/NTFS and SMB/NAS behavior before enabling the path.
+4. Verify the backup hash, then persist and perform the incoming source move using the existing no-replace verified move. Persist both records in order so reverse-order rollback first restores the incoming source, then restores the displaced destination.
+5. Make resume inspect the move kind and both paths/hashes. If the backup was completed but the incoming move was not, resume may continue from the preserved backup. If either side is ambiguous or changed, preserve all copies and stop for manual recovery.
+6. Update plan coverage, moved-file counts, progress, and destination recounts to count ordinary source moves, not backup journal entries. Keep checksum verification over both ordinary moves and backups.
+7. Only remove temporary replacement backups after the completed job status and full final hash verification are durably persisted. If cleanup fails or the process crashes before cleanup, retain the backup path in the job journal so recovery/cleanup can retry safely.
+8. Add fault-injection tests for crash before backup, after backup intent, after backup creation, after incoming intent, after incoming move, and during rollback; include destination replacement races, changed files, same-inode hard-link interruption, backup-path collision, and SMB/Windows behavior. Verify the old destination is never silently discarded.
+
+**Important compatibility note:** Resume currently builds `alreadyMovedRelPaths` from every journal entry with a `sourceRelPath`, and its plan coverage assumes one move record per planned source. The new backup record must not be mistaken for a completed source move or inflate user-facing moved counts. Existing unverified intents also need a deliberate source/destination hash reconciliation rule before resume is considered complete.
+
+**User-visible behavior:** Keep the current Replace meaning (the incoming file becomes the destination) and retain the displaced original only as a temporary recovery copy until the job is durably complete. Long-term post-completion version history would be a separate product decision and is not assumed here.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Critical | Replace deletes an existing organization destination before journaling or preserving it | found / blocked | design review only; no code change | Requires move-kind journal extension, same-filesystem no-overwrite backup, resume/count compatibility, crash tests, and Windows/SMB integration |
