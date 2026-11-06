@@ -157,6 +157,8 @@ test("media rename route validates JSON name type and uses no-replace moves", ()
   assert.match(route, /const requestedName = req\.body\?\.name;/);
   assert.match(route, /const stat = fs\.lstatSync\(currentPath\)/);
   assert.match(route, /Stored media path contains a symbolic link/);
+  assert.match(route, /await sha256File\(oldAbs\)/);
+  assert.match(route, /eq\(mediaFilesTable\.relativePath, file\.relativePath\)/);
   assert.match(route, /canonicalizePath\(nasPath\)/);
   assert.match(route, /typeof requestedName === "string"/);
   assert.match(route, /isPortableMediaFileName\(newName\)/);
