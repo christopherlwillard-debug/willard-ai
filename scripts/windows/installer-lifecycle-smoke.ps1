@@ -26,6 +26,7 @@ $script:UserAppData = Join-Path $script:UserProfile "AppData\Roaming"
 $script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
+$script:LifecycleStage = "initialization"
 $LifecycleProcessTimeoutSeconds = 180
 $script:ParentEnvironment = @{}
 foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP")) {
@@ -34,6 +35,11 @@ foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP"
 
 function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
+}
+
+function Write-LifecycleStage($stage) {
+  $script:LifecycleStage = [string]$stage
+  Write-Host "Lifecycle: $stage"
 }
 
 function Read-Text($path) {
@@ -150,7 +156,7 @@ try {
 "USERPROFILE=$env:USERPROFILE"
 "LOCALAPPDATA=$([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"
 '@ -Encoding ASCII
-  Write-Host "Lifecycle: profile probe"
+  Write-LifecycleStage "profile probe"
   $profileResult = Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
     "-NoProfile -ExecutionPolicy Bypass -File `"$profileProbe`"" "profile-probe"
   Assert-True ($profileResult.exitCode -eq 0) ("Could not initialize the standard-user profile:`n" + $profileResult.output)
@@ -183,7 +189,7 @@ exit $LASTEXITCODE
 '@
   $runnerContents.Replace("__RECOVERY_EXPORT_PATH__", $recoveryExportLiteral) | Set-Content $Runner -Encoding ASCII
 
-  Write-Host "Lifecycle: first install"
+  Write-LifecycleStage "first install"
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
   $firstInstallerForUser = Join-Path $TempRoot "first-install-Setup.exe"
   Copy-Item $FirstInstaller $firstInstallerForUser -Force
@@ -196,7 +202,7 @@ exit $LASTEXITCODE
   Assert-True (@(Get-ChildItem $startMenuRoot -Filter "Willard Media Center.lnk" -Recurse -ErrorAction SilentlyContinue).Count -eq 1) `
     "First install did not create the standard-user Start Menu shortcut."
 
-  Write-Host "Lifecycle: first start"
+  Write-LifecycleStage "first start"
   $startResult = Invoke-InstalledLauncher "start" "first-start"
   Assert-True ($startResult.exitCode -eq 0) ("Installed launcher failed after first install:`n" + $startResult.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
@@ -208,7 +214,7 @@ exit $LASTEXITCODE
 
   # Upgrade through a newer Setup.exe version while retaining the same external
   # database, app-data settings, and media root.
-  Write-Host "Lifecycle: upgrade compile and install"
+  Write-LifecycleStage "upgrade compile and install"
   $upgradeVersion = "0.1.$([int]$env:GITHUB_RUN_NUMBER + 1)"
   $env:WILLARD_VERSION = $upgradeVersion
   & (Join-Path $Root "scripts\windows\compile-installer.ps1")
@@ -229,12 +235,13 @@ exit $LASTEXITCODE
   Assert-True ($upgradeStartMenuShortcuts.Count -eq 1) "Upgrade removed or duplicated the Start Menu shortcut."
   Assert-ExternalState
 
-  Write-Host "Lifecycle: interrupted update recovery"
+  Write-LifecycleStage "post-upgrade start"
   $upgradeStart = Invoke-InstalledLauncher "start" "upgrade-start"
   Assert-True ($upgradeStart.exitCode -eq 0) ("Installed launcher failed after upgrade:`n" + $upgradeStart.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Stop-InstalledWillard
 
+  Write-LifecycleStage "simulate swapped-phase recovery"
   # Simulate a power loss after a packaged version swap. The next installed
   # launcher must restore its sibling backup before starting services.
   $installParent = Split-Path -Parent $InstallRoot
@@ -268,7 +275,7 @@ exit $LASTEXITCODE
 
   # Simulate power loss in the narrow window after the old install was moved
   # but before the updater could advance the journal beyond "prepared".
-  Write-Host "Lifecycle: prepared-phase update recovery"
+  Write-LifecycleStage "prepared-phase update recovery"
   $preparedBackup = Join-Path $installParent ("." + $installLeaf + ".previous-prepared-" + (Get-Date -Format "yyyyMMddHHmmss"))
   $preparedCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
   Copy-Item $InstallRoot $preparedCandidate -Recurse -Force
@@ -294,7 +301,7 @@ exit $LASTEXITCODE
 
   # A database failure must persist diagnostics and return control without a
   # modal dialog in this noninteractive test run.
-  Write-Host "Lifecycle: database failure diagnostics"
+  Write-LifecycleStage "database failure diagnostics"
   $envFile = Join-Path $script:DataRoot ".env"
   Copy-Item $envFile ($envFile + ".good") -Force
   @(
@@ -309,13 +316,13 @@ exit $LASTEXITCODE
   Move-Item ($envFile + ".good") $envFile -Force
   Assert-ExternalState
 
-  Write-Host "Lifecycle: uninstall stops active services"
+  Write-LifecycleStage "uninstall stops active services"
   $uninstallStart = Invoke-InstalledLauncher "start" "uninstall-running-start"
   Assert-True ($uninstallStart.exitCode -eq 0) ("Could not start Willard before uninstall:`n" + $uninstallStart.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($body) $body -match '"status"\s*:\s*"ok"' }
   Wait-Http "http://127.0.0.1:5000/" { param($body) $body -match "<html|<!doctype html" }
 
-  Write-Host "Lifecycle: uninstall"
+  Write-LifecycleStage "uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
   Assert-True (Test-Path $uninstaller) "Installed copy did not contain Inno Setup uninstaller."
   $uninstallResult = Invoke-AsLifecycleUser $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" "uninstall"
@@ -333,6 +340,12 @@ exit $LASTEXITCODE
   Assert-ExternalState
   $script:LifecyclePassed = $true
   Write-Host "Installed lifecycle smoke passed: standard user, install, start, upgrade, rollback, diagnostics, and uninstall."
+} catch {
+  Write-Host "Lifecycle failure during '$script:LifecycleStage': $($_.Exception.Message)" -ForegroundColor Red
+  if ($_.ScriptStackTrace) {
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+  }
+  throw
 } finally {
   try { Stop-InstalledWillard } catch {}
   if (Test-Path $Dropdb) {
@@ -353,12 +366,12 @@ exit $LASTEXITCODE
           }
         }
     }
+  }
   foreach ($entry in $script:ParentEnvironment.GetEnumerator()) {
     if ($null -eq $entry.Value) {
       Remove-Item "Env:$($entry.Key)" -ErrorAction SilentlyContinue
     } else {
       Set-Item "Env:$($entry.Key)" $entry.Value
     }
-  }
   }
 }

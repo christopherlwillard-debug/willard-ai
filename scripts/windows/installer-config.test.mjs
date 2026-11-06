@@ -1540,8 +1540,8 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
   assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
   assert.match(identityReader, /Windows did not return a process creation time/);
-  assert.match(identityReader, /\$expectedCreationDate -and[\s\S]*\$expectedPath/);
-  assert.match(identityReader, /\$expectedCreationDate -and[\s\S]*\$expectedCommandLine/);
+  assert.match(identityReader, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedPath\)\s*\)\s*\{\s*\$executablePath\s*=\s*\[string\]\$expectedPath/);
+  assert.match(identityReader, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCommandLine\)\s*\)\s*\{\s*\$commandLine\s*=\s*\[string\]\$expectedCommandLine/);
   const creationDateCheck = identityReader.indexOf("$expectedCreationDate");
   const executableCheck = identityReader.indexOf("$executablePath");
   assert.ok(creationDateCheck >= 0 && executableCheck > creationDateCheck,
@@ -1597,6 +1597,21 @@ test("installed lifecycle smoke uninstalls while both packaged services are runn
   assert.match(installedLifecycleSmoke, /services\.json/);
 });
 
+test("installed lifecycle reports the failing phase and restores the parent environment on every exit", () => {
+  assert.match(installedLifecycleSmoke, /function Write-LifecycleStage\(\$stage\)/);
+  assert.match(installedLifecycleSmoke, /\$script:LifecycleStage = \[string\]\$stage/);
+  assert.match(installedLifecycleSmoke, /Lifecycle failure during '\$script:LifecycleStage': \$\(\$_.Exception.Message\)/);
+  assert.match(installedLifecycleSmoke, /Write-LifecycleStage "simulate swapped-phase recovery"/);
+
+  const finallyStart = installedLifecycleSmoke.lastIndexOf("} finally {");
+  const cleanup = installedLifecycleSmoke.slice(finallyStart);
+  const failureBranch = cleanup.indexOf("  } else {");
+  const environmentRestore = cleanup.indexOf("foreach ($entry in $script:ParentEnvironment.GetEnumerator())");
+  assert.ok(finallyStart >= 0 && failureBranch >= 0 && environmentRestore > failureBranch,
+    "The lifecycle must restore its parent process environment after either cleanup branch.");
+  assert.match(cleanup, /\n  }\s*foreach \(\$entry in \$script:ParentEnvironment\.GetEnumerator\(\)\)/);
+});
+
 test("launcher retains the previous release if service shutdown cannot be verified", () => {
   const startupCatchStart = launcher.indexOf("\n} catch {\n  $startupError = $_");
   assert.ok(startupCatchStart >= 0, "The startup failure handler must preserve the original error.");
@@ -1632,8 +1647,8 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   assert.match(identity, /did not return a process creation time/);
   assert.match(identity, /did not return an executable path/);
   assert.match(identity, /did not return a command line/);
-  assert.match(identity, /\$expectedCreationDate -and[\s\S]*\$expectedPath/);
-  assert.match(identity, /\$expectedCreationDate -and[\s\S]*\$expectedCommandLine/);
+  assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedPath\)\s*\)\s*\{\s*\$executablePath\s*=\s*\[string\]\$expectedPath/);
+  assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCommandLine\)\s*\)\s*\{\s*\$commandLine\s*=\s*\[string\]\$expectedCommandLine/);
   assert.match(identity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
   assert.doesNotMatch(identity, /catch \{ return \$null \}/);
   const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
