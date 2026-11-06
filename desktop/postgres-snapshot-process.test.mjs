@@ -59,6 +59,21 @@ test("snapshot holder terminates a timed-out process and escalates to SIGKILL", 
   child.emit("close", null, "SIGKILL");
 });
 
+test("snapshot holder skips SIGKILL when signal exit is recorded before close", async () => {
+  const child = new FakeChild();
+  const pending = waitForExportedSnapshot(child, { timeoutMs: 20, killGraceMs: 20 });
+
+  await assert.rejects(pending, /Timed out while exporting/);
+  assert.deepEqual(child.kills, ["SIGTERM"]);
+
+  // The process has exited, but Node has not delivered the close event yet.
+  child.signalCode = "SIGTERM";
+  await delay(30);
+
+  assert.deepEqual(child.kills, ["SIGTERM"]);
+  child.emit("close", null, "SIGTERM");
+});
+
 test("snapshot holder cancels kill escalation when the child closes after SIGTERM", async () => {
   const child = new FakeChild();
   const pending = waitForExportedSnapshot(child, { timeoutMs: 20, killGraceMs: 30 });
