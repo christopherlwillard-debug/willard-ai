@@ -3819,3 +3819,15 @@ This head is a documentation-only commit after code/test commit `7f541970dbaed5a
 - **Full CI:** not run. Fast Validation is the Linux + Windows smoke/targeted validation workflow, not a full-repository CI claim.
 
 **Status for the node-7z batch:** source fix complete; targeted Linux tests and real-binary integration passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`; Windows smoke is still in progress. Do not mark Windows or full validation complete until the matching Windows job finishes successfully.
+
+
+### Final validation update — Fast Validation #42302252050 completed successfully
+
+The previously running Windows job has now completed. Both jobs in Fast Validation #42302252050 passed on exact code/test head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`:
+
+- Linux validation job `128182985506`: **success**. Typecheck/generated contracts, Expo/desktop/release/storage checks, official static 7-Zip 26.05 with node-7z, PostgreSQL media filters, conversion advisory locks, conversion finalization recovery, session-revocation tombstones, and the targeted backend suite all passed. Targeted backend suite: **364 total, 362 passed, 0 failed, 2 skipped** (the two Trash recovery cases explicitly require the configured PostgreSQL test database). The new node-7z process ownership, AbortSignal cancellation, production-call-site contract, and shutdown tests all passed. Real official-binary node-7z compatibility passed 1/1.
+- Windows archive/updater smoke job `128183713964`: **success**. All 23 steps passed, including Windows media subprocess responsiveness, storage migration/no-overwrite, NAS temp cleanup, conversion finalization rollback, official Windows 7-Zip 26.05 hash verification, node-7z symlink metadata, compressed TAR preview, packaged updater journal writes, and developer updater preservation/rollback.
+- Dependency Review #42302252056 on the same head: **success** for the production advisory gate; the separate installed dependency-graph audit was skipped.
+- The latest branch head after recording this evidence is documentation-only commit `bf305dc8e457edf042e10bced4ee3bf7d7aee4ca`. Fast Validation #42302869641 for that documentation head is queued; Dependency Review #42302869626 is in progress. Do not transfer the completed code/test results above to a claim that the newer documentation head has completed its own matching run.
+
+**Status:** node-7z source fix is target-tested and integration-tested on Linux and Windows Fast Validation. It is not a full-CI or installed-product-lifecycle validation. The Windows installer/data-root collision and stable external bootstrap remain blocked and unchanged.
