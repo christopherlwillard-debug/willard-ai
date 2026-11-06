@@ -2591,3 +2591,18 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Library job progress → duplicate EventSource connections and cursorless snapshot rollback after reconnect | fixed; targeted tests pending | this batch | Browser-level network interruption, visibility race, and long-running job stress tests remain |
+
+
+## 2026-11-06 follow-up — trash manifest descriptor I/O must not follow a swapped symlink
+
+**Finding — Medium (cleanup recovery integrity / local filesystem boundary):** The trash-manifest helper checked the final path with `lstat`, then separately used path-based `openSync(filePath, "a")` and `readFileSync(filePath)`. A concurrent process with write access to the NAS log directory could replace the manifest between validation and open/read. The append and tombstone paths could then follow a final-component symlink and write outside the configured library; the read path could consume an attacker-substituted file. The existing symlink and hard-link checks did not close this time-of-check/time-of-use window.
+
+**Fix:** Manifest access now opens one descriptor and performs the operation through that descriptor. It uses `O_NOFOLLOW` where Node/platform support is available, creates a missing manifest with exclusive `O_CREAT | O_EXCL`, and validates the opened descriptor against a fresh `lstat` (regular-file type, link count, device, and inode) before reading or writing. Appends and tombstones use descriptor writes plus `fsync`; reads use descriptor-based `readFileSync(fd)`; permission hardening uses `fchmod` on the opened descriptor rather than following the path again. Tombstone append does not recreate a manifest that disappeared after the read/check phase.
+
+**Regression:** Added direct descriptor tests that reject final-component symlinks for both read and append, reject hard-linked manifest files before append, and assert production manifest read/write paths use validated descriptors rather than path-based file I/O.
+
+**Validation status:** Fast Validation [#42155568974](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42155568974) and Dependency Review [#42155569007](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42155569007) passed on the preceding head `4d7c181d542d78b74cfe206bc679f10ee03eb293`; those runs include the library job-progress regression batch but predate this manifest change. The new manifest regressions are included in the Fast Validation targeted backend command and are awaiting a matching run on this batch. No full CI or Windows installed-product validation is inferred from those earlier runs.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Cleanup → trash manifest listing, recycle journal append, and removal tombstones | fixed; targeted tests pending | `8a3336f88595aa424ba6d42904fbd9cb1263bb27` (implementation); `90dbb868fd7a5ec3d6067a3c6e75e40b5d033f43` (regressions) | Ancestor-directory replacement remains a separate descriptor-relative traversal design issue; Windows/SMB filesystem behavior and the matching Fast Validation run remain to be verified |
