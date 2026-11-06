@@ -58,11 +58,12 @@ export async function withTarInput<T>(
   if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
 
   const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
-  const child = compression === "gzip"
-    ? null
-    : spawn(getSevenZipPath(), ["x", "-so", archivePath, "-y"], {
+  const sevenZipPath = compression === "gzip" ? null : await getSevenZipPath();
+  const child = sevenZipPath
+    ? spawn(sevenZipPath, ["x", "-so", archivePath, "-y"], {
         stdio: ["ignore", "pipe", "pipe"],
-      });
+      })
+    : null;
   let stderr = "";
   child?.stderr?.setEncoding("utf8");
   child?.stderr?.on("data", (chunk: string) => {
