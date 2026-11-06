@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const LIBRARY_IDENTITY_FORMAT = "willard-library-identity";
@@ -22,6 +22,39 @@ function identityPath(libraryRoot) {
   return path.join(normalizeLibraryRoot(libraryRoot), LIBRARY_IDENTITY_RELATIVE_PATH);
 }
 
+/**
+ * Resolve/create a library-relative directory without traversing a symlink
+ * below the configured NAS root. The root itself may be a legitimate mount
+ * alias; descendants must remain ordinary directories on that library.
+ */
+export async function ensureLibraryDirectory(libraryRoot, relativePath, create = false) {
+  const root = await realpath(normalizeLibraryRoot(libraryRoot));
+  const components = String(relativePath).split(/[\\/]+/).filter(Boolean);
+  if (components.some((component) => component === "." || component === ".." || component.includes("\0"))) {
+    throw new Error("Library directory path contains an invalid component.");
+  }
+  let current = root;
+  for (const component of components) {
+    current = path.join(current, component);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (!create || error?.code !== "ENOENT") throw error;
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (mkdirError?.code !== "EEXIST") throw mkdirError;
+      }
+      info = await lstat(current);
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error("Library storage path contains a symlink or non-directory component.");
+    }
+  }
+  return current;
+}
+
 function validateIdentity(identity) {
   if (
     !identity ||
@@ -38,7 +71,17 @@ function validateIdentity(identity) {
 }
 
 export async function readLibraryIdentity(libraryRoot) {
-  const markerPath = identityPath(libraryRoot);
+  const configDir = await ensureLibraryDirectory(libraryRoot, path.join("WillardAI", "config"));
+  const markerPath = path.join(configDir, "library-identity.json");
+  try {
+    const markerStat = await lstat(markerPath);
+    if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+      throw new Error("The NAS library identity marker must be a regular file inside the configured library.");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    throw error;
+  }
   const bytes = await readFile(markerPath);
   const identity = validateIdentity(JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")));
   return {
@@ -57,7 +100,8 @@ export async function ensureLibraryIdentity(libraryRoot) {
     if (error?.code !== "ENOENT") throw error;
   }
 
-  const markerPath = identityPath(root);
+  const configDir = await ensureLibraryDirectory(root, path.join("WillardAI", "config"), true);
+  const markerPath = path.join(configDir, "library-identity.json");
   const identity = {
     format: LIBRARY_IDENTITY_FORMAT,
     version: LIBRARY_IDENTITY_VERSION,
@@ -65,8 +109,7 @@ export async function ensureLibraryIdentity(libraryRoot) {
     createdAt: new Date().toISOString(),
   };
   const temporary = `${markerPath}.${process.pid}.${randomUUID()}.partial`;
-  await mkdir(path.dirname(markerPath), { recursive: true });
-  await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   try {
     await rename(temporary, markerPath);
   } catch (error) {
