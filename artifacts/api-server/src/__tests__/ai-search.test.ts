@@ -165,7 +165,7 @@ test("local-only route applies explicit clear-filter refinements", () => {
 test("AI intent parser accepts explicit clear-filter instructions", () => {
   assert.match(aiSearchSource, /"clearFilters"/);
   assert.match(aiSearchSource, /mergeRefinedIntent\(previous, parsed, effectiveClear\)/);
-  assert.match(aiSearchSource, /const localClear = previous \? localSearchClearFilters\(query\) : \{\}/);
+  assert.match(aiSearchSource, /const localClear: SearchIntentClear = previous \? localSearchClearFilters\(query\) : \{\}/);
   assert.match(aiSearchSource, /localSearchClearFilters\(query\)/);
 });
 
