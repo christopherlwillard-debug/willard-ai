@@ -46,7 +46,7 @@ import {
   validateRecoveryAttachment,
 } from "./library-recovery.mjs";
 import { createRecoveryExport, decryptRecoveryExport } from "./backup-credentials.mjs";
-import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
+import { releaseExportedSnapshot, waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
@@ -368,13 +368,8 @@ async function openDatabaseSnapshot(environment) {
   return {
     snapshot,
     async release() {
-      if (child.exitCode !== null) return;
-      child.stdin.end("ROLLBACK;\n\\q\n");
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 3000);
+      await releaseExportedSnapshot(child);
+    }, 3000);
         child.once("close", () => {
           clearTimeout(timer);
           resolve();
