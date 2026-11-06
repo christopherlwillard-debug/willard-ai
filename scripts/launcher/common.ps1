@@ -1111,15 +1111,21 @@ function Stop-TrackedProcesses {
     Assert-NoUntrackedDeveloperServices $pids
     $stopped = 0
     $remaining = @()
+    $taskkillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+    if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+        throw "Windows taskkill.exe was not found in the system directory. The process list was retained for diagnosis."
+    }
     if ($pids) {
         foreach ($p in @($pids.api, $pids.web)) {
             if ($p -and (Test-ProcessIdentity $p)) {
-                & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
+                $killOutput = @(& $taskkillPath /PID $p.pid /T /F 2>&1)
+                $killExitCode = $LASTEXITCODE
                 try {
                     Wait-Process -Id $p.pid -Timeout 10 -ErrorAction SilentlyContinue
                 } catch {}
                 if (Test-ProcessIdentity $p) {
-                    $remaining += $p
+                    $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
+                    $remaining += "PID $($p.pid) (taskkill exit code $killExitCode; $killText)"
                 } else {
                     $stopped++
                 }
@@ -1127,8 +1133,7 @@ function Stop-TrackedProcesses {
         }
     }
     if ($remaining.Count -gt 0) {
-        $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
-        throw "Could not stop tracked Willard process(es): $remainingPids. The process list was retained for a safe retry."
+        throw "Could not stop tracked Willard process(es): $($remaining -join '; '). The process list was retained for a safe retry."
     }
     $remainingListeners = @(Get-DeveloperListeningPorts)
     if ($remainingListeners.Count -gt 0) {

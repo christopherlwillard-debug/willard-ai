@@ -392,18 +392,25 @@ function Stop-Services {
   $pids = Read-Pids
   Assert-NoUntrackedPackagedServices $pids
   $remaining = @()
+  $taskkillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+  if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+    throw "Windows taskkill.exe was not found in the system directory. The running installation was left in place."
+  }
   foreach ($process in @($pids.api, $pids.web)) {
     if (Test-ProcessIdentity $process) {
-      & taskkill /PID $process.pid /T /F 2>&1 | Out-Null
+      $killOutput = @(& $taskkillPath /PID $process.pid /T /F 2>&1)
+      $killExitCode = $LASTEXITCODE
       try {
         Wait-Process -Id $process.pid -Timeout 10 -ErrorAction SilentlyContinue
       } catch {}
-      if (Test-ProcessIdentity $process) { $remaining += $process }
+      if (Test-ProcessIdentity $process) {
+        $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
+        $remaining += "PID $($process.pid) (taskkill exit code $killExitCode; $killText)"
+      }
     }
   }
   if ($remaining.Count -gt 0) {
-    $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
-    throw "Could not stop Willard Media Center process(es): $remainingPids. The running installation was left in place."
+    throw "Could not stop Willard Media Center process(es): $($remaining -join '; '). The running installation was left in place."
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }

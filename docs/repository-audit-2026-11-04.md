@@ -3040,3 +3040,15 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | High | Windows installer/developer launcher → verify and stop tracked processes when WMI omits optional fields | fixed; targeted validation pending | pending commit | Exact process creation time remains mandatory; Windows smoke and installed lifecycle must pass. |
 | Medium | Windows launcher → explicit stop when startup mutex cannot be acquired | fixed; targeted validation pending | pending commit | Static contract and Windows lifecycle must confirm prompt non-modal failure. |
 | Medium | Windows launcher → process identity check followed by PID-only process-tree termination | found; architecture required | — | TOCTOU PID reuse window remains; requires handle-bound process identity and process-tree ownership design. |
+
+## November 6 — Windows stop diagnostics after lifecycle #104
+
+- **Integration result:** Windows installer lifecycle [#104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42218506198) successfully built and compiled the unsigned installer, created the standard user, installed the product, and completed first startup. The first installed stop command then failed because the tracked process PID 2360 was still present after the shutdown attempt. The process was not force-cleared from the journal and the running installation was left in place. This run does not validate upgrade/recovery/uninstall.
+- **Confirmed diagnostic defect:** Both packaged and developer launchers invoked `taskkill` by command name, discarded all output, and ignored `$LASTEXITCODE`. If the executable could not be resolved or Windows refused termination, the only resulting message was the surviving PID; the actual operating-system reason was lost.
+- **Fix:** Both launchers now resolve taskkill.exe from the Windows system directory, verify that the executable exists, capture its output and exit code, and include sanitized output with the surviving PID in the retained-state error. They still verify process identity after the attempt and do not clear the state file when a tracked process remains.
+- **Remaining risk:** The reason PID 2360 survived in run #104 is not established because the previous code discarded taskkill output. The new diagnostics are intended to distinguish path resolution, access denial, and an actual surviving process in the next Windows lifecycle run. The PID-check-to-taskkill TOCTOU risk remains separately recorded and is not solved by this diagnostic change.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → stop API/web service tree after first startup or upgrade | fixed diagnostic gap; targeted validation pending | pending commit | Must observe taskkill result on next Windows lifecycle run; process still must be stopped safely. |
+| Medium | Windows developer launcher → stop tracked service tree | fixed diagnostic gap; targeted validation pending | pending commit | Windows process-ownership smoke and targeted contract tests must pass. |

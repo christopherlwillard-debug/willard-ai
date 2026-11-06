@@ -1571,6 +1571,10 @@ test("packaged launcher detects orphaned API and web processes before startup or
   const stop = launcher.slice(stopStart, stopEnd);
   assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") >= 0);
   assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") < stop.indexOf("taskkill"));
+  assert.match(stop, /Join-Path \(\[Environment\]::SystemDirectory\) "taskkill\.exe"/);
+  assert.match(stop, /\$killOutput = @\(& \$taskkillPath \/PID \$process\.pid \/T \/F 2>&1\)/);
+  assert.match(stop, /\$killExitCode = \$LASTEXITCODE/);
+  assert.match(stop, /taskkill exit code/);
 
   const startupRead = launcher.indexOf("$existing = Read-Pids");
   const startupAssert = launcher.indexOf("Assert-NoUntrackedPackagedServices $existing", startupRead);
@@ -1632,6 +1636,13 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   assert.match(identity, /\$expectedCreationDate -and[\s\S]*\$expectedCommandLine/);
   assert.match(identity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
   assert.doesNotMatch(identity, /catch \{ return \$null \}/);
+  const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
+  const developerStopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", developerStopStart);
+  const developerStop = launcherCommon.slice(developerStopStart, developerStopEnd);
+  assert.match(developerStop, /Join-Path \(\[Environment\]::SystemDirectory\) "taskkill\.exe"/);
+  assert.match(developerStop, /\$killOutput = @\(& \$taskkillPath \/PID \$p\.pid \/T \/F 2>&1\)/);
+  assert.match(developerStop, /\$killExitCode = \$LASTEXITCODE/);
+  assert.match(developerStop, /taskkill exit code/);
 
   const stopHandleStart = launcherCommon.indexOf("function Stop-LauncherStartedProcessHandle");
   const stopHandleEnd = launcherCommon.indexOf("\nfunction Read-TrackedPids", stopHandleStart);
