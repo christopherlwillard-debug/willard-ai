@@ -46,6 +46,9 @@ try {
     "Restore-UpdateBackup",
     "Recover-InterruptedUpdateSwap",
     "Read-Pids",
+    "Test-CommandLineContainsExactPath",
+    "Get-PackagedServiceProcesses",
+    "Assert-NoUntrackedPackagedServices",
     "Get-InstalledWindowsVersion",
     "Test-WindowsVersionRequirement"
   )) {
@@ -95,6 +98,98 @@ try {
   }
   Assert-True $incompleteProcessStateRejected "A process state record without executable identity was accepted."
   Remove-Item -LiteralPath $PidFile -Force
+
+  # Orphan discovery is read-only: it must recognize only this install's exact
+  # Node executable plus exact packaged entrypoint paths, never kill by name or port.
+  $Api = Join-Path $InstallRoot "api-runtime\dist\index.mjs"
+  $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
+  $script:MockPackagedProcesses = @()
+  $script:MockPackagedWmiFailure = $false
+  function Get-CimInstance {
+    [CmdletBinding()]
+    param([string]$ClassName, [string]$Filter)
+    if ($script:MockPackagedWmiFailure) { throw "synthetic packaged WMI failure" }
+    if ($ClassName -ne "Win32_Process") { throw "Unexpected CIM class: $ClassName" }
+    return $script:MockPackagedProcesses
+  }
+
+  $apiCommand = '"' + $Node + '" --env-file="C:\WillardData\.env" "' + $Api + '"'
+  $apiProcess = [pscustomobject]@{
+    ProcessId = 34567
+    ExecutablePath = $Node
+    CommandLine = $apiCommand
+    CreationDate = "2026-11-05T00:00:00Z"
+  }
+  $script:MockPackagedProcesses = @($apiProcess)
+  $missingJournalOrphanRejected = $false
+  $missingJournalMessage = ""
+  try { Assert-NoUntrackedPackagedServices $null } catch {
+    $missingJournalOrphanRejected = $true
+    $missingJournalMessage = $_.Exception.Message
+  }
+  Assert-True $missingJournalOrphanRejected "A packaged API process was ignored when its services journal was missing."
+  Assert-True ($missingJournalMessage -match "API PID 34567") "Missing-journal diagnostics did not identify the orphan API process."
+  Assert-True (-not (Test-Path -LiteralPath $PidFile)) "Orphan discovery created or altered the missing services journal."
+
+  $trackedApi = @{
+    pid = 34567
+    path = $Node
+    commandLine = $apiCommand
+    creationDate = "2026-11-05T00:00:00Z"
+  }
+  $webCommand = '"' + $Node + '" "' + $WebServer + '" --root="C:\WillardData\web" --port=5000 --api=http://127.0.0.1:8080'
+  $webProcess = [pscustomobject]@{
+    ProcessId = 34568
+    ExecutablePath = $Node
+    CommandLine = $webCommand
+    CreationDate = "2026-11-05T00:01:00Z"
+  }
+  $script:MockPackagedProcesses = @($apiProcess, $webProcess)
+  $partialJournalRejected = $false
+  $partialJournalMessage = ""
+  try { Assert-NoUntrackedPackagedServices ([pscustomobject]@{ api = $trackedApi; web = $null }) } catch {
+    $partialJournalRejected = $true
+    $partialJournalMessage = $_.Exception.Message
+  }
+  Assert-True $partialJournalRejected "A web process created after the API-only journal write was not detected."
+  Assert-True ($partialJournalMessage -match "web PID 34568") "Partial-journal diagnostics did not identify the orphan web process."
+  Assert-True ($partialJournalMessage -notmatch "API PID 34567") "A correctly journaled API process was incorrectly classified as orphaned."
+
+  $reusedPidRejected = $false
+  try {
+    Assert-NoUntrackedPackagedServices ([pscustomobject]@{
+      api = @{ pid = 34567; path = "C:\OldWillard\runtime\node.exe"; commandLine = $apiCommand; creationDate = "2025-01-01T00:00:00Z" }
+      web = $null
+    })
+  } catch { $reusedPidRejected = $_.Exception.Message -match "API PID 34567" }
+  Assert-True $reusedPidRejected "A reused PID with a different executable identity was incorrectly trusted."
+
+  $script:MockPackagedProcesses = @(
+    [pscustomobject]@{
+      ProcessId = 34569
+      ExecutablePath = $Node
+      CommandLine = '"' + $Node + '" "C:\OtherApplication\api-runtime\dist\index.mjs"'
+      CreationDate = "2026-11-05T00:02:00Z"
+    },
+    [pscustomobject]@{
+      ProcessId = 34570
+      ExecutablePath = $Node
+      CommandLine = '"' + $Node + '" "' + $Api + '.backup"'
+      CreationDate = "2026-11-05T00:03:00Z"
+    }
+  )
+  Assert-NoUntrackedPackagedServices $null
+  Assert-True $true "Unrelated Node processes and entrypoint path prefixes must be ignored."
+
+  $script:MockPackagedWmiFailure = $true
+  $wmiFailureRejected = $false
+  try { Assert-NoUntrackedPackagedServices $null } catch {
+    $wmiFailureRejected = $_.Exception.Message -match "could not inspect running processes"
+  }
+  Assert-True $wmiFailureRejected "A WMI failure was treated as proof that no orphaned services were running."
+  Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
+  $script:MockPackagedProcesses = @()
+  $script:MockPackagedWmiFailure = $false
 
   $developerTokens = $null
   $developerParseErrors = $null
