@@ -40,6 +40,8 @@ test("desktop service accepts only its loopback Host and same-origin browser req
   assert.equal(isAllowedDesktopRequestHost("127.0.0.1:5000", undefined, 5000), true);
   assert.equal(isAllowedDesktopRequestHost("localhost:5000", "http://localhost:5000", 5000), true);
   assert.equal(isAllowedDesktopRequestHost("127.0.0.1:5000", "http://127.0.0.1:5000", 5000), true);
+  assert.equal(isAllowedDesktopRequestHost("127.0.0.1:5000", undefined, 5000, "same-origin"), true);
+  assert.equal(isAllowedDesktopRequestHost("127.0.0.1:5000", undefined, 5000, "cross-site"), false);
   for (const [host, origin] of [
     ["attacker.example:5000", "http://attacker.example:5000"],
     ["127.0.0.1:5000", "http://attacker.example"],
@@ -54,7 +56,7 @@ test("desktop service accepts only its loopback Host and same-origin browser req
 
 test("desktop web server validates Host and Origin before routing or proxying", () => {
   const source = fs.readFileSync(new URL("./desktop-web-server.mjs", import.meta.url), "utf8");
-  const guard = source.indexOf("isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port)");
+  const guard = source.indexOf("isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port, request.headers[\"sec-fetch-site\"])");
   const apiRoute = source.indexOf('parsedRequest.pathname.startsWith("/api/")');
   assert.ok(guard >= 0 && apiRoute > guard, "untrusted hosts must be rejected before API proxy routing");
 });
