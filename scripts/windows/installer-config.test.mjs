@@ -112,6 +112,10 @@ const updateSmoke = await readFile(
   new URL("./update-smoke.ps1", import.meta.url),
   "utf8",
 );
+const updateJournalSmoke = await readFile(
+  new URL("./update-journal-smoke.ps1", import.meta.url),
+  "utf8",
+);
 const loaderPage = await readFile(
   new URL("../../desktop/loading.html", import.meta.url),
   "utf8",
@@ -1465,7 +1469,7 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
 
 test("packaged launcher detects orphaned API and web processes before startup or shutdown", () => {
   const discoveryStart = launcher.indexOf("function Test-CommandLineContainsExactPath");
-  const discoveryEnd = launcher.indexOf("\\nfunction Is-Alive", discoveryStart);
+  const discoveryEnd = launcher.indexOf("\nfunction Is-Alive", discoveryStart);
   assert.ok(discoveryStart >= 0 && discoveryEnd > discoveryStart, "Packaged orphan discovery helpers must be present.");
   const discovery = launcher.slice(discoveryStart, discoveryEnd);
   assert.match(discovery, /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/);
@@ -1477,7 +1481,7 @@ test("packaged launcher detects orphaned API and web processes before startup or
   assert.doesNotMatch(discovery, /taskkill|Stop-Process|\.Kill\(|Remove-Item/);
 
   const stopStart = launcher.indexOf("function Stop-Services {");
-  const stopEnd = launcher.indexOf("\\nfunction Stop-StartedProcess", stopStart);
+  const stopEnd = launcher.indexOf("\nfunction Stop-StartedProcess", stopStart);
   const stop = launcher.slice(stopStart, stopEnd);
   assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") >= 0);
   assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") < stop.indexOf("taskkill"));
@@ -1488,10 +1492,10 @@ test("packaged launcher detects orphaned API and web processes before startup or
   assert.ok(startupRead >= 0 && startupAssert > startupRead && startupDecision > startupAssert,
     "The launcher must inspect untracked services before deciding that no services are running.");
 
-  assert.match(installerLifecycleSmoke, /missing-journal/i);
-  assert.match(installerLifecycleSmoke, /partial-journal/i);
-  assert.match(installerLifecycleSmoke, /reused PID/i);
-  assert.match(installerLifecycleSmoke, /synthetic packaged WMI failure/i);
+  assert.match(updateJournalSmoke, /missing-journal/i);
+  assert.match(updateJournalSmoke, /partial-journal/i);
+  assert.match(updateJournalSmoke, /reused PID/i);
+  assert.match(updateJournalSmoke, /synthetic packaged WMI failure/i);
 });
 
 test("installed lifecycle smoke uninstalls while both packaged services are running", () => {
