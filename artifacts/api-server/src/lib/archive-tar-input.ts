@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { getSevenZipPath } from "./sevenzip.ts";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import {
@@ -59,7 +60,7 @@ export async function withTarInput<T>(
   const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
   const child = compression === "gzip"
     ? null
-    : spawn(compression === "bzip2" ? "bzip2" : "xz", ["-dc", "--", archivePath], {
+    : spawn(getSevenZipPath(), ["x", "-so", archivePath, "-y"], {
         stdio: ["ignore", "pipe", "pipe"],
       });
   let stderr = "";
@@ -73,8 +74,7 @@ export async function withTarInput<T>(
         child.once("close", (code, signal) => {
           if (code === 0) resolve();
           else reject(new Error(
-            (compression === "bzip2" ? "bzip2" : "xz") +
-            " failed" +
+            "7-Zip " + compression + " decompression failed" +
             (signal ? " (" + signal + ")" : "") +
             ": " + (stderr.trim() || "exit code " + code),
           ));
