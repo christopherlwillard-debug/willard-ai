@@ -1867,7 +1867,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
       await assertOrganizationLease(id, nasPath, executionLeaseToken);
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      const record = await verifiedMove(sf.fullPath, destFile, {
+        sourceRelPath: sf.relativePath,
+        expectedSourceHash: sourceHash,
+        beforeMove: () => assertOrganizationLease(id, nasPath, executionLeaseToken),
+        beforeRestore: () => assertOrganizationLease(id, nasPath, executionLeaseToken),
+      });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
 
@@ -2736,7 +2741,12 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
 
       await assertOrganizationLease(id, nasPath, resumeLeaseToken);
-      const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      const record = await verifiedMove(sf.fullPath, destFile, {
+        sourceRelPath: sf.relativePath,
+        expectedSourceHash: sourceHash,
+        beforeMove: () => assertOrganizationLease(id, nasPath, resumeLeaseToken),
+        beforeRestore: () => assertOrganizationLease(id, nasPath, resumeLeaseToken),
+      });
       newMoves[newMoves.length - 1] = record;
       moved++;
 
