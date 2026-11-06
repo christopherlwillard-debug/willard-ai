@@ -22,7 +22,7 @@ async function readSevenZipVersion(candidate: string): Promise<string | undefine
       maxBufferBytes: 64 * 1024,
     });
     const output = `${stdout}\n${stderr}`;
-    return output.match(/7-Zip(?: \\(z\\))? (\\d+\\.\\d+)/)?.[1];
+    return output.match(/7-Zip(?: \(z\))? (\d+\.\d+)/)?.[1];
   } catch {
     return undefined;
   }
@@ -30,7 +30,7 @@ async function readSevenZipVersion(candidate: string): Promise<string | undefine
 
 function isSupportedOfficialVersion(version: string | undefined): boolean {
   if (!version) return false;
-  const match = version.match(/^(\\d+)\\.(\\d+)$/);
+  const match = version.match(/^(\d+)\.(\d+)$/);
   if (!match) return false;
   const major = Number(match[1]);
   const minor = Number(match[2]);
