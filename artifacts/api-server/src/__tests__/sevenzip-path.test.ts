@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -9,6 +10,15 @@ import {
 } from "../lib/sevenzip.ts";
 
 const officialVersion = async () => "26.05";
+
+const resolverSource = readFileSync(new URL("../lib/sevenzip.ts", import.meta.url), "utf8");
+
+test("production 7-Zip version probing uses the tracked asynchronous runner", () => {
+  assert.ok(resolverSource.includes('runMediaToolAsync(candidate, ["i"]'));
+  assert.ok(resolverSource.includes("timeoutMs: 10_000"));
+  assert.ok(resolverSource.includes("maxBufferBytes: 64 * 1024"));
+  assert.ok(!resolverSource.includes("spawnSync"));
+});
 
 test("configured official 7-Zip path takes precedence when its version is supported", async () => {
   assert.equal(
@@ -136,7 +146,7 @@ test("archive operations return an actionable error when no official binary is a
       exists: () => false,
       getVersion: async () => undefined,
     }),
-    /official 7-Zip 26\\.01 or newer.*WILLARD_7ZIP_PATH/,
+    /official 7-Zip 26\.01 or newer.*WILLARD_7ZIP_PATH/,
   );
 });
 
