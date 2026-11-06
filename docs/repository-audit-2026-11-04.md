@@ -2621,3 +2621,27 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Windows clean install → first launcher startup → portable PostgreSQL recovery export | fixed; target validation pending | `2b7da325739accb3f74568b0f2eef0538c1c1d83` (payload); `a718ad68c127b9c528decb88d1a4a6c94cc03f16` and `57a7252406df08cd01b9a5dae890b5483247381f` (regression); `eb269c30423b1302e5212bdb64540af707c85339` and `6ede04dcf8c3ec146e84d2fbe6cc0dae6f09ceee` (trigger contract) | Corrected installed-product lifecycle must complete through startup, upgrade, recovery, diagnostics, and uninstall; this does not validate Authenticode trust or SmartScreen reputation |
+
+
+## 2026-11-06 architecture finding — conversion workers are not fenced after advisory-lock connection loss
+
+**Finding — High (conversion reliability / staged-media and job-state integrity):** Source inspection of `conversion-job-lock.ts`, `routes/optimize.ts`, and `conversion-recovery.ts` confirms that conversion ownership depends on a PostgreSQL session advisory lock. The execution and finalization routes acquire a dedicated client and release it in `finally`, but the worker does not subscribe to that client's `error`/`end` lifecycle or otherwise verify that the session lock remains alive during long-running work. PostgreSQL releases a session advisory lock when its connection is lost. Startup recovery can then acquire the lock and mark the row failed while the original process may still be executing.
+
+**Impact path confirmed in source:** A retry reuses the deterministic staging directory `WillardAI/conversions/<jobId>`; progress and per-file counters are updated using the job ID without an attempt/lease discriminator; and finalization journal checkpoints are conditional on job ID and status, not a unique owner generation. If the old worker survives a transient database disconnect long enough for recovery/retry to begin, the old and new attempts can write to the same staging tree and both can update the same job state. Finalization has durable per-move intent callbacks, but those callbacks are not a substitute for fencing the worker that owns the operation.
+
+**Status:** Blocked for implementation pending an architectural batch. This is not being "fixed" by adding a heartbeat alone: a heartbeat or a last-moment ownership query still leaves a race between the query and filesystem mutation, and killing one child process does not prove the entire process tree or stale worker has stopped.
+
+**Safe implementation plan:**
+1. Add a monotonically increasing attempt/lease generation (or equivalent durable owner token) to conversion jobs, with an atomic claim that returns the generation. Backfill existing rows without changing their status or result data.
+2. Give every execution attempt a unique staging directory, such as `conversions/<jobId>/<attemptId>`; never let retries share a writable staging tree.
+3. Include the generation in every progress, result, cancellation, retry, finalization-journal, and terminal-state update. Every update must be conditional on both the expected status and current generation; a zero-row update means the worker is stale and must stop.
+4. Monitor the dedicated lock client's `error` and `end` events. On loss, mark the attempt locally fenced, abort active FFmpeg/ffprobe and all owned subprocess trees, stop scheduling files, and prohibit further writes. Treat a failed liveness query as loss, not as permission to continue.
+5. Keep finalization attempt-specific and journal each move with its generation. Use no-replace publication and a recovery state machine that reconciles the filesystem against the durable intent before a new generation can publish. Do not assume a database check immediately before a filesystem call is atomic with that call.
+6. Add fault-injection integration tests that sever the lock connection during scanning, active conversion, between move intent and rename, after rename but before completion checkpoint, and during finalization; prove stale attempts cannot alter the new attempt's staging files, job counters, result JSON, or published media.
+7. Roll out behind a schema migration and compatibility review for existing running/awaiting-action jobs; do not automatically delete orphaned attempt directories until recovery proves they are unreferenced.
+
+**Validation:** Source inspection only. No implementation or targeted test is claimed. The existing PostgreSQL advisory-lock test proves mutual exclusion and automatic lock release after connection destruction; it does not prove that a still-running worker stops after losing that lock.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Optimize → conversion execution/retry → staged output; finalize/replace/recycle/archive | blocked | documentation and investigation only | Stale workers may continue after advisory-lock loss and race a retry/finalizer; requires generation fencing, isolated staging, subprocess cancellation, migration, and fault-injection integration tests |
