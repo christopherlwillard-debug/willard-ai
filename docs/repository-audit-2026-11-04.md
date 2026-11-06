@@ -2190,3 +2190,14 @@ The GET /cleanup/trash handler called `purgeExpiredTrashEntries`, so simply open
 
 ### Validation record
 The two changes above are committed to `audit/full-repository-review-2026-11`. Focused regression tests were added but have not yet been executed in a local checkout or confirmed by the matching latest CI run. Do not mark this batch integration-tested or fully validated until the corresponding workflow results are available.
+
+
+## 2026-11-06 follow-up — verified Trash retention
+
+### Finding: expired Trash entries could permanently delete modified or unverifiable content
+**Severity:** High (data loss). **Workflow:** Cleanup → local Trash retention.
+**Status:** Fixed; focused filesystem regressions added; CI validation pending.
+Before permanent deletion, retention now requires a regular non-symlink file, an exact manifest size match, and a syntactically valid SHA-256 that matches the file's bytes. Entries with missing/invalid hashes, changed content, size mismatch, symlinks, or special filesystem objects are preserved and reported for review. This intentionally leaves legacy manifest records without hashes untouched rather than guessing that they are safe to delete.
+**Implementation:** `20f19bde27af5e3c0515b2c295ca7e5e1a54ba94`.
+**Tests:** `72cc15b5d52737b413cc8e2a4e78771dbe2eda5d` covers valid files, changed content, missing hashes, and symlink preservation.
+**Remaining risk:** Filesystem deletion and database/manifest reconciliation still span separate durability domains. A crash after unlink but before database and tombstone updates requires additional recovery handling. Startup currently triggers retention cleanup once after launch; no recurring scheduler was added.
