@@ -1981,21 +1981,28 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     }
 
     const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
-    const resultJson = { files: results, totalSaved, stagingDir };
     const [finishedJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
       .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
     const wasCancelled = Boolean(finishedJob?.cancelledAt);
+    // A cancelled run may still have completed, verified staged outputs. Keep
+    // those outputs actionable: finalize accepts awaiting_action jobs, while
+    // cancelledAt and resultJson.cancelled preserve the user's cancellation.
+    const needsFinalization = succeeded > 0;
+    const nextStatus = needsFinalization ? "awaiting_action" : "cancelled";
+    const resultJson = { files: results, totalSaved, stagingDir, cancelled: wasCancelled };
 
     // Stage 4: Await user action — originals are untouched; staged files ready for user decision.
     await db.update(conversionJobsTable).set({
-      status: wasCancelled ? "cancelled" : "awaiting_action", processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
+      status: nextStatus, processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
       skippedFiles: skipped, completedAt: new Date(), resultJson,
     }).where(eq(conversionJobsTable.id, id));
 
     send("status", {
-      stage: wasCancelled ? "cancelled" : "awaiting_action",
+      stage: nextStatus,
       message: wasCancelled
-        ? `Conversion cancelled after ${results.length} of ${totalFiles} files — staged files are preserved`
+        ? needsFinalization
+          ? `Conversion cancelled after ${results.length} of ${totalFiles} files — ${succeeded} verified staged file(s) are ready for your action`
+          : `Conversion cancelled after ${results.length} of ${totalFiles} files — no successful staged files need finalization`
         : "Conversions staged — choose what to do with your originals",
       progress: wasCancelled ? Math.round(5 + (results.length / totalFiles) * 90) : 100,
       processed: results.length,
