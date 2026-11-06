@@ -3,6 +3,7 @@
  * Database session locks remain the cross-instance ownership authority.
  */
 import { logger } from "./logger.ts";
+import { stopActiveMediaTools } from "./media-tools.ts";
 
 const activeConversionRequests = new Map<number, number>();
 const activeConversionWaiters = new Set<() => void>();
@@ -26,6 +27,8 @@ export function trackConversionRequest(jobId: number): () => void {
 }
 
 export async function stopActiveConversionJobs(timeoutMs = 8_000): Promise<void> {
+  // Also terminate thumbnail FFmpeg children; this is the shared shutdown hook.
+  await stopActiveMediaTools(Math.min(timeoutMs, 2_000));
   if (activeConversionRequests.size === 0) return;
   await new Promise<void>((resolve) => {
     let timer: NodeJS.Timeout | null = null;

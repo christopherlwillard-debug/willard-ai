@@ -5,10 +5,15 @@ import { fileURLToPath } from "node:url";
 import {
   formatMediaToolExecutionError,
   runMediaToolAsync,
+  stopActiveMediaTools,
 } from "../lib/media-tools.ts";
 
 const optimizePath = fileURLToPath(new URL("../routes/optimize.ts", import.meta.url));
 const optimizeSource = readFileSync(optimizePath, "utf8");
+const thumbnailPath = fileURLToPath(new URL("../lib/thumbnail-engine.ts", import.meta.url));
+const thumbnailSource = readFileSync(thumbnailPath, "utf8");
+const runtimePath = fileURLToPath(new URL("../lib/conversion-runtime.ts", import.meta.url));
+const runtimeSource = readFileSync(runtimePath, "utf8");
 
 test("long-running media tools leave the API event loop responsive", async () => {
   let eventLoopTicked = false;
@@ -51,8 +56,27 @@ test("media tool timeout is enforced and missing binaries stay actionable", asyn
   assert.match(missing, /Install FFmpeg/);
 });
 
-test("conversion route awaits FFmpeg instead of running it synchronously", () => {
+test("conversion and thumbnail routes await FFmpeg instead of running it synchronously", () => {
   assert.doesNotMatch(optimizeSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(optimizeSource, /runMediaToolAsync\(\s*"ffmpeg"/);
   assert.match(optimizeSource, /convertError = await convertVideo\(fullPath, stagedPath\)/);
+  assert.doesNotMatch(thumbnailSource, /spawnSync\s*\(\s*"ffmpeg"/);
+  assert.match(thumbnailSource, /await runMediaToolAsync\("ffmpeg"/);
+  assert.match(thumbnailSource, /error = await generateVideoThumbnail/);
+});
+
+test("shutdown terminates owned media subprocesses before the server exits", async () => {
+  const pending = runMediaToolAsync(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1_000)"],
+    { timeoutMs: 10_000 },
+  );
+  const rejected = assert.rejects(pending, (error: NodeJS.ErrnoException & { killed?: boolean }) => {
+    assert.ok(error.killed || error.signal === "SIGTERM" || error.signal === "SIGKILL");
+    return true;
+  });
+
+  await stopActiveMediaTools(500);
+  await rejected;
+  assert.match(runtimeSource, /await stopActiveMediaTools/);
 });

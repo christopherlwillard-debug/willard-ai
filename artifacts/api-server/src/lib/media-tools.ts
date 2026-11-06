@@ -1,4 +1,4 @@
-import { execFile, spawnSync, type SpawnSyncReturns } from "child_process";
+import { execFile, spawnSync, type ChildProcess, type SpawnSyncReturns } from "child_process";
 import { logger } from "./logger.ts";
 
 /**
@@ -55,6 +55,85 @@ type MediaToolExecutionError = Error & {
   stderr?: string;
 };
 
+const activeMediaProcesses = new Set<ChildProcess>();
+
+function isMediaProcessRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function waitForMediaProcess(child: ChildProcess): Promise<void> {
+  if (!isMediaProcessRunning(child)) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      child.off("close", finish);
+      child.off("error", finish);
+      resolve();
+    };
+    child.once("close", finish);
+    child.once("error", finish);
+    if (!isMediaProcessRunning(child)) finish();
+  });
+}
+
+/**
+ * Stop tracked media subprocesses before the server closes its database and
+ * exits. FFmpeg only writes staged/cache derivatives, so terminating it
+ * preserves originals and leaves incomplete work available for recovery.
+ */
+export async function stopActiveMediaTools(graceMs = 2_000): Promise<void> {
+  const active = [...activeMediaProcesses].filter(isMediaProcessRunning);
+  if (active.length === 0) return;
+
+  const gracefulWait = Promise.all(active.map(waitForMediaProcess));
+  for (const child of active) {
+    try {
+      child.kill("SIGTERM");
+    } catch (error) {
+      logger.warn({ err: error }, "Unable to request graceful media subprocess shutdown");
+    }
+  }
+
+  let graceTimer: NodeJS.Timeout | null = null;
+  const exitedGracefully = await Promise.race([
+    gracefulWait.then(() => true),
+    new Promise<boolean>((resolve) => {
+      graceTimer = setTimeout(() => resolve(false), Math.max(0, graceMs));
+      graceTimer.unref?.();
+    }),
+  ]);
+  if (graceTimer) clearTimeout(graceTimer);
+  if (exitedGracefully) return;
+
+  const remaining = active.filter(isMediaProcessRunning);
+  for (const child of remaining) {
+    try {
+      child.kill("SIGKILL");
+    } catch (error) {
+      logger.warn({ err: error }, "Unable to force-stop a media subprocess");
+    }
+  }
+
+  if (remaining.length > 0) {
+    let forceTimer: NodeJS.Timeout | null = null;
+    await Promise.race([
+      Promise.all(remaining.map(waitForMediaProcess)),
+      new Promise<void>((resolve) => {
+        forceTimer = setTimeout(resolve, 1_000);
+        forceTimer.unref?.();
+      }),
+    ]);
+    if (forceTimer) clearTimeout(forceTimer);
+  }
+
+  const stillRunning = active.filter(isMediaProcessRunning);
+  if (stillRunning.length > 0) {
+    logger.error({ count: stillRunning.length }, "Media subprocesses remained active after forced shutdown");
+  }
+}
+
 /**
  * Run a media binary without blocking the API event loop. Conversion requests
  * can take minutes, so they must remain asynchronous for cancellation, health,
@@ -66,12 +145,17 @@ export function runMediaToolAsync(
   options: MediaToolExecutionOptions,
 ): Promise<MediaToolExecutionResult> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, {
+    let child: ChildProcess | null = null;
+    const removeChild = () => {
+      if (child) activeMediaProcesses.delete(child);
+    };
+    child = execFile(bin, args, {
       encoding: "utf8",
       timeout: options.timeoutMs,
       maxBuffer: options.maxBufferBytes ?? 1024 * 1024,
       windowsHide: true,
     }, (error, stdout, stderr) => {
+      removeChild();
       if (error) {
         const failure = error as MediaToolExecutionError;
         failure.stdout = String(stdout ?? "");
@@ -84,6 +168,9 @@ export function runMediaToolAsync(
         stderr: String(stderr ?? ""),
       });
     });
+    activeMediaProcesses.add(child);
+    child.once("close", removeChild);
+    child.once("error", removeChild);
   });
 }
 
@@ -101,8 +188,14 @@ export function formatMediaToolExecutionError(
   }
 
   const detail = String(failure.stderr ?? "").trim().slice(-500);
-  if (failure.code === "ETIMEDOUT" || (failure.killed && failure.signal === "SIGTERM")) {
+  if (failure.code === "ETIMEDOUT") {
     return `${bin} timed out after ${Math.ceil(timeoutMs / 1000)} seconds${detail ? `: ${detail}` : ""}`;
+  }
+  if (failure.killed || failure.signal) {
+    return `${bin} was stopped before completion${detail ? `: ${detail}` : ""}`;
+  }
+  if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+    return `${bin} output exceeded the configured diagnostic limit`;
   }
 
   const suffix = detail || failure.message;
