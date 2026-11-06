@@ -917,7 +917,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(launcherCommon, /function Wait-ForDatabase/);
   assert.match(developerLauncher, /Wait-ForDatabase 30/);
   assert.doesNotMatch(developerLauncher, /Show-Failure \$friendly \$technical/);
-  assert.match(launcherCommon, /Get-CimInstance Win32_Process/);
+  assert.match(launcherCommon, /Get-CimInstance -ClassName Win32_Process/);
   assert.match(launcherCommon, /Test-ProcessIdentity/);
   assert.doesNotMatch(launcherCommon, /\$pid\s*=/i);
   assert.match(launcherCommon, /StatusCode -eq 200/);

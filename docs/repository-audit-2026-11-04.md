@@ -1990,3 +1990,9 @@ Fast Validation #862 failed at the rollback-gating source assertion because the 
 | Medium | Developer launcher may leave a just-started API/web process untracked if PID persistence fails | fixed / target-tested pending CI | this batch | Direct `Process` handle cleanup is covered by source-contract tests; full failure injection on Windows remains pending |
 
 **Validation classification:** source inspection and focused regression tests added. The Windows updater smoke now exercises both packaged and developer process-state readers, but the full installed Inno uninstall-while-running lifecycle and a real developer launcher fault-injection run remain unexecuted on this PR branch.
+
+### Follow-up test correction — explicit CIM class argument
+
+Fast Validation #863 ran 73 installer/source-contract tests: 72 passed and one existing developer-startup assertion failed because it expected the older positional `Get-CimInstance Win32_Process` syntax. The production helper now uses the explicit `Get-CimInstance -ClassName Win32_Process` form so its target class is unambiguous; the source assertion now matches that intentional form. The Windows job was skipped after the Linux validation failure. Dependency Review #626 passed. The synthetic WMI-failure fixture was also tightened to declare the cmdlet-style parameters and common parameters so it exercises the intended exception path rather than a parameter-binding error.
+
+**Validation status:** the code changes remain source-reviewed; the corrected Linux source-contract test and Windows process-state smoke are pending the next matching branch-head run.

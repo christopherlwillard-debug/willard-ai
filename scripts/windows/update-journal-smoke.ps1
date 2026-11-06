@@ -138,7 +138,11 @@ try {
   Assert-True ($null -ne $developerIdentityAst) "Get-ProcessIdentity was not found in the developer launcher."
   $developerIdentitySource = $developerIdentityAst.Extent.Text -replace "^function Get-ProcessIdentity", "function Get-DeveloperProcessIdentity"
   . ([scriptblock]::Create($developerIdentitySource))
-  function Get-CimInstance { throw "synthetic WMI query failure" }
+  function Get-CimInstance {
+    [CmdletBinding()]
+    param([string]$ClassName, [string]$Filter)
+    throw "synthetic WMI query failure"
+  }
   $developerWmiFailureRejected = $false
   try { Get-DeveloperProcessIdentity 23456 | Out-Null } catch {
     $developerWmiFailureRejected = $_.Exception.Message -match "could not verify the identity of Willard process"
