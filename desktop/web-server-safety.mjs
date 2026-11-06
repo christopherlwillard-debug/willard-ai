@@ -42,8 +42,9 @@ export function staticFileReadErrorStatus(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 404 : 500;
 }
 
-export function isAllowedDesktopRequestHost(hostHeader, originHeader, port) {
+export function isAllowedDesktopRequestHost(hostHeader, originHeader, port, fetchSiteHeader) {
   if (typeof hostHeader !== "string" || !Number.isInteger(port) || port < 1 || port > 65535) return false;
+  if (typeof fetchSiteHeader === "string" && fetchSiteHeader.toLowerCase() === "cross-site") return false;
   const host = hostHeader.toLowerCase();
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false;
   if (originHeader === undefined) return true;
