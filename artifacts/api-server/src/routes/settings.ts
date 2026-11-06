@@ -59,10 +59,37 @@ function getBrandingDir(): string {
   return path.join(process.cwd(), "data", "branding");
 }
 
+/**
+ * Do not follow a substituted data/branding symlink. realpath containment
+ * alone would treat the symlink target as the trusted root and could permit
+ * reads or deletion outside the application's own branding directory.
+ */
+function ensureBrandingDirectory(): string {
+  const dataDir = path.join(process.cwd(), "data");
+  const brandingDir = getBrandingDir();
+  for (const directory of [dataDir, brandingDir]) {
+    try {
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("Branding storage must use regular directories inside the application data folder.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      fs.mkdirSync(directory, { mode: 0o700 });
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("Branding storage directory changed during initialization.");
+      }
+    }
+  }
+  return brandingDir;
+}
+
 // Defense-in-depth: only ever read/delete files inside the branding dir, even if
 // the stored DB path were somehow tampered with.
 function isWithinBrandingDir(targetPath: string): boolean {
   try {
+    ensureBrandingDirectory();
     // Lexical containment alone does not stop a symlink inside branding/
     // from pointing at an arbitrary readable file elsewhere on the machine.
     const root = fs.realpathSync(getBrandingDir());
@@ -362,8 +389,7 @@ router.post(
       const body = file.buffer;
 
       const settings = await getOrCreateSettings();
-      const dir = getBrandingDir();
-      fs.mkdirSync(dir, { recursive: true });
+      const dir = ensureBrandingDirectory();
 
       // Publish to a unique path first. Never delete the current logo until
       // the replacement is safely written and its database pointer is committed.
