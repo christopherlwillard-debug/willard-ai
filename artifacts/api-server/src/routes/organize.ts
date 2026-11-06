@@ -969,10 +969,15 @@ router.delete("/organize/jobs/:id", async (req, res) => {
 router.post("/organize/jobs/:id/analyze", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let analysisLeaseToken = "";
+  let analysisNasPath = "";
+  let analysisClaimed = false;
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
+    analysisNasPath = job.nasPath;
     if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
       res.status(409).json({ error: "Job is already being processed" }); return;
     }
@@ -981,18 +986,19 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     // read the same prior status, but only one can transition it to analyzing.
     // Every later write is fenced by this token so an older request cannot
     // overwrite a newer plan or recovery state.
-    const analysisLeaseToken = crypto.randomUUID();
+    analysisLeaseToken = crypto.randomUUID();
     const [claimedAnalysis] = await db.update(organizationJobsTable)
       .set({ status: "analyzing", leaseToken: analysisLeaseToken, error: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
         eq(organizationJobsTable.status, job.status),
       ))
       .returning({ id: organizationJobsTable.id });
     if (!claimedAnalysis) {
       res.status(409).json({ error: "This job changed while analysis was starting. Refresh and try again." }); return;
     }
+    analysisClaimed = true;
 
     const failAnalysis = async (message: string) => {
       await db.update(organizationJobsTable)
