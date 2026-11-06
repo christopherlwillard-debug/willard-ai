@@ -1581,6 +1581,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   const operationLogger = logger.child({ correlationId, operation: "organize", jobId: id });
   let capacityReservation: CapacityReservation | null = null;
   let stopHeartbeat: (() => void) | null = null;
+  let executionLeaseToken = "";
   let logWriteFailureReported = false;
   const opLog = (line: string) => {
     try {
@@ -1615,7 +1616,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Claim the job atomically before capacity reservation or staging. Two
     // requests can both read "verified"; only one may transition it to
     // "executing" and own the deterministic per-job staging directory.
-    const executionLeaseToken = crypto.randomUUID();
+    executionLeaseToken = crypto.randomUUID();
     const [claimedJob] = await db.update(organizationJobsTable)
       .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date(), leaseToken: executionLeaseToken })
       .where(and(
@@ -2308,6 +2309,7 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   let stopHeartbeat: (() => void) | null = null;
   let nasPath = "";
+  let rollbackLeaseToken = "";
   try {
     const configuredNasPath = await getNasPath();
     if (!configuredNasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
@@ -2328,7 +2330,7 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     // Rollback moves files and changes the recovery journal. Claim it only
     // after the previous worker is failed or its heartbeat has expired.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
-    const rollbackLeaseToken = crypto.randomUUID();
+    rollbackLeaseToken = crypto.randomUUID();
     const [claimedRollback] = await db.update(organizationJobsTable)
       .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date(), leaseToken: rollbackLeaseToken })
       .where(and(
@@ -2515,6 +2517,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   let existingMoves: FileMoveRecord[] = [];
   let capacityReservation: CapacityReservation | null = null;
   let stopHeartbeat: (() => void) | null = null;
+  let resumeLeaseToken = "";
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
@@ -2548,7 +2551,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // stale. The conditional update is the cross-process compare-and-swap:
     // only one resume request can acquire the lease.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
-    const resumeLeaseToken = crypto.randomUUID();
+    resumeLeaseToken = crypto.randomUUID();
     const [claimedResume] = await db.update(organizationJobsTable)
       .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date(), leaseToken: resumeLeaseToken })
       .where(and(
