@@ -972,3 +972,20 @@ test("restore target safety checks schemas, relations, routines, types, and exte
   assert.match(check, /extname <> 'plpgsql'/);
   assert.doesNotMatch(check, /pg_catalog\.pg_tables/);
 });
+
+
+test("backup and restore media inventories are scoped to the authenticated NAS root", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const sourceStart = source.indexOf("async function sourceLibrary");
+  const sourceEnd = source.indexOf("\nexport async function createPrivateBackupWorkDirectory", sourceStart);
+  assert.ok(sourceStart >= 0 && sourceEnd > sourceStart);
+  const sourceLibrary = source.slice(sourceStart, sourceEnd);
+  assert.match(sourceLibrary, /FROM media_files WHERE nas_path = \$\{sqlLiteral\(root\)\}/);
+  assert.match(sourceLibrary, /WHERE nas_path = \$\{sqlLiteral\(root\)\} AND last_scan_action/);
+
+  const restoreStart = source.indexOf("async function verifyRestoredLibraryInventory");
+  const restoreEnd = source.indexOf("\nfunction sqlLiteral", restoreStart);
+  assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+  const restoreInventory = source.slice(restoreStart, restoreEnd);
+  assert.match(restoreInventory, /nas_path = \$\{sqlLiteral\(targetLibrary\.root\)\}/);
+});
