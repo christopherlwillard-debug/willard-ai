@@ -283,6 +283,9 @@ test(
     const reattachedNasRoot = path.join(root, "reattached-nas-library");
     const foreignNasRoot = path.join(root, "foreign-nas-library");
     const originalPath = path.join(nasRoot, "photos", "family.jpg");
+    const recycledPath = path.join(nasRoot, "photos", "recycled.jpg");
+    const deletedPath = path.join(nasRoot, "photos", "deleted.jpg");
+    const recycledTrashPath = path.join(nasRoot, "WillardAI", ".Trash", "recycled.jpg");
     const optionalCache = path.join(nasRoot, "WillardAI", "cache", "thumbnails", "1.webp");
     const localModelCache = path.join(root, "lost-laptop", "models", "face.onnx");
     const useInstalledService = process.platform === "win32";
@@ -322,11 +325,15 @@ test(
       const sourceUrl = `${databasePrefix}/${sourceDatabase}`;
       const targetUrl = `${databasePrefix}/${targetDatabase}`;
       await mkdir(path.dirname(originalPath), { recursive: true });
+      await mkdir(path.dirname(recycledTrashPath), { recursive: true });
       await mkdir(path.dirname(optionalCache), { recursive: true });
       await mkdir(path.dirname(localModelCache), { recursive: true });
       const originalBytes = Buffer.from("representative-original-photo-bytes");
       const originalSha256 = createHash("sha256").update(originalBytes).digest("hex");
+      const recycledBytes = Buffer.from("recycled-photo-bytes");
+      const recycledSha256 = createHash("sha256").update(recycledBytes).digest("hex");
       await writeFile(originalPath, originalBytes);
+      await writeFile(recycledTrashPath, recycledBytes);
       await writeFile(optionalCache, "rebuildable thumbnail");
       await writeFile(localModelCache, "rebuildable model cache");
       await ensureLibraryIdentity(foreignNasRoot);
@@ -349,11 +356,17 @@ test(
           CREATE TABLE media_files (
             id integer PRIMARY KEY, nas_path text NOT NULL, relative_path text NOT NULL,
             content_hash text, favorite boolean NOT NULL DEFAULT false, name text NOT NULL,
-            thumbnail_path text
+            thumbnail_path text, last_scan_action text
           );
-          INSERT INTO media_files VALUES
+          INSERT INTO media_files
+            (id, nas_path, relative_path, content_hash, favorite, name, thumbnail_path, last_scan_action)
+          VALUES
             (1, ${sqlLiteral(nasRoot)}, 'photos/family.jpg', ${sqlLiteral(originalSha256)}, true, 'family.jpg',
-             ${sqlLiteral(optionalCache)});
+             ${sqlLiteral(optionalCache)}, NULL),
+            (2, ${sqlLiteral(nasRoot)}, 'photos/recycled.jpg', ${sqlLiteral(recycledSha256)}, false, 'recycled.jpg',
+             NULL, 'RECYCLED'),
+            (3, ${sqlLiteral(nasRoot)}, 'photos/deleted.jpg', ${sqlLiteral(originalSha256)}, false, 'deleted.jpg',
+             NULL, 'DELETED');
           CREATE TABLE media_ai (
             media_file_id integer PRIMARY KEY, description text, user_description text,
             user_tags jsonb, hidden_tags jsonb, notes text, embedding text
@@ -440,9 +453,12 @@ test(
       assert.equal(manifest.encryption.algorithm, "aes-256-gcm");
       assert.equal(manifest.library.root, path.resolve(nasRoot));
       assert.match(manifest.library.libraryId, /^[0-9a-f-]{36}$/);
+      assert.equal(manifest.library.catalogInventoryScope, "active");
+      assert.equal(manifest.library.catalogMediaCount, 1, "recycled and deleted rows are not active canonical media");
+      assert.equal(manifest.library.mediaSamples.length, 1);
       assert.equal(manifest.compatibility.applicationSchemaVersion, 2);
       assert.equal(manifest.verification.rowCounts["public.catalog_items"], "2");
-      assert.equal(manifest.verification.rowCounts["public.media_files"], "1");
+      assert.equal(manifest.verification.rowCounts["public.media_files"], "3");
       assert.equal(manifest.verification.rowCounts["public.empty_table"], "0");
       assert.ok(!encrypted.includes(Buffer.from("nas photo")));
       await runCli(["verify", "--backup-dir", backupDir], {
