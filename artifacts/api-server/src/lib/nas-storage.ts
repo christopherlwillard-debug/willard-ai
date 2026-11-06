@@ -635,7 +635,9 @@ export class LazyNasLogStream extends Writable {
   async setNasPath(nasPath: string): Promise<void> {
     try {
       const logDir = path.join(getWillardAIDir(nasPath), "logs");
-      if (!fs.existsSync(logDir)) return;
+      if (!fs.existsSync(logDir)) {
+        throw new Error("NAS operational log directory is unavailable");
+      }
       ensurePrivateDir(logDir);
       const { createStream } = await import("rotating-file-stream");
       const newStream = createStream("willard-ai.log", {
@@ -650,8 +652,14 @@ export class LazyNasLogStream extends Writable {
         (old as any).destroy();
       }
     } catch {
-      // NAS not accessible — continue with stdout, but make the degraded
-      // logging state visible to the operator.
+      // Never keep writing to the previous library after a switch fails:
+      // that would leak the new library's operational activity into the old
+      // NAS. Fall back to process logs until the correct destination is ready.
+      const old = this.rfsStream;
+      this.rfsStream = null;
+      if (old && "destroy" in old && typeof (old as any).destroy === "function") {
+        try { (old as any).destroy(); } catch { /* best-effort stream teardown */ }
+      }
       process.emitWarning("NAS operational log stream unavailable; using process logs only", {
         code: "WILLARD_NAS_LOG_STREAM_UNAVAILABLE",
       });
