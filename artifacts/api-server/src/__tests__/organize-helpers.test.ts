@@ -887,5 +887,5 @@ test("organization plan edits are serialized and release their claim on errors",
   assert.match(route, /eq\(organizationJobsTable\.leaseToken, planEditToken\)/);
   assert.match(route, /leaseToken: null/);
   assert.match(route, /Plan update lost ownership/);
-  assert.match(route, /Release organization plan edit claims/);
+  assert.match(route, /Do not leave a plan-edit claim behind/);
 });
