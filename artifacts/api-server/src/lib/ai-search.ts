@@ -172,7 +172,7 @@ export async function parseIntent(
     };
     // Built-in no-result suggestions must work even if the model omits or
     // misstates a clear flag. These exact UI actions are deterministic.
-    const localClear = previous ? localSearchClearFilters(query) : {};
+    const localClear: SearchIntentClear = previous ? localSearchClearFilters(query) : {};
     const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
     const objectName = objectMatch?.[1]?.trim().toLowerCase();
     if (localClear.dateRange) {
@@ -218,7 +218,7 @@ export async function parseIntent(
   } catch (err) {
     logger.warn({ err, query }, "Intent parsing failed — falling back to keyword search");
     const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2).slice(0, 8);
-    const clear = previous ? localSearchClearFilters(query) : {};
+    const clear: SearchIntentClear = previous ? localSearchClearFilters(query) : {};
     const hasClearAction = Object.values(clear).some((value) => value === true || (Array.isArray(value) && value.length > 0));
     const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
     const objectName = objectMatch?.[1]?.trim().toLowerCase();
