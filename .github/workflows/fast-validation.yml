@@ -168,6 +168,7 @@ jobs:
             artifacts/api-server/src/__tests__/ai-media-scope.test.ts \
             artifacts/api-server/src/__tests__/ai-search.test.ts \
             artifacts/api-server/src/__tests__/optimize-job-claim.test.ts \
+            artifacts/api-server/src/__tests__/media-tools-async.test.ts \
             artifacts/api-server/src/__tests__/optimize-scan.test.ts \
             artifacts/api-server/src/__tests__/backup-timeout-process-tree.test.ts \
             artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts \
@@ -250,6 +251,9 @@ jobs:
 
       - name: Verify media rename no-overwrite and portable filename behavior on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-rename.test.ts
+
+      - name: Verify media conversion subprocesses do not block the event loop on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-tools-async.test.ts
 
       - name: Run storage migration concurrency and no-overwrite regressions on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-migration.test.ts

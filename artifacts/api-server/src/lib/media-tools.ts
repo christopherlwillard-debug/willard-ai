@@ -37,6 +37,78 @@ export function formatMediaToolError(
   return `${bin} exited with code ${result.status}${suffix}`;
 }
 
+export interface MediaToolExecutionOptions {
+  timeoutMs: number;
+  maxBufferBytes?: number;
+}
+
+export interface MediaToolExecutionResult {
+  stdout: string;
+  stderr: string;
+}
+
+type MediaToolExecutionError = Error & {
+  code?: string | number;
+  killed?: boolean;
+  signal?: NodeJS.Signals | null;
+  stdout?: string;
+  stderr?: string;
+};
+
+/**
+ * Run a media binary without blocking the API event loop. Conversion requests
+ * can take minutes, so they must remain asynchronous for cancellation, health,
+ * and unrelated API traffic to be serviced while the child process runs.
+ */
+export function runMediaToolAsync(
+  bin: string,
+  args: string[],
+  options: MediaToolExecutionOptions,
+): Promise<MediaToolExecutionResult> {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, {
+      encoding: "utf8",
+      timeout: options.timeoutMs,
+      maxBuffer: options.maxBufferBytes ?? 1024 * 1024,
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        const failure = error as MediaToolExecutionError;
+        failure.stdout = String(stdout ?? "");
+        failure.stderr = String(stderr ?? "");
+        reject(failure);
+        return;
+      }
+      resolve({
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? ""),
+      });
+    });
+  });
+}
+
+/** Format an asynchronous child-process failure with bounded diagnostics. */
+export function formatMediaToolExecutionError(
+  bin: "ffmpeg" | "ffprobe",
+  error: unknown,
+  timeoutMs: number,
+): string {
+  const failure = error instanceof Error
+    ? error as MediaToolExecutionError
+    : new Error(String(error)) as MediaToolExecutionError;
+  if (failure.code === "ENOENT") {
+    return `${bin} is not installed or not on PATH. ${FFMPEG_INSTALL_HINT}`;
+  }
+
+  const detail = String(failure.stderr ?? "").trim().slice(-500);
+  if (failure.code === "ETIMEDOUT" || (failure.killed && failure.signal === "SIGTERM")) {
+    return `${bin} timed out after ${Math.ceil(timeoutMs / 1000)} seconds${detail ? `: ${detail}` : ""}`;
+  }
+
+  const suffix = detail || failure.message;
+  return `${bin} exited with code ${failure.code ?? "unknown"}${suffix ? `: ${suffix}` : ""}`;
+}
+
 let alreadyChecked = false;
 
 export interface MediaToolsHealth {

@@ -4,11 +4,11 @@ import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawnSync, execFile } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
-import { formatMediaToolError } from "../lib/media-tools";
+import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
 import { walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
@@ -535,6 +535,19 @@ function buildExplainerText(ext: string, rule: FormatRule, profile: OptimizeProf
 
 // ── Image conversion via sharp ─────────────────────────────────────────────────
 
+async function runFfmpeg(args: string[], timeoutMs: number): Promise<string | null> {
+  try {
+    await runMediaToolAsync(
+      "ffmpeg",
+      ["-nostdin", "-v", "error", ...args],
+      { timeoutMs, maxBufferBytes: 1024 * 1024 },
+    );
+    return null;
+  } catch (error) {
+    return formatMediaToolExecutionError("ffmpeg", error, timeoutMs);
+  }
+}
+
 const RAW_EXTS = new Set(["cr2","cr3","nef","nrw","arw","srf","sr2","dng","raf","orf","rw2","pef","x3f","rwl","raw","mrw"]);
 
 async function convertImageAsync(
@@ -555,17 +568,15 @@ async function convertImageAsync(
     if (RAW_EXTS.has(srcExt)) {
       const ffmpegTmp = destPath + ".raw_tmp.jpg";
       try {
-        const result = spawnSync("ffmpeg", [
+        const ffmpegError = await runFfmpeg([
           "-y", "-i", srcPath,
           "-q:v", "2",              // quality ~98 (q:v 1 = quality 100; spec says 98 not 100)
           "-pix_fmt", "yuvj444p",   // 4:4:4 chroma subsampling — no chroma data loss
           "-huffman", "optimal",    // Huffman optimization passes
           "-map_metadata", "0",     // preserve EXIF, ICC color profile, GPS, timestamps
           ffmpegTmp,
-        ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
-        if (result.status !== 0) {
-          return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-        }
+        ], 300_000);
+        if (ffmpegError) return ffmpegError;
 
         // Step 2: post-process with sharp for progressive encoding and visual auto-rotation.
         // sharp.rotate() with no argument reads EXIF orientation and rotates pixels, then
@@ -604,12 +615,8 @@ async function convertImageAsync(
         .toFile(destPath);
     } else {
       // Generic ffmpeg fallback for other image formats
-      const result = spawnSync("ffmpeg", ["-y", "-i", srcPath, destPath], {
-        encoding: "utf8", stdio: "pipe", timeout: 300_000,
-      });
-      if (result.status !== 0) {
-        return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-      }
+      const ffmpegError = await runFfmpeg(["-y", "-i", srcPath, destPath], 300_000);
+      if (ffmpegError) return ffmpegError;
     }
     return null;
   } catch (err: any) {
@@ -618,17 +625,13 @@ async function convertImageAsync(
 }
 
 /** Convert a video to H.265 MP4 using ffmpeg. Returns null on success, error string on failure. */
-function convertVideo(srcPath: string, destPath: string): string | null {
-  const result = spawnSync("ffmpeg", [
+async function convertVideo(srcPath: string, destPath: string): Promise<string | null> {
+  return runFfmpeg([
     "-y", "-i", srcPath,
     "-c:v", "libx265", "-crf", "28", "-preset", "medium",
     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
     destPath,
-  ], { encoding: "utf8", stdio: "pipe", timeout: 3_600_000 });
-  if (result.status !== 0) {
-    return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-  }
-  return null;
+  ], 3_600_000);
 }
 
 // ── Post-conversion verification ───────────────────────────────────────────────
@@ -1955,7 +1958,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       if (category === "image") {
         convertError = await convertImageAsync(fullPath, stagedPath, targetExt, profile);
       } else if (category === "video") {
-        convertError = convertVideo(fullPath, stagedPath);
+        convertError = await convertVideo(fullPath, stagedPath);
       } else {
         convertError = `Unsupported category for conversion: ${category}`;
       }
