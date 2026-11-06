@@ -876,7 +876,11 @@ $script:LauncherMutex = $null
 try {
   $script:LauncherMutex = Enter-WillardLauncherMutex
 } catch {
-  Report-StartupFailure ("Willard could not obtain its startup lock: " + $_.Exception.Message)
+  if ($args -contains "-Stop") {
+    Report-StopFailure ("Willard could not obtain its shutdown lock: " + $_.Exception.Message)
+  } else {
+    Report-StartupFailure ("Willard could not obtain its startup lock: " + $_.Exception.Message)
+  }
   exit 1
 }
 Write-Host ""

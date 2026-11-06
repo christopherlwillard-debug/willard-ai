@@ -26,6 +26,44 @@ function Get-NetTCPConnection {
     return @($script:MockListeners | Where-Object { $_.LocalPort -eq $LocalPort })
 }
 
+$script:MockCimProcess = [pscustomobject]@{
+    ProcessId = 4100
+    CreationDate = "20261106120000.000000+000"
+    ExecutablePath = $null
+    CommandLine = $null
+}
+function Get-CimInstance {
+    [CmdletBinding()]
+    param([string]$ClassName, [string]$Filter)
+    return $script:MockCimProcess
+}
+$trackedIdentity = [pscustomobject]@{
+    pid = 4100
+    path = "C:\\Willard\\node.exe"
+    commandLine = "node api-runtime\\dist\\index.mjs"
+    creationDate = "20261106120000.000000+000"
+}
+Write-Host "Testing WMI identity fallback only after an exact process-creation match..."
+if (-not (Test-ProcessIdentity $trackedIdentity)) {
+    throw "A process with a matching creation time was not recognized when WMI omitted optional path and command-line fields."
+}
+$script:MockCimProcess.CreationDate = "20261106120001.000000+000"
+if (Test-ProcessIdentity $trackedIdentity) {
+    throw "A reused PID was accepted despite a different process creation time."
+}
+$script:MockCimProcess.CreationDate = ""
+$creationTimeRejected = $false
+try {
+    Test-ProcessIdentity $trackedIdentity | Out-Null
+} catch {
+    if ($_.Exception.Message -notmatch "process creation time") { throw }
+    $creationTimeRejected = $true
+}
+if (-not $creationTimeRejected) {
+    throw "A missing process creation time did not fail closed."
+}
+$script:MockCimProcess = $null
+
 function Test-ProcessIdentity($tracked) {
     return $false
 }

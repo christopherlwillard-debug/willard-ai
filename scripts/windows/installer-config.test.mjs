@@ -592,7 +592,7 @@ test("installed launcher serializes fresh starts and skips updates for an existi
   assert.doesNotMatch(existingFlow, /Try-Update/);
 
   const releaseCalls = launcher.match(/Exit-WillardLauncherMutex \$script:LauncherMutex/g) ?? [];
-  assert.equal(releaseCalls.length, 4, "stop, existing-instance, normal-start, and failure paths must release the lock");
+  assert.equal(releaseCalls.length, 5, "stop, existing-instance, normal-start, stop-failure, and startup-failure paths must release the lock");
 
   assert.match(releaseStager, /desktop\/launcher-instance-lock\.ps1/);
   assert.match(fastValidationWorkflow, /Verify installed launcher serializes concurrent startup/);
@@ -1502,7 +1502,15 @@ test("packaged stop failures are non-modal and do not retry unsafe shutdown", ()
   assert.match(stopBranch, /Report-StopFailure/);
   assert.match(stopBranch, /Exit-WillardLauncherMutex/);
   assert.match(stopBranch, /exit 1/);
+  assert.match(launcher, /if \(\$args -contains "-Stop"\) \{[\s\S]*Report-StopFailure \(\"Willard could not obtain its shutdown lock:/);
   assert.doesNotMatch(stopBranch, /Stop-Services|Report-StartupFailure|MessageBox/);
+
+  const mutexCatchStart = launcher.indexOf("try {\n  $script:LauncherMutex = Enter-WillardLauncherMutex");
+  const mutexCatchEnd = launcher.indexOf('\nWrite-Host ""', mutexCatchStart);
+  const mutexCatch = launcher.slice(mutexCatchStart, mutexCatchEnd);
+  assert.match(mutexCatch, /if \(\$args -contains "-Stop"\)/);
+  assert.match(mutexCatch, /Report-StopFailure/);
+  assert.match(mutexCatch, /Report-StartupFailure/);
 
   const reportStart = launcher.indexOf("function Report-StopFailure");
   const reportEnd = launcher.indexOf("function Read-Version", reportStart + 1);
@@ -1526,7 +1534,9 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
   const identityEnd = launcher.indexOf("\nfunction Test-ProcessIdentity", identityStart);
   const identityReader = launcher.slice(identityStart, identityEnd);
   assert.match(identityReader, /could not verify the identity of Willard process/);
-  assert.match(identityReader, /did not return enough identity information/);
+  assert.match(identityReader, /did not return a process creation time/);
+  assert.match(identityReader, /did not return an executable path/);
+  assert.match(identityReader, /did not return a command line/);
   assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
   assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
   assert.match(identityReader, /Windows did not return a process creation time/);
@@ -1614,7 +1624,13 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   const identityEnd = launcherCommon.indexOf("\nfunction Test-ProcessIdentity", identityStart);
   const identity = launcherCommon.slice(identityStart, identityEnd);
   assert.match(identity, /could not verify the identity of Willard process/);
-  assert.match(identity, /did not return enough identity information/);
+  assert.match(identity, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
+  assert.match(identity, /did not return a process creation time/);
+  assert.match(identity, /did not return an executable path/);
+  assert.match(identity, /did not return a command line/);
+  assert.match(identity, /\$expectedCreationDate -and[\s\S]*\$expectedPath/);
+  assert.match(identity, /\$expectedCreationDate -and[\s\S]*\$expectedCommandLine/);
+  assert.match(identity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
   assert.doesNotMatch(identity, /catch \{ return \$null \}/);
 
   const stopHandleStart = launcherCommon.indexOf("function Stop-LauncherStartedProcessHandle");

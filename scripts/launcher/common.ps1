@@ -1026,7 +1026,7 @@ function Read-TrackedPids {
     }
 }
 
-function Get-ProcessIdentity($processId) {
+function Get-ProcessIdentity($processId, $expectedCreationDate, $expectedPath, $expectedCommandLine) {
     if (-not $processId) { return $null }
     try {
         $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
@@ -1034,23 +1034,47 @@ function Get-ProcessIdentity($processId) {
         throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
     }
     if (-not $process) { return $null }
+    $currentCreationDate = [string]$process.CreationDate
+    if ([string]::IsNullOrWhiteSpace($currentCreationDate)) {
+        throw "Windows did not return a process creation time for Willard process $processId."
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+        -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
     $executablePath = [string]$process.ExecutablePath
     $commandLine = [string]$process.CommandLine
-    if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
-        throw "Windows did not return enough identity information to safely manage Willard process $processId."
+    # WMI can omit optional identity fields for a process that is still the
+    # same instance. Reuse persisted values only after the exact creation
+    # timestamp matches; a missing timestamp never falls back to PID alone.
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedPath)) {
+            $executablePath = [string]$expectedPath
+        } else {
+            throw "Windows did not return an executable path for Willard process $processId."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedCommandLine)) {
+            $commandLine = [string]$expectedCommandLine
+        } else {
+            throw "Windows did not return a command line for Willard process $processId."
+        }
     }
     return @{
         pid = [int]$process.ProcessId
         path = $executablePath
         commandLine = $commandLine
-        creationDate = [string]$process.CreationDate
+        creationDate = $currentCreationDate
     }
 }
 
 function Test-ProcessIdentity($tracked) {
     if (-not $tracked) { return $false }
     $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
-    $current = Get-ProcessIdentity $trackedProcessId
+    $current = Get-ProcessIdentity $trackedProcessId $tracked.creationDate $tracked.path $tracked.commandLine
     if (-not $current) { return $false }
     # Refuse to act on legacy PID-only records. A reused PID must never be
     # mistaken for a Willard process.
