@@ -155,6 +155,9 @@ test("portable media filename validation accepts ordinary cross-platform names",
 test("media rename route validates JSON name type and uses no-replace moves", () => {
   const route = fs.readFileSync("artifacts/api-server/src/routes/media.ts", "utf8");
   assert.match(route, /const requestedName = req\.body\?\.name;/);
+  assert.match(route, /const stat = fs\.lstatSync\(currentPath\)/);
+  assert.match(route, /Stored media path contains a symbolic link/);
+  assert.match(route, /canonicalizePath\(nasPath\)/);
   assert.match(route, /typeof requestedName === "string"/);
   assert.match(route, /isPortableMediaFileName\(newName\)/);
   assert.match(route, /\(from, to\) => moveFileNoReplace\(from, to\)/);
