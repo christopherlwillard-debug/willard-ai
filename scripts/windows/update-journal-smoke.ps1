@@ -187,6 +187,36 @@ try {
     $wmiFailureRejected = $_.Exception.Message -match "could not inspect running processes"
   }
   Assert-True $wmiFailureRejected "A WMI failure was treated as proof that no orphaned services were running."
+
+  $script:MockPackagedWmiFailure = $false
+  $script:MockPackagedProcesses = @(
+    [pscustomobject]@{
+      ProcessId = 34571
+      ExecutablePath = $Node
+      CommandLine = ""
+      CreationDate = "2026-11-05T00:04:00Z"
+    }
+  )
+  $hiddenCommandLineRejected = $false
+  try { Assert-NoUntrackedPackagedServices $null } catch {
+    $hiddenCommandLineRejected = $_.Exception.Message -match "could not inspect its command line"
+  }
+  Assert-True $hiddenCommandLineRejected "An uninspectable process using the packaged Node runtime was silently ignored."
+
+  $script:MockPackagedProcesses = @(
+    [pscustomobject]@{
+      ProcessId = 34572
+      ExecutablePath = ""
+      CommandLine = $apiCommand
+      CreationDate = "2026-11-05T00:05:00Z"
+    }
+  )
+  $hiddenExecutableRejected = $false
+  try { Assert-NoUntrackedPackagedServices $null } catch {
+    $hiddenExecutableRejected = $_.Exception.Message -match "could not verify its executable path"
+  }
+  Assert-True $hiddenExecutableRejected "A process with a Willard entrypoint but no executable identity was silently ignored."
+
   Remove-Item Function:\Get-CimInstance -ErrorAction SilentlyContinue
   $script:MockPackagedProcesses = @()
   $script:MockPackagedWmiFailure = $false
