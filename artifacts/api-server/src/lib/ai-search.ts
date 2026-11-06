@@ -2,6 +2,7 @@ import { pool } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { embedText, toVectorLiteral } from "./ai-enrichment.ts";
 import { logger } from "./logger.ts";
+import { escapeLikePattern } from "./sql-like.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
 import { activeMediaSql } from "./media-scope.ts";
 import { normalizeOptionalDateOnlyRange, parseOptionalDateOnlyRange } from "./request-validation.ts";
@@ -438,11 +439,15 @@ const STARTER_SUGGESTIONS = [
   "Screenshots",
 ];
 
+export function buildSuggestionPattern(prefix: string): string {
+  return `%${escapeLikePattern(prefix.trim().toLowerCase())}%`;
+}
+
 export async function getSuggestions(nasPath: string, prefix: string | null): Promise<string[]> {
   if (!prefix || prefix.trim().length < 2) {
     return STARTER_SUGGESTIONS;
   }
-  const like = `%${prefix.trim().toLowerCase()}%`;
+  const like = buildSuggestionPattern(prefix);
   const { rows } = await pool.query(
     `SELECT DISTINCT term FROM (
        SELECT lower(jsonb_array_elements_text(a.tags)) AS term
@@ -468,7 +473,7 @@ export async function getSuggestions(nasPath: string, prefix: string | null): Pr
                 AND mf_suggestion.nas_path = $1
                 AND ${activeMediaSql("mf_suggestion")}
            )
-     ) t WHERE term LIKE $2 ORDER BY term LIMIT 8`,
+     ) t WHERE term LIKE $2 ESCAPE E'\\\\' ORDER BY term LIMIT 8`,
     [nasPath, like],
   );
   return rows.map((r: { term: string }) => r.term);
