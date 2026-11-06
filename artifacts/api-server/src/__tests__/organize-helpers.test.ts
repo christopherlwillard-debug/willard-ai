@@ -855,3 +855,19 @@ test("rollbackMoves: stops before mutation when ownership expires during checksu
   assert.equal(fs.existsSync(src), false);
   assert.equal(fs.readFileSync(dest, "utf8"), "rollback payload");
 });
+
+
+test("organization analysis claims and fences every write with its lease token", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/analyze"');
+  const end = source.indexOf('router.patch("/organize/jobs/:id/plan"', start);
+  assert.ok(start >= 0 && end > start, "analysis route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /const analysisLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(route, /eq\(organizationJobsTable\.status, job\.status\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/);
+  assert.match(route, /set\(\{ status: "planned", planJson, leaseToken: null \}\)/);
+  assert.ok((route.match(/eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/g) ?? []).length >= 3,
+    "success and failure writes must be fenced by the analysis owner");
+});
