@@ -352,3 +352,49 @@ test("directory-valued job references move as prefixes and destination orphans a
   assert.equal(update?.values[0], path.join(paths.destination, "WillardAI/ConversionBackups/job-7"));
   assert.equal(fs.existsSync(backup), true);
 });
+
+test("copy pauses and preserves originals when a database reference changed after preview", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/stale-reference.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect,
+  });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 44,
+      value: source,
+    }],
+  });
+
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Database reference changed or disappeared during migration/,
+  );
+
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/stale-reference.webp");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes", "the original must never be removed");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes", "the verified copy remains recoverable");
+  assert.equal(database.updates.some((entry) => entry.text === "ROLLBACK"), true);
+  assert.equal((await service.get(manifest.id)).state, "PAUSED");
+  await assert.rejects(() => service.confirmCleanup(manifest.id), /only after the migration/);
+});
