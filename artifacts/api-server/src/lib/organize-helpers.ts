@@ -239,12 +239,32 @@ export function canDeleteOrganizationJob(status: string, fileMoves: unknown): bo
  * This keeps an unverified partial result out of the final destination and
  * prevents a retry from silently treating it as a completed move.
  */
+function assertRegularFileWithoutSymlink(filePath: string, label: string): void {
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Organization ${label} must be a regular file, not a symlink or special filesystem entry.`);
+  }
+}
+
+function assertDestinationIsNotSymlink(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("Organization destination is a symlink or non-regular filesystem entry.");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export async function verifiedMove(
   from: string,
   to:   string,
   opts?: { afterMoveHook?: (to: string) => void | Promise<void>; beforeMove?: () => Promise<void>; beforeRestore?: () => Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
 ): Promise<FileMoveRecord> {
-  // Hash before moving; an unreadable source must never be moved.
+  // Reject final-component symlinks before hashing; hashing a symlink would
+  // otherwise follow it and could read a different file than the journaled path.
+  assertRegularFileWithoutSymlink(from, "source");
   const sourceHash = await sha256File(from);
   if (opts?.expectedSourceHash && sourceHash !== opts.expectedSourceHash) {
     throw new Error(`Source changed after its recovery intent was recorded: ${path.basename(from)}`);
@@ -255,9 +275,12 @@ export async function verifiedMove(
     // Re-check the fencing token after hashing, immediately before the
     // irreversible filesystem mutation.
     await opts?.beforeMove?.();
+    assertRegularFileWithoutSymlink(from, "source");
+    assertDestinationIsNotSymlink(to);
     // A concurrent job may have created the destination after its conflict
     // check. Never let rename semantics overwrite that independent file.
     moveFileNoReplace(from, to);
+    assertRegularFileWithoutSymlink(to, "destination");
     destinationCreated = true;
 
     // Optional hook (test-only) — e.g. corrupt destination before re-hashing.
@@ -281,7 +304,10 @@ export async function verifiedMove(
     if (destinationCreated && !fs.existsSync(from) && fs.existsSync(to)) {
       try {
         await opts?.beforeRestore?.();
+        assertRegularFileWithoutSymlink(to, "recovery destination");
+        assertDestinationIsNotSymlink(from);
         moveFileNoReplace(to, from);
+        assertRegularFileWithoutSymlink(from, "restored source");
       } catch (restoreError) {
         throw new AggregateError(
           [error, restoreError],
