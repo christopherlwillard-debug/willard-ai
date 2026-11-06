@@ -2443,3 +2443,10 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added source-contract regression coverage for busy-state rejection, exclusive claim, token-fenced final persistence, and error cleanup.
 - Commits: implementation `c7b2392bd87cd1d238bbf79f17a69b4eb2ee8aa8`, regression `3309b775fefb75b4f0b5a83db4d6478de4826bd7`.
 - Validation pending. A PostgreSQL-backed concurrent preflight-versus-execute integration test remains desirable.
+
+
+## Batch validation follow-up: lease typing and media rename hash import
+- The first typecheck after the concurrency batch exposed nullable library-scope values in the new lease predicates and a missing `sha256File` import used by a concurrent media-rename integrity change.
+- Analysis now keeps its claimed library path/token outside the try block, fences catch cleanup only when its claim is still owned, and uses the stable non-null path for all predicates. Plan-edit and preflight routes explicitly reject unscoped jobs and use stable path variables for their claim predicates. The media route imports the existing shared `sha256File` helper rather than duplicating hashing logic.
+- Commits: analysis lease typing/cleanup `5a9823d93bd8887d201ca9eda22b31fb1b42d85c`, scoped path guards `3d08a3edea9542025a08ea282594a71757f5fbb4`, media import `5250b7729bb963de9f5e21077a6971e7920a6f5b`, stable plan/preflight scope `b947da299d44b9d9f99614ad1df2cb3367ab3d7f`, and analysis scope `d816f5d49ec60d4a0a2d95cf1fec6673510cb102`.
+- A prior typecheck run reported these issues; the repaired head has not yet completed Fast Validation. The media hash check and the concurrency changes still require the next CI pass.
