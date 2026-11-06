@@ -481,7 +481,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            release-assets/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-Setup.exe
-            release-assets/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-windows-x64.zip
-            release-assets/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-source.zip
-            release-assets/release-manifest.json
+            release-assets/installer/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-Setup.exe
+            release-assets/release/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-windows-x64.zip
+            release-assets/release/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-source.zip
+            release-assets/release/release-manifest.json
