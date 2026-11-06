@@ -16,7 +16,8 @@ test("backup timeout terminates the complete process tree on supported platforms
   assert.match(source, /if \(taskkillError\)[\s\S]*?child\.kill\("SIGKILL"\)/);
   assert.match(source, /Windows taskkill could not terminate the backup process tree/);
   assert.match(source, /timedOut = true/);
-  assert.match(source, /Backup exceeded its 30-minute time limit/);
+  assert.match(source, /Backup exceeded its 30-minute time limit; process-tree termination was attempted/);
+  assert.doesNotMatch(source, /Backup exceeded its 30-minute time limit; its process tree was terminated/);
 });
 
 test("backup process diagnostics are bounded and startup errors clear timeout state", () => {
