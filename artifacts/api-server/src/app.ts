@@ -28,6 +28,7 @@ import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-
 import { isShuttingDown } from "./lib/shutdown-state.ts";
 import { apiErrorHandler, apiNotFoundHandler } from "./lib/api-errors.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
+import { isSessionInactive } from "./lib/auth-session-guard.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost",
@@ -284,9 +285,7 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  if (sess.lastSeenAt) {
-    const elapsed = Date.now() - new Date(sess.lastSeenAt as string).getTime();
-    if (elapsed > INACTIVITY_TIMEOUT_MS) {
+  if (isSessionInactive(sess.lastSeenAt, Date.now(), INACTIVITY_TIMEOUT_MS)) {
       try {
         await destroySession(req);
       } catch (error) {
@@ -295,7 +294,6 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
       res.clearCookie("willard.sid");
       res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
       return;
-    }
   }
   if (!_firstAuthSeen) {
     _firstAuthSeen = true;
