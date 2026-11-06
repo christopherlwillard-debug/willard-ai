@@ -586,3 +586,10 @@ test("preview rejects selected source and destination roots that are symlinks", 
     fs.rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+
+test("storage migration hashing shares the no-follow file reader", () => {
+  const source = fs.readFileSync(new URL("../lib/storage-migration.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ moveFileNoReplace, sha256File \} from "\.\/organize-helpers\.ts"/);
+  assert.match(source, /async function defaultHashFile\(filePath: string\): Promise<string>\s*\{[\s\S]*?return sha256File\(filePath\)/);
+});
