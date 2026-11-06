@@ -889,3 +889,19 @@ test("organization plan edits are serialized and release their claim on errors",
   assert.match(route, /Plan update lost ownership/);
   assert.match(route, /Do not leave a plan-edit claim behind/);
 });
+
+
+test("organization preflight holds and releases the execution row lease", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/preflight"');
+  const end = source.indexOf('router.get("/organize/jobs/:id/dry-run"', start);
+  assert.ok(start >= 0 && end > start, "preflight route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /const \[claimedPreflight\]/);
+  assert.match(route, /isNull\(organizationJobsTable\.leaseToken\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, preflightLeaseToken\)/);
+  assert.match(route, /status: capacityAllOk \? "verified" : "planned"[\s\S]*?leaseToken: null/);
+  assert.match(route, /preflightClaimed && preflightLeaseToken && preflightNasPath/);
+  assert.match(route, /Preflight lost ownership/);
+});
