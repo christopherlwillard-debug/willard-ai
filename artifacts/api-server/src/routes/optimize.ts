@@ -8,7 +8,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
-import { createConcurrencyLimiter, mapSettledWithConcurrency, walkForConversion, walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
+import { createConcurrencyLimiter, mapSettledWithConcurrency, walkForConversion, walkForOptimize, type OptimizeConversionFile, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
@@ -336,15 +336,13 @@ function getCachePath(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", CACHE_FILENAME);
 }
 
-function readScanCache(
+async function readScanCache(
   nasPath: string,
   profile?: string,
   rawConversionEnabled?: boolean,
-): (Record<string, unknown> & { scannedAt: string }) | null {
+): Promise<(Record<string, unknown> & { scannedAt: string }) | null> {
   try {
-    const cachePath = getCachePath(nasPath);
-    if (!fs.existsSync(cachePath)) return null;
-    const raw  = fs.readFileSync(cachePath, "utf-8");
+    const raw = await fs.promises.readFile(getCachePath(nasPath), "utf-8");
     const data = JSON.parse(raw) as Record<string, unknown> & { scannedAt: string; cacheVersion?: number };
     if (!data.scannedAt) return null;
     if ((data.cacheVersion ?? 0) < CACHE_VERSION) return null;
@@ -358,11 +356,15 @@ function readScanCache(
   }
 }
 
-function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
+async function writeScanCache(nasPath: string, data: Record<string, unknown>): Promise<void> {
   try {
     const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
-    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(getCachePath(nasPath), JSON.stringify({ ...data, cacheVersion: CACHE_VERSION }), "utf-8");
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    await fs.promises.writeFile(
+      getCachePath(nasPath),
+      JSON.stringify({ ...data, cacheVersion: CACHE_VERSION }),
+      "utf-8",
+    );
   } catch {
     // Non-fatal — cache write is best-effort
   }
@@ -393,7 +395,11 @@ async function analyzeJpegFile(filePath: string): Promise<string[]> {
     // Issue 2: Non-optimized Huffman tables — detectable via significant entropy gap.
     // A well-optimized JPEG has chromaSubsampling set and effective entropy coding.
     // We compare EXIF overhead vs image size: large EXIF relative to total size suggests duplication.
-    const totalBytes = fs.statSync(filePath).size;
+    const fileStat = await fs.promises.lstat(filePath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+      throw new Error("JPEG source is no longer a regular file");
+    }
+    const totalBytes = fileStat.size;
     const exifBytes  = meta.exif?.length ?? 0;
     if (totalBytes > 0 && exifBytes / totalBytes > 0.05) {
       issues.push("excessive metadata overhead (EXIF > 5% of file size)");
@@ -565,7 +571,7 @@ async function convertImageAsync(
         return null;
       } finally {
         // Always clean up temp file regardless of success or failure
-        try { fs.unlinkSync(ffmpegTmp); } catch { /* already gone or never created */ }
+        try { await fs.promises.unlink(ffmpegTmp); } catch { /* already gone or never created */ }
       }
     }
 
@@ -627,9 +633,7 @@ async function verifyConvertedFile(
   destPath: string,
   category = "image",
   isSameExt = true,
-  originalBytes = (() => {
-    try { return fs.statSync(srcPath).size; } catch { return 0; }
-  })(),
+  originalBytes: number,
   isRawSource = false,
 ): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
@@ -639,16 +643,18 @@ async function verifyConvertedFile(
     return { passed: false, checks, failedCheck: `${name}: ${details}` };
   };
 
-  // Check 1: Output file exists and non-zero.
-  if (!fs.existsSync(destPath)) {
-    return fail("output-exists", "Output file does not exist");
-  }
-  let convertedBytes = 0;
+  // Check 1: Output is a regular file and non-zero. Use async lstat so
+  // verification does not block API requests during large conversion batches.
+  let destinationStat: fs.Stats;
   try {
-    convertedBytes = fs.statSync(destPath).size;
+    destinationStat = await fs.promises.lstat(destPath);
   } catch {
-    return fail("output-exists", "Output file cannot be inspected");
+    return fail("output-exists", "Output file does not exist or cannot be inspected");
   }
+  if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+    return fail("output-exists", "Output is not a regular file");
+  }
+  const convertedBytes = destinationStat.size;
   if (convertedBytes === 0) {
     return fail("output-nonzero", "Output file is empty");
   }
@@ -824,7 +830,7 @@ router.get("/optimize/status", async (_req, res) => {
       return;
     }
 
-    const cached = readScanCache(nasPath, profile, rawConversionEnabled);
+    const cached = await readScanCache(nasPath, profile, rawConversionEnabled);
     if (!cached) {
       res.json({ available: false });
       return;
@@ -1094,7 +1100,7 @@ router.get("/optimize/scan", async (req, res) => {
       fromCache: false,
     };
 
-    writeScanCache(nasPath, payload);
+    await writeScanCache(nasPath, payload);
     res.json(payload);
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Scan failed" });
@@ -1188,7 +1194,7 @@ router.post("/optimize/run", async (req, res) => {
     // Load scan cache to check per-file decisions for codec-detected formats.
     // Container formats (mp4/mov/mkv/m4v) may show as "optimal" in static rules but
     // have per-file codec overrides in the scan cache making some files convertible.
-    const cachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const cachedScan = await readScanCache(nasPath, profile, rawConversionEnabled);
     const cachedDecisions = (cachedScan?.fileDecisions as Record<string, { convert: boolean; targetExt: string }> | undefined) ?? {};
 
     for (const ext of approvedExts) {
@@ -1572,9 +1578,9 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // The database now records a verified completed operation. Cleanup is
     // intentionally last; a cleanup failure leaves extra recoverable bytes.
     try {
-      if (resultData.stagingDir && fs.existsSync(resultData.stagingDir)) {
+      if (resultData.stagingDir) {
         assertWithinRoot(resultData.stagingDir, nasPath);
-        fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
+        await fs.promises.rm(resultData.stagingDir, { recursive: true, force: true });
       }
     } catch (error) {
       logger.error({ err: error, jobId: id, stagingDir: resultData.stagingDir }, "Conversion completed but staging cleanup was not finished");
@@ -1730,7 +1736,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       path.resolve(backupDir),
       path.resolve(path.join(nasPath, "WillardAI")),
     ]);
-    const filesToConvert: Array<{ fullPath: string; ext: string }> = [];
+    const filesToConvert: OptimizeConversionFile[] = [];
     await walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, SKIP_DIRS, skipDirs);
 
     const totalFiles = filesToConvert.length;
@@ -1747,9 +1753,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       return;
     }
 
-    const estimatedStagingBytes = filesToConvert.reduce((sum, file) => {
-      try { return sum + fs.statSync(file.fullPath).size; } catch { return sum; }
-    }, 0);
+    const estimatedStagingBytes = filesToConvert.reduce((sum, file) => sum + file.sizeBytes, 0);
     try {
       capacityReservation = await reserveCapacity({
         nasPath,
@@ -1910,16 +1914,24 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const shortName = path.basename(fullPath);
       send("status", { stage: "converting", message: `[${i + 1}/${totalFiles}] ${shortName}`, progress, currentFile: fullPath, processed: i, total: totalFiles });
 
-      if (!fs.existsSync(fullPath)) {
-        skipped++;
-        results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
-        send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
-        continue;
+      let originalStat: fs.Stats;
+      try {
+        originalStat = await fs.promises.lstat(fullPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          skipped++;
+          results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
+          continue;
+        }
+        throw error;
       }
-
-      let originalBytes = 0;
-      try { originalBytes = fs.statSync(fullPath).size; } catch { /* best effort */ }
+      if (!originalStat.isFile() || originalStat.isSymbolicLink()) {
+        throw new Error(`Conversion source is no longer a regular file: "${fullPath}"`);
+      }
+      const originalBytes = originalStat.size;
 
       // ── Build staged path (mirrors NAS directory structure) ──────────────────
       const relPath    = path.relative(path.resolve(nasPath), path.resolve(fullPath));
@@ -1941,7 +1953,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       }
 
       if (convertError) {
-        try { if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath); } catch { /* best effort */ }
+        try { await fs.promises.unlink(stagedPath); } catch { /* best effort */ }
         failed++;
         results.push({ filePath: fullPath, status: "failed", error: convertError });
         await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
@@ -1970,7 +1982,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       }
 
       let convertedBytes = 0;
-      try { convertedBytes = fs.statSync(stagedPath).size; } catch { /* best effort */ }
+      try {
+        const stagedStat = await fs.promises.lstat(stagedPath);
+        if (stagedStat.isFile() && !stagedStat.isSymbolicLink()) convertedBytes = stagedStat.size;
+      } catch { /* verification already records any output inspection failure */ }
 
       // ── Success: original is safe, staged file is verified ──────────────────
       succeeded++;
