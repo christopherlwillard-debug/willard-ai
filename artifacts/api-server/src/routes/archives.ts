@@ -142,10 +142,11 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
   let format = "7z";
   const budget = createArchiveBudget();
   const archiveSnapshot = snapshotArchiveFile(filePath);
+  const sevenZipPath = await getSevenZipPath();
 
   return new Promise((resolve, reject) => {
     const stream = Seven.list(filePath, {
-      $bin: getSevenZipPath(),
+      $bin: sevenZipPath,
       $progress: false,
       techInfo: true,
     } as any);
