@@ -159,6 +159,7 @@ jobs:
             artifacts/api-server/src/__tests__/canonical-active-library.test.ts \
             artifacts/api-server/src/__tests__/background-active-library.test.ts \
             artifacts/api-server/src/__tests__/ai-media-scope.test.ts \
+            artifacts/api-server/src/__tests__/ai-search.test.ts \
             artifacts/api-server/src/__tests__/optimize-job-claim.test.ts \
             artifacts/api-server/src/__tests__/optimize-scan.test.ts \
             artifacts/api-server/src/__tests__/backup-timeout-process-tree.test.ts \
