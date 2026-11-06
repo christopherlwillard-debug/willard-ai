@@ -229,7 +229,7 @@ function Get-ProcessIdentity($processId) {
   try {
     $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
   } catch {
-    throw "Windows could not verify the identity of Willard process $processId: $($_.Exception.Message)"
+    throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
   }
   if (-not $process) { return $null }
   $executablePath = [string]$process.ExecutablePath
