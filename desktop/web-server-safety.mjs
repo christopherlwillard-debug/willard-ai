@@ -41,3 +41,17 @@ export function parseDesktopRequestUrl(requestUrl) {
 export function staticFileReadErrorStatus(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 404 : 500;
 }
+
+export function isAllowedDesktopRequestHost(hostHeader, originHeader, port) {
+  if (typeof hostHeader !== "string" || !Number.isInteger(port) || port < 1 || port > 65535) return false;
+  const host = hostHeader.toLowerCase();
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false;
+  if (originHeader === undefined) return true;
+  if (typeof originHeader !== "string") return false;
+  try {
+    const origin = new URL(originHeader);
+    return origin.protocol === "http:" && origin.host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
+}
