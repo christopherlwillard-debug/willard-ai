@@ -2606,3 +2606,18 @@ The full recovery design for Replace requires durable backup intents, checksums,
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Cleanup → trash manifest listing, recycle journal append, and removal tombstones | fixed; targeted tests pending | `8a3336f88595aa424ba6d42904fbd9cb1263bb27` (implementation); `90dbb868fd7a5ec3d6067a3c6e75e40b5d033f43` (regressions); `46e82eb09f422d9516842bf843f282c2dc335bce` (corrected source-contract matchers) | Ancestor-directory replacement remains a separate descriptor-relative traversal design issue; Windows/SMB filesystem behavior and the matching Fast Validation run remain to be verified |
+
+
+## 2026-11-06 follow-up — Windows installer omitted a required PostgreSQL backup helper
+
+**Finding — High (Windows first install / startup / backup readiness):** The isolated standard-user installer lifecycle run [#42154854501](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154854501) failed on commit `eb15580d7770723bf36173e5799e228bfa5454e5`. Inno Setup successfully compiled and installed the application, but the first installed launcher could not import `desktop/postgres-snapshot-process.mjs` from `desktop/database-backup.mjs`. Node reported `ERR_MODULE_NOT_FOUND`; startup then reported that the required portable recovery export could not be created. Source inspection confirmed the helper existed in the repository, but `scripts/windows/build-release.mjs` copied the backup entry point and its other helpers without copying this imported module into the installer payload.
+
+**Fix:** The Windows release staging script now copies `desktop/postgres-snapshot-process.mjs` beside `desktop/database-backup.mjs`. The release-payload regression derives the local `.mjs` imports from the backup entry point and asserts every helper is included in the staged desktop file set. The Windows lifecycle workflow's PR and audit-branch push path filters now include the helper itself, so changes to it trigger the installed-product test; its workflow contract test requires both path-filter entries.
+
+**Regression:** Added the backup-import/payload consistency test to `scripts/windows/release-payload.test.mjs`, and a workflow contract assertion for both path filters in `scripts/windows/installer-config.test.mjs`. The first matcher draft had over-escaped regex literals and was corrected before validation.
+
+**Validation status:** The failure is confirmed from the completed Windows job log, not inferred from source alone. The implementation and regression commits are `2b7da325739accb3f74568b0f2eef0538c1c1d83`, `a718ad68c127b9c528decb88d1a4a6c94cc03f16`, and `57a7252406df08cd01b9a5dae890b5483247381f`; workflow trigger coverage is `eb269c30423b1302e5212bdb64540af707c85339` and `6ede04dcf8c3ec146e84d2fbe6cc0dae6f09ceee`. A new Windows lifecycle run on the corrected head and matching Fast Validation are required before this is marked integration-tested. The failed run remains a valid record of the pre-fix defect.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows clean install → first launcher startup → portable PostgreSQL recovery export | fixed; target validation pending | `2b7da325739accb3f74568b0f2eef0538c1c1d83` (payload); `a718ad68c127b9c528decb88d1a4a6c94cc03f16` and `57a7252406df08cd01b9a5dae890b5483247381f` (regression); `eb269c30423b1302e5212bdb64540af707c85339` and `6ede04dcf8c3ec146e84d2fbe6cc0dae6f09ceee` (trigger contract) | Corrected installed-product lifecycle must complete through startup, upgrade, recovery, diagnostics, and uninstall; this does not validate Authenticode trust or SmartScreen reputation |
