@@ -42,3 +42,16 @@ test("NAS log stream switches only after the new library path is persisted", () 
   const preflight = route.slice(route.indexOf("const normalizedNasPath"), persistence);
   assert.doesNotMatch(preflight, /nasLogStream\.setNasPath/);
 });
+
+
+test("NAS log stream detaches the previous library when switching to a new path fails", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const source = fs.readFileSync(path.join(sourceDir, "lib", "nas-storage.ts"), "utf8");
+  const start = source.indexOf("async setNasPath(nasPath: string)");
+  const end = source.indexOf("\n  override _write", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /this\.rfsStream = null/);
+  assert.match(implementation, /NAS operational log stream unavailable/);
+  assert.match(implementation, /old\)\.destroy\(\)/);
+});
