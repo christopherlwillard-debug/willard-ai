@@ -46,27 +46,10 @@ test("organization execution, resume, and rollback are fenced by unique lease to
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, executionLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, resumeLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, rollbackLeaseToken\)/);
-  assert.match(routes, /assertOrganizationLease\(id, nasPath, executionLeaseToken\)/);
-  assert.match(routes, /assertOrganizationLease\(id, nasPath, resumeLeaseToken\)/);
+  assert.match(routes, /beforeMove: \(\) => assertOrganizationLease/);
+  assert.match(routes, /beforeRestore: \(\) => assertOrganizationLease/);
   assert.match(helpers, /await beforeEachMove\?\.\(\);\s*try/);
-});
-
-test("organization execution, resume, and rollback are fenced by unique lease tokens", () => {
-  const schema = source("../../../lib/db/src/schema/organization_jobs.ts");
-  const routes = source("routes/organize.ts");
-  const helpers = source("lib/organize-helpers.ts");
-
-  assert.match(schema, /leaseToken:\\s*text\\("lease_token"\\)/);
-  assert.match(routes, /const executionLeaseToken = crypto\\.randomUUID\\(\\)/);
-  assert.match(routes, /const resumeLeaseToken = crypto\\.randomUUID\\(\\)/);
-  assert.match(routes, /const rollbackLeaseToken = crypto\\.randomUUID\\(\\)/);
-  assert.match(routes, /eq\\(organizationJobsTable\\.leaseToken, executionLeaseToken\\)/);
-  assert.match(routes, /eq\\(organizationJobsTable\\.leaseToken, resumeLeaseToken\\)/);
-  assert.match(routes, /eq\\(organizationJobsTable\\.leaseToken, rollbackLeaseToken\\)/);
-  assert.match(routes, /beforeMove: \\(\\) => assertOrganizationLease/);
-  assert.match(routes, /beforeRestore: \\(\\) => assertOrganizationLease/);
-  assert.match(helpers, /await beforeEachMove\\?\\.\\(\\);\\s*try/);
-  assert.match(helpers, /await opts\\?\\.beforeMove\\?\\.\\(\\);/);
+  assert.match(helpers, /await opts\?\.beforeMove\?\.\(\);/);
 });
 
 test("catalog reconciliation remains metadata-only", () => {
