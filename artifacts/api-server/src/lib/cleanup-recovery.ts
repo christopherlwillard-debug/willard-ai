@@ -312,6 +312,27 @@ export type ExpiredTrashResult = {
   errors: string[];
 };
 
+/**
+ * Verify a local-trash object before retention is allowed to destroy it.
+ * Legacy entries without a trustworthy SHA-256 are preserved for manual review.
+ */
+export async function assertTrashFileIntegrity(entry: TrashManifestEntry, trashPath: string): Promise<void> {
+  const stat = fs.lstatSync(trashPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("Expired trash object is not a regular file; preserving it for review");
+  }
+  if (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0 || stat.size !== entry.sizeBytes) {
+    throw new Error("Expired trash object size does not match its manifest; preserving it for review");
+  }
+  if (typeof entry.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(entry.contentHash)) {
+    throw new Error("Expired trash object has no valid SHA-256 manifest; preserving it for review");
+  }
+  const actualHash = await sha256File(trashPath);
+  if (actualHash.toLowerCase() !== entry.contentHash.toLowerCase()) {
+    throw new Error("Expired trash object hash does not match its manifest; preserving it for review");
+  }
+}
+
 
 /**
  * Permanently remove expired local-trash files and their canonical rows.
@@ -332,7 +353,10 @@ export async function purgeExpiredTrashEntries(nasPath: string): Promise<Expired
       continue;
     }
     try {
-      if (fs.existsSync(trashPath)) fs.rmSync(trashPath, { force: true });
+      if (fs.existsSync(trashPath)) {
+        await assertTrashFileIntegrity(entry, trashPath);
+        fs.unlinkSync(trashPath);
+      }
       if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
       if (entry.mediaFileId != null) {
         const canonical = await db.execute(sql`
