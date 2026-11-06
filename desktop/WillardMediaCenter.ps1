@@ -224,7 +224,7 @@ function Read-Pids {
     throw "The Willard services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard processes remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
   }
 }
-function Get-ProcessIdentity($processId) {
+function Get-ProcessIdentity($processId, $expectedCreationDate) {
   if (-not $processId) { return $null }
   try {
     $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
@@ -232,6 +232,15 @@ function Get-ProcessIdentity($processId) {
     throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
   }
   if (-not $process) { return $null }
+  $currentCreationDate = [string]$process.CreationDate
+  # A recorded creation time is the first safe PID-reuse discriminator. If
+  # Windows has already recycled the PID, the new process is not ours even if
+  # its executable/command-line fields are protected or temporarily unavailable.
+  if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+    -not [string]::IsNullOrWhiteSpace($currentCreationDate) -and
+    -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
+    return $null
+  }
   $executablePath = [string]$process.ExecutablePath
   $commandLine = [string]$process.CommandLine
   if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($commandLine)) {
@@ -241,12 +250,12 @@ function Get-ProcessIdentity($processId) {
     pid = [int]$process.ProcessId
     path = $executablePath
     commandLine = $commandLine
-    creationDate = [string]$process.CreationDate
+    creationDate = $currentCreationDate
   }
 }
 function Test-ProcessIdentity($tracked) {
   if (-not $tracked) { return $false }
-  $current = Get-ProcessIdentity $tracked.pid
+  $current = Get-ProcessIdentity $tracked.pid $tracked.creationDate
   if (-not $current -or -not $tracked.path -or -not $tracked.commandLine) { return $false }
   return ($current.path -eq $tracked.path -and $current.commandLine -eq $tracked.commandLine -and
     (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
