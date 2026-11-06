@@ -2714,3 +2714,21 @@ The targeted backend regression command failed on two stale source-contract asse
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Windows installer lifecycle → PR synchronization and installer contract test changes | fixed; workflow validation pending | `7f27403fdcc859929580438764fa931bf63267d4` and `ef792b956f4d9caa2618ee47ca8616394abf748e` | The updated trigger must still be observed scheduling a current-head Windows lifecycle run; run #32's post-upgrade stop failure is not yet cleared. |
+
+## 2026-11-06 follow-up — malformed compressed archive caused an unhandled decompressor-exit rejection
+
+**Finding — High (Archive Library → preview malformed `.bz2`/`.xz` input → API process availability):** Fast Validation #1195 ran against `e22350d536b2ee8c86dc4ae0b6a4623b78e896b6`. TypeScript/generated-contract validation, desktop safety, release/storage contracts, official 7-Zip verification, PostgreSQL filter checks, and conversion-lock/finalization integration steps passed. The targeted backend regression command reported 325 passed, 1 failed, and 2 skipped. The only failing test was the existing invalid-compressed-input regression in `archive-tar-input.test.ts`.
+
+Source inspection and the failing test identified a timing defect in `withTarInput`: the function created a promise for the 7-Zip child process exit, but did not attach a rejection handler until after the stdout pipeline completed. For malformed xz input, 7-Zip can exit with an error before the pipeline reaches `await exit`. The rejection was therefore temporarily unhandled. In Node's default unhandled-rejection mode, that can be escalated to an uncaught exception and terminate the API process while a malformed archive is being previewed. This is an availability risk, not merely a test-harness issue.
+
+**Fix:** Immediately attach a rejection observer to the child-exit promise when it is created. The original promise is still awaited after the stdout pipeline, so the decompressor error continues to propagate through the existing catch/finally path and the partial scratch TAR is removed. The observer prevents the early rejection from being unhandled; it does not swallow the error returned to the caller.
+
+**Regression coverage:** Extended the corrupted `.tar.xz` fixture test to capture `unhandledRejection`, wait one event-loop turn after the expected rejection, assert that no unhandled rejection occurred, and verify the scratch directory remains empty. This directly exercises the timing window seen in Fast Validation #1195.
+
+**Commits:** helper fix `8fb0ea7b277e354fb64c056e7e4407c90c5bfa0f`; regression `2d7ab28756a343674acb41f49044d9b621c61da1`.
+
+**Validation status:** The fix and regression are committed. Fast Validation #1195 is a failed run on the pre-fix head and does not validate these commits. A new Fast Validation run must pass the API typecheck and targeted backend regression command. Windows archive smoke must also run on the updated head. Dependency Review #958 passed on the pre-fix head; it is not evidence for the new commits. Windows installer lifecycle #40 was still compiling the unsigned installer at the last observation; its installed-product install/upgrade/recovery/uninstall steps had not started. No full-CI or release-readiness claim is made.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Archive preview of malformed bzip2/xz input; API process availability | fixed; target validation pending | `8fb0ea7b277e354fb64c056e7e4407c90c5bfa0f` (helper); `2d7ab28756a343674acb41f49044d9b621c61da1` (regression) | New Linux targeted validation and Windows archive smoke are required. Other decompressor cancellation, scratch-capacity, and installed-product preview behavior remain separate risks. |
