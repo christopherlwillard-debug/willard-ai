@@ -2532,11 +2532,11 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 **Regression:** Updated the installer configuration contract to require `opened`, `reopened`, and `synchronize` together. Existing assertions still enforce read-only permissions and isolation from production signing and release publishing.
 
-**Validation status:** Source inspection confirms the event and path-filter correction. The installer contract regression is included in Fast Validation; the current matching run must complete before target-tested is claimed. The Windows lifecycle run triggered by this workflow change is pending; no installed-product integration pass is claimed yet.
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the final push/PR trigger contract. The path-filtered push event started Windows lifecycle run [#42154854501](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154854501) on the current audit head; standard-user install/upgrade/recovery/uninstall validation is still in progress. No installed-product integration pass is claimed yet.
 
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
-| High | Windows installer → standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall validation skipped on later PR commits | fixed; target test and Windows integration pending | this batch | Matching Fast Validation and Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
+| High | Windows installer → standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall validation skipped on later PR commits | target-tested; Windows lifecycle integration pending | eb15580d7770723bf36173e5799e228bfa5454e5 | Matching push-triggered Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
 
 ## 2026-11-06 follow-up — database recovery remapping must verify both roots and preserve empty JSON
 
@@ -2546,10 +2546,48 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 **Regression:** Extended the PostgreSQL-backed recovery drill to restore a library at a different root, resume an authenticated completed recovery, assert that nested empty JSON objects/arrays survive path remapping, and verify both face-crop and media-scan-history paths are remapped. This is the exact integration test that failed in Fast Validation; it has not yet been rerun against the complete fix.
 
-**Validation status:** The first post-fix Fast Validation run passed typecheck, generated contracts, Expo config, and desktop web-server safety. The PostgreSQL drill then completed the fresh restore, source-to-target remap, nested empty-JSON assertions, and media verification, but its completed-resume check ran after the same test deliberately remapped the database to unrelated Windows/UNC probe roots; the test therefore asked a completed recovery to verify a deliberately changed root. A separate source-contract assertion also still required the old `targetLibrary.root` expression. Both test issues are corrected by running the completed-resume check before the path probes and asserting the new source/target verification contract. The face-crop/media-scan path assertions are now included. The matching rerun is pending; no full validation pass is claimed.
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) completed successfully, including the PostgreSQL-backed restore drill: restore to a reattached NAS root, source-to-target catalog remap, authenticated completed-resume, nested empty-JSON preservation, face-crop and media-scan-history path remapping, and Windows/UNC remap probes. The same run also passed Windows archive/updater smoke. This is integration-tested against PostgreSQL and a local filesystem; the separate installed-product Windows lifecycle run and real NAS/SMB remount validation remain pending.
 
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
-| High | Encrypted PostgreSQL backup → restore to reattached NAS → durable path remap → resume recovery | fixed; targeted integration pending | this batch | Matching Linux PostgreSQL restore drill and Windows installed lifecycle must pass; real NAS/SMB remount, filesystem alias, and crash-at-each-remap-boundary validation remain |
-| High | NAS recovery path remap → JSONB durable metadata preservation | fixed; targeted integration pending | this batch | PostgreSQL integration must confirm nested empty values survive across all durable JSON columns |
-| High | NAS reattachment → face crop paths and media scan history remain bound to the old root | fixed; targeted integration pending | this batch | PostgreSQL integration must confirm both path columns follow the new NAS root on Linux and Windows |
+| High | Encrypted PostgreSQL backup → restore to reattached NAS → durable path remap → resume recovery | integration-tested (Linux PostgreSQL + local filesystem); Windows pending | 0d35ff08127d0e5975e3db4fc3ea03866950b1c5; d4e5ff0851d3091d7d86e016cdeb6d3807f0b61a; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Real NAS/SMB remount, filesystem aliases, Windows installed recovery, and crash-at-each-remap-boundary validation remain |
+| High | NAS recovery path remap → JSONB durable metadata preservation | integration-tested (Linux PostgreSQL + local filesystem) | 0d35ff08127d0e5975e3db4fc3ea03866950b1c5; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Windows/SMB recovery and broader durable JSON-column coverage remain |
+| High | NAS reattachment → face crop paths and media scan history remain bound to the old root | integration-tested (Linux PostgreSQL + local filesystem); Windows pending | d4e5ff0851d3091d7d86e016cdeb6d3807f0b61a; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Windows/SMB recovery and installed-product face-view validation remain |
+
+## 2026-11-06 follow-up — targeted backend regression environment and source matcher
+
+**Finding — Medium (validation pipeline reliability):** Fast Validation reached the targeted backend regression batch after the recovery and release/storage-contract checks passed. Two unrelated harness failures blocked the rest of that run: `ai-search.test.ts` imports the shared PostgreSQL pool, but the targeted-regression step did not set `DATABASE_URL` even though the PostgreSQL service was available; and the organization-analysis lease source test still expected a `const analysisLeaseToken` declaration after the route had moved to an outer `let` so the catch path could fence cleanup.
+
+**Fix:** The targeted-regression step now receives the isolated PostgreSQL service URL used by the preceding DB tests. The organization-analysis source contract now checks the outer mutable token declaration and the subsequent `crypto.randomUUID()` assignment before the conditional claim.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the targeted backend regression batch after these changes, including the AI-search module import and organization-analysis lease source contract. This is target-tested; it does not substitute for route-level concurrency or production database integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation targeted regressions → missing DATABASE_URL for AI-search module import and stale organization lease source assertion | target-tested | eb15580d7770723bf36173e5799e228bfa5454e5 | Source-contract tests remain distinct from PostgreSQL route-level concurrency tests |
+
+## 2026-11-06 follow-up — targeted backend regression environment and source matcher
+
+**Finding — Medium (validation pipeline reliability):** Fast Validation reached the targeted backend regression batch after the recovery and release/storage-contract checks passed. Two unrelated harness failures blocked the rest of that run: `ai-search.test.ts` imports the shared PostgreSQL pool, but the targeted-regression step did not set `DATABASE_URL` even though the PostgreSQL service was available; and the organization-analysis lease source test still expected a `const analysisLeaseToken` declaration after the route had moved to an outer `let` so the catch path could fence cleanup.
+
+**Fix:** The targeted-regression step now receives the isolated PostgreSQL service URL used by the preceding DB tests. The organization-analysis source contract now checks the outer mutable token declaration and the subsequent `crypto.randomUUID()` assignment before the conditional claim.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the targeted backend regression batch after these changes, including the AI-search module import and organization-analysis lease source contract. This is target-tested; it does not substitute for route-level concurrency or production database integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation targeted regressions → missing DATABASE_URL for AI-search module import and stale organization lease source assertion | target-tested | eb15580d7770723bf36173e5799e228bfa5454e5 | Source-contract tests remain distinct from PostgreSQL route-level concurrency tests |
+
+## 2026-11-06 follow-up — library job progress stream reconnect and cursor safety
+
+**Finding — Medium (user-facing job progress reliability):** The EventSource error handler closed the shared `source` variable and scheduled a delayed retry. If the browser fired `online` or `visibilitychange` before that timer elapsed, the reconnect handler opened another EventSource without cancelling the timer. The timer could then open a second connection, and a delayed error callback from the older connection could close the newer one. The cursor helper also accepted every cursorless snapshot, allowing an unversioned event to overwrite progress after a sequenced stream had already been established.
+
+**Fix:** Reconnect now keeps one live EventSource, cancels a pending retry when reconnecting manually, binds event/open/error handlers to the exact source instance, and ignores callbacks from superseded sources. Cursorless snapshots are accepted only before the first valid cursor; stream IDs and non-negative safe-integer sequences are validated before advancing the cursor.
+
+**Regression:** Added unit coverage for cursorless and malformed cursors, and included the library job recovery unit suite in Fast Validation. Added a UI source-contract regression for single-source ownership, retry cancellation, and source-instance guards.
+
+**Validation status:** Source inspection confirms the race and the corrective ownership checks. The new focused unit/source tests are committed; the next Fast Validation run must complete before target-tested is claimed. Browser-level offline/online and tab-visibility stress testing remains outstanding.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Library job progress → duplicate EventSource connections and cursorless snapshot rollback after reconnect | fixed; targeted tests pending | this batch | Browser-level network interruption, visibility race, and long-running job stress tests remain |

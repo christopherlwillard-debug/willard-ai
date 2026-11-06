@@ -66,6 +66,7 @@ export function useLibraryJobStream() {
 
   useEffect(() => {
     let source: EventSource | null = null;
+    let jobsListener: ((event: MessageEvent<string>) => void) | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
@@ -115,20 +116,46 @@ export function useLibraryJobStream() {
     };
 
     const connect = () => {
-      if (stopped) return;
-      source = new EventSource(eventUrl("/library/jobs/events"));
-      source.addEventListener("jobs", onJobs);
-      source.onopen = () => {
+      // Online/visibility events can race the scheduled retry. Keep one live
+      // EventSource and cancel any retry before opening its replacement.
+      if (stopped || (source && source.readyState !== EventSource.CLOSED)) return;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (source) {
+        if (jobsListener) source.removeEventListener("jobs", jobsListener);
+        source.close();
+      }
+
+      const nextSource = new EventSource(eventUrl("/library/jobs/events"));
+      source = nextSource;
+      const handleJobs = (event: MessageEvent<string>) => {
+        if (source !== nextSource) return;
+        onJobs(event);
+      };
+      jobsListener = handleJobs;
+      nextSource.addEventListener("jobs", handleJobs);
+      nextSource.onopen = () => {
+        if (source !== nextSource) return;
         delay = 500;
         setStreamConnected(true);
         void reconcile();
       };
-      source.onerror = () => {
+      nextSource.onerror = () => {
+        // A delayed error from an old source must never close a newer one.
+        if (source !== nextSource) return;
         setStreamConnected(false);
-        source?.close();
+        nextSource.removeEventListener("jobs", handleJobs);
+        nextSource.close();
+        source = null;
+        jobsListener = null;
         void reconcile();
         if (!stopped) {
-          reconnectTimer = setTimeout(connect, delay);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, delay);
           delay = Math.min(delay * 2, 10_000);
         }
       };
@@ -166,8 +193,10 @@ export function useLibraryJobStream() {
       if (fallbackTimer) clearTimeout(fallbackTimer);
       window.removeEventListener("online", reconcileAfterReconnect);
       document.removeEventListener("visibilitychange", onVisibility);
-      source?.removeEventListener("jobs", onJobs);
+      if (source && jobsListener) source.removeEventListener("jobs", jobsListener);
       source?.close();
+      source = null;
+      jobsListener = null;
     };
   }, []);
 

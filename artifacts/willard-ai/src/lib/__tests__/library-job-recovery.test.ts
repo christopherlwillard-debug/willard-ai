@@ -14,6 +14,11 @@ test("job snapshot cursors ignore stale events but accept a restarted server", (
   assert.equal(shouldAcceptJobSnapshot(current, { streamId: "before-restart", sequence: 7 }), false);
   assert.equal(shouldAcceptJobSnapshot(current, { streamId: "before-restart", sequence: 9 }), true);
   assert.equal(shouldAcceptJobSnapshot(current, { streamId: "after-restart", sequence: 1 }), true);
+  assert.equal(shouldAcceptJobSnapshot(null, null), true);
+  assert.equal(shouldAcceptJobSnapshot(current, null), false);
+  assert.equal(shouldAcceptJobSnapshot(current, { streamId: "", sequence: 9 }), false);
+  assert.equal(shouldAcceptJobSnapshot(current, { streamId: "after-restart", sequence: -1 }), false);
+  assert.equal(shouldAcceptJobSnapshot(current, { streamId: "after-restart", sequence: Number.NaN }), false);
 });
 
 test("recovery treats every terminal job state as complete and preserves resumable pause", () => {

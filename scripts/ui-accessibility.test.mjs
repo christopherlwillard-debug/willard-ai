@@ -50,6 +50,10 @@ const settingsPage = await readFile(
   new URL("../artifacts/willard-ai/src/pages/settings.tsx", import.meta.url),
   "utf8",
 );
+const libraryJobStreamHook = await readFile(
+  new URL("../artifacts/willard-ai/src/hooks/use-library-job-stream.ts", import.meta.url),
+  "utf8",
+);
 
 function openingTagForTestId(needle) {
   const index = searchPage.indexOf(needle);
@@ -293,4 +297,19 @@ test("nested media dialogs expose semantic roles, labels, and focus handling", (
 test("settings ignored-folder and ignored-extension removals have accessible names", () => {
   assert.ok(settingsPage.includes('aria-label={"Remove ignored folder " + f}'));
   assert.ok(settingsPage.includes('aria-label={"Remove ignored extension " + e}'));
+});
+
+
+test("library job progress reconnects with one owned EventSource", () => {
+  const start = libraryJobStreamHook.indexOf("const connect = () =>");
+  const end = libraryJobStreamHook.indexOf("\n    const onJobs", start);
+  assert.ok(start >= 0 && end > start, "job stream connect function should exist");
+  const connect = libraryJobStreamHook.slice(start, end);
+  assert.match(connect, /source && source\.readyState !== EventSource\.CLOSED/);
+  assert.match(connect, /clearTimeout\(reconnectTimer\)/);
+  assert.match(connect, /reconnectTimer = null/);
+  assert.match(connect, /const nextSource = new EventSource/);
+  assert.match(connect, /if \(source !== nextSource\) return/);
+  assert.match(connect, /nextSource\.removeEventListener\("jobs", handleJobs\)/);
+  assert.match(connect, /reconnectTimer = setTimeout\(\(\) => \{[\s\S]*?reconnectTimer = null;[\s\S]*?connect\(\);/);
 });
