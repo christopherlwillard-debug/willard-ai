@@ -53,5 +53,5 @@ test("NAS log stream detaches the previous library when switching to a new path 
   const implementation = source.slice(start, end);
   assert.match(implementation, /this\.rfsStream = null/);
   assert.match(implementation, /NAS operational log stream unavailable/);
-  assert.match(implementation, /old\)\.destroy\(\)/);
+  assert.match(implementation, /old as any\)\.destroy/);
 });
