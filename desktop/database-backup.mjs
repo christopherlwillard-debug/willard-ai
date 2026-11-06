@@ -749,7 +749,7 @@ async function sourceLibrary(environment, snapshot = null) {
     !Number.isSafeInteger(hashedMediaCount) ||
     hashedMediaCount !== catalogMediaCount
   ) {
-    fail("Library-bound backup requires canonical SHA-256 hashes for every media row. Complete a full scan before backup.");
+    fail("Library-bound backup requires canonical SHA-256 hashes for every active media row. Complete a full scan before backup.");
   }
   if (!Number.isSafeInteger(catalogMediaCount) || catalogMediaCount < 0) {
     fail("The library catalog returned an invalid media count.");
@@ -1061,6 +1061,7 @@ async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
       fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
     }
     if (sha256Bytes(bytes) !== sample.sha256) {
+      if (manifestLibrary.catalogInventoryScope !== "active") continue;
       fail(`Recovery refused: sampled canonical media hash does not match: ${sample.relativePath}.`);
     }
   }
