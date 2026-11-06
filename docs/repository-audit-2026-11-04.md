@@ -3273,3 +3273,51 @@ Those children were not in the shared active-process registry and were not rejec
 - **Full CI:** not run; Fast Validation is not the full-repository CI suite.
 
 **Next batch:** Complete Windows archive/updater and installer-lifecycle result diagnosis, then implement the node-7z ownership/cancellation adapter only after the explicit distinction between read-only preview abort and server-owned destructive Organize execution is covered by tests. Continue the conversion attempt-fencing design separately; do not add a token-only workaround.
+
+
+## 2026-11-06 follow-up — hard media-tool timeout and Windows recovery failure diagnosis
+
+### Fixed — Medium: media subprocess timeout now escalates beyond SIGTERM
+
+**Affected workflows:** Optimize conversion, video/PDF/image thumbnail generation, 7-Zip version probing, FFprobe codec detection, and media-health probes.
+
+**Evidence and root cause:** runMediaToolAsync previously relied only on child_process.execFile's timeout option. Node sends the configured kill signal (SIGTERM by default) when the timeout expires, but the runner had no escalation if a child handled/ignored SIGTERM. Since the promise settles only after the child-process callback, a stuck encoder could retain its request, worker slot, and conversion lock beyond the configured timeout. Existing timeout coverage used a child that exited when SIGTERM was delivered and did not exercise this case.
+
+**Fix:** runMediaToolAsync now schedules a bounded SIGKILL escalation after a 2-second grace period beyond the configured timeout. It checks that the child still has a PID and is still running, and clears both timers on process close/error. The existing process registry remains the single owner; no dependency was added. Thumbnail and conversion callers write to temporary/staging paths and publish only after successful validation, so timeout cleanup does not overwrite original media.
+
+**Regression evidence:** media-tools-async.test.ts launches a Node child that deliberately handles SIGTERM and would otherwise remain alive for 8 seconds. The runner rejected after the 2-second escalation window (2,209 ms) instead of waiting for the child's own timer.
+
+**Status:** fixed; target-tested on Linux and Windows smoke.
+- Fast Validation [42257114134](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114134), Linux validation job 128027130518: passed typecheck/generated contracts, PostgreSQL integration and targeted backend tests; 351 tests, 349 passed, 0 failed, 2 skipped. The new ignored-SIGTERM regression passed in 2,209 ms.
+- The same Fast Validation run's Windows archive/updater job 128027885762 passed. The ignored-SIGTERM test was intentionally skipped on Windows because Windows terminates the child directly for this signal; the Windows archive/updater preservation and rollback smoke passed.
+- Dependency Review [42257114045](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114045) passed; its separate installed dependency-graph audit step was skipped.
+
+**Implementation/test commits:** 8808afbb4ec9833483997e2b41f976dcd909dece (SIGKILL escalation); bf3dc6ce88d80b014e555c0c8f5d118a255b9315 (ignored-SIGTERM regression).
+
+**Remaining risk:** This hardens timeout handling but does not add per-job AbortSignal cancellation. A process-kill failure remains an exceptional OS-level case; conversion attempt fencing and job-to-child ownership still require the previously documented design.
+
+### Confirmed — High: packaged Windows recovery cannot start after the install directory is moved
+
+**Affected workflow:** Installed Windows upgrade/recovery, specifically interruption after the old installation directory is moved but before the candidate is swapped into place.
+
+**Latest failure evidence:** Windows installer lifecycle run [42254322661](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42254322661), job 128019096052, failed during the “prepared-phase update recovery” stage. The script then timed out waiting for http://127.0.0.1:8080/api/healthz. The captured stderr states that PowerShell could not find C:\WillardLifecycle\wl_life_13288244\desktop\WillardMediaCenter.ps1.
+
+**Root cause traced through product and test callers:**
+- scripts/windows/installer-lifecycle-smoke.ps1 lines 276–295 intentionally move InstallRoot to a sibling backup, write a prepared journal, then call Invoke-InstalledLauncher.
+- Invoke-InstalledLauncher (lines 105–108) constructs the launcher path as InstallRoot\desktop\WillardMediaCenter.ps1. That path no longer exists after the simulated move.
+- This is not only a test-helper defect: installer/WillardMediaCenter.iss [Icons] and [Run] entries (lines 56–61) also point directly to {app}\desktop\WillardMediaCenter.ps1. Its [InstallDelete] section deletes {app}\desktop before copying the new payload (lines 39–42).
+- The production recovery logic is inside desktop/WillardMediaCenter.ps1, whose InstallRoot is derived from its own path. It cannot execute if the entire directory containing it has been moved.
+
+**Status:** found; blocked pending stable-bootstrap implementation. The test is exercising a real recovery gap; do not weaken or skip the prepared-phase scenario to make the workflow green.
+
+**Safe implementation plan:** Install a small, version-independent bootstrap outside the replaceable {app} tree (for example, under the per-user LocalAppData application directory). Point Start Menu/desktop shortcuts and installer recovery entry points at that bootstrap. It must locate and validate the external update journal, restore the last known-good sibling backup when the live tree is absent, verify the restored launcher before handing off, and remain available until the uninstaller has safely stopped services and removed the payload. Preserve the current path-containment and no-overwrite checks. Add tests for missing live tree, prepared/backup-created/swapped journals, corrupt or redirected journals, repeated recovery, standard-user permissions, and uninstall. Do not merely change the lifecycle test to launch a different path.
+
+**Current lifecycle status:** Windows installer lifecycle run [42257114207](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114207) was pending at this report snapshot on code head bf3dc6ce88d80b014e555c0c8f5d118a255b9315. No lifecycle pass is claimed.
+
+### Validation snapshot
+
+- **Code head:** bf3dc6ce88d80b014e555c0c8f5d118a255b9315.
+- **PR #2:** open, draft, unmerged; base main; 188 changed files; 1,351 commits.
+- **Comparison with main:** 1,351 commits ahead, 1 behind.
+- **Full CI:** not run. Fast Validation and the Windows archive/updater smoke are not the complete installer lifecycle or full-repository CI.
+- **Next batch:** resolve the external stable Windows bootstrap and rerun the full lifecycle workflow; then continue node-7z ownership/cancellation and conversion attempt-fencing. Keep read-only archive-preview cancellation distinct from server-owned destructive Organize jobs.
