@@ -13,6 +13,8 @@ test("backup timeout terminates the complete process tree on supported platforms
   assert.match(source, /process\.kill\(-child\.pid!, "SIGKILL"\)/);
   assert.match(source, /detached: process\.platform !== "win32"/);
   assert.match(source, /await closed/);
+  assert.match(source, /if \(taskkillError\)[\\s\\S]*?child\\.kill\("SIGKILL"\)/);
+  assert.match(source, /Windows taskkill could not terminate the backup process tree/);
   assert.match(source, /timedOut = true/);
   assert.match(source, /Backup exceeded its 30-minute time limit/);
 });
