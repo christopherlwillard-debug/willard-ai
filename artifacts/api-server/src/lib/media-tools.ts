@@ -243,9 +243,13 @@ let healthProbe: Promise<MediaToolsHealth> | null = null;
 const HEALTH_CACHE_MS = 30_000;
 
 function probeTool(bin: "ffmpeg" | "ffprobe"): Promise<boolean> {
-  return new Promise(resolve => {
-    execFile(bin, ["-version"], { timeout: 5000 }, (error) => resolve(!error));
-  });
+  return runMediaToolAsync(bin, ["-version"], {
+    timeoutMs: 5_000,
+    maxBufferBytes: 64 * 1024,
+  }).then(
+    () => true,
+    () => false,
+  );
 }
 
 /**
