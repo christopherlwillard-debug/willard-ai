@@ -1681,3 +1681,14 @@ test("installed lifecycle runner disables interactive pause prompts", () => {
   const runner = installedLifecycleSmoke.slice(runnerStart, runnerEnd);
   assert.match(runner, /\$env:WILLARD_NO_PAUSE = "1"/);
 });
+
+test("packaged interrupted-update lifecycle fixtures use the accepted sibling path contract", () => {
+  assert.match(launcher, /candidate-\\[0-9a-fA-F-\\]\\{36\\}/);
+  assert.match(launcher, /previous-\\.\\+-\\\\d\\{14\\}/);
+  assert.match(installedLifecycleSmoke, /\\$installParent = Split-Path -Parent \\$InstallRoot/);
+  assert.match(installedLifecycleSmoke, /\\$installLeaf = Split-Path -Leaf \\$InstallRoot/);
+  assert.match(installedLifecycleSmoke, /"\\.candidate-" \\+ \\[guid\\]::NewGuid\\(\\)\\.ToString\\(\\)/);
+  assert.match(installedLifecycleSmoke, /"\\.previous-lifecycle-" \\+ \\(Get-Date -Format "yyyyMMddHHmmss"\\)/);
+  assert.match(installedLifecycleSmoke, /"\\.previous-prepared-" \\+ \\(Get-Date -Format "yyyyMMddHHmmss"\\)/);
+  assert.doesNotMatch(installedLifecycleSmoke, /\\$InstallRoot \\+ "\\.(?:lifecycle|prepared)-(?:backup|candidate)"/);
+});

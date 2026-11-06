@@ -237,8 +237,10 @@ exit $LASTEXITCODE
 
   # Simulate a power loss after a packaged version swap. The next installed
   # launcher must restore its sibling backup before starting services.
-  $backup = $InstallRoot + ".lifecycle-backup"
-  $candidate = $InstallRoot + ".lifecycle-candidate"
+  $installParent = Split-Path -Parent $InstallRoot
+  $installLeaf = Split-Path -Leaf $InstallRoot
+  $backup = Join-Path $installParent ("." + $installLeaf + ".previous-lifecycle-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $candidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
   Copy-Item $InstallRoot $candidate -Recurse -Force
   Set-Content (Join-Path $candidate "candidate-only.marker") "discard candidate" -Encoding UTF8
   Set-Content (Join-Path $InstallRoot "backup-only.marker") "restore backup" -Encoding UTF8
@@ -267,8 +269,8 @@ exit $LASTEXITCODE
   # Simulate power loss in the narrow window after the old install was moved
   # but before the updater could advance the journal beyond "prepared".
   Write-Host "Lifecycle: prepared-phase update recovery"
-  $preparedBackup = $InstallRoot + ".prepared-backup"
-  $preparedCandidate = $InstallRoot + ".prepared-candidate"
+  $preparedBackup = Join-Path $installParent ("." + $installLeaf + ".previous-prepared-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $preparedCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
   Copy-Item $InstallRoot $preparedCandidate -Recurse -Force
   Set-Content (Join-Path $InstallRoot "prepared-backup-only.marker") "restore prepared backup" -Encoding UTF8
   Move-Item -LiteralPath $InstallRoot -Destination $preparedBackup -ErrorAction Stop
