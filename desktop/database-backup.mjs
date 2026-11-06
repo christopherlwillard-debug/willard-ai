@@ -1065,7 +1065,7 @@ async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity
 async function validateRecoveryJournal(targetRoot, manifest, secret, environment) {
   let journal;
   try {
-    journal = JSON.parse(await readFile(await recoveryJournalPath(targetRoot, manifest), "utf8"));
+    journal = JSON.parse(await readRegularFileNoFollow(await recoveryJournalPath(targetRoot, manifest), "utf8", 1024 * 1024));
   } catch {
     fail("Recovery resume refused: no matching recovery journal exists on the attached NAS.");
   }
