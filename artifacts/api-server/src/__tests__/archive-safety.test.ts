@@ -385,3 +385,33 @@ test("archive peek does not mislabel corrupt archives as password protected", ()
   assert.match(routeSource, /throw new Error\(`Archive preview failed: \$\{error\}`\)/);
   assert.match(routeSource, /if \(error instanceof ArchiveSafetyError\) throw error;/);
 });
+
+
+test("password-protected ZIP and 7-Zip previews verify the original archive snapshot", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+
+  const sevenZipErrorStart = routeSource.indexOf('stream.on("error", (err: Error) => {');
+  assert.notEqual(sevenZipErrorStart, -1, "7-Zip preview error handler should exist");
+  const sevenZipErrorEnd = routeSource.indexOf("\n    });", sevenZipErrorStart);
+  assert.ok(sevenZipErrorEnd > sevenZipErrorStart, "7-Zip preview error handler should close");
+  const sevenZipErrorHandler = routeSource.slice(sevenZipErrorStart, sevenZipErrorEnd);
+  const sevenZipPasswordStart = sevenZipErrorHandler.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg))");
+  assert.notEqual(sevenZipPasswordStart, -1, "7-Zip password-error branch should exist");
+  const sevenZipPasswordBranch = sevenZipErrorHandler.slice(sevenZipPasswordStart);
+  const sevenZipSnapshotCheck = sevenZipPasswordBranch.indexOf("assertArchiveFileUnchanged(filePath, archiveSnapshot)");
+  const sevenZipAccept = sevenZipPasswordBranch.indexOf("resolve({ entries, isPasswordProtected, format, error: msg })");
+  assert.ok(sevenZipSnapshotCheck >= 0 && sevenZipAccept > sevenZipSnapshotCheck,
+    "7-Zip must verify the original archive before accepting a password-protected result");
+
+  const zipStart = routeSource.indexOf("if (ZIP_EXTS.has(ext))");
+  const zipEnd = routeSource.indexOf("const category = computeCategoryFromContent(entries, isPasswordProtected);", zipStart);
+  assert.ok(zipStart >= 0 && zipEnd > zipStart, "ZIP preview branch should exist");
+  const zipPreview = routeSource.slice(zipStart, zipEnd);
+  const zipPasswordStart = zipPreview.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(message))");
+  assert.notEqual(zipPasswordStart, -1, "ZIP password-error branch should exist");
+  const zipPasswordBranch = zipPreview.slice(zipPasswordStart);
+  const zipSnapshotCheck = zipPasswordBranch.indexOf("assertArchiveFileUnchanged(archivePath, archiveSnapshot)");
+  const zipAccept = zipPasswordBranch.indexOf("isPasswordProtected = true");
+  assert.ok(zipSnapshotCheck >= 0 && zipAccept > zipSnapshotCheck,
+    "ZIP must verify the original archive before accepting a password-protected result");
+});
