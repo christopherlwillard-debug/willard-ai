@@ -11,6 +11,7 @@ import {
   getThumbnailCacheStats,
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
+  clearThumbnailCache,
   findValidThumbnailPath,
   findReusableThumbnailPaths,
   THUMBNAIL_REUSE_PROBE_MAX_FILES,
@@ -124,6 +125,28 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(fs.existsSync(second.destPath!), true);
     assert.equal(fs.existsSync(first.destPath!), false);
     assert.equal(kept.files, 1);
+  });
+
+  test("cache clearing preserves active thumbnail locks and partial outputs", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const generated = await generateThumbnail(53, source, "jpg", root);
+    assert.equal(generated.error, null);
+
+    const dir = getThumbnailDir(root);
+    const lock = path.join(dir, "54.webp.lock");
+    const partial = path.join(dir, "54.webp.123.456.1.tmp.webp");
+    const frame = path.join(dir, "54.webp.frame.png");
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    fs.writeFileSync(partial, Buffer.alloc(128));
+    fs.writeFileSync(frame, Buffer.alloc(128));
+
+    assert.equal(clearThumbnailCache(root), 1);
+    assert.equal(fs.existsSync(generated.destPath), false);
+    assert.equal(fs.existsSync(lock), true);
+    assert.equal(fs.existsSync(partial), true);
+    assert.equal(fs.existsSync(frame), true);
   });
 
   test("reuses a real-size thumbnail cache after restart without rewriting completed files", async () => {
