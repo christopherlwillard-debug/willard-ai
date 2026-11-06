@@ -201,6 +201,15 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
       }
       const msg = err?.message ?? "";
       if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg)) {
+        // A password error is still a successful classification result. Verify
+        // that the archive inspected is the same file that was snapshotted
+        // before accepting that result, just as the normal "end" path does.
+        try {
+          assertArchiveFileUnchanged(filePath, archiveSnapshot);
+        } catch (snapshotError) {
+          reject(snapshotError instanceof Error ? snapshotError : new Error(String(snapshotError)));
+          return;
+        }
         isPasswordProtected = true;
         resolve({ entries, isPasswordProtected, format, error: msg });
         return;
@@ -388,6 +397,9 @@ router.post("/archives/:id/peek", async (req, res) => {
         if (error instanceof ArchiveSafetyError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         if (/password|wrong password|encrypted|cannot open encrypted/i.test(message)) {
+          // Do not persist a password-protected result for a file that changed
+          // while AdmZip was attempting to inspect it.
+          assertArchiveFileUnchanged(archivePath, archiveSnapshot);
           isPasswordProtected = true;
         } else {
           throw error;
