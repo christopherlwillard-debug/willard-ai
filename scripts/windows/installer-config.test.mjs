@@ -686,7 +686,7 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /UserProfile = Join-Path/);
   assert.match(installedLifecycleSmoke, /TEMP = \$script:UserTemp/);
   assert.match(installedLifecycleSmoke, /WaitForExit/);
-  assert.match(installedLifecycleSmoke, /Lifecycle: first install/);
+  assert.match(installedLifecycleSmoke, /Write-LifecycleStage "first install"/);
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PATH/);
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
@@ -1623,6 +1623,16 @@ test("launcher retains the previous release if service shutdown cannot be verifi
   assert.match(startupCatch, /Stop-StartedProcess \$webProc/);
   assert.match(startupCatch, /Stop-StartedProcess \$apiProc/);
   assert.match(startupCatch, /prior release backup was retained/);
+
+  const serviceStopStart = launcher.indexOf("function Stop-Services");
+  const serviceStopEnd = launcher.indexOf("\nfunction Stop-StartedProcess", serviceStopStart);
+  const serviceStop = launcher.slice(serviceStopStart, serviceStopEnd);
+  assert.match(serviceStop, /Wait-ForProcessIdentityExit \$process 5/);
+  const packagedWaitStart = launcher.indexOf("function Wait-ForProcessIdentityExit");
+  const packagedWaitEnd = launcher.indexOf("\nfunction Stop-Services", packagedWaitStart);
+  const packagedWait = launcher.slice(packagedWaitStart, packagedWaitEnd);
+  assert.match(packagedWait, /Start-Sleep -Milliseconds 200/);
+  assert.match(packagedWait, /return \(-not \(Test-ProcessIdentity \$process\)\)/);
   const directStopStart = launcher.indexOf("function Stop-StartedProcess");
   const directStopEnd = launcher.indexOf("\nfunction Save-Services", directStopStart);
   const directStop = launcher.slice(directStopStart, directStopEnd);
@@ -1649,8 +1659,18 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   assert.match(identity, /did not return a command line/);
   assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedPath\)\s*\)\s*\{\s*\$executablePath\s*=\s*\[string\]\$expectedPath/);
   assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCommandLine\)\s*\)\s*\{\s*\$commandLine\s*=\s*\[string\]\$expectedCommandLine/);
-  assert.match(identity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
   assert.doesNotMatch(identity, /catch \{ return \$null \}/);
+
+  const processIdentityStart = launcherCommon.indexOf("function Test-ProcessIdentity");
+  const processIdentityEnd = launcherCommon.indexOf("\nfunction Save-TrackedPids", processIdentityStart);
+  const processIdentity = launcherCommon.slice(processIdentityStart, processIdentityEnd);
+  assert.match(processIdentity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
+
+  const developerWaitStart = launcherCommon.indexOf("function Wait-ForProcessIdentityExit");
+  const developerWaitEnd = launcherCommon.indexOf("\nfunction Save-TrackedPids", developerWaitStart);
+  const developerWait = launcherCommon.slice(developerWaitStart, developerWaitEnd);
+  assert.match(developerWait, /Start-Sleep -Milliseconds 200/);
+  assert.match(developerWait, /return \(-not \(Test-ProcessIdentity \$process\)\)/);
   const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
   const developerStopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", developerStopStart);
   const developerStop = launcherCommon.slice(developerStopStart, developerStopEnd);
@@ -1658,6 +1678,7 @@ test("developer launcher fails closed on corrupt process state and WMI query fai
   assert.match(developerStop, /\$killOutput = @\(& \$taskkillPath \/PID \$p\.pid \/T \/F 2>&1\)/);
   assert.match(developerStop, /\$killExitCode = \$LASTEXITCODE/);
   assert.match(developerStop, /taskkill exit code/);
+  assert.match(developerStop, /Wait-ForProcessIdentityExit \$p 5/);
 
   const stopHandleStart = launcherCommon.indexOf("function Stop-LauncherStartedProcessHandle");
   const stopHandleEnd = launcherCommon.indexOf("\nfunction Read-TrackedPids", stopHandleStart);

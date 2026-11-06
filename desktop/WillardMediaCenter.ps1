@@ -388,6 +388,14 @@ function Is-Alive($process) {
   if ($process -is [psobject] -and $process.pid) { return (Test-ProcessIdentity $process) }
   return $false
 }
+function Wait-ForProcessIdentityExit($process, $timeoutSeconds = 5) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+  do {
+    if (-not (Test-ProcessIdentity $process)) { return $true }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $deadline)
+  return (-not (Test-ProcessIdentity $process))
+}
 function Stop-Services {
   $pids = Read-Pids
   Assert-NoUntrackedPackagedServices $pids
@@ -403,7 +411,7 @@ function Stop-Services {
       try {
         Wait-Process -Id $process.pid -Timeout 10 -ErrorAction SilentlyContinue
       } catch {}
-      if (Test-ProcessIdentity $process) {
+      if (-not (Wait-ForProcessIdentityExit $process 5)) {
         $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
         $remaining += "PID $($process.pid) (taskkill exit code $killExitCode; $killText)"
       }

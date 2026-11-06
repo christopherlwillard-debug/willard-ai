@@ -1084,6 +1084,15 @@ function Test-ProcessIdentity($tracked) {
         (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
 }
 
+function Wait-ForProcessIdentityExit($process, $timeoutSeconds = 5) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    do {
+        if (-not (Test-ProcessIdentity $process)) { return $true }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return (-not (Test-ProcessIdentity $process))
+}
+
 function Save-TrackedPids($apiPid, $webPid) {
     Ensure-LogDir
     $apiIdentity = Get-ProcessIdentity $apiPid
@@ -1123,7 +1132,7 @@ function Stop-TrackedProcesses {
                 try {
                     Wait-Process -Id $p.pid -Timeout 10 -ErrorAction SilentlyContinue
                 } catch {}
-                if (Test-ProcessIdentity $p) {
+                if (-not (Wait-ForProcessIdentityExit $p 5)) {
                     $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
                     $remaining += "PID $($p.pid) (taskkill exit code $killExitCode; $killText)"
                 } else {
