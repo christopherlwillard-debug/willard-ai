@@ -369,12 +369,6 @@ async function openDatabaseSnapshot(environment) {
     snapshot,
     async release() {
       await releaseExportedSnapshot(child);
-    }, 3000);
-        child.once("close", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
     },
   };
 }
