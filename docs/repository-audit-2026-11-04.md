@@ -2346,3 +2346,12 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Added `library-job-failure-persistence.test.ts` and wired it into Fast Validation.
 - Commits: implementation `4285392ab9f5ac16cf7fba0f8c31988ef74fc98f`; regression `0a65572c00247235ca843e7220e7f58924067feb`; workflow `6aa52fa79dca52d78b6d73ea347d4e6dceb1d452`.
 - Validation pending. This source-contract test does not replace a PostgreSQL fault-injection test that forces the terminal update to fail and verifies the active-job guard and recovery behavior end to end.
+
+
+## Backup timeout process-tree hardening (2026-11-06)
+- Revisited the backup timeout after the earlier fix and found that the existing helper was not truly tree-safe on POSIX: it signaled only the direct child. On Windows it returned after `taskkill` completed without waiting for the child close event. A timeout also did not record a timeout-specific failure, and stdout/stderr were accumulated without a memory bound.
+- Backup children now start in a dedicated POSIX process group; timeout termination signals the whole group with TERM and escalates to KILL after two seconds. Windows termination uses `taskkill /T /F` and waits for the child close event. The timeout is reported as an explicit 30-minute failure.
+- Child output and error diagnostics are bounded to the latest 8 KiB each, and spawn errors clear the timeout and active-child state.
+- Updated `backup-timeout-process-tree.test.ts` to cover platform-specific process-group/tree termination, timeout reporting, bounded output, and error cleanup. The test is already wired into Fast Validation.
+- Implementation commit `22f424795ef26f163d1a1cca65a30827da8b7258`; regression commit `84b34c0d70ff9fef76d8b5b520a6f87a14093cd8`.
+- Validation pending. The current regression is source-contract coverage; controlled child-plus-grandchild execution tests on Windows and POSIX remain necessary to prove the operating-system behavior.
