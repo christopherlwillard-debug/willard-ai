@@ -77,7 +77,7 @@ permissions:
 
 concurrency:
   group: windows-installer-lifecycle-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   lifecycle:
