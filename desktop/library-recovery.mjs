@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { link, lstat, mkdir, open as openFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const LIBRARY_IDENTITY_FORMAT = "willard-library-identity";
@@ -82,7 +83,25 @@ export async function readLibraryIdentity(libraryRoot) {
     if (error?.code !== "ENOENT") throw error;
     throw error;
   }
-  const bytes = await readFile(markerPath);
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(markerPath, fsConstants.O_RDONLY | noFollow);
+  let bytes;
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(markerPath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("The NAS library identity marker changed or became a symlink while opening.");
+    }
+    bytes = await handle.readFile();
+  } finally {
+    await handle.close();
+  }
   const identity = validateIdentity(JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")));
   return {
     ...identity,
