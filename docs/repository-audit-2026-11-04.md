@@ -2586,7 +2586,7 @@ The full recovery design for Replace requires durable backup intents, checksums,
 
 **Regression:** Added unit coverage for cursorless and malformed cursors, and included the library job recovery unit suite in Fast Validation. Added a UI source-contract regression for single-source ownership, retry cancellation, and source-instance guards.
 
-**Validation status:** Source inspection confirms the race and the corrective ownership checks. The new focused unit/source tests are committed; the next Fast Validation run must complete before target-tested is claimed. Browser-level offline/online and tab-visibility stress testing remains outstanding.
+**Validation status:** The first Fast Validation attempt was rejected before jobs started because the newly added TypeScript unit-test command was indented outside the shell block. The YAML indentation is corrected; the rerun must pass before target-tested is claimed. Browser-level offline/online and tab-visibility stress testing remains outstanding.
 
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
