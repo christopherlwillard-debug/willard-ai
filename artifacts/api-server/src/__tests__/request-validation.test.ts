@@ -163,7 +163,10 @@ test("organize job creation validates archive IDs and source-compatible options"
   const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
   assert.ok(route.includes("parsePositiveIntegerValue(archiveId)"));
   assert.ok(route.includes('parseAllowedString(archiveDisposition, ["waiting", "keep", "move_to_processed", "delete"], "keep")'));
-  assert.ok(route.includes('parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing")'));
+  assert.ok(route.includes('if (conflictPolicy === "replace")'));
+  assert.ok(route.includes("REPLACE_RECOVERY_UNAVAILABLE"));
+  assert.ok(route.includes('parseAllowedString(conflictPolicy, ["keep_existing", "rename", "skip"], "keep_existing")'));
+  assert.doesNotMatch(route, /parseAllowedString\(conflictPolicy, \["keep_existing", "replace"/);
   assert.ok(route.includes("archiveId: parsedArchiveId"));
   assert.ok(route.includes('sourceType === "folder" && requestedDisposition !== "keep"'));
   assert.doesNotMatch(route, /Number\(archiveId\)/);
