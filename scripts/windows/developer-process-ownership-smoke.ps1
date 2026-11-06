@@ -7,11 +7,22 @@ $script:LogDir = $tempRoot
 $script:PidFile = Join-Path $tempRoot "willard.pids.json"
 $script:MockListeners = @()
 $script:MockPortQueryFails = $false
+$script:MockNoMatchingInstances = $false
 
 function Get-NetTCPConnection {
     [CmdletBinding()]
     param([int]$LocalPort, [string]$State)
     if ($script:MockPortQueryFails) { throw "synthetic TCP query failure" }
+    if ($script:MockNoMatchingInstances) {
+        $exception = [System.Management.Automation.ItemNotFoundException]::new("No matching listener objects")
+        $record = [System.Management.Automation.ErrorRecord]::new(
+            $exception,
+            "NoMatchingInstances",
+            [System.Management.Automation.ErrorCategory]::ObjectNotFound,
+            $LocalPort
+        )
+        $PSCmdlet.ThrowTerminatingError($record)
+    }
     return @($script:MockListeners | Where-Object { $_.LocalPort -eq $LocalPort })
 }
 
@@ -31,8 +42,10 @@ function Assert-Throws([scriptblock]$Action, [string]$Expected) {
 }
 
 try {
-    Write-Host "Testing clean startup with no journal and no listeners..."
+    Write-Host "Testing clean startup when Windows reports no matching listener objects..."
+    $script:MockNoMatchingInstances = $true
     Assert-NoUntrackedDeveloperServices $null
+    $script:MockNoMatchingInstances = $false
 
     Write-Host "Testing missing journal with an API listener..."
     $script:MockListeners = @([pscustomobject]@{ LocalPort = 8080; OwningProcess = 4101 })
