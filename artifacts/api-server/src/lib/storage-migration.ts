@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createReadStream } from "node:fs";
-import { canonicalizePath, ensureDirectoryWithinRoot, resolveWithinRoot } from "./nas-storage.ts";
+import { canonicalizePath, ensureDataDirectoryWithinRoot, resolveWithinRoot } from "./nas-storage.ts";
 import { moveFileNoReplace } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
@@ -638,7 +638,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           throw new Error(entry.error);
         }
         const partialPath = `${safeDestinationPath}.${manifest.id}.${crypto.randomUUID()}.partial`;
-        ensureDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
+        ensureDataDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
         resolveWithinRoot(partialPath, manifest.destinationRoot);
         resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
         let partialCreated = false;
@@ -660,7 +660,7 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           try {
             // Publish without POSIX rename-overwrite semantics. A destination
             // created after the earlier conflict check is never replaced.
-            ensureDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
+            ensureDataDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
             publishing = true;
             moveFileNoReplace(partialPath, safeDestinationPath);
             partialCreated = false;
