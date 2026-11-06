@@ -1,3 +1,22 @@
+/**
+ * Missing, malformed, or implausibly future activity timestamps must not
+ * silently disable the server's inactivity timeout.
+ */
+export function isSessionInactive(
+  lastSeenAt: unknown,
+  now = Date.now(),
+  inactivityTimeoutMs = 30 * 60 * 1000,
+): boolean {
+  const timestamp = lastSeenAt instanceof Date
+    ? lastSeenAt.getTime()
+    : typeof lastSeenAt === "string" || typeof lastSeenAt === "number"
+      ? new Date(lastSeenAt).getTime()
+      : Number.NaN;
+  return !Number.isFinite(timestamp) ||
+    timestamp > now + 60_000 ||
+    now - timestamp > inactivityTimeoutMs;
+}
+
 export interface CredentialLock {
   passwordHash: string | null;
   commit(): Promise<void>;
