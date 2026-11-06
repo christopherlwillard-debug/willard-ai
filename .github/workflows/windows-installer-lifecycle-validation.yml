@@ -5,6 +5,7 @@ on:
     types:
       - opened
       - reopened
+      - synchronize
     branches:
       - main
     paths:
@@ -23,6 +24,7 @@ on:
       - "scripts/windows/build-release.mjs"
       - "scripts/windows/compile-installer.ps1"
       - "scripts/windows/installer-lifecycle-smoke.ps1"
+      - "scripts/windows/installer-config.test.mjs"
       - "scripts/windows/prepare-official-7zip.ps1"
       - "scripts/windows/release-payload.mjs"
       - "scripts/windows/validate-release.mjs"
