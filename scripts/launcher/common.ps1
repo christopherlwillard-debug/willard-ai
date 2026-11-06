@@ -922,14 +922,46 @@ function quoteIdentifier(identifier) {
     }
 }
 
+function Get-DeveloperListeningPorts {
+    $listeners = @()
+    foreach ($port in @(8080, 5000)) {
+        try {
+            $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+        } catch {
+            throw "Windows could not verify whether Willard service port $port is free: $($_.Exception.Message)"
+        }
+        foreach ($connection in $connections) {
+            $ownerPid = 0
+            if (-not [int]::TryParse([string]$connection.OwningProcess, [ref]$ownerPid) -or $ownerPid -le 0) {
+                throw "Windows found a listener on Willard service port $port but could not verify its owning process."
+            }
+            $listeners += [pscustomobject]@{ port = $port; pid = $ownerPid }
+        }
+    }
+    return $listeners
+}
+
+function Assert-NoUntrackedDeveloperServices($tracked) {
+    # A complete journal is checked against exact process identity by the
+    # existing stop path. With no journal or only one recorded process, any
+    # listener on either application port is unowned until proven otherwise.
+    $completeJournal = $tracked -and $tracked.api -and $tracked.web
+    if ($completeJournal) { return }
+
+    $listeners = @(Get-DeveloperListeningPorts)
+    if ($listeners.Count -gt 0) {
+        $details = ($listeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard found a listener on $details, but its developer services state file is missing or incomplete. It did not stop the process or change application files. Keep the state file for diagnosis, inspect the listed process, and close only the confirmed Willard service before retrying."
+    }
+}
+
 function Test-PortFree($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-    return (-not $conn)
+    return (@(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port }).Count -eq 0)
 }
 
 function Get-PortOwnerPid($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($conn) { return $conn.OwningProcess }
+    $listener = @(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port } | Select-Object -First 1)
+    if ($listener.Count -gt 0) { return $listener[0].pid }
     return $null
 }
 
@@ -1045,6 +1077,7 @@ function Stop-TrackedProcesses {
     # Stops ONLY what the launcher started (tracked PIDs + their children).
     # Retain the PID manifest if any owned process survives the stop attempt.
     $pids = Read-TrackedPids
+    Assert-NoUntrackedDeveloperServices $pids
     $stopped = 0
     $remaining = @()
     if ($pids) {
@@ -1065,6 +1098,11 @@ function Stop-TrackedProcesses {
     if ($remaining.Count -gt 0) {
         $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
         throw "Could not stop tracked Willard process(es): $remainingPids. The process list was retained for a safe retry."
+    }
+    $remainingListeners = @(Get-DeveloperListeningPorts)
+    if ($remainingListeners.Count -gt 0) {
+        $details = ($remainingListeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard services still have listening connections on $details. The process list was retained for a safe retry."
     }
     Clear-TrackedPids
     return $stopped
