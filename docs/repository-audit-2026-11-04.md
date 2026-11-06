@@ -2355,3 +2355,12 @@ The full recovery design for Replace requires durable backup intents, checksums,
 - Updated `backup-timeout-process-tree.test.ts` to cover platform-specific process-group/tree termination, timeout reporting, bounded output, and error cleanup. The test is already wired into Fast Validation.
 - Implementation commit `22f424795ef26f163d1a1cca65a30827da8b7258`; regression commit `84b34c0d70ff9fef76d8b5b520a6f87a14093cd8`.
 - Validation pending. The current regression is source-contract coverage; controlled child-plus-grandchild execution tests on Windows and POSIX remain necessary to prove the operating-system behavior.
+
+
+## Windows release permission isolation (latest)
+- Confirmed the validation/build job inherited workflow-level `contents: write` even when a manual run selected `validate_only: true`. The release action was conditional, but the build job still had an unnecessary write-capable token.
+- Changed the workflow default to `contents: read`, explicitly kept the Windows build job read-only, and moved GitHub Release creation into a separate Ubuntu publisher job with `contents: write` only.
+- The build job now uploads the installer, update ZIP, source ZIP, and manifest only when publication is requested. The publisher downloads those exact artifacts and uses the version output from the validated build.
+- Validation-only manual runs skip both artifact upload and the publisher. Push-to-main and manual publish runs still require the full Windows build/lifecycle checks to succeed before publication.
+- Commits: workflow permission split `b19152c8be8427f00ac9dead2d1859e801f60a4d`; artifact path correction `0b3630849708350b6ff9e166efa746e4f4f0afdb`.
+- This workflow is not triggered by the audit branch, so its GitHub Actions execution remains unverified here. YAML structure and artifact path behavior require CI validation before relying on the new publisher path. No release was dispatched or published.
