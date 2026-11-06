@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   formatMediaToolExecutionError,
+  assertMediaProcessStartAllowed,
   runMediaToolAsync,
   stopActiveMediaTools,
+  trackActiveMediaProcess,
 } from "../lib/media-tools.ts";
 import { markShuttingDown } from "../lib/shutdown-state.ts";
 
@@ -66,6 +69,17 @@ test("conversion and thumbnail routes await FFmpeg instead of running it synchro
   assert.match(thumbnailSource, /error = await generateVideoThumbnail/);
 });
 
+test("directly spawned archive helpers share the shutdown process registry", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], { stdio: "ignore" });
+  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  const unregister = trackActiveMediaProcess(child);
+
+  await stopActiveMediaTools(500);
+  await closed;
+  unregister();
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
 test("shutdown terminates owned media subprocesses before the server exits", async () => {
   const pending = runMediaToolAsync(
     process.execPath,
@@ -82,6 +96,10 @@ test("shutdown terminates owned media subprocesses before the server exits", asy
   assert.match(runtimeSource, /await stopActiveMediaTools/);
 
   markShuttingDown();
+  assert.throws(assertMediaProcessStartAllowed, (error: NodeJS.ErrnoException) => {
+    assert.equal(error.code, "ERR_SERVER_SHUTTING_DOWN");
+    return true;
+  });
   await assert.rejects(
     runMediaToolAsync("willard-audit-must-not-spawn", [], { timeoutMs: 1_000 }),
     (error: NodeJS.ErrnoException) => {
