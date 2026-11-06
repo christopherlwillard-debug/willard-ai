@@ -725,8 +725,11 @@ router.post("/cleanup/restore", async (req, res) => {
     `);
 
     // ── Ensure destination directory exists ───────────────────────────────────
-    const destinationDir = resolveWithinRoot(path.dirname(resolvedOriginalPath), nasPath);
-    fs.mkdirSync(destinationDir, { recursive: true });
+    // The destination may be lexically inside the library but have a
+    // symlinked parent. Validate each existing component before creating any
+    // missing directories so restore cannot write through an in-library link.
+    const canonicalNasRoot = canonicalizePath(nasPath);
+    ensureDirectoryWithinRoot(path.dirname(resolvedOriginalPath), canonicalNasRoot);
 
     // ── Verify and move file back ──────────────────────────────────────────────
     const verifyFile = async (filePath: string) => {
