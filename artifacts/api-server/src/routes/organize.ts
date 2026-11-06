@@ -8,7 +8,7 @@ import * as crypto from "crypto";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
-import { getSevenZipPath } from "../lib/sevenzip.ts";
+import { createTrackedSevenZipStream, getSevenZipPath, stopTrackedSevenZipStream } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, ensureDataDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
@@ -290,25 +290,30 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
     const sevenZipPath = await getSevenZipPath();
     let validationError: Error | undefined;
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
+      const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
+      const rejectUnsafeEntry = (error: Error) => {
+        if (validationError) return;
+        validationError = error;
+        void stopTrackedSevenZipStream(s);
+      };
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
           const info = getSevenZipEntryInfo(d);
           const isDir = info.isDirectory;
           if (info.isLink) {
-            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`);
+            rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`));
             return;
           }
           try {
             const checked = validateArchiveEntry({ path: d.file, sizeBytes: info.sizeBytes, isDirectory: isDir }, budget);
             entries.push({ path: d.file, sizeBytes: checked.sizeBytes, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
           } catch (error) {
-            validationError = error instanceof Error ? error : new Error(String(error));
+            rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
           }
         }
       });
       s.on("end", () => validationError ? reject(validationError) : resolve());
-      s.on("error", (error: Error) => reject(error));
+      s.on("error", (error: Error) => reject(validationError ?? error));
     });
   }
   assertArchiveFileUnchanged(archivePath, archiveSnapshot);
@@ -370,12 +375,17 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
       const sevenZipPath = await getSevenZipPath();
       let validationError: Error | undefined;
       await new Promise<void>((resolve, reject) => {
-        const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
+        const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
+        const rejectUnsafeEntry = (error: Error) => {
+          if (validationError) return;
+          validationError = error;
+          void stopTrackedSevenZipStream(s);
+        };
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
           const info = getSevenZipEntryInfo(entry);
           if (info.isLink) {
-            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`);
+            rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`));
             return;
           }
           try {
@@ -386,11 +396,11 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
             }, budget);
             count++;
           } catch (error) {
-            validationError = error instanceof Error ? error : new Error(String(error));
+            rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
           }
         });
         s.on("end", () => validationError ? reject(validationError) : resolve());
-        s.on("error", (error: Error) => reject(error));
+        s.on("error", (error: Error) => reject(validationError ?? error));
       });
     } else {
       return { ok: false, detail: `Unsupported format: .${ext}`, entryCount: 0 };
@@ -648,11 +658,12 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any);
+      const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
       let failed = false;
       const fail = (error: unknown) => {
         if (failed) return;
         failed = true;
+        void stopTrackedSevenZipStream(s);
         reject(error instanceof Error ? error : new Error(String(error)));
       };
       s.on("data", (d: any) => {
@@ -681,7 +692,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     // Pass 2: extract
     assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.extractFull(archivePath, stagingDir, {
+      const s = createTrackedSevenZipStream(() => Seven.extractFull(archivePath, stagingDir, {
         $bin: sevenZipPath,
         overwrite: "a",
         // Never let 7-Zip materialize archive-provided symbolic links. The
@@ -690,7 +701,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
         // incomplete link metadata through the list parser.
         $raw: ["-snl-"],
         $progress: false,
-      } as any);
+      } as any));
       s.on("end",   resolve);
       s.on("error", (e: any) => reject(new Error(`7z extract error: ${e?.message ?? e}`)));
     });
