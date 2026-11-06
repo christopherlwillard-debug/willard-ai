@@ -33,8 +33,8 @@ test("shutdown drains only this instance's conversion requests and never cancels
   assert.doesNotMatch(source, /db\.update\(organizationJobsTable\)/);
   assert.doesNotMatch(source, /db\.update\(conversionJobsTable\)/);
   assert.match(source, /dependencies\.stopActiveConversionJobs\(\)/);
-  assert.match(optimize, /const activeConversionJobIds = new Set<number>\(\)/);
-  assert.match(optimize, /activeConversionJobIds\.add\(id\)/);
+  assert.match(optimize, /const activeConversionJobIds = new Map<number, number>\(\)/);
+  assert.match(optimize, /activeConversionJobIds\.set\(id, \(activeConversionJobIds\.get\(id\) \?\? 0\) \+ 1\)/);
   assert.match(optimize, /activeConversionJobIds\.delete\(id\)/);
   assert.match(optimize, /isShuttingDown\(\)/);
   assert.match(optimize, /export async function stopActiveConversionJobs/);
