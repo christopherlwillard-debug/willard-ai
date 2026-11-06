@@ -19,6 +19,7 @@ import {
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
   ensureLibraryIdentity,
+  readLibraryFileNoFollow,
   readLibraryIdentity,
 } from "./library-recovery.mjs";
 import {
@@ -68,6 +69,33 @@ test("backup input reader refuses symlinked manifest and dump files", async (t) 
     await assert.rejects(() => readRegularFileNoFollow(link), /regular, non-symlink file/);
     assert.equal(await readRegularFileNoFollow(target, "utf8"), "sensitive external bytes");
     await assert.rejects(() => readRegularFileNoFollow(target, undefined, 4), /permitted size limit/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("recovery media verification refuses symlinked library paths", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-media-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-media-outside-"));
+  try {
+    const outsideFile = path.join(outside, "secret.jpg");
+    await writeFile(outsideFile, "external media bytes");
+    await mkdir(path.join(root, "photos"), { recursive: true });
+    try {
+      await symlink(outside, path.join(root, "linked-photos"), "dir");
+      await symlink(outsideFile, path.join(root, "photos", "linked.jpg"), "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readLibraryFileNoFollow(root, "linked-photos/secret.jpg"), /symlink or non-directory component/);
+    await assert.rejects(() => readLibraryFileNoFollow(root, "photos/linked.jpg"), /symlink or non-regular file/);
+    await writeFile(path.join(root, "photos", "family.jpg"), "family media");
+    assert.equal((await readLibraryFileNoFollow(root, "photos/family.jpg")).toString("utf8"), "family media");
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
