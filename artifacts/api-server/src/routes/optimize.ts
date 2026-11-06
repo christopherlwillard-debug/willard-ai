@@ -886,7 +886,11 @@ router.get("/optimize/scan", async (req, res) => {
     const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const library = await getActiveLibraryContext();
     const nasPath = library?.nasPath;
-    if (!nasPath || !fs.existsSync(nasPath)) {
+    let nasDirectoryAvailable = false;
+    if (nasPath) {
+      try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
+    }
+    if (!nasDirectoryAvailable) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
@@ -896,7 +900,7 @@ router.get("/optimize/scan", async (req, res) => {
     const force = req.query.force === "true";
 
     if (!force) {
-      const cached = readScanCache(nasPath, profile, rawConversionEnabled);
+      const cached = await readScanCache(nasPath, profile, rawConversionEnabled);
       if (cached) {
         res.json({ ...cached, libraryKey: library.libraryKey, fromCache: true, profile });
         return;
@@ -1182,7 +1186,11 @@ router.post("/optimize/run", async (req, res) => {
 
     const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const nasPath: string | null | undefined = settings.nasPath;
-    if (!nasPath || !fs.existsSync(nasPath)) {
+    let nasDirectoryAvailable = false;
+    if (nasPath) {
+      try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
+    }
+    if (!nasDirectoryAvailable) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
@@ -1726,7 +1734,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
     // Load per-file decisions from scan cache — used to enforce codec-specific convert/skip
     // and to get the correct targetExt for codec-overridden container files.
-    const execCachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const execCachedScan = await readScanCache(nasPath, profile, rawConversionEnabled);
     const execFileDecisions = (execCachedScan?.fileDecisions as
       Record<string, { convert: boolean; targetExt: string; reasons: string[] }> | undefined) ?? {};
 
@@ -1965,7 +1973,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const isRawSrc = RAW_EXTS.has(ext);
       const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes, isRawSrc);
       if (!verification.passed) {
-        try { if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath); } catch { /* best effort */ }
+        try { await fs.promises.unlink(stagedPath); } catch { /* best effort */ }
         const isRegression = verification.failedCheck?.includes("not smaller");
         if (isRegression) {
           skipped++;
