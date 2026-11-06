@@ -451,7 +451,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         res.json({
           archiveId: id, filename: archive.filename, entries: [], totalEntries: 0,
           isPasswordProtected: false, hasNestedArchives: false, estimatedExtractionSizeBytes: 0,
-          category: archive.category ?? "General", format: "gz",
+          category: archive.category ?? "General", format: rawExt,
           notes: "Standalone compressed file (not a TAR) — contents not listable without extraction",
         });
         return;
