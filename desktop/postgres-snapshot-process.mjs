@@ -122,7 +122,7 @@ export function releaseExportedSnapshot(child, { timeoutMs = 3_000 } = {}) {
     }, timeoutMs);
 
     try {
-      child.stdin.end("ROLLBACK;\\n\\\\q\\n");
+      child.stdin.end("ROLLBACK;\n\\q\n");
     } catch {
       // Keep the bounded SIGKILL fallback if the stdin pipe is already closed.
     }
