@@ -71,6 +71,52 @@ function validateIdentity(identity) {
   return identity;
 }
 
+/**
+ * Read one media file by library-relative path without following any
+ * descendant symlink. Used during recovery verification before trusting NAS
+ * paths restored from a database backup.
+ */
+export async function readLibraryFileNoFollow(libraryRoot, relativePath) {
+  if (
+    typeof relativePath !== "string" ||
+    !relativePath ||
+    path.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    /^[A-Za-z]:/.test(relativePath)
+  ) {
+    throw new Error("Library media path must be a non-empty relative path.");
+  }
+  const components = relativePath.split(/[\\/]+/);
+  if (components.some((component) => !component || component === "." || component === ".." || component.includes("\0"))) {
+    throw new Error("Library media path contains an invalid component.");
+  }
+  const fileName = components.pop();
+  const parent = await ensureLibraryDirectory(libraryRoot, components.join(path.sep));
+  const filePath = path.join(parent, fileName);
+  const initial = await lstat(filePath);
+  if (initial.isSymbolicLink() || !initial.isFile()) {
+    throw new Error("Library media path is a symlink or non-regular file.");
+  }
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(filePath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(filePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("Library media path changed or became a symlink while opening.");
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readLibraryIdentity(libraryRoot) {
   const configDir = await ensureLibraryDirectory(libraryRoot, path.join("WillardAI", "config"));
   const markerPath = path.join(configDir, "library-identity.json");
