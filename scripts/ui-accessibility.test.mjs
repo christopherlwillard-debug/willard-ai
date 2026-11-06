@@ -323,7 +323,7 @@ test("no-result search suggestions refine the current intent", () => {
   const suggestionEnd = searchPage.indexOf("\n                  ))}", suggestionStart);
   assert.ok(suggestionStart >= 0 && suggestionEnd > suggestionStart, "no-result suggestions should be rendered");
   const suggestionBlock = searchPage.slice(suggestionStart, suggestionEnd);
-  assert.match(suggestionBlock, /onClick=\{\(\) => submit\(s\)\}/);
+  assert.match(suggestionBlock, /onClick=\{\(\) => submitSuggestion\(s\)\}/);
   assert.doesNotMatch(suggestionBlock, /submit\(s,\s*true\)/);
 
   const submitStart = searchPage.indexOf("const submit = useCallback");
