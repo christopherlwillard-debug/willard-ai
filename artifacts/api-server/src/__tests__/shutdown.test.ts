@@ -29,15 +29,17 @@ function dependencies(events: string[], options: { hangingStep?: string } = {}) 
 test("shutdown drains only this instance's conversion requests and never cancels remote jobs", async () => {
   const source = readFileSync(new URL("../lib/shutdown.ts", import.meta.url), "utf8");
   const optimize = readFileSync(new URL("../routes/optimize.ts", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("../lib/conversion-runtime.ts", import.meta.url), "utf8");
 
   assert.doesNotMatch(source, /db\.update\(organizationJobsTable\)/);
   assert.doesNotMatch(source, /db\.update\(conversionJobsTable\)/);
   assert.match(source, /dependencies\.stopActiveConversionJobs\(\)/);
-  assert.match(optimize, /const activeConversionJobIds = new Map<number, number>\(\)/);
-  assert.match(optimize, /activeConversionJobIds\.set\(id, \(activeConversionJobIds\.get\(id\) \?\? 0\) \+ 1\)/);
-  assert.match(optimize, /activeConversionJobIds\.delete\(id\)/);
+  assert.match(runtime, /const activeConversionRequests = new Map<number, number>\(\)/);
+  assert.match(runtime, /export function trackConversionRequest/);
+  assert.match(runtime, /export async function stopActiveConversionJobs/);
+  assert.match(optimize, /trackConversionRequest\(id\)/);
+  assert.match(optimize, /releaseConversionRequest\(\)/);
   assert.match(optimize, /isShuttingDown\(\)/);
-  assert.match(optimize, /export async function stopActiveConversionJobs/);
 });
 
 test("shutdown is idempotent and closes resources in dependency order", async () => {
