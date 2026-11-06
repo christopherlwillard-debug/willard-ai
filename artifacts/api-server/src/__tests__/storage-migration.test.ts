@@ -486,3 +486,63 @@ test("cleanup enforces protected namespaces from the namespace catalog, not mani
   await service.cleanup(manifest.id);
   assert.equal(fs.readFileSync(backup, "utf8"), "protected original");
 });
+
+
+test("preview refuses a symlinked source namespace without scanning its target", async (context) => {
+  const paths = fixture();
+  const namespace = path.join(paths.source, "WillardAI/cache/thumbnails");
+  const outside = path.join(paths.root, "outside-source");
+  fs.rmSync(namespace, { recursive: true, force: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "private.jpg"), "outside source");
+  try {
+    fs.symlinkSync(outside, namespace, process.platform === "win32" ? "junction" : "dir");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("directory symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.equal(manifest.entries.some((entry) => entry.sourcePath === path.join(outside, "private.jpg")), false);
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+});
+
+test("preview marks a destination symlink unsafe instead of treating its target as a verified copy", async (context) => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/symlinked.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/symlinked.webp");
+  const other = path.join(paths.destination, "WillardAI/reports/other.webp");
+  fs.writeFileSync(source, "same bytes");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  fs.writeFileSync(other, "same bytes");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  try {
+    fs.symlinkSync(other, destination, "file");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("file symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.notEqual(manifest.entries.find((entry) => entry.sourcePath === source)?.state, "verified");
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+  assert.equal(fs.readFileSync(other, "utf8"), "same bytes");
+});
