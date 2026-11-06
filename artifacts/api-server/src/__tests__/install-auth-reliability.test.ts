@@ -146,7 +146,7 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
 test("late session-store saves after password reset cannot restore authorization", () => {
   assert.ok(authSource.includes("sess.credentialSettingsId = settingsId"));
   assert.ok(authSource.includes("sess.credentialVersion = credentialVersion(expectedPasswordHash)"));
-  assert.ok(appSource.includes("SELECT password_hash FROM app_settings WHERE id = $1"));
+  assert.ok(appSource.includes("FROM app_settings WHERE id = $1"));
   assert.ok(appSource.includes("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)"));
   const credentialCheck = appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)");
   assert.ok(

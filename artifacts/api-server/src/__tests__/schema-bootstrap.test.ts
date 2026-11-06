@@ -47,6 +47,10 @@ test("required schema bootstrap is versioned and runs atomically", async () => {
     "fresh bootstrap must create app_settings before any settings query",
   );
   assert.ok(
+    statements.some((sql) => /CREATE TABLE IF NOT EXISTS revoked_sessions/.test(sql)),
+    "fresh and upgraded installs must create durable session-revocation tombstones",
+  );
+  assert.ok(
     statements.some((sql) => /CREATE TABLE IF NOT EXISTS media_files/.test(sql)),
     "fresh bootstrap must create the canonical media table",
   );

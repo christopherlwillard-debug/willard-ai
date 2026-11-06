@@ -172,6 +172,13 @@ const SETUP_SQL = [
   ) WITH (OIDS=FALSE)`,
   `CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")`,
 
+  // Durable revocation tombstones prevent late connect-pg-simple upserts from
+  // restoring a session after logout or device/session revocation.
+  `CREATE TABLE IF NOT EXISTS revoked_sessions (
+    sid        varchar PRIMARY KEY,
+    revoked_at timestamp NOT NULL DEFAULT now()
+  )`,
+
   // app_settings (single-row settings + auth)
   `CREATE TABLE IF NOT EXISTS app_settings (
     id                      serial PRIMARY KEY,

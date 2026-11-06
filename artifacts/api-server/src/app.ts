@@ -29,6 +29,7 @@ import { isShuttingDown } from "./lib/shutdown-state.ts";
 import { apiErrorHandler, apiNotFoundHandler } from "./lib/api-errors.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
 import { isSessionCredentialCurrent, isSessionInactive } from "./lib/auth-session-guard.ts";
+import { revokeSession } from "./lib/auth-session-revocation.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost",
@@ -157,10 +158,22 @@ const PgStore = connectPgSimple(session);
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-function destroySession(req: Request): Promise<void> {
-  return new Promise((resolve, reject) => {
-    req.session.destroy((error) => (error ? reject(error) : resolve()));
-  });
+async function destroySession(req: Request): Promise<void> {
+  const sid = req.sessionID;
+  // Write the durable marker before relying on deletion from the upserting store.
+  await revokeSession(sid);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((error) => (error ? reject(error) : resolve()));
+    });
+  } catch (error) {
+    try {
+      await pool.query("DELETE FROM session WHERE sid = $1", [sid]);
+    } catch (fallbackError) {
+      // A committed tombstone still blocks authorization if physical cleanup fails.
+      req.log.warn({ err: fallbackError, operation: "revoked_session_row_cleanup", sid, originalError: error }, "Session row cleanup failed; durable revocation tombstone remains active");
+    }
+  }
 }
 
 const envSecret = process.env["SESSION_SECRET"];
@@ -289,7 +302,9 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     try {
       await destroySession(req);
     } catch (error) {
-      req.log.warn({ err: error }, "Unable to destroy expired session");
+      req.log.error({ err: error }, "Unable to durably revoke expired session");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
     }
     res.clearCookie("willard.sid");
     res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
@@ -304,7 +319,9 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     try {
       await destroySession(req);
     } catch (error) {
-      req.log.warn({ err: error }, "Unable to destroy a session without credential ownership");
+      req.log.error({ err: error }, "Unable to durably revoke a session without credential ownership");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
     }
     res.clearCookie("willard.sid");
     res.status(401).json({ error: "Session credentials are no longer valid. Please log in again." });
@@ -312,15 +329,32 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
   }
 
   let currentPasswordHash: string | null;
+  let sessionRevoked = false;
   try {
-    const credential = await pool.query<{ password_hash: string | null }>(
-      "SELECT password_hash FROM app_settings WHERE id = $1",
-      [credentialSettingsId],
+    const credential = await pool.query<{ password_hash: string | null; session_revoked: boolean }>(
+      `SELECT password_hash,
+              EXISTS (SELECT 1 FROM revoked_sessions WHERE sid = $2) AS session_revoked
+         FROM app_settings WHERE id = $1`,
+      [credentialSettingsId, req.sessionID],
     );
     currentPasswordHash = credential.rows[0]?.password_hash ?? null;
+    sessionRevoked = credential.rows[0]?.session_revoked === true;
   } catch (error) {
-    req.log.error({ err: error, operation: "session_credential_check" }, "Unable to verify session credentials");
+    req.log.error({ err: error, operation: "session_credential_check" }, "Unable to verify session credentials or revocation");
     res.status(503).json({ error: "Session credentials could not be verified. Please retry." });
+    return;
+  }
+
+  if (sessionRevoked) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.error({ err: error }, "Unable to confirm an existing session revocation");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "This session has been revoked. Please log in again." });
     return;
   }
 
@@ -328,7 +362,9 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     try {
       await destroySession(req);
     } catch (error) {
-      req.log.warn({ err: error }, "Unable to destroy a session with revoked credentials");
+      req.log.error({ err: error }, "Unable to durably revoke a session with changed credentials");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
     }
     res.clearCookie("willard.sid");
     res.status(401).json({ error: "Session revoked because account credentials changed. Please log in again." });
