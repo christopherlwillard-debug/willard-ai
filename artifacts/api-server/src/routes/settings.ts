@@ -3,7 +3,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import multer from "multer";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
-import { asc, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
@@ -375,9 +375,16 @@ router.post(
         const [saved] = await db
           .update(appSettingsTable)
           .set({ logoPath: destPath })
-          .where(eq(appSettingsTable.id, settings.id))
+          .where(and(
+            eq(appSettingsTable.id, settings.id),
+            settings.logoPath ? eq(appSettingsTable.logoPath, settings.logoPath) : isNull(appSettingsTable.logoPath),
+          ))
           .returning();
-        if (!saved) throw new Error("Branding settings row was not updated.");
+        if (!saved) {
+          const conflict = new Error("Branding logo changed during upload. Refresh settings and try again.");
+          Object.assign(conflict, { status: 409 });
+          throw conflict;
+        }
         updated = saved;
       } catch (error) {
         try { fs.unlinkSync(destPath); } catch { /* preserve original database pointer */ }
@@ -404,9 +411,15 @@ router.delete("/settings/logo", async (_req, res) => {
     const [updated] = await db
       .update(appSettingsTable)
       .set({ logoPath: null })
-      .where(eq(appSettingsTable.id, settings.id))
+      .where(and(
+        eq(appSettingsTable.id, settings.id),
+        settings.logoPath ? eq(appSettingsTable.logoPath, settings.logoPath) : isNull(appSettingsTable.logoPath),
+      ))
       .returning();
-    if (!updated) throw new Error("Branding settings row was not updated");
+    if (!updated) {
+      res.status(409).json({ error: "Branding logo changed before it could be removed. Refresh settings and try again." });
+      return;
+    }
 
     // Clear the database pointer first. If the database update fails, preserve
     // the current logo; a failed best-effort unlink can only leave an orphan.
