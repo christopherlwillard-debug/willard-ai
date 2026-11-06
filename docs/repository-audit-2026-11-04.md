@@ -2076,3 +2076,23 @@ This means the new corrupt-journal and WMI-error protections are useful but do n
 | Severity | Workflow / finding | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Inno Setup previously proceeded when the packaged shutdown helper was missing | fixed; source-contract tested | `36c715dd`; tests: `acd8d882` | Inno compilation and real standard-user lifecycle integration pending |
+
+
+### Upgrade compatibility boundary — prior installed launchers
+
+The new orphan-process discovery lives in the packaged launcher payload. During an in-place upgrade, Inno Setup's `PrepareToInstall` runs the **previously installed** launcher before the new payload is copied. Therefore, when upgrading from a release that predates this discovery, its `-Stop` implementation can still miss a missing or partial `services.json`. The new launcher protects subsequent starts, stops, and uninstall operations after the upgrade, but this batch does **not** yet prove that an upgrade from every older release is safe when its process journal is missing.
+
+**Status:** found / blocked; no partial workaround applied.
+
+**Safe implementation plan:**
+1. Add one small process-verification helper to the release payload and embed a temporary copy in the Inno Setup package.
+2. During `PrepareToInstall`, run the previous launcher shutdown first, then run the embedded helper against the exact old `{app}\runtime\node.exe` path. Refuse the upgrade if any process still uses that runtime or if Windows cannot inspect process identity.
+3. Install the same helper beside the new launcher so future uninstalls can verify that no process remains even if the launcher journal is missing or the launcher itself cannot be started.
+4. Keep this check read-only: never kill by process name or port; show process IDs and abort so the user can close only the confirmed processes.
+5. Add Windows integration coverage using a disposable install tree and real child processes for missing journal, API-only journal, normal complete journal, PID reuse, and WMI failure. Run the standard-user installer upgrade and uninstall lifecycle before declaring this path validated.
+
+This requires coordinated release-stager, Inno Setup, and Windows integration changes; it is intentionally not represented as fixed by the current launcher-only detection.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Upgrade from an older installed launcher may still leave an orphan service because Inno invokes the old `-Stop` before copying the new detector | found / blocked | none | Needs an installer-embedded verifier and real Windows upgrade lifecycle test |
