@@ -117,7 +117,7 @@ function relativeFor(sourceRoot: string, filePath: string): string {
   return path.relative(safeRoot(sourceRoot), safeRoot(filePath)).split(path.sep).join("/");
 }
 
-function assertRegularFileWithoutSymlinks(filePath: string, root: string): string {
+function inspectRegularFileWithoutSymlinks(filePath: string, root: string): "missing" | "regular" {
   const canonicalRoot = canonicalizePath(root);
   const target = path.resolve(filePath);
   const relative = path.relative(canonicalRoot, target);
@@ -128,7 +128,13 @@ function assertRegularFileWithoutSymlinks(filePath: string, root: string): strin
   let current = canonicalRoot;
   for (let index = 0; index < components.length; index += 1) {
     current = path.join(current, components[index]!);
-    const stat = fs.lstatSync(current);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
     if (stat.isSymbolicLink()) throw new Error("Migration file path contains a symbolic link.");
     if (index < components.length - 1 && !stat.isDirectory()) {
       throw new Error("Migration file path contains a non-directory parent.");
@@ -137,9 +143,15 @@ function assertRegularFileWithoutSymlinks(filePath: string, root: string): strin
       throw new Error("Migration source or destination is not a regular file.");
     }
   }
-  return target;
+  return "regular";
 }
 
+function assertRegularFileWithoutSymlinks(filePath: string, root: string): string {
+  if (inspectRegularFileWithoutSymlinks(filePath, root) !== "regular") {
+    throw new Error("Migration source or destination file is missing.");
+  }
+  return path.resolve(filePath);
+}
 function destinationFor(destinationRoot: string, relativePath: string): string {
   const result = safeRoot(path.join(destinationRoot, relativePath));
   if (!isWithin(destinationRoot, result)) throw new Error(`Destination path escapes migration root: ${relativePath}`);
@@ -463,20 +475,16 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         let destinationHash: string | null = null;
         let destinationExists = false;
         try {
-          const destinationStat = await fs.promises.lstat(destinationPath);
-          destinationExists = true;
-          if (destinationStat.isFile() && !destinationStat.isSymbolicLink()) {
-            destinationHash = await hashFile(destinationPath);
-          }
+          const destinationState = inspectRegularFileWithoutSymlinks(destinationPath, destinationRoot);
+          destinationExists = destinationState === "regular";
+          if (destinationExists) destinationHash = await hashFile(destinationPath);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            entries.push({
-              id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
-              sizeBytes: stat.size, sourceHash, destinationHash: null, referenceCount: 0, references: [],
-              protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
-            });
-            continue;
-          }
+          entries.push({
+            id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
+            sizeBytes: stat.size, sourceHash, destinationHash: null, referenceCount: 0, references: [],
+            protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
         }
         const fileReferences = referencesForPath(references, sourceRoot, sourcePath);
         entries.push({
@@ -586,18 +594,20 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     try {
       for (const entry of manifest.entries) {
         if (entry.state === "verified") continue;
-        const safeSourcePath = resolveWithinRoot(entry.sourcePath, manifest.sourceRoot);
-        const safeDestinationPath = resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+        const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+        resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+        const safeDestinationPath = path.resolve(entry.destinationPath);
         try {
-          assertRegularFileWithoutSymlinks(safeSourcePath, manifest.sourceRoot);
+          // The helper checks the lexical path before any filesystem read;
+          // canonicalizing first would hide an in-root symlink target.
         } catch (error) {
           entry.state = "missing";
           entry.error = error instanceof Error ? error.message : "Source is no longer a regular file.";
           throw new Error(entry.error);
         }
-        if (fs.existsSync(safeDestinationPath)) {
+        const destinationState = inspectRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        if (destinationState === "regular") {
           try {
-            assertRegularFileWithoutSymlinks(safeDestinationPath, manifest.destinationRoot);
             const existingHash = await hashFile(safeDestinationPath);
             if (existingHash === entry.sourceHash) {
               entry.destinationHash = existingHash;
