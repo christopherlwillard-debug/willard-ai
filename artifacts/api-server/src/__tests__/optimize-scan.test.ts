@@ -296,3 +296,15 @@ test("scan-limit state is cached, returned by the API, and warned about in Optim
   assert.match(optimizePageSource, /Scan limit reached/);
   assert.match(optimizePageSource, /Videos outside the scan window are safely skipped during conversion/);
 });
+
+test("Optimize scan route rejects a missing active library before using its NAS path", () => {
+  const start = optimizeRouteSource.indexOf('router.get("/optimize/scan"');
+  const end = optimizeRouteSource.indexOf('router.post("/optimize/ai-summary"', start);
+  assert.ok(start >= 0 && end > start, "Optimize scan route boundaries must remain discoverable");
+  const route = optimizeRouteSource.slice(start, end);
+  const guard = route.indexOf("if (!library || !library.nasPath.trim())");
+  assert.ok(guard >= 0, "missing active library must return before cache or filesystem access");
+  assert.ok(guard < route.indexOf("await readScanCache(nasPath"), "library guard must precede cache access");
+  assert.ok(guard < route.indexOf("await walkForOptimize(nasPath"), "library guard must precede NAS traversal");
+  assert.match(route, /const nasPath = library\.nasPath;/);
+});
