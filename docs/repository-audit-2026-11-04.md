@@ -3806,3 +3806,16 @@ Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/w
 - **High / blocked:** destructive Replace still needs a durable displaced-destination journal and restore workflow; do not re-enable it through a partial workaround.
 - **High / open:** explicit durable cancellation for server-owned organization jobs and operation-specific 7-Zip deadlines remain separate design items.
 - **Windows lifecycle:** prepared-phase recovery remains failed on the prior run; Fast Validation's Windows archive/updater smoke is not installed-product lifecycle validation.
+
+
+### Validation update — exact documentation head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`
+
+This head is a documentation-only commit after code/test commit `7f541970dbaed5a07fadd123841544217a653cec`; it contains the same archive process-ownership implementation and tests.
+
+- **Fast Validation #42302252050 — Linux job 128182985506: passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`.** Typecheck and generated-contract validation passed; Expo CLI configuration, desktop web-server safety, release/storage contracts, official static 7-Zip 26.05 compatibility, PostgreSQL media filters, conversion advisory-lock integration, conversion finalization recovery, session-revocation tombstones, and the targeted backend regression batch all passed. Targeted backend batch: 364 tests, 362 passed, 0 failed, 2 skipped (both explicitly require the configured PostgreSQL test database). The new node-7z ownership, AbortSignal, call-site contract, and shutdown tests all passed. The real official-binary node-7z compatibility test passed 1/1.
+- **Fast Validation #42302252050 — Windows job 128183713964: in progress at last inspection.** PowerShell parsing, launcher serialization/orphan handling, environment-file encoding, dependency installation, Windows capacity checks, media rename/no-overwrite, media subprocess responsiveness, storage migration, NAS temp cleanup, conversion finalization/rollback, official Windows 7-Zip staging, node-7z symlink metadata, compressed TAR preview, and packaged updater-journal tests had passed. The final developer-updater preservation/rollback step was still running; therefore Windows Fast Validation is not yet marked passed.
+- **Dependency Review #42302252056 — passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`.** The production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- Fast Validation #42301992363 for preceding code/test head `7f541970dbaed5a07fadd123841544217a653cec` was queue-replaced/cancelled when the documentation-only head was pushed. This is not a test failure; the newer run above is the matching validation.
+- **Full CI:** not run. Fast Validation is the Linux + Windows smoke/targeted validation workflow, not a full-repository CI claim.
+
+**Status for the node-7z batch:** source fix complete; targeted Linux tests and real-binary integration passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`; Windows smoke is still in progress. Do not mark Windows or full validation complete until the matching Windows job finishes successfully.
