@@ -2732,3 +2732,42 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | High | Archive preview of malformed bzip2/xz input; API process availability | fixed; target validation pending | `8fb0ea7b277e354fb64c056e7e4407c90c5bfa0f` (helper); `2d7ab28756a343674acb41f49044d9b621c61da1` (regression) | New Linux targeted validation and Windows archive smoke are required. Other decompressor cancellation, scratch-capacity, and installed-product preview behavior remain separate risks. |
+
+
+## 2026-11-06 follow-up — archive classification parity and Windows installed-stop failure
+
+### Archive preview classification parity
+
+**Finding — Medium (Archive Library → preview contents and category summaries):** Source inspection confirmed that `routes/archives.ts` maintained a second, incomplete media-extension list instead of using the canonical media scanner classification. Files already supported by the library scanner were displayed as `other` in archive previews: AVIF/CR3/PSD images; 3GP/TS/MTS/M2TS/MXF/VOB video; audio formats including MP3/FLAC/OPUS/AIFF; and documents including CSV/Markdown/ODS/ODP/Pages/Numbers/Keynote. The archive preview list also omitted supported archive/container extensions such as `.tgz`, `.tbz2`, `.txz`, `.cab`, and `.iso`. The category aggregator had no audio bucket, so audio-heavy archives could not be categorized correctly.
+
+**Fix:** Extracted the canonical media extension sets and `classifyMediaType` into the pure `lib/media-classification.ts` module. The media scanner imports and re-exports that function to preserve existing imports. Archive previews now use `lib/archive-classification.ts`, which maps canonical photo/video/audio/document types into archive entry types, recognizes the archive/container extensions already supported by the preview routes, retains software classification, and adds an Audio Archive category. No dependency was added and no second copy of the media extension lists remains.
+
+**Regression coverage:** Added `archive-classification.test.ts` for AVIF/CR3/PSD, camera/video formats, audio formats, document formats, compound TAR wrappers, CAB/ISO, software files, audio category counts, directory exclusion, password/empty states, both path separator styles, and dot-prefixed extension normalization. Added the suite to the Fast Validation targeted backend command.
+
+**Commits:** `465a85dcb0d1703c244ef013584f42365819269b` (canonical media classifier); `fc27c2971ce4f6baf04f6d3aaacc93caded1d0e0` (archive classifier); `7ca0a68488a5e18a0dbd280696489bd02b3f05df` (scanner reuse); `e565f72f9f69ae26c6fd62694cf9d570d821a26d` (archive route reuse); `ecc92c0d4097545d82913dfdacd7fbdb49939190` (regression suite); `d20e41c749a015eb713739592f69ee3a504bf190` (Fast Validation wiring); `66932a0896c96dcdf36d02fd67b05bdd585c51b9` and `a4ff4f22f332eba717fadb0817750eb15d3e5bc2` (leading-dot normalization and regression).
+
+**Validation status:** Source changes and focused regression tests are committed. Fast Validation #1202 and Windows installer lifecycle #47 were queued on the updated branch at the time this entry was written; neither result is claimed here. The preceding Fast Validation #1198 passed its Linux validation and Windows archive/updater smoke jobs, but it predates this classification batch and does not validate it.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → preview entry type and category | fixed; target validation pending | classifier/route/test/workflow commits listed above | A clean installed-product archive preview and full Windows lifecycle remain outstanding. |
+
+### Windows installed-product lifecycle — stop after upgrade
+
+**Finding — High (Windows installer → stop after in-place upgrade):** Windows lifecycle run #40 successfully built the unsigned installer, completed standard-user installation and startup, and completed two stop operations. The third stop, after the in-place upgrade, did not finish within the lifecycle harness's 180-second timeout. Its captured output reported: `Windows did not return enough identity information to safely manage Willard process 8416.` The current PID-reuse guard had already compared the persisted creation time; the same process identity could not be confirmed because Windows did not return the executable path and command line. The install/upgrade itself completed; the full lifecycle failed at stop and did not reach the remaining recovery/diagnostics/uninstall assertions.
+
+**Safety decision:** Do not weaken process ownership checks or force-kill an unverified PID. The existing fail-closed behavior is retained. A safe follow-up should add bounded WMI/CIM retry and an independent process-handle identity check, then prove that the tracked process is the exact installed API/web child before allowing termination. If identity remains incomplete, stop should return a bounded actionable error rather than hang. The updated lifecycle run #47 is queued; no pass is claimed.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installed launcher → stop after upgrade | found; blocked pending safe process-identity design | current launcher identity implementation remains unchanged in this batch | A standard-user upgrade/stop/recovery/uninstall run must pass. Never terminate a PID using only a reused PID value. |
+
+### Conversion responsiveness and worker ownership — source inspection
+
+**Finding — High (Optimize Center → video/RAW conversion, cancellation, and API responsiveness):** The current `routes/optimize.ts` still calls `spawnSync` for FFmpeg video encoding (up to a one-hour timeout), RAW image decoding, and the generic image fallback. The conversion execute route is async, but these synchronous child-process calls block the Node event loop. The cancel endpoint only writes `cancelledAt`; the worker checks that flag between files, so an active FFmpeg process cannot be interrupted and unrelated API requests can be delayed for the duration of an encode. The route acquires a session-scoped PostgreSQL advisory lock, but does not attach a process-termination strategy to the lock connection's error/end lifecycle. The lock helper explicitly documents that losing the connection releases ownership; that event does not itself stop the running FFmpeg child.
+
+**Status:** Found by source inspection; no partial workaround applied. This requires a coherent asynchronous worker batch: spawn/stream FFmpeg asynchronously, track each child per job, cancel the child and owned subprocess tree, detect lost lock connections, prevent stale workers from publishing results, and use attempt-specific staging plus conditional finalization. Add fault-injection tests for cancellation, process exit, database connection loss, retry overlap, and Windows process-tree termination before claiming the conversion workflow reliable.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Optimize Center → active conversion and cancel | found; architecture required | no code change in this batch | Current synchronous FFmpeg calls still block the event loop; advisory-lock loss can leave a stale child running. |
