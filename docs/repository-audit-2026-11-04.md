@@ -2886,3 +2886,20 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Fast Validation → Search filter UI contract | fixed; target-test pending | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Confirm the full UI contract suite on the corrected head; static contract checks do not replace browser accessibility testing. |
+
+
+## November 6 validation milestone — archive, installer-fixture, and UI contract corrections
+
+- **Fast Validation #1232 passed** on audit head `99874ac039961eebc6d42844c356f9273754ea16`. The Linux job completed typecheck/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 download/hash verification, Linux node-7z compatibility, PostgreSQL media LIKE behavior, cross-connection advisory locks, PostgreSQL conversion-finalization recovery, and the targeted backend regression suite.
+- The paired **Windows archive/updater smoke job also passed** in #1232. It covered PowerShell launcher parsing, concurrent startup protection, developer-launcher orphan handling, UTF-8 launcher environment files, Windows media rename and storage-migration no-overwrite behavior, NAS temp/cleanup safety, conversion finalization rollback, official Windows 7-Zip symlink metadata, compressed TAR preview, updater journal writes, and developer updater preservation/rollback.
+- **Dependency Review #995 passed** on the same head.
+- The three corrections represented by commits `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250`, `3b063902d289a1d08bc7289221e79ee6900f604a`, `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, and `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` are now **target-tested** by the successful Fast Validation run. This is not full CI and does not constitute the Windows installed-product lifecycle.
+- **Windows installer lifecycle #83 remains in progress** on the same head. Installer compilation completed successfully; standard-user install, first startup, upgrade, interrupted-update recovery, diagnostics, and uninstall have not yet been confirmed. Do not mark the installer fully validated until that workflow completes successfully.
+- Current branch head at this milestone: `99874ac039961eebc6d42844c356f9273754ea16`. No main-branch, production-data, credential, or release changes.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview snapshot integrity | target-tested | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Snapshot metadata is not a file lock; Windows/SMB source-change semantics remain untested. |
+| Medium | Windows installer → interrupted-update lifecycle fixture cleanup | target-tested | `3b063902d289a1d08bc7289221e79ee6900f604a` | Installer lifecycle #83 still needs to finish its installed-product recovery sequence. |
+| Medium | Fast Validation → Search filter UI contract parser | target-tested | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Static UI contracts do not replace browser keyboard/screen-reader testing. |
+
