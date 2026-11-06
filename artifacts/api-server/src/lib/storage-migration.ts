@@ -417,23 +417,29 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   }
 
   async function preview(input: Omit<MigrationPreviewOptions, "manifestDir">): Promise<StorageMigrationManifest> {
-    const sourceRoot = canonicalizePath(input.sourceRoot);
-    const destinationRoot = canonicalizePath(input.destinationRoot);
-    if (samePath(sourceRoot, destinationRoot) || isWithin(sourceRoot, destinationRoot) || isWithin(destinationRoot, sourceRoot)) {
-      throw new Error("Migration source and destination must be separate, non-overlapping directories.");
+    // Inspect the caller-supplied final components BEFORE canonicalization;
+    // canonicalizePath intentionally dereferences symlinks and would otherwise
+    // hide a symlink used as the selected source or destination root.
+    const requestedSourceRoot = path.resolve(input.sourceRoot);
+    if (!fs.existsSync(requestedSourceRoot)) throw new Error("Migration source is not reachable.");
+    const requestedSourceStat = fs.lstatSync(requestedSourceRoot);
+    if (requestedSourceStat.isSymbolicLink() || !requestedSourceStat.isDirectory()) {
+      throw new Error("Migration source must be a regular, non-symlink directory.");
     }
-    if (!fs.existsSync(sourceRoot)) throw new Error("Migration source is not reachable.");
-    const sourceStat = fs.lstatSync(sourceRoot);
-    if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
-      throw new Error("Migration source must resolve to a regular directory.");
-    }
+    const requestedDestinationRoot = path.resolve(input.destinationRoot);
     try {
-      const destinationStat = fs.lstatSync(destinationRoot);
-      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
-        throw new Error("Migration destination must be a regular directory when it already exists.");
+      const requestedDestinationStat = fs.lstatSync(requestedDestinationRoot);
+      if (requestedDestinationStat.isSymbolicLink() || !requestedDestinationStat.isDirectory()) {
+        throw new Error("Migration destination must be a regular, non-symlink directory when it already exists.");
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+
+    const sourceRoot = canonicalizePath(requestedSourceRoot);
+    const destinationRoot = canonicalizePath(requestedDestinationRoot);
+    if (samePath(sourceRoot, destinationRoot) || isWithin(sourceRoot, destinationRoot) || isWithin(destinationRoot, sourceRoot)) {
+      throw new Error("Migration source and destination must be separate, non-overlapping directories.");
     }
 
     const references = input.referenceRows ?? await databaseReferences(query);
