@@ -1494,7 +1494,7 @@ test("packaged process-state and WMI failures fail closed instead of hiding runn
     "A recorded creation-time mismatch must prove PID reuse before path/command-line checks can fail closed.");
 
   const processIdentityStart = launcher.indexOf("function Test-ProcessIdentity");
-  const processIdentityEnd = launcher.indexOf("\\nfunction Test-CommandLineContainsExactPath", processIdentityStart);
+  const processIdentityEnd = launcher.indexOf("\nfunction Test-CommandLineContainsExactPath", processIdentityStart);
   const processIdentity = launcher.slice(processIdentityStart, processIdentityEnd);
   assert.match(processIdentity, /Get-ProcessIdentity \$tracked\.pid \$tracked\.creationDate/);
 });
