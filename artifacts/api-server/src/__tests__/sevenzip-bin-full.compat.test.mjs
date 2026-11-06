@@ -81,11 +81,11 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
 
       const linkEntries = await new Promise((resolve, reject) => {
         const entries = [];
-        const stream = Seven.list(linkArchive, {
+        const stream = createTrackedSevenZipStream(() => Seven.list(linkArchive, {
           $bin: binaryPath,
           $progress: false,
           techInfo: true,
-        });
+        }));
         stream.on("data", (entry) => {
           if (entry.file !== undefined) entries.push(entry);
         });
@@ -104,7 +104,7 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       // would only prove the binary's default behavior, not that -snl- works.
       const defaultLinkDestination = path.join(root, "link-extracted-default");
       await new Promise((resolve, reject) => {
-        const stream = Seven.extractFull(linkArchive, defaultLinkDestination, {
+        const stream = createTrackedSevenZipStream(() => Seven.extractFull(linkArchive, defaultLinkDestination, {
           $bin: binaryPath,
           $progress: false,
           overwrite: "a",
@@ -171,11 +171,11 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       assert.ok(fs.statSync(linkArchivePath).isFile(), "cross-platform symlink archive fixture is missing");
       const linkEntries = await new Promise((resolve, reject) => {
         const entries = [];
-        const stream = Seven.list(linkArchivePath, {
+        const stream = createTrackedSevenZipStream(() => Seven.list(linkArchivePath, {
           $bin: binaryPath,
           $progress: false,
           techInfo: true,
-        });
+        }));
         stream.on("data", (entry) => {
           if (entry.file !== undefined) entries.push(entry);
         });
