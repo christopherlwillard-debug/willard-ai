@@ -1294,12 +1294,17 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let preflightLeaseToken = "";
+  let preflightNasPath = "";
+  let preflightClaimed = false;
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "This job is currently being processed" }); return;
+    }
 
     const plan = job.planJson as any;
     const settings = await getActiveAppSettings();
@@ -1307,6 +1312,24 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running preflight." }); return;
     }
+
+    // Hold the same row lease used by execution so preflight cannot finish
+    // late and reset a worker's status back to verified/planned.
+    preflightLeaseToken = crypto.randomUUID();
+    preflightNasPath = job.nasPath;
+    const [claimedPreflight] = await db.update(organizationJobsTable)
+      .set({ leaseToken: preflightLeaseToken })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, job.nasPath),
+        eq(organizationJobsTable.status, job.status),
+        isNull(organizationJobsTable.leaseToken),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedPreflight) {
+      res.status(409).json({ error: "This job changed while preflight was starting. Refresh and try again." }); return;
+    }
+    preflightClaimed = true;
     const checks: any[] = [];
 
     // Active routes = plan.activeRoutes (if exclusions applied) or plan.routes
@@ -1488,11 +1511,30 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       conflictPolicy, conflictList,
     };
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, preflightNasPath),
+        eq(organizationJobsTable.leaseToken, preflightLeaseToken),
+        eq(organizationJobsTable.status, job.status),
+      ))
       .returning();
-    res.json(updated ? publicOrganizationJob(updated) : updated);
-  } catch { res.status(500).json({ error: "Preflight check failed" }); }
+    if (!updated) { res.status(409).json({ error: "Preflight lost ownership. Refresh and try again." }); return; }
+    preflightClaimed = false;
+    res.json(publicOrganizationJob(updated));
+  } catch {
+    // Release only this preflight's claim; never clear a replacement worker's lease.
+    if (preflightClaimed && preflightLeaseToken && preflightNasPath) {
+      await db.update(organizationJobsTable)
+        .set({ leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, preflightNasPath),
+          eq(organizationJobsTable.leaseToken, preflightLeaseToken),
+        )).catch(() => {});
+    }
+    res.status(500).json({ error: "Preflight check failed" });
+  }
 });
 
 /**
