@@ -2911,3 +2911,13 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 - Cache clearing now removes completed cache entries only and leaves lock/partial artifacts in place for their owning worker and existing cleanup policy.
 - Added a regression test that creates a completed thumbnail plus simulated active lock, temporary WebP, and FFmpeg frame files; it verifies the completed derivative is cleared while all in-flight artifacts remain.
 - Targeted test and CI validation are pending. This change does not resolve stale-lock recovery after a crashed worker; that remains an open operational concern.
+
+
+## Validation follow-up — thumbnail cache race and Windows lifecycle (2026-11-06)
+
+- **Fast Validation #1235 passed** on commit 59cf2461c1f0a8467f3c744309eeefa73bd50c9c: both validate and windows-archive-and-updater-smoke jobs succeeded. The passing validate job includes typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official 7-Zip policy and binary compatibility checks, PostgreSQL media LIKE filters, cross-connection conversion advisory locks, conversion finalization restart recovery, and targeted backend regressions. This run includes the thumbnail cache clear regression.
+- **Dependency Review #998 passed** on the same commit.
+- **Windows installer lifecycle #86 failed** on the same commit. The installer built and compiled successfully, but the standard-user install/upgrade/recovery/diagnostics/uninstall exercise failed. The job reports the failure in its single lifecycle step; the available GitHub run metadata does not expose the step console output or preserved runner-local diagnostic files, so the failing lifecycle phase is not yet established. Do not treat this as a product defect until the exact assertion/log is recovered; equally, do not mark the installer lifecycle as passed.
+- Follow-up inspection confirmed the lifecycle script preserves runner-local diagnostics on failure and prints them to the job log. The current connected GitHub metadata view exposes the failed step but not that log body. Next action is to obtain the failing phase/assertion from the job log, reproduce it, and only then make a targeted correction.
+- The thumbnail cache clear change is now **CI-validated** by Fast Validation #1235. It intentionally leaves stale lock recovery open; no age-only lock stealing was reintroduced.
+- PR #2 remains open and draft. No main branch, production data, credentials, release artifacts, or production settings were changed.
