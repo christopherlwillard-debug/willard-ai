@@ -67,6 +67,7 @@ test("backup input reader refuses symlinked manifest and dump files", async (t) 
     }
     await assert.rejects(() => readRegularFileNoFollow(link), /regular, non-symlink file/);
     assert.equal(await readRegularFileNoFollow(target, "utf8"), "sensitive external bytes");
+    await assert.rejects(() => readRegularFileNoFollow(target, undefined, 4), /permitted size limit/);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
