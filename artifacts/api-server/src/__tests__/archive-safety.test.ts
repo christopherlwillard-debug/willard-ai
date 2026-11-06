@@ -356,3 +356,21 @@ test("7-Zip organize extraction explicitly disables symbolic-link materializatio
   assert.match(extractionOptions, /\$raw:\s*\["-snl-"\]/);
   assert.match(extractionOptions, /on\("error"/);
 });
+
+test("archive publication never replaces a regular destination created before publication", () => {
+  const outputRoot = path.join(root, "staging");
+  const output = path.join(outputRoot, "existing.txt");
+  fs.mkdirSync(outputRoot, { recursive: true });
+  fs.writeFileSync(output, "user file");
+
+  assert.throws(
+    () => writeArchiveFileAtomically(outputRoot, output, Buffer.from("archive replacement")),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as NodeJS.ErrnoException).code, "EEXIST");
+      return true;
+    },
+  );
+  assert.equal(fs.readFileSync(output, "utf8"), "user file");
+  assert.deepEqual(fs.readdirSync(outputRoot), ["existing.txt"]);
+});
