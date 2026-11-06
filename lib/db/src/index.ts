@@ -24,3 +24,5 @@ export function closePool(): Promise<void> {
 }
 
 export * from "./schema/index.ts";
+
+export type { PoolClient } from "pg";
