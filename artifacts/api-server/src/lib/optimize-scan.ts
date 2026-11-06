@@ -21,6 +21,7 @@ export interface OptimizeExtGroup {
 export interface OptimizeConversionFile {
   fullPath: string;
   ext: string;
+  sizeBytes: number;
 }
 
 function filesystemError(error: unknown): string {
@@ -173,7 +174,7 @@ export async function walkForConversion(
       throw new Error(`Conversion scan entry is no longer a regular file: "${fullPath}"`);
     }
 
-    results.push({ fullPath, ext });
+    results.push({ fullPath, ext, sizeBytes: stat.size });
     return true;
   }, "conversion");
 }
