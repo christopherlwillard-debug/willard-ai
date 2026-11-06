@@ -333,9 +333,9 @@ function Is-Alive($process) {
   if ($process -is [psobject] -and $process.pid) { return (Test-ProcessIdentity $process) }
   return $false
 }
-function Stop-Services([switch]$SkipOrphanCheck) {
+function Stop-Services {
   $pids = Read-Pids
-  if (-not $SkipOrphanCheck) { Assert-NoUntrackedPackagedServices $pids }
+  Assert-NoUntrackedPackagedServices $pids
   $remaining = @()
   foreach ($process in @($pids.api, $pids.web)) {
     if (Test-ProcessIdentity $process) {
@@ -844,7 +844,7 @@ try {
     $script:LauncherMutex = $null
     exit 0
   }
-  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services -SkipOrphanCheck }
+  if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
   Recover-InterruptedUpdateSwap
   Try-Update
   if (-not (Ensure-Env)) {
