@@ -2993,3 +2993,9 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 - Dependency Review [#1005](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932307) passed on the same audit head.
 - Windows installer lifecycle [#97](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932341) successfully completed the unsigned installer build/compile step, which exercises the corrected resolved-sharp check and fail-closed build wrapper. Its standard-user lifecycle step was still running at the time of this update. Do not count the lifecycle as passed; run #87 already failed at prepared-phase recovery, and the stable-bootstrap defect remains open.
 - No full-repository CI matrix was run. The successful Fast Validation workflow is broad targeted/integration validation, not a claim that every workflow or installed-product scenario passed.
+
+
+### Post-update status — Windows lifecycle run #97
+
+- Run [#97](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932341) was **cancelled**, not passed or failed, after the unsigned installer build/compile step had succeeded. Its installed-product lifecycle step was interrupted when the audit branch received the documentation-only ledger correction; the cleanup step then reported failure because cancellation interrupted teardown.
+- Therefore, the new sharp parity and installer build path have a successful Windows build/compile integration result, but run #97 provides no new result for first-start/upgrade/recovery/uninstall. The last completed installed-product lifecycle result remains run #87's prepared-phase recovery failure. Keep that high-severity finding open.
