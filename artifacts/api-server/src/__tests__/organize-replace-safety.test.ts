@@ -16,3 +16,17 @@ test("organization Replace collisions fail closed in execute and resume until ba
   }
   assert.doesNotMatch(source, /fs\.unlinkSync\(destFile\)/);
 });
+
+test("new organize jobs reject the unsupported Replace policy before creating a job", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const route = fs.readFileSync(path.join(sourceDir, "routes", "organize.ts"), "utf8");
+  const ui = fs.readFileSync(
+    path.resolve(sourceDir, "../../willard-ai/src/pages/organize.tsx"),
+    "utf8",
+  );
+
+  assert.match(route, /if \(conflictPolicy === "replace"\)/);
+  assert.match(route, /REPLACE_RECOVERY_UNAVAILABLE/);
+  assert.match(route, /Choose Rename or Keep Existing/);
+  assert.match(ui, /SelectItem value="replace" disabled/);
+});
