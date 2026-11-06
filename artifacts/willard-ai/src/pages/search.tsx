@@ -322,7 +322,7 @@ export default function SearchPage() {
       previousIntent: SearchIntent | null;
       filters?: Record<string, unknown>;
     }) => {
-      const body: Record<string, unknown> = { query, filters: filters ?? buildFilters() };
+      const body: Record<string, unknown> = { query, filters };
       if (refine && previousIntent) {
         body.refine = true;
         body.previousIntent = previousIntent;
@@ -428,8 +428,13 @@ export default function SearchPage() {
     const q = (raw ?? input).trim();
     if (!q || search.isPending) return;
     const refine = hasSession && !forceNew;
-    search.mutate({ query: q, refine, previousIntent: refine ? response?.intent ?? null : null, filters });
-  }, [input, search, hasSession, response]);
+    search.mutate({
+      query: q,
+      refine,
+      previousIntent: refine ? response?.intent ?? null : null,
+      filters: filters ?? buildFilters(),
+    });
+  }, [input, search, hasSession, response, buildFilters]);
 
   const submitSuggestion = useCallback((suggestion: string) => {
     const filters = { ...(buildFilters() ?? {}) };

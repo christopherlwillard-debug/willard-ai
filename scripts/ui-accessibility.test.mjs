@@ -369,6 +369,7 @@ test("search filter controls can explicitly clear inherited media and favorite c
   assert.ok(submitStart >= 0 && submitEnd > submitStart);
   assert.match(searchPage.slice(submitStart, submitEnd), /filters\?: Record<string, unknown>/);
   assert.match(searchPage.slice(submitStart, submitEnd), /previousIntent: refine \? response\?\.intent \?\? null : null, filters/);
+  assert.match(searchPage.slice(submitStart, submitEnd), /filters: filters \\?\\? buildFilters\\(\\)/);
 
   assert.match(searchPage, /setMediaTypeOverride\(null\)/);
   assert.match(searchPage, /setFavoriteOnlyOverride\(null\)/);
