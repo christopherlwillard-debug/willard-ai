@@ -109,19 +109,35 @@ const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
  * A resume request may reclaim an "executing" job only after this heartbeat
  * becomes stale, which distinguishes a crashed worker from a live one.
  */
-function startOrganizationJobHeartbeat(id: number, nasPath: string, status: "executing" | "rolling_back" = "executing"): () => void {
+async function assertOrganizationLease(id: number, nasPath: string, leaseToken: string): Promise<void> {
+  const [owner] = await db.select({ id: organizationJobsTable.id })
+    .from(organizationJobsTable)
+    .where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, leaseToken),
+      inArray(organizationJobsTable.status, ["executing", "rolling_back"]),
+    ))
+    .limit(1);
+  if (!owner) throw new Error("Organization worker lease was lost; this worker stopped before making further changes.");
+}
+
+function startOrganizationJobHeartbeat(id: number, nasPath: string, leaseToken: string, status: "executing" | "rolling_back" = "executing"): () => void {
   let inFlight = false;
   const timer = setInterval(async () => {
     if (inFlight) return;
     inFlight = true;
     try {
-      await db.update(organizationJobsTable)
+      const [owner] = await db.update(organizationJobsTable)
         .set({ stageUpdatedAt: new Date() })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, leaseToken),
           eq(organizationJobsTable.status, status),
-        ));
+        ))
+        .returning({ id: organizationJobsTable.id });
+      if (!owner) logger.warn({ jobId: id, status }, "Organization worker lost its heartbeat lease");
     } catch (error) {
       logger.warn({ err: error, jobId: id, status }, "Organization job heartbeat failed");
     } finally {
@@ -1587,8 +1603,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Claim the job atomically before capacity reservation or staging. Two
     // requests can both read "verified"; only one may transition it to
     // "executing" and own the deterministic per-job staging directory.
+    const executionLeaseToken = crypto.randomUUID();
     const [claimedJob] = await db.update(organizationJobsTable)
-      .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date() })
+      .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date(), leaseToken: executionLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -1600,7 +1617,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       res.end();
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, executionLeaseToken);
 
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1658,9 +1675,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Stage checkpoint helper — fire-and-forget; persists lastStage + stageUpdatedAt for Recovery Center
     const setStage = async (stage: string): Promise<void> => {
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ lastStage: stage, stageUpdatedAt: new Date() })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before its stage checkpoint.");
       } catch (e: any) {
         opLog(`WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}`);
       }
@@ -1823,9 +1847,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       };
       fileMoves.push(intent);
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: fileMoves as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before the move intent was saved.");
       } catch (e: any) {
         fileMoves.pop();
         throw new Error(`File-move intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
@@ -1833,6 +1864,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
+      await assertOrganizationLease(id, nasPath, executionLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
@@ -1841,9 +1873,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // Replace the durable intent with the completed, checksum-verified move.
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: fileMoves as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before its verified move was saved.");
       } catch (e: any) {
         // The persisted intent remains sufficient for crash recovery. The
         // in-memory verified record lets this process roll the move back now.
@@ -2009,13 +2048,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     logStream?.end();
 
     const safeReport = redactOperationalData(report) as Record<string, unknown>;
-    await db.update(organizationJobsTable).set({
+    const [completedJob] = await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: fileMoves as any,
       reportJson: safeReport as any,
       reportPath: reportPath || null,
       completedAt,
-    }).where(eq(organizationJobsTable.id, id));
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, executionLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).returning({ id: organizationJobsTable.id });
+    if (!completedJob) throw new Error("Organization worker lease was lost before completion could be committed.");
     void requestLibraryBackup("completed organization job");
 
     send("complete", { ...safeReport, progress: 100 });
