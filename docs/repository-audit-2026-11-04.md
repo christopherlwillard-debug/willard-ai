@@ -3390,3 +3390,30 @@ The source diff traced this to an incomplete refactor of `openDatabaseSnapshot`:
 **Current validation snapshot at investigation:** PR #2 remained open/draft on branch `audit/full-repository-review-2026-11`. Fast Validation run [42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413) was pending/in progress, Windows installer lifecycle run [42265345436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345436) was pending, and Dependency Review run [42265345459](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345459) was in progress on head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf`. No result is inferred from those states.
 
 **Investigation/report commit:** `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf` (ledger update only). No conversion product code was changed in this batch.
+
+
+## November 6 follow-up — Fast Validation concurrency was cancelling Windows coverage
+
+### Fixed — Medium: new PR commits cancelled the in-progress Windows archive/updater validation
+
+**Affected workflow:** `.github/workflows/fast-validation.yml`, especially the Windows `windows-archive-and-updater-smoke` job that installs the API-server test dependency graph and then exercises Windows archive, storage, media-process, and updater behavior.
+
+**Failure evidence:** Fast Validation run [42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413) on code/test head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf` completed its Linux `validate` job successfully, but the Windows job was cancelled during `pnpm install --filter @workspace/api-server... --frozen-lockfile --ignore-scripts --no-optional`. Its log ends with `##[error]The operation was canceled.` at 17:53:16 UTC. The audit-ledger commit `704631bf79569ba3f90064cc7d8483ae73e90904` had been pushed at 17:53:08 UTC, and the workflow's concurrency policy was `cancel-in-progress: true`. The newer PR run superseded the active Windows validation; the package installation log showed no dependency-resolution error.
+
+**Root cause:** The Fast Validation workflow's ref-level concurrency group cancelled the entire running validation whenever another commit was pushed to the PR. Unlike the dedicated Windows installer lifecycle workflow, Fast Validation had not been changed to preserve an already-running job. Documentation-only audit-ledger commits were therefore interrupting the Windows dependency install and preventing the full Windows smoke scope from completing.
+
+**Fix:** Changed `cancel-in-progress` to `false` in `.github/workflows/fast-validation.yml`, matching the non-cancelling lifecycle workflow policy. The running validation is now allowed to finish; GitHub may replace an older *pending* run with the newest pending run, but it should not cancel the active run merely because another audit commit arrives.
+
+**Commit:** `da327bd5fa6a29fc32a676334dbb033daf47be08`.
+
+**Status:** fixed by source/workflow inspection; regression evidence pending the next overlapping run. The currently running Fast Validation run [42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345) started on the preceding head `704631bf79569ba3f90064cc7d8483ae73e90904`; the new policy commit was pushed while it was running. Confirm that it completes rather than being cancelled before marking this workflow fix target-tested.
+
+### Validation snapshot after the database-backup syntax fix
+
+- **Fast Validation [run 42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413), code/test head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf`:** Linux `validate` job passed. Workspace typechecks/generated contracts and Expo/desktop safety checks passed. `pnpm run test:database-backup` passed 33/33, including the new snapshot-lease ownership regression; `postgres-snapshot-process.test.mjs` passed 85/85. PostgreSQL media-query validation passed 6/6, advisory-lock integration passed 1/1, conversion finalization recovery passed 2/2, and the targeted backend batch passed 351 tests (349 passed, 0 failed, 2 skipped). The Windows archive/updater job was cancelled during dependency installation by the concurrency behavior described above; no Windows pass is claimed for this run.
+- **Dependency Review [run 42265345459](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345459), same code/test head:** passed production advisory checks; the separate installed dependency-graph audit was skipped.
+- **Later Fast Validation [run 42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345), head `704631bf79569ba3f90064cc7d8483ae73e90904`:** Linux validation was in progress at this snapshot. Its Windows job had not yet completed. This run predates the non-cancelling workflow commit.
+- **Windows installer lifecycle:** run [42265345436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345436) was cancelled while pending when a newer pending run replaced it; run [42265706819](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265706819) was the latest pending lifecycle run at this snapshot. The lifecycle workflow already has `cancel-in-progress: false`; pending-run replacement is GitHub's one-pending-run concurrency behavior, not a product test failure.
+- **Full CI:** not run. Fast Validation, Dependency Review, and Windows installer lifecycle remain distinct validation scopes.
+
+**Next batch:** Verify the active Fast Validation run survives the next commit and completes its Windows archive/updater smoke; verify the newest lifecycle run starts and reaches installed first startup. Then address the stable external Windows bootstrap design and continue the generation-fenced conversion-worker work. Do not treat the cancelled Windows job as passed.
