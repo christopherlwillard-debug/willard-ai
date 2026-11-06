@@ -286,14 +286,14 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     return;
   }
   if (isSessionInactive(sess.lastSeenAt, Date.now(), INACTIVITY_TIMEOUT_MS)) {
-      try {
-        await destroySession(req);
-      } catch (error) {
-        req.log.warn({ err: error }, "Unable to destroy expired session");
-      }
-      res.clearCookie("willard.sid");
-      res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
-      return;
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.warn({ err: error }, "Unable to destroy expired session");
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
+    return;
   }
   if (!_firstAuthSeen) {
     _firstAuthSeen = true;
