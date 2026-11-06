@@ -33,6 +33,21 @@ import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
 
+test("concurrent NAS identity initialization never replaces the first published identity", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-race-"));
+  try {
+    const [first, second, persisted] = await Promise.all([
+      ensureLibraryIdentity(root),
+      ensureLibraryIdentity(root),
+      ensureLibraryIdentity(root),
+    ]);
+    assert.equal(first.libraryId, second.libraryId);
+    assert.equal(first.libraryId, persisted.libraryId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("NAS library identity refuses symlinked config directories", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-root-"));
   const outside = await mkdtemp(path.join(os.tmpdir(), "willard-identity-outside-"));
