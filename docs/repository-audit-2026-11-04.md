@@ -3552,3 +3552,25 @@ The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` befor
 - Dependency Review [run 42274282218](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282218): production advisory gate passed; the separate installed dependency-graph audit was skipped.
 - The latest branch head at this update is documentation-only commit `f8912e741e5a0960b52c3d3e6f3905410ebadba8`; matching workflows for that head were pending. Results above are attributed only to the exact code/test head `be8f472e55c82f15aae16af2ad33870960f82c33`.
 - **Full CI:** not run. Fast Validation, Dependency Review, and installed Windows lifecycle validation are separate scopes.
+
+
+## November 6 — avoid repeating the expensive Windows lifecycle build for docs-only PR synchronizations
+
+### Fixed — Medium: PR-wide path filtering reran installer lifecycle on audit-ledger-only commits
+
+**Affected workflow:** Windows installer lifecycle CI cost and feedback time; no product runtime behavior.
+
+**Evidence and root cause:** The lifecycle workflow had both a branch-specific `push` trigger with a path filter and a `pull_request.synchronize` trigger with the same paths. GitHub evaluates a pull-request path filter against the overall PR diff, not only the newest commit. The audit PR currently contains 191 changed files including installer inputs. A documentation-only ledger commit `f8912e741e5a0960b52c3d3e6f3905410ebadba8` therefore still created a pending Windows installer lifecycle run [42274363837](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274363837), even though that commit changed only the audit report. This repeats a costly unsigned installer build for no installer-code change.
+
+**Fix:** The PR trigger now runs on `opened` and `reopened`; subsequent branch commits are handled by the existing branch-specific `push` trigger, whose path filter is evaluated for the pushed commit. The job's branch/base guard, Windows lifecycle coverage, manual dispatch, read-only permissions, and non-cancelling concurrency remain unchanged. The installer configuration regression test now asserts that `synchronize` is absent from the PR trigger and that the branch push trigger remains present.
+
+**Commit:** `bacce51da775563e3eaab04d2f079faa6b8de3d9`. **Status:** fixed; targeted validation pending for this exact workflow/test commit. **Remaining risk:** this workflow-scope change must be confirmed by the next installer-related branch push; the available commit-run listing exposes PR-triggered runs only, so no unobserved push-run result is claimed.
+
+### Validation update — diagnostic lifecycle guard
+
+- Fast Validation [run 42274282530](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282530), code/test head `be8f472e55c82f15aae16af2ad33870960f82c33), completed successfully. Linux `validate` job `128086474928` passed typechecks/generated contracts, Expo/desktop checks, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization checks, and targeted regressions (355 tests: 353 passed, 0 failed, 2 skipped). The new lifecycle missing-launcher test passed.
+- The same Fast Validation run's Windows `windows-archive-and-updater-smoke` job `128087265574` passed. Logs confirm 20 PowerShell scripts parsed; launcher mutex and developer process ownership checks passed; Windows organization capacity, media rename/process shutdown, storage migration, NAS cleanup, conversion finalization, official 7-Zip 26.05, node-7z symlink metadata, compressed TAR preview, updater journal validation, and developer-updater preservation/rollback passed.
+- Dependency Review [run 42274282218](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282218) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- Windows installer lifecycle [run 42274282416](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282416) remained in the unsigned installer build/compile step at the last inspection. It had not reached standard-user install, prepared-phase recovery, or uninstall; no installed-product result is claimed.
+- For the new workflow/test commit `bacce51da775563e3eaab04d2f079faa6b8de3d9`, Fast Validation [run 42275019531](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019531) was pending and Dependency Review [run 42275019537](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019537) had passed the advisory gate. No matching Fast Validation result is claimed yet.
+- **Full CI:** not run. These targeted Linux/Windows validation workflows and Dependency Review are not the full repository CI.
