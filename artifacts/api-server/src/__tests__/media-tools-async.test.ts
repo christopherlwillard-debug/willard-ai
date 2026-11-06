@@ -10,6 +10,7 @@ import {
   stopActiveMediaTools,
   trackActiveMediaProcess,
 } from "../lib/media-tools.ts";
+import { createTrackedSevenZipStream } from "../lib/sevenzip.ts";
 import { markShuttingDown } from "../lib/shutdown-state.ts";
 
 const optimizePath = fileURLToPath(new URL("../routes/optimize.ts", import.meta.url));
@@ -20,6 +21,8 @@ const runtimePath = fileURLToPath(new URL("../lib/conversion-runtime.ts", import
 const runtimeSource = readFileSync(runtimePath, "utf8");
 const mediaToolsPath = fileURLToPath(new URL("../lib/media-tools.ts", import.meta.url));
 const mediaToolsSource = readFileSync(mediaToolsPath, "utf8");
+const archiveRoutesSource = readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+const organizeRoutesSource = readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
 
 test("long-running media tools leave the API event loop responsive", async () => {
   let eventLoopTicked = false;
@@ -111,6 +114,48 @@ test("directly spawned archive helpers share the shutdown process registry", asy
   await closed;
   unregister();
   assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
+test("node-7z archive operations register their child processes with the shared shutdown owner", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], { stdio: "ignore" });
+  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  const stream = createTrackedSevenZipStream(() => ({ _childProcess: child }));
+
+  assert.equal(stream._childProcess, child);
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  await stopActiveMediaTools(500);
+  await closed;
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
+test("aborting a read-only 7-Zip operation stops only its owned child", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], { stdio: "ignore" });
+  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  const controller = new AbortController();
+  createTrackedSevenZipStream(() => ({ _childProcess: child }), controller.signal);
+
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+  });
+  controller.abort();
+  await closed;
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
+test("every node-7z archive route uses tracked process ownership and early validation stops", () => {
+  const routes = `${archiveRoutesSource}\\n${organizeRoutesSource}`;
+  const node7zCalls = routes.match(/Seven\\.(?:list|extractFull)\\(/g) ?? [];
+  const trackedCalls = routes.match(/createTrackedSevenZipStream\\(\\(\\) => Seven\\.(?:list|extractFull)\\(/g) ?? [];
+  assert.equal(node7zCalls.length, 5);
+  assert.equal(trackedCalls.length, node7zCalls.length);
+  assert.match(archiveRoutesSource, /peek7z\\(filePath: string, signal\\?: AbortSignal\\)/);
+  assert.match(archiveRoutesSource, /res\\.once\\("close", abortPreviewIfDisconnected\\)/);
+  assert.match(archiveRoutesSource, /stopTrackedSevenZipStream\\(stream\\)/);
+  assert.match(organizeRoutesSource, /stopTrackedSevenZipStream\\(s\\)/);
 });
 
 test("shutdown terminates owned media subprocesses before the server exits", async () => {
