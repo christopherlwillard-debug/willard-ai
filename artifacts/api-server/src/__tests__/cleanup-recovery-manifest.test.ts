@@ -510,3 +510,31 @@ test("trash retention requires a present file and matching recycled canonical ro
   assert.match(retention, /entry\.mediaFileId == null/);
   assert.match(retention, /affectedRows\(deleted\) !== 1/);
 });
+
+
+test("cleanup execute and startup recovery fence recycled media by canonical file identity", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const recovery = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+
+  const executeStart = cleanupRoute.indexOf('router.post("/cleanup/execute"');
+  const executeEnd = cleanupRoute.indexOf('router.get("/cleanup/trash"', executeStart);
+  assert.ok(executeStart >= 0 && executeEnd > executeStart);
+  const execute = cleanupRoute.slice(executeStart, executeEnd);
+  assert.match(execute, /fs\.lstatSync\(currentPath\)/);
+  assert.match(execute, /info\.isSymbolicLink\(\)/);
+  assert.match(execute, /await sha256File\(filePath\)/);
+  assert.match(execute, /relative_path = \$\{file\.relativePath\}/);
+  assert.match(execute, /content_hash IS NOT DISTINCT FROM \$\{file\.contentHash\}/);
+  assert.match(execute, /last_scan_action IS DISTINCT FROM 'DELETED'/);
+
+  const reconcileStart = recovery.indexOf("async function reconcileCleanupOperation");
+  const reconcileEnd = recovery.indexOf("\nexport type ExpiredTrashResult", reconcileStart);
+  assert.ok(reconcileStart >= 0 && reconcileEnd > reconcileStart);
+  const reconcile = recovery.slice(reconcileStart, reconcileEnd);
+  assert.match(reconcile, /resolveLibraryPath\(op\.nasPath, canonical\.relativePath\)/);
+  assert.match(reconcile, /Canonical media path changed during cleanup/);
+  assert.match(reconcile, /await sha256File\(trash\)/);
+  assert.match(reconcile, /relative_path = \$\{canonical\.relativePath\}/);
+  assert.match(reconcile, /content_hash IS NOT DISTINCT FROM \$\{canonical\.contentHash\}/);
+});
