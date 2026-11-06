@@ -3101,12 +3101,20 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
 // ── Fail a job ────────────────────────────────────────────────────────────────
 
 async function failJob(jobId: number, reason: CancellationReason, message: string): Promise<void> {
-  await db.update(libraryJobsTable).set({
+  // Do not report a durable failure or release the in-memory job slot unless
+  // PostgreSQL confirms the terminal transition. If the write fails, retain
+  // the active entry so the UI/guardrails do not permit a duplicate job while
+  // the database still says RUNNING; force-discard or restart recovery can
+  // resolve the unresolved state after database connectivity returns.
+  const result = await db.update(libraryJobsTable).set({
     status:             "FAILED",
     cancellationReason: reason,
     error:              message,
     finishedAt:         new Date(),
-  }).where(eq(libraryJobsTable.id, jobId)).catch(() => {});
+  }).where(eq(libraryJobsTable.id, jobId));
+  if (result.rowCount !== 1) {
+    throw new Error(`Could not persist FAILED status for library job ${jobId}; expected one row, updated ${result.rowCount ?? 0}.`);
+  }
   activeJobs.delete(jobId);
   logger.error({ jobId, reason, errorMessage: message, phase: 'fail_job', activeJobs: activeJobs.size }, 'scan job FAILED');
 }
