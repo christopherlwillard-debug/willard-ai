@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
+import { releaseExportedSnapshot, waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 class FakeChild extends EventEmitter {
   constructor() {
@@ -11,7 +11,9 @@ class FakeChild extends EventEmitter {
     this.stdout = new PassThrough();
     this.stderr = new PassThrough();
     this.kills = [];
+    this.pid = 4321;
     this.exitCode = null;
+    this.signalCode = null;
   }
 
   kill(signal) {
@@ -87,4 +89,37 @@ test("snapshot holder handles stdin EPIPE and stops the child", async () => {
   await delay(30);
   assert.deepEqual(child.kills, ["SIGTERM", "SIGKILL"]);
   child.emit("close", null, "SIGKILL");
+});
+
+
+test("snapshot release is a no-op after the holder exits by signal", async () => {
+  const child = new FakeChild();
+  child.signalCode = "SIGTERM";
+  child.emit("close", null, "SIGTERM");
+
+  await releaseExportedSnapshot(child, { timeoutMs: 20 });
+
+  assert.equal(child.stdin.writableEnded, false);
+  assert.deepEqual(child.kills, []);
+});
+
+test("snapshot release waits for normal close and cancels the kill timer", async () => {
+  const child = new FakeChild();
+  const pending = releaseExportedSnapshot(child, { timeoutMs: 30 });
+
+  assert.equal(child.stdin.writableEnded, true);
+  child.emit("close", 0, null);
+  await pending;
+  await delay(40);
+
+  assert.deepEqual(child.kills, []);
+});
+
+test("snapshot release escalates only while the holder is still running", async () => {
+  const child = new FakeChild();
+  const pending = releaseExportedSnapshot(child, { timeoutMs: 20 });
+
+  await delay(30);
+  assert.deepEqual(child.kills, ["SIGKILL"]);
+  await pending;
 });
