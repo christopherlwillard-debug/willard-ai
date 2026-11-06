@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getSevenZipPath, resolveSevenZipPath } from "../lib/sevenzip.ts";
+import {
+  createSevenZipPathResolver,
+  getSevenZipPath,
+  resolveSevenZipPath,
+} from "../lib/sevenzip.ts";
 
-const officialVersion = () => "26.05";
+const officialVersion = async () => "26.05";
 
-test("configured official 7-Zip path takes precedence when its version is supported", () => {
+test("configured official 7-Zip path takes precedence when its version is supported", async () => {
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/usr/bin",
       configuredPath: "/opt/willard/7zz",
@@ -19,38 +23,38 @@ test("configured official 7-Zip path takes precedence when its version is suppor
   );
 });
 
-test("outdated configured binaries are skipped in favor of a verified official system binary", () => {
+test("outdated configured binaries are skipped in favor of a verified official system binary", async () => {
   const current = path.join("/nix/store/7zip/bin", "7zzs");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/nix/store/7zip/bin",
       configuredPath: "/opt/legacy/7za",
       exists: (candidate) => candidate === "/opt/legacy/7za" || candidate === current,
-      getVersion: (candidate) => candidate === current ? "26.05" : "16.02",
+      getVersion: async (candidate) => candidate === current ? "26.05" : "16.02",
     }),
     current,
   );
 });
 
-test("Linux prefers verified official static 7zzs over dynamic 7zz", () => {
+test("Linux prefers verified official static 7zzs over dynamic 7zz", async () => {
   const staticBinary = path.join("/nix/store/7zip/bin", "7zzs");
   const dynamicBinary = path.join("/nix/store/7zip/bin", "7zz");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/nix/store/7zip/bin",
       exists: (candidate) => candidate === staticBinary || candidate === dynamicBinary,
-      getVersion: (candidate) => candidate === staticBinary ? "26.05" : "26.05",
+      getVersion: async () => "26.05",
     }),
     staticBinary,
   );
 });
 
-test("Linux uses official dynamic 7zz when static 7zzs is absent", () => {
+test("Linux uses official dynamic 7zz when static 7zzs is absent", async () => {
   const candidate = path.join("/usr/local/bin", "7zz");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/usr/local/bin",
       exists: (value) => value === candidate,
@@ -60,31 +64,31 @@ test("Linux uses official dynamic 7zz when static 7zzs is absent", () => {
   );
 });
 
-test("missing or outdated binaries fail closed instead of using bundled p7zip", () => {
+test("missing or outdated binaries fail closed instead of using bundled p7zip", async () => {
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "",
       exists: () => false,
-      getVersion: () => undefined,
+      getVersion: async () => undefined,
     }),
     undefined,
   );
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "/usr/bin",
       exists: () => true,
-      getVersion: () => "16.02",
+      getVersion: async () => "16.02",
     }),
     undefined,
   );
 });
 
-test("Windows resolves official system 7-Zip instead of a legacy bundled executable", () => {
+test("Windows resolves official system 7-Zip instead of a legacy bundled executable", async () => {
   const candidate = path.join("C:\\tools", "7z.exe");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "win32",
       pathEnv: "C:\\tools",
       exists: (value) => value === candidate,
@@ -94,26 +98,26 @@ test("Windows resolves official system 7-Zip instead of a legacy bundled executa
   );
 });
 
-test("packaged official Windows binary takes precedence at api-runtime/vendor/7zip", () => {
+test("packaged official Windows binary takes precedence at api-runtime/vendor/7zip", async () => {
   const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
   const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7z.exe");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "win32",
       pathEnv: "C:\\tools",
       moduleUrl,
       exists: (candidate) => candidate === packaged || candidate.endsWith("7z.exe"),
-      getVersion: (candidate) => candidate === packaged ? "26.05" : "16.02",
+      getVersion: async (candidate) => candidate === packaged ? "26.05" : "16.02",
     }),
     packaged,
   );
 });
 
-test("compiled API resolves the bundled official 7-Zip folder beside api-runtime", () => {
+test("compiled API resolves the bundled official 7-Zip folder beside api-runtime", async () => {
   const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
   const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7zzs");
   assert.equal(
-    resolveSevenZipPath({
+    await resolveSevenZipPath({
       platform: "linux",
       pathEnv: "",
       moduleUrl,
@@ -124,14 +128,50 @@ test("compiled API resolves the bundled official 7-Zip folder beside api-runtime
   );
 });
 
-test("archive operations return an actionable error when no official binary is available", () => {
-  assert.throws(
-    () => getSevenZipPath({
+test("archive operations return an actionable error when no official binary is available", async () => {
+  await assert.rejects(
+    getSevenZipPath({
       platform: "linux",
       pathEnv: "",
       exists: () => false,
-      getVersion: () => undefined,
+      getVersion: async () => undefined,
     }),
-    /official 7-Zip 26\.01 or newer.*WILLARD_7ZIP_PATH/,
+    /official 7-Zip 26\\.01 or newer.*WILLARD_7ZIP_PATH/,
   );
+});
+
+test("resolver coalesces concurrent version probes and caches a verified path", async () => {
+  let calls = 0;
+  const resolve = createSevenZipPathResolver({
+    platform: "linux",
+    pathEnv: "",
+    configuredPath: "/opt/willard/7zz",
+    exists: (candidate) => candidate === "/opt/willard/7zz",
+    getVersion: async () => {
+      calls++;
+      await new Promise<void>((done) => setImmediate(done));
+      return "26.05";
+    },
+  });
+
+  const [first, second] = await Promise.all([resolve(), resolve()]);
+  assert.equal(first, "/opt/willard/7zz");
+  assert.equal(second, first);
+  assert.equal(await resolve(), first);
+  assert.equal(calls, 1);
+});
+
+test("resolver retries a negative result so an operator can install 7-Zip without restarting", async () => {
+  let calls = 0;
+  const resolve = createSevenZipPathResolver({
+    platform: "linux",
+    pathEnv: "",
+    configuredPath: "/opt/willard/7zz",
+    exists: (candidate) => candidate === "/opt/willard/7zz",
+    getVersion: async () => (++calls === 1 ? undefined : "26.05"),
+  });
+
+  assert.equal(await resolve(), undefined);
+  assert.equal(await resolve(), "/opt/willard/7zz");
+  assert.equal(calls, 2);
 });
