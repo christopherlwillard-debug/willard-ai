@@ -2389,3 +2389,17 @@ The full recovery design for Replace requires durable backup intents, checksums,
 |---|---|---|---|---|
 | High | Windows installer → clean standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall | fixed validation path; Windows integration pending | this batch | Matching Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
 
+## 2026-11-06 follow-up — literal wildcard handling in AI search suggestions
+
+**Finding — Medium (search correctness):** AI-search suggestions interpolated the raw user prefix into a PostgreSQL LIKE pattern. Unlike the main media-list search, which already escapes percent, underscore, and backslashes, this path treated those characters as SQL pattern syntax. A query containing wildcard characters could therefore return unrelated suggestions instead of literal matches.
+
+**Fix:** Reused the existing escapeLikePattern helper, added a small buildSuggestionPattern boundary, and paired the escaped pattern with an explicit PostgreSQL ESCAPE clause. No dependency or schema change was needed.
+
+**Regression:** Added a focused unit/source-contract regression covering percent, underscore, backslash, whitespace trimming, lowercase normalization, and the SQL escape clause.
+
+**Validation status:** Implementation and regression are committed. Targeted AI-search test, workspace typecheck, and matching Fast Validation are pending; this is not yet PostgreSQL-backed route integration.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | AI search → suggestion prefix treats percent, underscore, and backslashes as SQL wildcards | fixed; targeted test pending | this batch | PostgreSQL-backed suggestion endpoint test and browser search workflow remain to be integration-tested |
+
