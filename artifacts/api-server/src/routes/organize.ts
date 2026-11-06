@@ -986,7 +986,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "analyzing", leaseToken: analysisLeaseToken, error: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.status, job.status),
       ))
       .returning({ id: organizationJobsTable.id });
@@ -994,19 +994,30 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       res.status(409).json({ error: "This job changed while analysis was starting. Refresh and try again." }); return;
     }
 
+    const failAnalysis = async (message: string) => {
+      await db.update(organizationJobsTable)
+        .set({ status: "failed", error: message, leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, job.nasPath),
+          eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+          eq(organizationJobsTable.status, "analyzing"),
+        ));
+    };
+
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
     if (!nasPath || !path.isAbsolute(nasPath)) {
       await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
     }
     try { resolveWithinRoot(job.sourcePath, nasPath); }
-    catch { res.status(403).json({ error: "Job source is outside the configured library" }); return; }
+    catch { await failAnalysis("Job source is outside the configured library"); res.status(403).json({ error: "Job source is outside the configured library" }); return; }
 
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
     let archiveInspectionWarning: string | null = null;
@@ -1016,7 +1027,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1027,14 +1038,17 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           .where(archiveByIdScope(job.archiveId, nasPath))
           .limit(1);
         if (!arc) {
+          await failAnalysis("Archive record not found in the active library");
           res.status(404).json({ error: "Archive record not found in the active library" }); return;
         }
         let recordPath: string;
         try { recordPath = resolveActiveArchivePath(arc.path, nasPath); }
         catch {
+          await failAnalysis("Archive record is outside the active library");
           res.status(403).json({ error: "Archive record is outside the active library" }); return;
         }
         if (recordPath !== archivePath) {
+          await failAnalysis("Archive record does not belong to this source path");
           res.status(403).json({ error: "Archive record does not belong to this source path" }); return;
         }
         if (arc?.peekStatus === "peeked" && Array.isArray(arc.peekEntries) && (arc.peekEntries as any[]).length > 0) {
@@ -1073,7 +1087,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           if (error instanceof CapacityAdmissionError) {
             await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1090,7 +1104,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.existsSync(job.sourcePath)) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1099,7 +1113,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       if (!fs.statSync(job.sourcePath).isDirectory()) {
         await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ));
@@ -1177,7 +1191,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "planned", planJson, leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       ))
@@ -1188,7 +1202,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error", leaseToken: null })
       .where(and(
         eq(organizationJobsTable.id, id),
-        eq(organizationJobsTable.nasPath, nasPathForJob),
+        eq(organizationJobsTable.nasPath, job.nasPath),
         eq(organizationJobsTable.leaseToken, analysisLeaseToken),
         eq(organizationJobsTable.status, "analyzing"),
       )).catch(() => {});
