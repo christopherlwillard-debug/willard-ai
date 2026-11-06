@@ -918,3 +918,16 @@ test("sha256File validates an already-open descriptor before reading from it", (
   assert.ok(implementation.indexOf("fs.fstatSync(fd)") < implementation.indexOf("fs.createReadStream(filePath, { fd"));
   assert.doesNotMatch(implementation, /stream\.once\("open"/);
 });
+
+
+test("organization analysis clears its lease on every failed terminal update", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/analyze"');
+  const end = source.indexOf('router.patch("/organize/jobs/:id/plan"', start);
+  assert.ok(start >= 0 && end > start, "analysis route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /status: "failed", error: "NAS path is not configured[^\n]+leaseToken: null/);
+  assert.match(route, /status: "failed", error: "Archive file not found", leaseToken: null/);
+  assert.match(route, /if \(!updated\)[\s\S]*Analysis lost ownership before the plan could be saved/);
+  assert.match(route, /if \(analysisClaimed\) await db\.update/);
+});
