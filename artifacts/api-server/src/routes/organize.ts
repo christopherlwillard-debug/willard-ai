@@ -1781,10 +1781,10 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       if (fs.existsSync(destFile)) {
         const filename = path.basename(sf.relativePath);
         if (conflictPolicy === "replace") {
-          fs.unlinkSync(destFile);
-          opLog("CONFLICT_REPLACE: existing destination overwritten");
-          conflictResolutions.push({ filename, destDir, action: "replace" });
-          // fall through to move normally
+          throw new Error(
+            "Replace is temporarily unavailable because this operation cannot yet preserve the existing destination for crash recovery. " +
+            "Choose Rename or Keep Existing; no destination file was changed.",
+          );
         } else if (conflictPolicy === "rename") {
           const ext  = path.extname(filename);
           const base = filename.slice(0, filename.length - ext.length);
@@ -2603,7 +2603,10 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // Conflict handling for files not yet moved
       if (fs.existsSync(destFile)) {
         if (conflictPolicy === "replace") {
-          fs.unlinkSync(destFile);
+          throw new Error(
+            "Replace is temporarily unavailable because this operation cannot yet preserve the existing destination for crash recovery. " +
+            "Choose Rename or Keep Existing; no destination file was changed.",
+          );
         } else if (conflictPolicy === "rename") {
           const ext  = path.extname(path.basename(sf.relativePath));
           const base = path.basename(sf.relativePath).slice(0, path.basename(sf.relativePath).length - ext.length);
