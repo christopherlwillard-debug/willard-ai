@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSevenZipEntryInfo } from "../lib/archive-safety.ts";
+import { createTrackedSevenZipStream } from "../lib/sevenzip.ts";
 import Seven from "node-7z";
 
 const configuredBinaryPath = process.env.WILLARD_7ZIP_PATH;
@@ -48,11 +49,12 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
 
     const listed = await new Promise((resolve, reject) => {
       const entries = [];
-      const stream = Seven.list(archive, {
+      const stream = createTrackedSevenZipStream(() => Seven.list(archive, {
         $bin: binaryPath,
         $progress: false,
         techInfo: true,
-      });
+      }));
+      assert.ok(stream._childProcess?.pid, "tracked node-7z stream must expose its spawned child");
       stream.on("data", (entry) => {
         if (entry.file !== undefined) entries.push(entry);
       });
@@ -106,7 +108,7 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
           $bin: binaryPath,
           $progress: false,
           overwrite: "a",
-        });
+        }));
         stream.once("error", reject);
         stream.once("end", resolve);
       });
@@ -120,12 +122,12 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
       // successful command must not materialize the archive's symlink.
       const linkDestination = path.join(root, "link-extracted");
       await new Promise((resolve, reject) => {
-        const stream = Seven.extractFull(linkArchive, linkDestination, {
+        const stream = createTrackedSevenZipStream(() => Seven.extractFull(linkArchive, linkDestination, {
           $bin: binaryPath,
           $progress: false,
           overwrite: "a",
           $raw: ["-snl-"],
-        });
+        }));
         stream.once("error", reject);
         stream.once("end", resolve);
       });
@@ -148,11 +150,11 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
 
     const destination = path.join(root, "extracted");
     await new Promise((resolve, reject) => {
-      const stream = Seven.extractFull(archive, destination, {
+      const stream = createTrackedSevenZipStream(() => Seven.extractFull(archive, destination, {
         $bin: binaryPath,
         $progress: false,
         overwrite: "a",
-      });
+      }));
       stream.once("error", reject);
       stream.once("end", resolve);
     });
