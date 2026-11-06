@@ -1865,6 +1865,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
       await assertOrganizationLease(id, nasPath, executionLeaseToken);
+      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
@@ -2072,6 +2073,14 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`ERROR: ${errMsg}`);
     send("status", { stage: "rolling_back", message: "Error — rolling back all moves…", progress: -1 });
 
+    // Do not let a worker that lost ownership roll back files now owned by a replacement.
+    try {
+      await assertOrganizationLease(id, cleanupNasPath, executionLeaseToken);
+    } catch {
+      send("error", { message: "This worker lost ownership of the job. Its recovery journal was preserved for the current owner.", rolledBack: 0 });
+      return;
+    }
+
     // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
     const rolledBack = await rollbackMoves(fileMoves, line => opLog(line));
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
@@ -2086,7 +2095,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       error: recoveryError,
       fileMoves: fileMoves as any,
       completedAt: new Date(),
-    }).where(eq(organizationJobsTable.id, id)).catch(() => {});
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, cleanupNasPath),
+      eq(organizationJobsTable.leaseToken, executionLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
   } finally {
@@ -2498,8 +2512,9 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // stale. The conditional update is the cross-process compare-and-swap:
     // only one resume request can acquire the lease.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    const resumeLeaseToken = crypto.randomUUID();
     const [claimedResume] = await db.update(organizationJobsTable)
-      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
+      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date(), leaseToken: resumeLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -2520,7 +2535,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       res.end();
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, resumeLeaseToken);
 
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
     const excludedPaths = new Set<string>(plan.excludePaths ?? []);
@@ -2556,9 +2571,16 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // Stage checkpoint helper for resume — awaited, non-throwing
     const setStage = async (stage: string): Promise<void> => {
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ lastStage: stage, stageUpdatedAt: new Date() })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease.");
       } catch (e: any) {
         send("log", { message: `WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}` });
       }
@@ -2683,9 +2705,16 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // and the verified checkpoint still leaves a recoverable journal entry.
       const intentJournal = [...existingMoves, ...newMoves];
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: intentJournal as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease before saving its move intent.");
       } catch (e: any) {
         newMoves.pop();
         throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
@@ -2698,9 +2727,16 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // Replace the durable intent with the checksum-verified move record.
       const merged = [...existingMoves, ...newMoves];
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: merged as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease before saving the verified move.");
       } catch (e: any) {
         // The persisted intent remains sufficient for Recovery Center rollback.
         throw new Error(`Resume file-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
@@ -2756,12 +2792,19 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       checksumVerified, resumedFrom: existingMoves.length,
     };
 
-    await db.update(organizationJobsTable).set({
+    const [completedJob] = await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: allMoves as any,
       reportJson: report as any,
       completedAt,
-    }).where(eq(organizationJobsTable.id, id));
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).returning({ id: organizationJobsTable.id });
+    if (!completedJob) throw new Error("Organization resume worker lost its lease before completion could be committed.");
     void requestLibraryBackup("completed organization recovery");
 
     send("complete", { ...report, progress: 100 });
@@ -2769,6 +2812,14 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : "Unknown error";
     send("status", { stage: "rolling_back", message: "Resume error — rolling back new moves…", progress: -1 });
+
+    // A worker that lost ownership must not undo files handled by its replacement.
+    try {
+      await assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken);
+    } catch {
+      send("error", { message: "This resume worker lost ownership. Its durable recovery journal was preserved.", rolledBack: 0 });
+      return;
+    }
 
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
     const rolledBack = await rollbackMoves(newMoves, () => {});
@@ -2784,7 +2835,12 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       status: "failed",
       fileMoves: retainedMoves as any,
       error: recoveryError,
-    }).where(eq(organizationJobsTable.id, id)).catch(() => {});
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, cleanupNasPath),
+      eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
   } finally {
