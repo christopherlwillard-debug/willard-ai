@@ -281,10 +281,10 @@ test("Optimize scan and conversion routes use asynchronous traversal and bounded
   assert.match(optimizeRouteSource, /await withVideoProbeSlot\(\(\) => runMediaToolAsync\(/);
   assert.match(optimizeRouteSource, /mapSettledWithConcurrency\(videoProbeTasks, 4/);
   assert.doesNotMatch(optimizeScanSource, /readdirSync|lstatSync/);
-  assert.doesNotMatch(optimizeRouteSource, /\\bfs\\.(?:existsSync|statSync|lstatSync|readdirSync|readFileSync|writeFileSync|mkdirSync|rmSync|unlinkSync)\\b/);
+  assert.doesNotMatch(optimizeRouteSource, /\bfs\.(?:existsSync|statSync|lstatSync|readdirSync|readFileSync|writeFileSync|mkdirSync|rmSync|unlinkSync)\b/);
   assert.match(optimizeRouteSource, /async function readScanCache/);
-  assert.match(optimizeRouteSource, /await fs\\.promises\\.readFile/);
-  assert.match(optimizeRouteSource, /await fs\\.promises\\.writeFile/);
+  assert.match(optimizeRouteSource, /await fs\.promises\.readFile/);
+  assert.match(optimizeRouteSource, /await fs\.promises\.writeFile/);
 });
 
 test("scan-limit state is cached, returned by the API, and warned about in Optimize Center", () => {
