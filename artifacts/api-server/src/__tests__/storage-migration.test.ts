@@ -592,4 +592,7 @@ test("storage migration hashing shares the no-follow file reader", () => {
   const source = fs.readFileSync(new URL("../lib/storage-migration.ts", import.meta.url), "utf8");
   assert.match(source, /import \{ moveFileNoReplace, sha256File \} from "\.\/organize-helpers\.ts"/);
   assert.match(source, /async function defaultHashFile\(filePath: string\): Promise<string>\s*\{[\s\S]*?return sha256File\(filePath\)/);
+  assert.match(source, /copyFileFromNoFollowDescriptor\(safeSourcePath, partialHandle\)/);
+  assert.match(source, /O_NOFOLLOW/);
+  assert.match(source, /fs\.createReadStream\(sourcePath, \{ fd: sourceFd, autoClose: false \}\)/);
 });
