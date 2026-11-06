@@ -7,6 +7,7 @@ import AdmZip from "adm-zip";
 import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
+import { randomUUID } from "node:crypto";
 import Seven from "node-7z";
 import { getSevenZipPath } from "../lib/sevenzip.ts";
 import {
@@ -15,6 +16,7 @@ import {
   resolveActiveArchivePath,
 } from "../lib/archive-scope.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { cleanTempDir, getTempDir } from "../lib/nas-storage.ts";
 import {
   ArchiveSafetyError,
   assertArchiveFileUnchanged,
@@ -149,6 +151,23 @@ async function peekTar(
       error: error instanceof Error ? error.message : String(error),
       failureKind: "input",
     };
+  }
+}
+
+async function peekTarWithPrivateScratch(
+  filePath: string,
+  filename: string,
+  nasPath: string,
+): Promise<{
+  entries: any[];
+  error: string | null;
+  failureKind: "input" | "tar-parse" | null;
+}> {
+  const scratchDir = getTempDir(nasPath, `archive-preview-${randomUUID()}`);
+  try {
+    return await peekTar(filePath, filename, scratchDir);
+  } finally {
+    cleanTempDir(scratchDir, nasPath);
   }
 }
 async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
@@ -434,7 +453,7 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── TAR / GZ / BZ2 / XZ ─────────────────────────────────────────────────
     if (TAR_EXTS.has(ext)) {
-      const { entries, error, failureKind } = await peekTar(archivePath, archive.filename, nasPath);
+      const { entries, error, failureKind } = await peekTarWithPrivateScratch(archivePath, archive.filename, nasPath);
 
       if (error && shouldTreatAsStandaloneCompressedFile(archive.filename, entries.length, failureKind)) {
         // A bare .gz/.bz2/.xz file is a compressed payload, not a TAR wrapper.
