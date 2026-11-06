@@ -2811,3 +2811,16 @@ Source inspection and the failing test identified a timing defect in `withTarInp
 | Severity | Affected workflow | Status | Commit | Remaining risk |
 |---|---|---|---|---|
 | Medium | Windows installer → interrupted-update recovery lifecycle fixture | fixed; targeted validation pending | `29ca94c42c89b90776f546878a04d6adcf263e93` | The prior run failed before exercising the valid recovery path. Full Windows install → upgrade → both recovery phases → diagnostics → uninstall must pass on the corrected head. |
+
+## AI Search no-result suggestions must refine the active intent — November 6
+
+- **Finding — Medium (Search → no-result suggestions → inherited filters):** Source inspection found that each no-result suggestion button called `submit(s, true)`. The second argument forces a new search, so `SearchPage` omitted `previousIntent`. However, both the AI parser and local-only fallback deliberately apply the deterministic built-in clear-filter actions only when a previous intent is supplied. Consequently suggestions such as “Remove the date filter,” “Search all media,” and “Include non-favorites” were being parsed as new search phrases instead of removing the corresponding inherited constraint; in local-only mode the suggestion sentence could become literal keywords.
+- **Fix:** No-result suggestions now call `submit(s)`, which follows the existing refinement path and supplies the current response intent. Starter prompts still explicitly start a new search. No parser or search-query behavior was duplicated.
+- **Regression:** Added a UI contract test asserting no-result suggestions use the refinement call and that the submit handler passes the active intent when refining.
+- **Implementation and test commit:** `c5958eed90da42ab487debb1d90a949490832147`.
+- **Validation:** Pending on the new branch head. The previous Fast Validation #1210 passed on `c6844f585cfdb16189b5edc4d3501f4e02ddf0ed`, including typecheck/generated contracts and the targeted backend regression suite, but predates this UI correction. The corrected suggestion test must pass in Fast Validation before the finding is marked target-tested.
+- **Remaining risk:** The deterministic built-in suggestion strings are covered by the existing `localSearchClearFilters` and `mergeRefinedIntent` tests; AI-provider interpretation of arbitrary user-written refinements remains probabilistic by design.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search → no-result suggestion → clear inherited filters | fixed; targeted validation pending | `c5958eed90da42ab487debb1d90a949490832147` | Fast Validation must execute the new UI regression on the latest branch head. |
