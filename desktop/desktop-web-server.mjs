@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { parseDesktopRequestUrl, resolveApiProxyTarget, resolveStaticFile, staticFileReadErrorStatus } from "./web-server-safety.mjs";
+import { isAllowedDesktopRequestHost, parseDesktopRequestUrl, resolveApiProxyTarget, resolveStaticFile, staticFileReadErrorStatus } from "./web-server-safety.mjs";
 import { URL } from "node:url";
 
 const args = new Map();
@@ -59,6 +59,12 @@ function proxyApi(request, response) {
 }
 
 const server = http.createServer((request, response) => {
+  // Bind to loopback AND validate the HTTP authority. Loopback binding alone
+  // does not stop DNS-rebinding pages from sending a hostile Host header to
+  // this local service and reaching its API proxy.
+  if (!isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port)) {
+    return sendError(response, 403, "Untrusted local request host.");
+  }
   if (!request.url) return sendError(response, 400, "Bad request.");
   let parsedRequest;
   try { parsedRequest = parseDesktopRequestUrl(request.url); }
