@@ -1135,7 +1135,7 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       .set({ status: "planned", planJson })
       .where(eq(organizationJobsTable.id, id))
       .returning();
-    res.json(updated);
+    res.json(updated ? publicOrganizationJob(updated) : updated);
   } catch (err) {
     await db.update(organizationJobsTable)
       .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error" })
@@ -1182,7 +1182,7 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
       .set({ status: "planned", planJson: updatedPlan, preflightJson: null })
       .where(eq(organizationJobsTable.id, id))
       .returning();
-    res.json(updated);
+    res.json(updated ? publicOrganizationJob(updated) : updated);
   } catch { res.status(500).json({ error: "Failed to update plan" }); }
 });
 
@@ -1386,7 +1386,7 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message })
       .where(eq(organizationJobsTable.id, id))
       .returning();
-    res.json(updated);
+    res.json(updated ? publicOrganizationJob(updated) : updated);
   } catch { res.status(500).json({ error: "Preflight check failed" }); }
 });
 
@@ -2296,7 +2296,7 @@ router.get("/organize/recovery", async (_req, res) => {
       ))
       .orderBy(desc(organizationJobsTable.createdAt))
       .limit(50);
-    res.json({ interrupted: jobs });
+    res.json({ interrupted: jobs.map(publicOrganizationJob) });
   } catch { res.status(500).json({ error: "Failed to query recovery data" }); }
 });
 
