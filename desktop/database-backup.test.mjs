@@ -956,3 +956,18 @@ test("secure plaintext backup cleanup refuses symlink targets", async () => {
   assert.match(cleanup, /fsConstants\.O_RDWR \| noFollow/);
   assert.match(cleanup, /current\.isSymbolicLink\(\)/);
 });
+
+
+test("restore target safety checks schemas, relations, routines, types, and extensions", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function cleanTarget");
+  const end = source.indexOf("\nfunction recoveryJournalPath", start);
+  assert.ok(start >= 0 && end > start);
+  const check = source.slice(start, end);
+  for (const catalog of ["pg_class", "pg_proc", "pg_type", "pg_namespace", "pg_extension"]) {
+    assert.match(check, new RegExp(`pg_catalog\\.${catalog}\\b`));
+  }
+  assert.match(check, /nspname NOT IN \('pg_catalog', 'information_schema', 'public'\)/);
+  assert.match(check, /extname <> 'plpgsql'/);
+  assert.doesNotMatch(check, /pg_catalog\.pg_tables/);
+});
