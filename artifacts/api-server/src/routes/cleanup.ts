@@ -4,7 +4,7 @@ import { archivesTable, mediaFilesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import { sendToWindowsRecycleBin } from "../lib/windows-recycle-bin.ts";
 import { randomUUID } from "crypto";
 import { canonicalizePath, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
@@ -463,15 +463,15 @@ router.post("/cleanup/execute", async (req, res) => {
 
         if (process.platform === "win32") {
           await db.execute(sql`UPDATE cleanup_operations SET status = 'MOVING', updated_at = NOW() WHERE operation_id = ${operationId}`);
-          // Windows: move to OS Recycle Bin via PowerShell (recoverable)
-          const psResult = spawnSync("powershell", [
-            "-NoProfile", "-Command",
-            `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${filePath.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`,
-          ], { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
-
-          if (psResult.status !== 0) {
-            await db.execute(sql`UPDATE cleanup_operations SET status = 'FAILED', error = ${(psResult.stderr ?? "").slice(0, 500)}, updated_at = NOW() WHERE operation_id = ${operationId}`);
-            errors.push(`File ID ${fileId}: Recycle Bin failed: ${(psResult.stderr ?? "").slice(0, 200)}`);
+          // Keep the Windows Recycle Bin operation off the API event loop.
+          // The target path is passed as environment data, never interpolated
+          // into PowerShell source. The helper enforces a bounded process timeout.
+          try {
+            await sendToWindowsRecycleBin(filePath);
+          } catch (error) {
+            const detail = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+            await db.execute(sql`UPDATE cleanup_operations SET status = 'FAILED', error = ${detail}, updated_at = NOW() WHERE operation_id = ${operationId}`);
+            errors.push(`File ID ${fileId}: Recycle Bin failed: ${detail.slice(0, 200)}`);
             continue;
           }
           await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
