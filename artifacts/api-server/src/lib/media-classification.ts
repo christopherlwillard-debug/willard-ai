@@ -19,7 +19,7 @@ const DOCUMENT_EXTS = new Set([
 
 /** Classify a file extension using the same catalog rules for every workflow. */
 export function classifyMediaType(ext: string): MediaType {
-  const lower = ext.toLowerCase().replace(/^\\./, "");
+  const lower = ext.toLowerCase().replace(/^\./, "");
   if (PHOTO_EXTS.has(lower)) return "photo";
   if (VIDEO_EXTS.has(lower)) return "video";
   if (AUDIO_EXTS.has(lower)) return "audio";
