@@ -100,6 +100,7 @@ try {
   Remove-Item -LiteralPath $PidFile -Force
 
   # Orphan discovery is read-only: it must recognize only this install's exact
+  # missing-journal and partial-journal scenarios cover the two crash windows.
   # Node executable plus exact packaged entrypoint paths, never kill by name or port.
   $Api = Join-Path $InstallRoot "api-runtime\dist\index.mjs"
   $WebServer = Join-Path $InstallRoot "desktop\desktop-web-server.mjs"
