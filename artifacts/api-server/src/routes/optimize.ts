@@ -1682,6 +1682,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     res.status(403).json({ error: "A valid one-time execution token is required." });
     return;
   }
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "The server is shutting down; retry conversion after it restarts." });
+    return;
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
