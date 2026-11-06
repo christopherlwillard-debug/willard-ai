@@ -2730,7 +2730,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       }
 
       await assertOrganizationLease(id, nasPath, resumeLeaseToken);
-      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
       const record = await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
       newMoves[newMoves.length - 1] = record;
       moved++;
