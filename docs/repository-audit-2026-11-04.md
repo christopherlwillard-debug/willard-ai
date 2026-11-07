@@ -4142,3 +4142,54 @@ Fast Validation [#42372668667](https://github.com/christopherlwillard-debug/will
 The audit-ledger commit edfe76359cac8f139a00ad16679576d215e300c9 is documentation-only. Fast Validation [#42373190808](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42373190808) is running on that exact report head; no result is claimed yet. Dependency Review [#42373190848](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42373190848) passed on the exact report head; the installed dependency-graph audit was skipped.
 
 **Current PR snapshot:** branch head edfe76359cac8f139a00ad16679576d215e300c9; PR #2 open/draft/unmerged; base main 694a055aeb10a41ee8e98f5b776faef89cbd449d; 1,472 commits ahead and 1 behind; 200 changed files, 25,309 additions, 3,163 deletions. No changes to main or production data.
+
+
+## November 7 — Health Center partial outcomes and mobile authentication review
+
+### P2 — Health Center thumbnail/face-crop failures were hidden as successful cleanup
+
+- **Affected workflow:** Health Center selective cleanup, missing-thumbnail regeneration, orphaned face-crop cleanup, metadata-worker handoff, and cleanup job history.
+- **Root cause:** per-thumbnail exceptions were swallowed as progress; `purgeOrphanedDerivedData` returned crop deletion errors that were included in a summary but did not affect the final job status; the SSE completion always used `ok: true`; the frontend discarded `metadataJobId` and cleared selected actions after any completion.
+- **Correction:** count thumbnail and face-crop failures; persist `FAILED` plus an explicit partial-result summary/error when any item fails; send `ok: false, partial: true, failedItems, message,` and the optional metadata job ID; parse and validate those fields in the frontend; retain selected actions on partial completion; show an accessible status notice with the partial result or continuing metadata job ID.
+- **Commits:** implementation and route/parser/page/test batch `d062e56c891535a39ecea14077ecd413ebdaa951`; completion-event narrowing `31e75aa21c81e3b23d017902e3d134248f56fb95`; regression assertion corrections `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Status:** fixed; target-tested on exact code/test head `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Validation:** Fast Validation [#42374315721](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42374315721) passed both jobs. Linux job 128408675966 passed workspace typechecks/generated contracts and targeted regressions (403 total, 401 passed, 0 failed, 2 skipped); the new partial-failure route regression, 33 Health Center event/recovery tests, durable session-revocation test, and setup-authorization test passed. Windows job 128409014666 passed all 25 archive/updater smoke steps, including the final developer updater preservation/rollback test. Dependency Review [#42374315746](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42374315746) passed the production advisory gate; the installed dependency-graph audit was skipped.
+- **Remaining risk:** Health Center inspection and thumbnail work remain request-bound and are not restart-resumable. This fix reports partial outcomes accurately but does not convert the workflow into a checkpointed server-owned worker.
+
+### P2 — Health Center accepts an empty action set and reports a misleading progress denominator
+
+- **Affected workflow:** direct API callers and the Health Center progress bar.
+- **Evidence/root cause:** `POST /media/cleanup` filters unknown actions but does not reject an empty result before creating a `HEALTH_CLEANUP` row and sending HTTP 200/SSE. Its `total` is the sum of every inspected issue category, regardless of the selected actions; it also includes the library root in `emptyFolders` even though the execution loop skips that root. A single selected action can therefore show progress against unrelated work or reach 100% too early.
+- **Status:** found; not changed in this batch.
+- **Safe correction:** reject an empty/invalid action set with HTTP 400 before SSE headers or job insertion; calculate the initial denominator from only the selected action targets, using the same eligibility filters as the execution loops; account for discovered face-crop work when the derived-data cleanup returns. Add route and progress-contract regressions.
+- **Remaining risk:** until corrected, API clients can create no-op cleanup jobs and the displayed percentage is not a reliable measure of selected work.
+
+### P2 — Mobile authentication has first-run, status-error, and storage-failure dead ends
+
+- **Affected workflow:** first launch, sign-in, and logout in the Expo mobile app.
+- **Evidence/root cause:** `/auth/status` returns `setup: true` before the first administrator password exists, but mobile `AuthContext` only reads `authenticated`; `RootLayoutNav` consequently shows a login form even though `LoginScreen` only calls `/auth/login` and cannot perform first-run setup. The context also does not check `response.ok` before interpreting the status JSON. Its initial `AsyncStorage.getItem` occurs before the status-fetch try/finally, so a storage rejection can leave `loading` true indefinitely. The mobile logout path does not inspect the server response, even though the API returns HTTP 503 when durable session revocation cannot be confirmed.
+- **Status:** found; not changed in this batch.
+- **Safe correction:** expose setup-required and status-error states; provide a clear link/instruction to complete the token-protected first-run flow in the web app and a status retry; guarantee loading cleanup when local storage fails; surface a server logout/revocation failure instead of implying confirmed revocation. Preserve local sign-out behavior but clearly warn when remote revocation was not confirmed.
+- **Remaining risk:** mobile users can be misdirected into an impossible login flow, can be left on an indefinite splash screen by storage failure, and can receive no warning when the server cannot confirm logout.
+
+### P2 — Mobile session bearer cookie is persisted in AsyncStorage
+
+- **Affected workflow:** native mobile authentication persistence.
+- **Evidence/root cause:** `AuthContext` writes the session cookie (a bearer credential) to `@react-native-async-storage/async-storage`; the mobile package does not declare Expo SecureStore. AsyncStorage is app-private storage but is not the OS Keychain/Keystore secret store.
+- **Status:** found; no dependency or storage migration applied.
+- **Safe correction:** add a supported SecureStore dependency with a generated lockfile; migrate the existing cookie once from AsyncStorage to SecureStore and remove the legacy value only after a successful write; do not fall back to plaintext persistence if secure storage fails; keep browser/web cookie handling separate; add migration, read/write failure, and logout tests.
+- **Remaining risk:** native bearer session material remains in ordinary app storage until the migration is implemented and validated.
+
+### November 7 security status reconciliation
+
+- **Remote first-run administrator takeover:** the earlier public-setup finding is no longer open in the current source. `setup-authorization.ts` requires the operator-provisioned `WILLARD_SETUP_TOKEN` for hosted/LAN setup; the loopback exception requires explicit launcher-owned `WILLARD_LOCAL_SETUP=true`, no Replit marker, and `HOST=127.0.0.1`. The first-run token UI, generated API contract, helper tests, route/launcher contracts, and current Fast Validation setup-authorization regression are present. Status: target-tested; a live hosted reverse-proxy integration test and secret-provisioning verification remain outstanding.
+- **Late session-store upsert after logout/device revocation:** the earlier deletion-only finding is fixed in current source. `revoked_sessions` tombstones are written transactionally before session deletion, and the global API middleware checks the tombstone before dispatching protected routes. The real PostgreSQL late-upsert regression passed again in Fast Validation #1403. Status: integration-tested. Tombstones remain retained without automatic cleanup because no safe maximum in-flight request lifetime has been established.
+
+### Branch/PR and validation snapshot
+
+- **Code/test head:** `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Fast Validation:** #1403 passed Linux and Windows jobs on that exact head.
+- **Dependency Review:** #1166 passed on the same exact head; installed dependency-graph audit skipped.
+- **PR #2:** open, draft, unmerged; base `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`; 1,477 commits ahead and 1 behind; 200 changed files, 25,430 additions, 3,168 deletions.
+- **Full CI:** not run. The available Fast Validation and Dependency Review workflows are not full CI. The separate installed-product Windows lifecycle workflow remains unresolved; its prior prepared-phase failure is not replaced by the Windows archive/updater smoke.
+- No branch switch, main modification, merge/close, deployment, release publication, credential access/change, or production data mutation occurred.
