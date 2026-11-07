@@ -27,8 +27,9 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const schemaReady = process.env["WILLARD_SCHEMA_READY"] === "1";
-const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTable();
+// Always verify the connected database under the schema bootstrap lock. A
+// launcher marker cannot survive a database restore or DATABASE_URL change safely.
+const startupMigrations = bootstrapSessionTable();
 
 startupMigrations
   .then(() => {
@@ -66,7 +67,8 @@ startupMigrations
       // gate has passed. These cleanup and recovery tasks are safe to run
       // after binding and must not block the launcher's health probe.
       void (async () => {
-        if (schemaReady) await initializeVectorCapability();
+        // Optional vector extension/index work must not delay the HTTP readiness gate.
+        await initializeVectorCapability();
         await recoverInterruptedJobs();
         await reconcileCleanupOperations();
         const nasPath = await getActiveNasPath();

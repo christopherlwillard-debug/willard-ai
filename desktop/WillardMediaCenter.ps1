@@ -651,7 +651,7 @@ function Ensure-Schema {
     try {
       $marker = Get-Content $SchemaMarker -Raw | ConvertFrom-Json
       if ($marker.version -eq 1 -and $marker.fingerprint -eq $fingerprint) {
-        Good "Media database schema is already ready."
+        Good "Previous schema setup found; the API will verify the connected database before serving requests."
         return
       }
     } catch {}
@@ -667,7 +667,7 @@ function Ensure-Schema {
     fingerprint = $fingerprint
     completedAt = (Get-Date).ToString("o")
   } | ConvertTo-Json | Set-Content $SchemaMarker
-  Good "Media database is ready."
+  Good "Database setup completed; the API will verify schema readiness before serving requests."
 }
 function Read-StartupLogTail($path) {
   if (-not (Test-Path $path)) { return "(log not found: $path)" }
@@ -929,7 +929,6 @@ try {
   }
   Ensure-Schema
   Initialize-BackupProtection
-  $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
   # The API must only be reachable through the localhost-only desktop proxy.
   $env:HOST = "127.0.0.1"

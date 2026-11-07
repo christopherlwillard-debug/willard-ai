@@ -46,11 +46,17 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
 
 const pool = dbPool;
 
+type RequiredSchemaVerification = {
+  ready: boolean;
+  missing: string[];
+};
+
 type RequiredSchemaBootstrap = {
   runRequiredSchema: (
     client: Queryable,
     options?: { log?: boolean },
   ) => Promise<void>;
+  verifyRequiredSchema: (client: Queryable) => Promise<RequiredSchemaVerification>;
 };
 
 function loadRequiredSchemaBootstrap(): RequiredSchemaBootstrap {
@@ -66,8 +72,11 @@ function loadRequiredSchemaBootstrap(): RequiredSchemaBootstrap {
     if (!existsSync(candidate)) continue;
     try {
       const bootstrap = createRequire(import.meta.url)(candidate) as Partial<RequiredSchemaBootstrap>;
-      if (typeof bootstrap.runRequiredSchema !== "function") {
-        throw new Error("setup-db.cjs does not export runRequiredSchema");
+      if (
+        typeof bootstrap.runRequiredSchema !== "function" ||
+        typeof bootstrap.verifyRequiredSchema !== "function"
+      ) {
+        throw new Error("setup-db.cjs does not export the required schema verification contract");
       }
       return bootstrap as RequiredSchemaBootstrap;
     } catch (error) {
@@ -138,8 +147,15 @@ export async function initializeVectorCapability(queryable: Queryable = pool): P
 
 export async function bootstrapSessionTable(): Promise<void> {
   await withSchemaBootstrapLock(dbPool, async (client) => {
-    const { runRequiredSchema } = loadRequiredSchemaBootstrap();
-    await runRequiredSchema(client, { log: false });
+    const { runRequiredSchema, verifyRequiredSchema } = loadRequiredSchemaBootstrap();
+    let verification = await verifyRequiredSchema(client);
+    if (!verification.ready) {
+      logger.warn(
+        { missing: verification.missing },
+        "Database schema is incomplete; applying required migrations",
+      );
+      await runRequiredSchema(client, { log: false });
+    }
     await client.query(`
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_enabled boolean NOT NULL DEFAULT true;
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_schedule_hours integer NOT NULL DEFAULT 24;
@@ -149,8 +165,12 @@ export async function bootstrapSessionTable(): Promise<void> {
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_verified_at timestamp;
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_error text;
     `);
-    // pgvector is optional; probe it only after all required tables exist.
-    await initializeVectorCapability(client);
+    verification = await verifyRequiredSchema(client);
+    if (!verification.ready) {
+      throw new Error(
+        `Required database schema remains incomplete after migration: ${verification.missing.join(", ")}`,
+      );
+    }
   });
 }
 

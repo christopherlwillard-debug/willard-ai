@@ -194,7 +194,7 @@ if ($schemaFingerprint -and (Test-Path $schemaMarkerPath)) {
     } catch { $schemaReady = $false }
 }
 if ($schemaReady) {
-    Write-Ok "Database schema already ready"
+    Write-Ok "Previous schema setup found; the API will verify the connected database"
 } else {
     $migrationCode = Invoke-LoggedCommand "Applying safe database updates..." $dbMigrateLog {
         & node (Join-Path $Root "setup-db.cjs")
@@ -209,8 +209,7 @@ if ($schemaReady) {
         completedAt = (Get-Date).ToString("o")
     } | ConvertTo-Json | Set-Content $schemaMarkerPath
 }
-Write-Ok "Database ready"
-$env:WILLARD_SCHEMA_READY = "1"
+Write-Ok "Database connection ready; the API will verify schema readiness before listening"
 try {
     Initialize-WillardBackupProtection $true -OfferCredentialReset | Out-Null
 } catch {

@@ -660,7 +660,114 @@ async function runRequiredSchema(client, { log = true } = {}) {
   }
 }
 
-// -- 7. Standalone setup ------------------------------------------------------
+
+ // -- 7. Read-only required-schema verification ------------------------------
+ // Launcher markers are only hints: they cannot prove which database is
+ // connected or whether its schema was restored/changed after the marker was made.
+ // Run this read-only contract under the API's existing advisory lock.
+ async function verifyRequiredSchema(client) {
+   const inspection = await client.query(`
+     WITH required_tables(table_name) AS (
+       VALUES
+         ('willard_schema_versions'),
+         ('indexed_files'),
+         ('session'),
+         ('revoked_sessions'),
+         ('app_settings'),
+         ('scan_jobs'),
+         ('archives'),
+         ('organization_jobs'),
+         ('conversion_jobs'),
+         ('media_scan_jobs'),
+         ('library_jobs'),
+         ('media_files'),
+         ('collections'),
+         ('collection_items'),
+         ('library_activity'),
+         ('media_ai'),
+         ('geo_place_cache'),
+         ('search_history'),
+         ('saved_searches'),
+         ('people'),
+         ('media_tags'),
+         ('media_file_tags'),
+         ('faces'),
+         ('face_scan_state'),
+         ('cleanup_operations')
+     ),
+     required_columns(table_name, column_name) AS (
+       VALUES
+         ('session', 'sid'),
+         ('session', 'sess'),
+         ('session', 'expire'),
+         ('revoked_sessions', 'sid'),
+         ('app_settings', 'nas_path'),
+         ('organization_jobs', 'nas_path'),
+         ('organization_jobs', 'lease_token'),
+         ('conversion_jobs', 'status'),
+         ('conversion_jobs', 'nas_path'),
+         ('library_jobs', 'job_type'),
+         ('library_jobs', 'status'),
+         ('library_jobs', 'nas_path'),
+         ('media_files', 'nas_path'),
+         ('media_files', 'relative_path'),
+         ('archives', 'path'),
+         ('archives', 'nas_path'),
+         ('collections', 'nas_path'),
+         ('collection_items', 'media_file_id'),
+         ('cleanup_operations', 'operation_id'),
+         ('cleanup_operations', 'nas_path')
+     ),
+     missing_tables AS (
+       SELECT required.table_name
+       FROM required_tables AS required
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM information_schema.tables AS actual
+         WHERE actual.table_schema = current_schema()
+           AND actual.table_name = required.table_name
+           AND actual.table_type = 'BASE TABLE'
+       )
+     ),
+     missing_columns AS (
+       SELECT required.table_name, required.column_name
+       FROM required_columns AS required
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM information_schema.columns AS actual
+         WHERE actual.table_schema = current_schema()
+           AND actual.table_name = required.table_name
+           AND actual.column_name = required.column_name
+       )
+     )
+     SELECT
+       ARRAY(
+         SELECT table_name FROM missing_tables ORDER BY table_name
+       ) AS missing_tables,
+       ARRAY(
+         SELECT table_name || '.' || column_name
+         FROM missing_columns
+         ORDER BY table_name, column_name
+       ) AS missing_columns
+   `);
+   const row = inspection?.rows?.[0];
+   if (!row || !Array.isArray(row.missing_tables) || !Array.isArray(row.missing_columns)) {
+     throw new Error('Database schema verification returned an invalid result.');
+   }
+   const missing = [...row.missing_tables, ...row.missing_columns];
+   if (missing.length > 0) return { ready: false, missing };
+
+   const history = await client.query(
+     `SELECT COALESCE(MAX(version), 0) AS current_version FROM willard_schema_versions`,
+   );
+   const currentVersion = Number(history?.rows?.[0]?.current_version ?? 0);
+   if (currentVersion !== SCHEMA_VERSION) {
+     missing.push(`willard_schema_versions.max_version=${SCHEMA_VERSION} (found ${currentVersion})`);
+   }
+   return { ready: missing.length === 0, missing };
+ }
+
+// -- 8. Standalone setup ------------------------------------------------------
 async function main() {
   console.log('\n  Willard AI - Database Setup\n');
 
@@ -720,6 +827,7 @@ module.exports = {
   quoteIdentifier,
   ensureDatabase,
   runRequiredSchema,
+  verifyRequiredSchema,
 };
 
 if (require.main === module) {
