@@ -86,3 +86,45 @@ test("all library job-start routes fail HTTP admission when NAS is offline or re
   assert.match(legacyScan, /result\.errorCode === "NAS_READ_ONLY"/);
   assert.match(legacyScan, /result\.errorCode === "CAPACITY_UNSAFE"/);
 });
+
+
+test("full thumbnail rebuild invalidates cache only after durable job admission and NAS validation", () => {
+  const library = source("routes/library.ts");
+  const engine = source("lib/library-engine/job-engine.ts");
+
+  const rebuildStart = library.indexOf('router.post("/library/thumbnails/rebuild"');
+  const rebuildEnd = library.indexOf("// ── GET /api/library/jobs/:id/files", rebuildStart);
+  assert.ok(rebuildStart >= 0 && rebuildEnd > rebuildStart, "full rebuild route must exist");
+  const rebuildRoute = library.slice(rebuildStart, rebuildEnd);
+  assert.ok(rebuildRoute.includes("rebuildThumbnails: true"));
+  assert.doesNotMatch(rebuildRoute, /clearThumbnailCache|thumbnailPath: null|thumbnailGeneratedAt: null/);
+  assert.ok(rebuildRoute.includes("if (result.alreadyRunning)") && rebuildRoute.includes("res.status(409)"),
+    "a different active library job must not be reported as a successful rebuild");
+
+  const backfillStart = library.indexOf('router.post("/library/thumbnails"');
+  const backfillEnd = library.indexOf("// ── GET /api/library/thumbnails/status", backfillStart);
+  const backfillRoute = library.slice(backfillStart, backfillEnd);
+  assert.ok(backfillStart >= 0 && backfillEnd > backfillStart);
+  assert.ok(!backfillRoute.includes("rebuildThumbnails"), "ordinary missing-thumbnail backfill must preserve reusable cache");
+
+  const startJobStart = engine.indexOf("export async function startJob");
+  const startJobEnd = engine.indexOf("// ── Resume a paused job", startJobStart);
+  const startJob = engine.slice(startJobStart, startJobEnd);
+  const durableRunningInsert = startJob.indexOf('status:   "RUNNING"');
+  const thumbnailDispatch = startJob.indexOf("startJobRun(job.id, runThumbnailJob(state, opts.rebuildThumbnails === true), reservation)");
+  assert.ok(durableRunningInsert >= 0 && thumbnailDispatch > durableRunningInsert,
+    "thumbnail worker must be dispatched only after the durable RUNNING row is inserted");
+  assert.ok(startJob.includes('opts.rebuildThumbnails && opts.jobType !== "THUMBNAILS"'));
+
+  const workerStart = engine.indexOf("async function runThumbnailJob");
+  const workerEnd = engine.indexOf("// ── Fail a job", workerStart);
+  const worker = engine.slice(workerStart, workerEnd);
+  const reachability = worker.indexOf("const initialReach = await checkNasReachableAsync(nasPath)");
+  const rebuildGuard = worker.indexOf("if (rebuild)");
+  const cacheClear = worker.indexOf("clearThumbnailCache(nasPath)");
+  const pointerReset = worker.indexOf("thumbnailPath: null");
+  const reconciliation = worker.indexOf("reconcileThumbnailPointers(nasPath)");
+  assert.ok(reachability >= 0 && rebuildGuard > reachability && cacheClear > rebuildGuard &&
+    pointerReset > cacheClear && reconciliation > pointerReset,
+    "cache invalidation and pointer reset must follow NAS validation and precede thumbnail reconciliation");
+});
