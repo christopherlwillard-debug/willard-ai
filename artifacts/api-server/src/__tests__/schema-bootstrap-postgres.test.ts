@@ -35,11 +35,12 @@ test("PostgreSQL schema verifier detects and repairs version-2 organization jobs
     try {
       for (const sql of bootstrap.SETUP_SQL) {
         if (/ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS lease_token text/i.test(sql)) continue;
-        const legacySql = sql.includes("INSERT INTO willard_schema_versions")
-          ? sql.replace(`VALUES (${bootstrap.SCHEMA_VERSION})`, "VALUES (2)")
-          : sql;
-        await client.query(legacySql);
+        await client.query(sql);
       }
+      // The current SQL array records its current version; reset only this
+      // disposable schema's history to model the legacy v2 database.
+      await client.query("DELETE FROM willard_schema_versions");
+      await client.query("INSERT INTO willard_schema_versions (version) VALUES (2)");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
