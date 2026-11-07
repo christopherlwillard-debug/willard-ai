@@ -134,6 +134,37 @@ test("Health Center reports thumbnail and face-crop failures as partial cleanup 
   assert.match(cleanupRoute, /metadataJobId !== null \? \{ metadataJobId \} : \{\}/);
 });
 
+test("Health Center rejects empty or unsupported cleanup actions before opening an event stream or creating a job", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+
+  const validationEnd = cleanupRoute.indexOf('const nasPath =');
+  const streamStart = cleanupRoute.indexOf('res.writeHead(200');
+  const jobInsert = cleanupRoute.indexOf("await db.insert(libraryJobsTable)");
+  assert.ok(validationEnd > 0 && streamStart > validationEnd && jobInsert > streamStart);
+  const validation = cleanupRoute.slice(0, validationEnd);
+  assert.match(validation, /!Array\.isArray\(requested\)/);
+  assert.match(validation, /requested\.length === 0/);
+  assert.match(validation, /requested\.some\(/);
+  assert.match(validation, /return res\.status\(400\)\.json/);
+  assert.match(validation, /const actions = \[\.\.\.new Set\(requested as string\[\]\)\]/);
+});
+
+test("Health Center cleanup progress counts only selected work and excludes skipped folders", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+
+  assert.match(cleanupRoute, /actions\.includes\("orphanedRecords"\) \? inspected\.missing\.length : 0/);
+  assert.match(cleanupRoute, /actions\.includes\("orphanedThumbnails"\) \? inspected\.orphanThumbs\.length : 0/);
+  assert.match(cleanupRoute, /thumbnailTargets\.length/);
+  assert.match(cleanupRoute, /actions\.includes\("emptyFolders"\) \? emptyFolderTargets\.length : 0/);
+  assert.match(cleanupRoute, /emptyFolderTargets = inspected\.emptyFolders\.filter/);
+  assert.match(cleanupRoute, /total \+= cleaned\.staleCropsRemoved \+ cleaned\.cropErrors\.length/);
+  assert.doesNotMatch(cleanupRoute, /const total = Math\.max\(1, inspected\.missing\.length \+ inspected\.orphanThumbs\.length \+ inspected\.missingThumbs\.length \+ inspected\.emptyFolders\.length\)/);
+});
+
 test("Health Center orphan cleanup uses reversible conditional soft-delete and preserves derived data", () => {
   const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
   const enginePath = fileURLToPath(new URL("../lib/library-engine/job-engine.ts", import.meta.url));
