@@ -99,6 +99,14 @@ test("all library job-start routes fail HTTP admission when NAS is offline or re
   assert.match(engine, /thumbnailOperation: "CLEAR_ONLY"/);
   assert.match(engine, /jobDiagnostics\.thumbnailOperation === "CLEAR_ONLY"/);
 
+  const openapi = readFileSync(new URL("../../../../lib/api-spec/openapi.yaml", import.meta.url), "utf8");
+  const openApiClearStart = openapi.indexOf("  /library/thumbnails/cache:");
+  const openApiClearEnd = openapi.indexOf("  /library/thumbnails/rebuild:", openApiClearStart);
+  const openApiClear = openapi.slice(openApiClearStart, openApiClearEnd);
+  assert.match(openApiClear, /summary: Queue thumbnail cache clearing/);
+  assert.match(openApiClear, /"202":\s*\n\s*description: Thumbnail cache clear job accepted/);
+  assert.match(openApiClear, /"503":\s*\n\s*description: NAS is offline or read-only/);
+
   assert.match(legacyScan, /result\.errorCode === "NAS_OFFLINE"/);
   assert.match(legacyScan, /result\.errorCode === "NAS_READ_ONLY"/);
   assert.match(legacyScan, /result\.errorCode === "CAPACITY_UNSAFE"/);

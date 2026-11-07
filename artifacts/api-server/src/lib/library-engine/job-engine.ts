@@ -3227,7 +3227,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
   const runPass = async (): Promise<void> => {
     try {
       if (!(await checkNasReachableAsync(nasPath)).online) return;
-      cleanStaleThumbnailPartials(nasPath);
+      await cleanStaleThumbnailPartials(nasPath);
 
       const rows = await db.select({
         id: mediaFilesTable.id,
@@ -3275,7 +3275,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
             }
           }
         } catch { /* cache cleanup is best effort */ }
-        enforceThumbnailCacheQuota(nasPath);
+        await enforceThumbnailCacheQuota(nasPath);
         cursor = 0;
         passResets = 0;
         return;

@@ -105,6 +105,25 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(stats.incompleteBytes, 904);
   });
 
+  test("does not remove a stale partial while its destination publisher lock exists", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const dir = ensureThumbnailDir(root);
+    const partial = path.join(dir, "54.webp.123.456.1.tmp.webp");
+    const lock = path.join(dir, "54.webp.lock");
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.writeFileSync(partial, Buffer.alloc(17));
+    fs.utimesSync(partial, old, old);
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 0, bytes: 0 });
+    assert.equal(fs.existsSync(partial), true, "an active publisher's partial must be preserved");
+
+    fs.unlinkSync(lock);
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
+    assert.equal(fs.existsSync(partial), false);
+  });
+
   test("removes abandoned partials and evicts oldest valid files over quota", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
     roots.push(root);
@@ -116,16 +135,40 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(second.error, null);
 
     const dir = getThumbnailDir(root);
-    const stale = path.join(dir, "old.1.tmp.webp");
+    const stale = path.join(dir, "old.webp.123.456.1.tmp.webp");
     fs.writeFileSync(stale, Buffer.alloc(17));
     const oldTime = new Date(Date.now() - 60 * 60_000);
     fs.utimesSync(stale, oldTime, oldTime);
-    assert.deepEqual(cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
 
-    const kept = enforceThumbnailCacheQuota(root, fs.statSync(second.destPath!).size, second.destPath!);
+    const kept = await enforceThumbnailCacheQuota(root, fs.statSync(second.destPath!).size, second.destPath!);
     assert.equal(fs.existsSync(second.destPath!), true);
     assert.equal(fs.existsSync(first.destPath!), false);
     assert.equal(kept.files, 1);
+  });
+
+  test("quota eviction preserves a thumbnail with an active publisher lock", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const first = await generateThumbnail(71, source, "jpg", root);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await generateThumbnail(72, source, "jpg", root);
+    assert.equal(first.error, null);
+    assert.equal(second.error, null);
+
+    const lock = `${first.destPath}.lock`;
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    const maxBytes = fs.statSync(second.destPath!).size;
+    const whileLocked = await enforceThumbnailCacheQuota(root, maxBytes, second.destPath!);
+    assert.equal(fs.existsSync(first.destPath!), true);
+    assert.equal(whileLocked.files, 2);
+
+    fs.unlinkSync(lock);
+    const afterRelease = await enforceThumbnailCacheQuota(root, maxBytes, second.destPath!);
+    assert.equal(fs.existsSync(first.destPath!), false);
+    assert.equal(fs.existsSync(second.destPath!), true);
+    assert.equal(afterRelease.files, 1);
   });
 
   test("cache clearing preserves active thumbnail locks and partial outputs", async () => {
