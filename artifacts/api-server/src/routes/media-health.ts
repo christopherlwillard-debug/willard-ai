@@ -19,6 +19,7 @@ type HealthRow = {
   relativePath: string;
   thumbnailPath: string | null;
   mediaType: string;
+  extension: string;
   sizeBytes: number;
   lastScanAction: string | null;
 };
@@ -91,6 +92,7 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
     relativePath: mediaFilesTable.relativePath,
     thumbnailPath: mediaFilesTable.thumbnailPath,
     mediaType: mediaFilesTable.mediaType,
+    extension: mediaFilesTable.extension,
     sizeBytes: mediaFilesTable.sizeBytes,
     lastScanAction: mediaFilesTable.lastScanAction,
   }).from(mediaFilesTable).where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE));
@@ -102,7 +104,7 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
     validIds.add(row.id);
     const source = resolveLibraryPath(nasPath, row.relativePath);
     if (isMissingRegularMediaFile(source)) missing.push(row);
-    const needsThumb = row.mediaType === "photo" || row.mediaType === "video";
+    const needsThumb = row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
     if (needsThumb) {
       try {
         const thumb = row.thumbnailPath
@@ -263,7 +265,7 @@ router.post("/media/cleanup", async (req, res) => {
     if (actions.includes("missingThumbnails") || actions.includes("fullThumbnailRebuild")) {
       const targets = actions.includes("fullThumbnailRebuild") ? inspected.rows : inspected.missingThumbs;
       for (const row of targets) {
-        if (row.mediaType !== "photo" && row.mediaType !== "video") continue;
+        if (row.mediaType !== "photo" && row.mediaType !== "video" && row.extension !== "pdf") continue;
         try {
           const source = resolveLibraryPath(nasPath, row.relativePath);
           const result = await generateThumbnail(

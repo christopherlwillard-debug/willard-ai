@@ -165,6 +165,8 @@ test("thumbnail catalog pointer persistence is serialized with cache clearing", 
   assert.match(media, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
   assert.match(engine, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
   assert.match(health, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
+  assert.match(health, /const needsThumb = row\.mediaType === "photo" \|\| row\.mediaType === "video" \|\| row\.extension === "pdf"/);
+  assert.match(health, /row\.mediaType !== "photo" && row\.mediaType !== "video" && row\.extension !== "pdf"/);
   assert.match(health, /removeOrphanedThumbnail\(nasPath, file, async \(\) => \{[\s\S]*?db\.select\(\{ id: mediaFilesTable\.id \}\)/);
   assert.doesNotMatch(health, /fs\.unlinkSync\(resolveWithinRoot\(file, getWillardAIDir\(nasPath\)\)\)/);
 });
