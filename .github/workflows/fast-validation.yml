@@ -170,6 +170,7 @@ jobs:
             artifacts/api-server/src/__tests__/empty-folder-scan.test.ts \
             artifacts/api-server/src/__tests__/ai-library-context.test.ts \
             artifacts/api-server/src/__tests__/media-health-scan.test.ts \
+            artifacts/api-server/src/__tests__/library-consistency-contract.test.ts \
             artifacts/api-server/src/__tests__/active-library-cache.test.ts \
             artifacts/api-server/src/__tests__/storage-active-library.test.ts \
             artifacts/api-server/src/__tests__/canonical-active-library.test.ts \
