@@ -68,7 +68,8 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
     assert.ok(payloadInfo.crc !== undefined, "node-7z did not expose technical CRC metadata");
 
     if (process.platform !== "win32") {
-      fs.symlinkSync("payload.txt", path.join(root, "linked.txt"));
+      const outsideLinkTarget = "../outside-target.txt";
+      fs.symlinkSync(outsideLinkTarget, path.join(root, "linked.txt"));
       const linkArchive = path.join(root, "link.7z");
       const linkCreate = spawnSync(binaryPath, ["a", "-snl", linkArchive, "payload.txt", "linked.txt"], {
         cwd: root,
@@ -114,6 +115,11 @@ test("official 7-Zip binary works with node-7z and archive safety metadata", {
         fs.lstatSync(path.join(defaultLinkDestination, "linked.txt")).isSymbolicLink(),
         true,
         "control extraction without -snl- must materialize the safe symlink fixture",
+      );
+      assert.equal(
+        fs.readlinkSync(path.join(defaultLinkDestination, "linked.txt")),
+        outsideLinkTarget,
+        "the cross-platform fixture link must target outside its extraction root",
       );
 
       // Exercise the exact extraction switch used by the organize route. A

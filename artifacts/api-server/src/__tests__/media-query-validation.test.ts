@@ -23,7 +23,7 @@ test("LIKE patterns treat percent, underscore, and backslash as literal user inp
 });
 
 test("media listing validates scalar filters and escapes literal folder/search patterns", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/media.ts", "utf8");
+  const route = readFileSync(new URL("../routes/media.ts", import.meta.url), "utf8");
   for (const name of ["mediaType", "favorites", "folder", "search", "sort"]) {
     assert.ok(route.includes('parseOptionalQueryString(req.query["' + name + '"], "' + name + '")'), name);
   }
@@ -36,7 +36,7 @@ test("media listing validates scalar filters and escapes literal folder/search p
 });
 
 test("Explorer rejects repeated path parameters before resolving filesystem paths", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/explorer.ts", "utf8");
+  const route = readFileSync(new URL("../routes/explorer.ts", import.meta.url), "utf8");
   assert.ok(route.includes('parseOptionalQueryString(req.query.path, "path")'));
   assert.ok(route.includes("instanceof RequestValidationError"));
   assert.ok(route.indexOf("parseOptionalQueryString(req.query.path") < route.indexOf("safeResolve(nasPath, relativePath)"));

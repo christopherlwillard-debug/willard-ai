@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { normalizeOptionalDateOnlyRange, parseAllowedString, parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
+
+const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+const readWorkspaceFile = (relativePath: string) =>
+  readFileSync(path.join(workspaceRoot, relativePath), "utf8");
 
 test("parsePositiveIntegerParam accepts canonical positive safe integer identifiers", () => {
   assert.equal(parsePositiveIntegerParam("1"), 1);
@@ -44,19 +50,19 @@ test("numeric route handlers use strict path parsing and body ID validation", ()
     "artifacts/api-server/src/routes/openai/index.ts",
   ];
   for (const file of routeFiles) {
-    const source = readFileSync(file, "utf8");
+    const source = readWorkspaceFile(file);
     assert.ok(source.includes("parsePositiveIntegerParam"), file);
     assert.doesNotMatch(source, /(?:parseInt|Number)\s*\(\s*req\.params/, file);
   }
 
-  const collectionsSource = readFileSync("artifacts/api-server/src/routes/collections.ts", "utf8");
+  const collectionsSource = readWorkspaceFile("artifacts/api-server/src/routes/collections.ts");
   assert.ok(collectionsSource.includes("parsePositiveIntegerValue"));
   assert.doesNotMatch(collectionsSource, /parseInt\(String/);
 
-  const facesSource = readFileSync("artifacts/api-server/src/routes/faces.ts", "utf8");
+  const facesSource = readWorkspaceFile("artifacts/api-server/src/routes/faces.ts");
   assert.ok(facesSource.includes("parsePositiveIntegerValue"));
 
-  const cleanupSource = readFileSync("artifacts/api-server/src/routes/cleanup.ts", "utf8");
+  const cleanupSource = readWorkspaceFile("artifacts/api-server/src/routes/cleanup.ts");
   assert.ok(cleanupSource.includes("parseBoundedInteger"));
   assert.doesNotMatch(cleanupSource, /Number\.parseInt\(String\(req\.query\.(?:limit|offset)/);
 });
@@ -86,7 +92,7 @@ test("archive date-only ranges validate calendar dates and include the entire en
 });
 
 test("archive route validates filters and treats the selected end date as inclusive", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/archives.ts", "utf8");
+  const route = readWorkspaceFile("artifacts/api-server/src/routes/archives.ts");
   assert.ok(route.includes('parseOptionalQueryString(req.query.category, "category")'));
   assert.ok(route.includes("parseBoundedInteger(req.query.minSize"));
   assert.ok(route.includes("parseBoundedInteger(req.query.maxSize"));
@@ -97,21 +103,21 @@ test("archive route validates filters and treats the selected end date as inclus
   assert.ok(route.includes("lt(archivesTable.modifiedAt, dateToExclusive)"));
   assert.ok(!route.includes("parseInt(minSize") && !route.includes("parseInt(maxSize"));
 
-  const spec = readFileSync("lib/api-spec/openapi.yaml", "utf8");
+  const spec = readWorkspaceFile("lib/api-spec/openapi.yaml");
   const dateFromIndex = spec.indexOf("name: dateFrom");
   const dateToIndex = spec.indexOf("name: dateTo");
   assert.ok(dateFromIndex >= 0 && dateToIndex > dateFromIndex);
   assert.ok(spec.slice(dateFromIndex, dateToIndex).includes("format: date"));
   assert.ok(spec.slice(dateToIndex, dateToIndex + 140).includes("format: date"));
 
-  const generatedParams = readFileSync("lib/api-zod/src/generated/types/listArchivesParams.ts", "utf8");
+  const generatedParams = readWorkspaceFile("lib/api-zod/src/generated/types/listArchivesParams.ts");
   assert.ok(generatedParams.includes("dateFrom?: Date;"));
   assert.ok(generatedParams.includes("dateTo?: Date;"));
-  const generatedClientParams = readFileSync("lib/api-client-react/src/generated/api.schemas.ts", "utf8");
+  const generatedClientParams = readWorkspaceFile("lib/api-client-react/src/generated/api.schemas.ts");
   assert.ok(generatedClientParams.includes("dateFrom?: string;"));
   assert.ok(generatedClientParams.includes("dateTo?: string;"));
 
-  const page = readFileSync("artifacts/willard-ai/src/pages/archives.tsx", "utf8");
+  const page = readWorkspaceFile("artifacts/willard-ai/src/pages/archives.tsx");
   assert.ok(page.includes("const params: ListArchivesParams ="));
   assert.ok(page.includes("minSizeMb !== \"\""));
   assert.ok(page.includes("maxSizeMb !== \"\""));
@@ -137,12 +143,12 @@ test("search intent date normalization rejects impossible and contradictory cale
 });
 
 test("search SQL uses a half-open end-date bound and validates date-only intent", () => {
-  const source = readFileSync("artifacts/api-server/src/lib/ai-search.ts", "utf8");
+  const source = readWorkspaceFile("artifacts/api-server/src/lib/ai-search.ts");
   assert.ok(source.includes("parseOptionalDateOnlyRange(intent.dateFrom ?? undefined, intent.dateTo ?? undefined)"));
   assert.match(source, /COALESCE\(f\.date_taken, f\.modified_at\) < \$\{add\(dateRange\.toExclusive/);
   assert.doesNotMatch(source, /T23:59:59/);
 
-  const route = readFileSync("artifacts/api-server/src/routes/search.ts", "utf8");
+  const route = readWorkspaceFile("artifacts/api-server/src/routes/search.ts");
   assert.ok(route.includes("normalizeOptionalDateOnlyRange(o.dateFrom, o.dateTo)"));
   assert.ok(route.includes("parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined)"));
   assert.ok(route.includes("instanceof RequestValidationError"));
@@ -160,7 +166,7 @@ test("parseAllowedString accepts exact enum values and rejects coercions", () =>
 });
 
 test("organize job creation validates archive IDs and source-compatible options", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  const route = readWorkspaceFile("artifacts/api-server/src/routes/organize.ts");
   assert.ok(route.includes("parsePositiveIntegerValue(archiveId)"));
   assert.ok(route.includes('parseAllowedString(archiveDisposition, ["waiting", "keep", "move_to_processed", "delete"], "keep")'));
   assert.ok(route.includes('parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing")'));
@@ -168,26 +174,26 @@ test("organize job creation validates archive IDs and source-compatible options"
   assert.ok(route.includes('sourceType === "folder" && requestedDisposition !== "keep"'));
   assert.doesNotMatch(route, /Number\(archiveId\)/);
 
-  const page = readFileSync("artifacts/willard-ai/src/pages/organize.tsx", "utf8");
+  const page = readWorkspaceFile("artifacts/willard-ai/src/pages/organize.tsx");
   assert.match(page, /archiveDisposition:\s*form\.sourceType === "archive"\s*\?\s*form\.archiveDisposition(?:\s+as any)?\s*:\s*"keep"/);
 });
 
 
 test("archive disposition requires an explicit boolean confirmation", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  const route = readWorkspaceFile("artifacts/api-server/src/routes/organize.ts");
   assert.ok(route.includes("req.body?.confirm !== true"));
   assert.doesNotMatch(route, /if\s*\(!req\.body\?\.confirm\)/);
 });
 
 test("archive disposition results persist and failed processed moves can be retried", () => {
-  const route = readFileSync("artifacts/api-server/src/routes/organize.ts", "utf8");
+  const route = readWorkspaceFile("artifacts/api-server/src/routes/organize.ts");
   assert.ok(route.includes("reportJson: nextReport as any"));
   assert.ok(route.includes("dispositionPending: false"));
   assert.ok(route.includes("dispositionError = redactText"));
   assert.ok(route.includes('previousResult === "already_gone"'));
   assert.ok(route.includes("destinationHash !== sourceHash"));
 
-  const page = readFileSync("artifacts/willard-ai/src/pages/organize.tsx", "utf8");
+  const page = readWorkspaceFile("artifacts/willard-ai/src/pages/organize.tsx");
   assert.ok(page.includes("report?.dispositionPending === true"));
   assert.ok(page.includes("Retry move to processed"));
   assert.ok(page.includes("Archive is no longer present. No further deletion was performed."));

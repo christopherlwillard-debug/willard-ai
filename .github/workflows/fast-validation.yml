@@ -298,6 +298,13 @@ jobs:
           WILLARD_7ZIP_LINK_ARCHIVE: ${{ runner.temp }}/sevenzip-link-fixture/sevenzip-link-fixture.7z
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/sevenzip-bin-full.compat.test.mjs
 
+      - name: Verify organization rejects unsafe archive links on Windows
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/willard
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7z.exe
+          WILLARD_7ZIP_LINK_ARCHIVE: ${{ runner.temp }}/sevenzip-link-fixture/sevenzip-link-fixture.7z
+        run: pnpm --filter @workspace/api-server exec tsx --test src/__tests__/archive-link-conformance.test.mjs
+
       - name: Verify packaged updater journal writes
         shell: pwsh
         run: .\scripts\windows\update-journal-smoke.ps1
