@@ -3,7 +3,7 @@ import test from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isMissingFilesystemEntry, isMissingRegularMediaFile } from "../lib/media-health-scan.ts";
+import { isMissingFilesystemEntry, isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
@@ -80,4 +80,58 @@ test("Health Center metadata rebuild starts the durable METADATA worker instead 
   const releasedTemporaryClaim = cleanupRoute.indexOf('status: "DONE"');
   const metadataStart = cleanupRoute.indexOf("const metadataJob = await startJob");
   assert.ok(releasedTemporaryClaim >= 0 && metadataStart > releasedTemporaryClaim);
+});
+
+test("missing-media cleanup rechecks the source and skips a file restored after inspection", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-health-restored-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "restored.jpg");
+
+  // Model the original inspection finding followed by a restore before cleanup.
+  assert.equal(isMissingRegularMediaFile(source), true);
+  fs.writeFileSync(source, "restored media");
+
+  let updateCalled = false;
+  const result = await softDeleteMissingMediaRecord(source, async () => {
+    updateCalled = true;
+    return true;
+  });
+
+  assert.equal(result, "reappeared");
+  assert.equal(updateCalled, false);
+});
+
+test("missing-media cleanup marks only a still-missing active record and preserves changed rows", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-health-soft-delete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "missing.jpg");
+
+  let updates = 0;
+  const result = await softDeleteMissingMediaRecord(source, async () => {
+    updates++;
+    return true;
+  });
+  assert.equal(result, "marked_deleted");
+  assert.equal(updates, 1);
+
+  const changed = await softDeleteMissingMediaRecord(source, async () => false);
+  assert.equal(changed, "record_changed");
+});
+
+test("Health Center orphan cleanup uses reversible conditional soft-delete and preserves derived data", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const enginePath = fileURLToPath(new URL("../lib/library-engine/job-engine.ts", import.meta.url));
+  const route = readFileSync(routePath, "utf8");
+  const engine = readFileSync(enginePath, "utf8");
+  const start = route.indexOf('if (actions.includes("orphanedRecords"))');
+  const end = route.indexOf('if (actions.includes("orphanedDerivedData"))', start);
+  const cleanup = route.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(cleanup, /softDeleteMissingMediaRecord\\(source/);
+  assert.match(cleanup, /lastScanAction: "DELETED"/);
+  assert.match(cleanup, /eq\\(mediaFilesTable\\.relativePath, row\\.relativePath\\)/);
+  assert.match(cleanup, /ACTIVE/);
+  assert.doesNotMatch(cleanup, /db\\.delete\\(mediaFilesTable\\)|purgeDerivedDataForMedia/);
+  assert.match(engine, /lastScanAction:[\\s\\S]*excluded\\.last_scan_action/);
 });
