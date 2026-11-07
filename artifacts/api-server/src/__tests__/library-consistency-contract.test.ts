@@ -66,3 +66,20 @@ test("catalog reconciliation remains metadata-only", () => {
   assert.match(reconciliation, /\.update\(mediaFilesTable\)/);
   assert.doesNotMatch(reconciliation, /unlink|rmSync|renameSync|copyFile/);
 });
+
+test("all library job-start routes fail HTTP admission when NAS is offline or read-only", () => {
+  const library = source("routes/library.ts");
+  const legacyScan = source("routes/scan.ts");
+
+  const startCalls = library.match(/const result = await startJob\\(/g) ?? [];
+  const handledCalls = library.match(/respondToLibraryJobStartFailure\\(res, result, nasPath\\)/g) ?? [];
+  assert.equal(startCalls.length, 4, "all four library worker start routes should be covered");
+  assert.equal(handledCalls.length, startCalls.length, "every library worker start route must map admission failures");
+  assert.match(library, /result\\.errorCode === "NAS_OFFLINE"/);
+  assert.match(library, /result\\.errorCode === "NAS_READ_ONLY"/);
+  assert.match(library, /result\\.errorCode === "CAPACITY_UNSAFE"/);
+
+  assert.match(legacyScan, /result\\.errorCode === "NAS_OFFLINE"/);
+  assert.match(legacyScan, /result\\.errorCode === "NAS_READ_ONLY"/);
+  assert.match(legacyScan, /result\\.errorCode === "CAPACITY_UNSAFE"/);
+});
