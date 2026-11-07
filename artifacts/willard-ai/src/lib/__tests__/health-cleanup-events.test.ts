@@ -43,7 +43,7 @@ test("Health Center cleanup parser preserves partial failures and metadata worke
   );
   assert.throws(
     () => parseHealthCleanupEvent('event: done\ndata: {"ok":false,"partial":true,"failedItems":0}'),
-    /at least one failed item/,
+    /invalid failure count/,
   );
 });
 
@@ -59,7 +59,7 @@ test("Health Center cleanup parser ignores comments and unknown event names", ()
 test("Health Center only clears selected actions after a successful completion event", () => {
   const page = readFileSync(new URL("../../pages/health.tsx", import.meta.url), "utf8");
   assert.match(page, /parseHealthCleanupEvent/);
-  assert.match(page, /if \(!completed\) throw/);
+  assert.match(page, /if \(!completed \|\| !completion\) throw/);
   assert.ok(page.indexOf("if (!completed || !completion) throw") < page.indexOf("setSelected([])"));
   assert.match(page, /if \(completion\.ok\) \{/);
   assert.match(page, /else if \(completion\.partial\)/);
