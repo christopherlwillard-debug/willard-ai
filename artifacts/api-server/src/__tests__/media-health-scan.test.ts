@@ -161,7 +161,8 @@ test("Health Center cleanup progress counts only selected work and excludes skip
   assert.match(cleanupRoute, /thumbnailTargets\.length/);
   assert.match(cleanupRoute, /actions\.includes\("emptyFolders"\) \? emptyFolderTargets\.length : 0/);
   assert.match(cleanupRoute, /emptyFolderTargets = inspected\.emptyFolders\.filter/);
-  assert.match(cleanupRoute, /total \+= cleaned\.staleCropsRemoved \+ cleaned\.cropErrors\.length/);
+  assert.match(cleanupRoute, /cleaned\.orphanRows - inspected\.report\.issues\.brokenMetadataReferences/);
+  assert.match(cleanupRoute, /cleaned\.staleCropsRemoved \+ cleaned\.cropErrors\.length/);
   assert.doesNotMatch(cleanupRoute, /const total = Math\.max\(1, inspected\.missing\.length \+ inspected\.orphanThumbs\.length \+ inspected\.missingThumbs\.length \+ inspected\.emptyFolders\.length\)/);
 });
 
