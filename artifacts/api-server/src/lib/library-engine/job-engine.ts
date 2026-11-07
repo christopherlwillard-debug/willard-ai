@@ -25,7 +25,7 @@ import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import {
-  getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
+  clearThumbnailCache, getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
   findReusableThumbnailPaths, THUMBNAIL_REUSE_PROBE_MAX_FILES,
   getThumbnailCacheStats, cleanStaleThumbnailPartials, enforceThumbnailCacheQuota,
 } from "../thumbnail-engine.ts";
@@ -863,6 +863,8 @@ export interface StartJobOptions {
   profile:  JobProfile;
   nasPath:  string;
   rootPath?: string;
+  /** Clear existing thumbnail derivatives only after a full thumbnail job is durably claimed. */
+  rebuildThumbnails?: boolean;
 }
 
 export async function startJob(opts: StartJobOptions): Promise<{
@@ -871,6 +873,9 @@ export async function startJob(opts: StartJobOptions): Promise<{
   errorCode?: "NAS_OFFLINE" | "NAS_READ_ONLY" | "CAPACITY_UNSAFE";
   errorMessage?: string;
 }> {
+  if (opts.rebuildThumbnails && opts.jobType !== "THUMBNAILS") {
+    throw new Error("Only thumbnail jobs can request a full cache rebuild");
+  }
   if (isShuttingDown()) {
     throw new Error("Server is shutting down");
   }
@@ -1058,7 +1063,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
 
   // Run async without blocking the response
   if (opts.jobType === "THUMBNAILS") {
-    startJobRun(job.id, runThumbnailJob(state), reservation);
+    startJobRun(job.id, runThumbnailJob(state, opts.rebuildThumbnails === true), reservation);
   } else if (opts.jobType === "METADATA") {
     startJobRun(job.id, runMetadataRefreshJob(state), reservation);
   } else {
@@ -2835,7 +2840,7 @@ export async function reconcileThumbnailPointers(
   };
 }
 
-async function runThumbnailJob(state: ActiveJobState): Promise<void> {
+async function runThumbnailJob(state: ActiveJobState, rebuild = false): Promise<void> {
   const jobId   = state.id;
   const nasPath = state.nasPath;
 
@@ -2851,6 +2856,16 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         initialReach.message,
       );
       return;
+    }
+
+    if (rebuild) {
+      // The durable RUNNING claim and NAS write check must succeed before any
+      // existing derivative is invalidated. Ordinary backfill jobs never clear the cache.
+      clearThumbnailCache(nasPath);
+      await db.update(mediaFilesTable).set({
+        thumbnailPath: null,
+        thumbnailGeneratedAt: null,
+      }).where(eq(mediaFilesTable.nasPath, nasPath));
     }
 
     // Read thumbnail quality setting
