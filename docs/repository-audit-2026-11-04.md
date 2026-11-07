@@ -4046,3 +4046,88 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 - **Commits:** worker/option 1925ff07200d95570be0f0a4d733dafd11aac6a3; route 2bb96ce45c14cb8d8c42a868ae08c0322e7ea0dc; regression d92b9bb0fbf3465ce6ccac5552a47bb5d2d951ea; Settings feedback 38cbb0a184e0381dff93f90a4aacebe252fdc0aa.
 - **Validation:** the parent Fast Validation [#42361470271](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361470271) passed both Linux validation and Windows archive/updater smoke on exact pre-fix head  b64c9b3c93ab03fa779d760b2e22f0a5f16a5f30; Dependency Review [#42361470279](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361470279) passed its production advisory gate. New Fast Validation [#42365415423](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42365415423) and Dependency Review [#42365415439](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42365415439) were queued on the updated code/test/UI head when this entry was written. No successful result is inferred from the parent run.
 - **Remaining risk:** clearThumbnailCache() is an existing best-effort helper that suppresses individual unlink failures; a full rebuild may therefore reuse a valid derivative that could not be removed. The separate explicit DELETE /api/library/thumbnails/cache action still performs an immediate cache clear and pointer reset outside a durable worker claim; its coordination with an already-running thumbnail worker needs a separate concurrency-safe design. The cache and database pointer reset also cannot be one cross-resource transaction. No production library, database, credentials, or media were touched.
+
+
+## November 7 — Thumbnail cache/catalog consistency and Health Center repair coverage
+
+### Fixed — P1/P2: thumbnail file publication and catalog pointer updates were not one serialized operation
+
+**Affected workflows:** on-demand media thumbnail generation, the durable THUMBNAILS worker, Health Center missing-thumbnail repair, and full cache clearing.
+
+**Evidence/root cause:** generateThumbnail held a per-destination lock while writing/publishing the WebP, but released it before callers updated media_files.thumbnail_path. The clear-only thumbnail job also uses that per-file lock before unlinking. A clear could therefore wait for publication, unlink the file, and then have a late caller commit a pointer to the deleted path. The old Health Center caller did not persist the canonical thumbnail pointer at all.
+
+**Fix:** generateThumbnail now accepts an asynchronous onReady callback and holds the same destination lock through the callback for both newly generated and reused thumbnails. The on-demand media route, background thumbnail worker, and Health Center repair path all persist the canonical path and generation timestamp inside that callback. The existing clear-only job and publisher continue to share the same lock; no second lock or queue was added.
+
+**Regression coverage:** added deterministic tests for new and reused thumbnails where cache clearing starts while the callback is blocked. Added a source contract requiring all three production callers to persist pointers inside the callback.
+
+**Status:** fixed; target-tested.
+- Code commits: fd97c977a7880b3aca997f7d38f2aed11da8b34e (publisher callback and generated API sync), 8f87fb7fff2af79410348ccc8926cfb878582ddb (test syntax/extension normalization correction), 9ffa31c1180227e9f78ce447b5bc9a102c852046 (Health Center caller).
+- Fast Validation [#42372236195](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372236195) passed both Linux and Windows jobs on exact code head 8f87fb7fff2af79410348ccc8926cfb878582ddb. Linux typecheck/generated contracts and targeted backend regressions passed: **400 total, 398 passed, 0 failed, 2 skipped**. Windows archive/updater smoke passed.
+- Fast Validation [#42372316367](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372316367) passed both jobs on exact code head 9ffa31c1180227e9f78ce447b5bc9a102c852046. Linux targeted regressions again passed **400 total, 398 passed, 0 failed, 2 skipped**; Windows archive/updater smoke passed.
+- The latest combined validation is Fast Validation [#42372668667](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372668667) on exact code head cc2023a40994980af9fbb625d57edafdbfa077e1: Linux passed **402 total, 400 passed, 0 failed, 2 skipped**, including both orphan-cleanup regressions and the thumbnail pointer contract. The Windows archive/updater smoke job was still running at the developer-updater preservation/rollback step when this entry was written; do not claim the complete run passed until that job finishes.
+- Dependency Review [#42372668753](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372668753) passed on exact head cc2023a40994980af9fbb625d57edafdbfa077e1; the production advisory gate passed and the separate installed dependency-graph audit was skipped.
+
+**Remaining risk:** the thumbnail quota/status path still uses synchronous directory/stat helpers in places; those remain part of the broader NAS event-loop review.
+
+### Fixed — P2: Health Center orphan-thumbnail cleanup bypassed publisher ownership
+
+**Affected workflow:** Health Center → Remove orphaned thumbnails.
+
+**Evidence/root cause:** the cleanup loop used unlinkSync directly on paths from an earlier inventory. It bypassed the thumbnail engine's per-file publisher lock and did not recheck whether the media row had become active since inspection. It could race a publisher or act on a stale orphan decision.
+
+**Fix:** added removeOrphanedThumbnail, which accepts only canonical numeric .webp files directly inside the verified thumbnail directory, acquires the same per-file lock as publishers, rechecks the active media row after acquiring the lock, verifies regular-file type and file identity, then unlinks asynchronously. Health Center now uses this helper and skips files that changed or are no longer orphaned.
+
+**Regression coverage:** added tests proving orphan cleanup waits for a publisher callback and rechecks catalog membership, deletes only a regular canonical file still confirmed orphaned, and rejects a path outside the thumbnail directory. The route contract prevents reintroduction of direct unlinkSync for these cache entries.
+
+**Status:** fixed; target-tested on Linux in Fast Validation #42372668667 (402 total, 400 passed, 0 failed, 2 skipped). The Windows smoke job for that run was still in progress at report time.
+- Commit: f4138f3fd50839956c449869f5d861a072c85621.
+- Remaining risk: the overall Health Center inventory/traversal is still synchronous and request-bound; this fix fences only the per-thumbnail deletion.
+
+### Fixed — P2: Health Center omitted PDF thumbnails
+
+**Affected workflow:** Health Center → Regenerate missing thumbnails / Full thumbnail rebuild.
+
+**Evidence/root cause:** HealthRow did not select the media extension, and both eligibility filters included only photos and videos. The normal thumbnail engine and durable library route support PDFs, so Health Center could report a completed repair while leaving PDF thumbnails untouched.
+
+**Fix:** select the extension and include pdf in both missing-thumbnail inventory and full-rebuild eligibility.
+
+**Status:** fixed; target-tested on Linux in Fast Validation #42372668667 (402 total, 400 passed, 0 failed, 2 skipped).
+- Commit: cc2023a40994980af9fbb625d57edafdbfa077e1.
+- Remaining risk: Health Center still performs the thumbnail loops inside its SSE request instead of handing the whole operation to a restart-aware durable worker.
+
+### Fixed — generated API contract drift after the thumbnail clear endpoint became a queued job
+
+**Affected workflow:** API client/Zod generation and Fast Validation's generated-contract gate.
+
+**Evidence/root cause:** OpenAPI changed the DELETE thumbnail-cache operation summary to “Queue thumbnail cache clearing”, but the generated React API client and Zod artifacts were not updated. Fast Validation #42371526828 (run #1392, head 6fb2a6692afd329ff91c68bd237920c18a42bbaa) failed at the generated-artifact diff check before API-server typecheck.
+
+**Fix:** synchronized the two generated outputs from the current OpenAPI contract in commit fd97c977a7880b3aca997f7d38f2aed11da8b34e. Fast Validation #42372236195 subsequently passed generated-contract validation on exact head 8f87fb7fff2af79410348ccc8926cfb878582ddb.
+
+**Validation process correction:** Fast Validation #42372158347 (run #1393, head fd97c977a7880b3aca997f7d38f2aed11da8b34e) then exposed over-escaped test regexes and a misplaced test-suite closing delimiter introduced in the first callback-test draft. These were corrected in 8f87fb7fff2af79410348ccc8926cfb878582ddb; #1394 passed both jobs. Fast Validation #42372553086 (run #1396) was superseded while pending by a newer branch push; it was not a test failure.
+
+### Newly prioritized Health Center follow-ups — found, not yet fixed
+
+1. **P2 — thumbnail regeneration errors are swallowed and the route still reports ok=true.** The per-item catch in media-health.ts currently treats failed generation as progress and the final cleanup row/SSE completion can still be marked successful. Add an explicit failure count, persist partial-failure status, and report it through the named SSE done event so the UI retains selections and explains what failed.
+2. **P2 — metadata worker handoff is hidden by the frontend.** The server includes metadataJobId in the completion payload, but health-cleanup-events.ts drops it and the Health Center page replaces the progress message with generic “Cleanup completed.” Preserve the job ID in the parsed event and tell the user that the metadata job is still running.
+3. **P1 — Health Center thumbnail actions are still request-bound.** Missing-thumbnail and full-rebuild loops call the generator from the SSE route rather than the durable library worker. The HEALTH_CLEANUP row is marked failed on restart by generic recovery; it is not resumed from a durable checkpoint. A safe correction needs one server-owned, checkpointed Health Center worker or a supported sequential job orchestration plan. SSE must remain an observer, not the owner. Do not start multiple incompatible library jobs at once or claim completion before each accepted worker job is durable.
+
+### Conversion worker fencing — current source inspection, design remains blocked
+
+**Evidence:** conversion-job-lock.ts holds a PostgreSQL advisory lock through a dedicated client but does not attach a lock-connection error/end handler that aborts the current attempt. runMediaToolAsync supports bounded timeout and shutdown ownership but no per-attempt AbortSignal; trackConversionRequest is not a job-attempt fence. This confirms the earlier finding that losing the lock connection does not itself stop the running child or fence subsequent staging writes.
+
+**Safe plan:** add a persisted per-attempt UUID and unique attempt staging directory; monitor the advisory-lock client and abort the attempt on connection loss; thread an attempt-scoped AbortSignal through all media-tool and conversion phases; recheck attempt ownership before every staging/finalization mutation; require the current attempt token for final publication; and add fault-injection tests for lock loss, late child exit, retry overlap, and stale finalization. Do not add a token-only workaround without process cancellation and isolated staging.
+
+**Status:** found; blocked pending the complete attempt-fencing design.
+
+### Archive and installer status carried forward
+
+- Archive source inspection confirms the existing path/link rejection, archive snapshot verification, atomic no-replace ZIP output, bounded TAR input, official 7-Zip compatibility, and symlink-metadata tests. The broader request-path synchronous extraction/tree-inspection work and explicit durable user cancellation for server-owned Organize extraction remain open.
+- Windows prepared-phase recovery remains **P1, blocked**. The last installed-product lifecycle failure remains run [#42353036558](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353036558): after the install directory was moved to its backup, the launcher path under the original directory was missing. A stable bootstrap outside the replaceable install tree is still required. The safe lifecycle workflow supports manual dispatch, but no workflow-dispatch action is available through the current GitHub connector; it was not triggered by creating an artificial installer change.
+- Full CI has not been run. The release workflow was not run because it can publish/sign releases. Fast Validation and Dependency Review are not a substitute for full CI or installed-product lifecycle validation.
+
+### Branch/PR snapshot for this batch
+
+- Code head before this ledger update: cc2023a40994980af9fbb625d57edafdbfa077e1.
+- PR #2 remains open, draft, unmerged; base main remains 694a055aeb10a41ee8e98f5b776faef89cbd449d.
+- Comparison at this snapshot: 1,471 commits ahead, 1 behind; PR diff 200 files, 25,224 additions, 3,163 deletions.
+- No branch switch, main modification, merge, deployment, release publication, credential access/change, or production data mutation occurred.
