@@ -599,7 +599,7 @@ export async function generateThumbnail(
     try { fs.rmSync(destPath, { force: true }); } catch { /* regenerate below */ }
 
     const preset = qualityPreset(quality);
-    const ext = extension.toLowerCase().replace(/^\\./, "");
+    const ext = extension.toLowerCase().replace(/^\./, "");
     let error: string | null = null;
 
     if (IMAGE_EXTS.has(ext)) {
