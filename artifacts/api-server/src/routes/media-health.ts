@@ -184,10 +184,12 @@ router.post("/media/cleanup", async (req, res) => {
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  const [job] = await db.insert(libraryJobsTable).values({
-    jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
-  }).returning({ id: libraryJobsTable.id });
+  let jobId: number | null = null;
   try {
+    const [job] = await db.insert(libraryJobsTable).values({
+      jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
+    }).returning({ id: libraryJobsTable.id });
+    jobId = job.id;
     const inspected = await inspectLibrary(nasPath);
     let done = 0;
     const total = Math.max(1, inspected.missing.length + inspected.orphanThumbs.length + inspected.missingThumbs.length + inspected.emptyFolders.length);
@@ -246,7 +248,11 @@ router.post("/media/cleanup", async (req, res) => {
     }).where(eq(libraryJobsTable.id, job.id));
     send("done", { ok: true, processed: done, total });
   } catch (error) {
-    await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, job.id));
+    if (jobId !== null) {
+      try {
+        await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, jobId));
+      } catch { /* Preserve the original cleanup failure for the connected client. */ }
+    }
     send("error", { message: "Cleanup failed safely; original media was not removed." });
   } finally { return res.end(); }
 });

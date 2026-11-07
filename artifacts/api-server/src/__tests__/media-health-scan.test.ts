@@ -51,3 +51,14 @@ test("media health checks library reachability and uses fail-closed missing-file
   assert.ok(walkerStart >= 0 && walkerEnd > walkerStart);
   assert.doesNotMatch(walker, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
 });
+
+test("health cleanup reports durable job creation failures through its SSE error boundary", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+  const guardedStart = cleanupRoute.indexOf("try {");
+  const jobInsert = cleanupRoute.indexOf("await db.insert(libraryJobsTable)");
+  assert.ok(guardedStart >= 0 && jobInsert > guardedStart);
+  assert.match(cleanupRoute, /let jobId: number \| null = null/);
+  assert.match(cleanupRoute, /if \(jobId !== null\)/);
+});

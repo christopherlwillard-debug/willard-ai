@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
+import { parseHealthCleanupEvent } from "@/lib/health-cleanup-events";
 
 type Report = {
   checkedAt: string;
@@ -71,18 +72,34 @@ export default function Health() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let completed = false;
+      const handleEvent = (block: string) => {
+        const event = parseHealthCleanupEvent(block);
+        if (!event) return;
+        if (event.type === "progress") {
+          setProgress({ processed: event.processed, total: event.total, message: event.message });
+          return;
+        }
+        if (event.type === "error") throw new Error(event.message);
+        if (!event.ok) throw new Error("Cleanup did not complete successfully.");
+        completed = true;
+        setProgress({
+          processed: event.processed ?? 0,
+          total: event.total ?? 1,
+          message: "Cleanup completed.",
+        });
+      };
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n"); buffer = events.pop() ?? "";
-        for (const event of events) {
-          const data = event.match(/^data: (.+)$/m)?.[1];
-          if (!data) continue;
-          const parsed = JSON.parse(data) as { processed?: number; total?: number; message?: string };
-          if (parsed.message) setProgress({ processed: parsed.processed ?? 0, total: parsed.total ?? 1, message: parsed.message });
-        }
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+        for (const event of events) handleEvent(event);
       }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleEvent(buffer);
+      if (!completed) throw new Error("Cleanup ended before the server confirmed completion.");
       setSelected([]);
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Cleanup failed"); }
