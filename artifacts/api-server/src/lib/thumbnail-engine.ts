@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+
 import { getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
-import { formatMediaToolError } from "./media-tools.ts";
+import { formatMediaToolExecutionError, runMediaToolAsync } from "./media-tools.ts";
 import { StoragePolicyError } from "./storage-policy.ts";
 
 // ── Quality presets ────────────────────────────────────────────────────────────
@@ -108,7 +108,6 @@ export function findReusableThumbnailPaths(
 // A tiny valid WebP can be smaller than 100 bytes, so use the minimum size
 // needed for a RIFF/WebP header and validate the declared RIFF length too.
 const MIN_VALID_THUMBNAIL_BYTES = 32;
-const THUMBNAIL_LOCK_STALE_MS = 2 * 60_000;
 /** A backfill is intentionally bounded; on-demand requests remain lazy. */
 export const THUMBNAIL_CACHE_MAX_BYTES = 1 * 1024 * 1024 * 1024;
 const INCOMPLETE_FILE_RETENTION_MS = 15 * 60_000;
@@ -156,10 +155,10 @@ async function acquireThumbnailLock(destPath: string): Promise<() => void> {
         break;
       } catch (err: any) {
         if (err?.code !== "EEXIST") throw err;
-        try {
-          const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
-          if (ageMs > THUMBNAIL_LOCK_STALE_MS) fs.unlinkSync(lockPath);
-        } catch { /* another process may be replacing/removing the lock */ }
+        // Never steal a lock based only on age: thumbnail generation can
+        // legitimately exceed two minutes on slow disks or large media. A
+        // stale lock may require operator cleanup after a crash, but deleting
+        // it here could let two processes publish the same derivative.
         await sleep(50);
       }
     }
@@ -239,69 +238,52 @@ const VIDEO_EXTS = new Set([
   "ts", "mts", "m2ts", "mpeg", "mpg",
 ]);
 
-function generateVideoThumbnail(
+async function generateVideoThumbnail(
   sourcePath: string,
   destPath: string,
   sizePx: number,
-): string | null {
+): Promise<string | null> {
   const tmpPng = destPath.replace(/\.webp$/, ".frame.png");
   try {
-    const result = spawnSync("ffmpeg", [
+    await runMediaToolAsync("ffmpeg", [
+      "-nostdin", "-v", "error",
       "-y",
       "-ss", "00:00:01",
       "-i", sourcePath,
       "-frames:v", "1",
       "-vf", `scale=${sizePx}:-2`,
       tmpPng,
-    ], { encoding: "buffer", timeout: 30000 });
+    ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
 
-    if (result.status !== 0 || !fs.existsSync(tmpPng)) {
-      return formatMediaToolError("ffmpeg", result);
-    }
-
-    return generateImageThumbnailSync(tmpPng, destPath, sizePx);
+    if (!fs.existsSync(tmpPng)) return "ffmpeg did not produce a video frame";
+    return await generateImageThumbnailFfmpeg(tmpPng, destPath, sizePx);
+  } catch (error) {
+    return formatMediaToolExecutionError("ffmpeg", error, 30_000);
   } finally {
     try { fs.rmSync(tmpPng, { force: true }); } catch { /* best effort */ }
   }
 }
 
-function generateImageThumbnailSync(
-  sourcePath: string,
-  destPath: string,
-  sizePx: number,
-): string | null {
-  const result = spawnSync("ffmpeg", [
-    "-y",
-    "-i", sourcePath,
-    "-vf", `scale=${sizePx}:-2`,
-    "-frames:v", "1",
-    destPath,
-  ], { encoding: "buffer", timeout: 15000 });
-  try { fs.rmSync(sourcePath); } catch { /* ignore */ }
-  if (result.status !== 0) {
-    return formatMediaToolError("ffmpeg", result);
-  }
-  return null;
-}
-
 // ── PDF thumbnail via ffmpeg ───────────────────────────────────────────────────
 
-function generatePdfThumbnail(
+async function generatePdfThumbnail(
   sourcePath: string,
   destPath: string,
   sizePx: number,
-): string | null {
-  const result = spawnSync("ffmpeg", [
-    "-y",
-    "-i", sourcePath,
-    "-frames:v", "1",
-    "-vf", `scale=${sizePx}:-2`,
-    destPath,
-  ], { encoding: "buffer", timeout: 30000 });
-  if (result.status !== 0) {
-    return formatMediaToolError("ffmpeg", result);
+): Promise<string | null> {
+  try {
+    await runMediaToolAsync("ffmpeg", [
+      "-nostdin", "-v", "error",
+      "-y",
+      "-i", sourcePath,
+      "-frames:v", "1",
+      "-vf", `scale=${sizePx}:-2`,
+      destPath,
+    ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
+    return fs.existsSync(destPath) ? null : "ffmpeg did not produce a PDF thumbnail";
+  } catch (error) {
+    return formatMediaToolExecutionError("ffmpeg", error, 30_000);
   }
-  return null;
 }
 
 // ── FFmpeg image-to-thumbnail fallback ────────────────────────────────────────
@@ -309,23 +291,24 @@ function generatePdfThumbnail(
 // a native binding issue on the user's platform). ffmpeg handles far more image
 // formats and doesn't rely on platform-specific native add-ons.
 
-function generateImageThumbnailFfmpeg(
+async function generateImageThumbnailFfmpeg(
   sourcePath: string,
   destPath: string,
   sizePx: number,
-): string | null {
-  const result = spawnSync("ffmpeg", [
-    "-y",
-    "-i", sourcePath,
-    "-vf", `scale=${sizePx}:-2`,
-    "-frames:v", "1",
-    destPath,
-  ], { encoding: "buffer", timeout: 30000 });
-  if (result.status !== 0 || !fs.existsSync(destPath)) {
-    const stderr = result.stderr ? Buffer.from(result.stderr).toString("utf8").slice(0, 200) : "";
-    return `ffmpeg image conversion failed (exit ${result.status}): ${stderr}`;
+): Promise<string | null> {
+  try {
+    await runMediaToolAsync("ffmpeg", [
+      "-nostdin", "-v", "error",
+      "-y",
+      "-i", sourcePath,
+      "-vf", `scale=${sizePx}:-2`,
+      "-frames:v", "1",
+      destPath,
+    ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
+    return fs.existsSync(destPath) ? null : "ffmpeg did not produce an image thumbnail";
+  } catch (error) {
+    return formatMediaToolExecutionError("ffmpeg", error, 30_000);
   }
-  return null;
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -497,14 +480,14 @@ export async function generateThumbnail(
       // AVIF, or another platform binding issue), try ffmpeg.
       if (error) {
         const sharpError = error;
-        const ffmpegError = generateImageThumbnailFfmpeg(sourcePath, tempPath, preset.sizePx);
+        const ffmpegError = await generateImageThumbnailFfmpeg(sourcePath, tempPath, preset.sizePx);
         if (!ffmpegError && isThumbnailFileValid(tempPath)) error = null;
         if (error) error = `sharp: ${sharpError}; ffmpeg: ${ffmpegError ?? "unknown"}`;
       }
     } else if (VIDEO_EXTS.has(ext)) {
-      error = generateVideoThumbnail(sourcePath, tempPath, preset.sizePx);
+      error = await generateVideoThumbnail(sourcePath, tempPath, preset.sizePx);
     } else if (ext === "pdf") {
-      error = generatePdfThumbnail(sourcePath, tempPath, preset.sizePx);
+      error = await generatePdfThumbnail(sourcePath, tempPath, preset.sizePx);
     } else {
       error = `Unsupported extension: ${ext}`;
     }
@@ -533,6 +516,10 @@ export function clearThumbnailCache(nasPath: string): number {
   let deleted = 0;
   try {
     for (const file of fs.readdirSync(dir)) {
+      // Do not unlink a worker's inter-process lock or in-flight output.
+      // Removing a live lock would allow another process to acquire the same
+      // destination and publish concurrently.
+      if (isIncompleteThumbnailName(file)) continue;
       try {
         fs.rmSync(path.join(dir, file));
         deleted++;

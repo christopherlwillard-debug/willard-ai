@@ -236,6 +236,7 @@ export default function Archives() {
             <SelectItem value="all">All Categories</SelectItem>
             <SelectItem value="Photo Archive">Photo Archive</SelectItem>
             <SelectItem value="Video Archive">Video Archive</SelectItem>
+            <SelectItem value="Audio Archive">Audio Archive</SelectItem>
             <SelectItem value="Document Backup">Document Backup</SelectItem>
             <SelectItem value="Software">Software</SelectItem>
             <SelectItem value="Nested Archives">Nested Archives</SelectItem>

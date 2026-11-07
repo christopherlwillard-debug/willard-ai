@@ -174,14 +174,25 @@ export async function validateRelease() {
     throw error;
   }
 
-  const sharpPackage = path.join(releaseDir, "api-runtime", "node_modules", "sharp", "package.json");
+  const sourceSharpPackage = path.join(root, "artifacts", "api-server", "node_modules", "sharp", "package.json");
+  const packagedSharpPackage = path.join(releaseDir, "api-runtime", "node_modules", "sharp", "package.json");
   try {
-    const sharpManifest = JSON.parse(await readFile(sharpPackage, "utf8"));
-    if (sharpManifest.version !== "0.35.2") {
-      throw new Error(`Packaged sharp must be 0.35.2, found ${sharpManifest.version || "unknown"}.`);
+    const [sourceSharpManifest, packagedSharpManifest] = await Promise.all([
+      readFile(sourceSharpPackage, "utf8").then(JSON.parse),
+      readFile(packagedSharpPackage, "utf8").then(JSON.parse),
+    ]);
+    if (!sourceSharpManifest.version) {
+      throw new Error("The resolved API runtime sharp dependency has no package version.");
+    }
+    if (packagedSharpManifest.version !== sourceSharpManifest.version) {
+      throw new Error(
+        `Packaged sharp must match the resolved API runtime version ${sourceSharpManifest.version}, found ${packagedSharpManifest.version || "unknown"}.`,
+      );
     }
   } catch (error) {
-    if (error?.code === "ENOENT") throw new Error("Packaged sharp dependency is missing.");
+    if (error?.code === "ENOENT") {
+      throw new Error("The resolved or packaged sharp dependency is missing.");
+    }
     throw error;
   }
 

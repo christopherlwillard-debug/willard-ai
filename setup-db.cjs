@@ -139,7 +139,7 @@ const OPTIONAL_SQL = [
 // Increment this when a new ordered schema step is added. The history table
 // makes the bootstrap contract inspectable without relying on a local marker
 // file, while every step remains idempotent for existing installations.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS willard_schema_versions (
@@ -171,6 +171,13 @@ const SETUP_SQL = [
     CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
   ) WITH (OIDS=FALSE)`,
   `CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")`,
+
+  // Durable revocation tombstones prevent late connect-pg-simple upserts from
+  // restoring a session after logout or device/session revocation.
+  `CREATE TABLE IF NOT EXISTS revoked_sessions (
+    sid        varchar PRIMARY KEY,
+    revoked_at timestamp NOT NULL DEFAULT now()
+  )`,
 
   // app_settings (single-row settings + auth)
   `CREATE TABLE IF NOT EXISTS app_settings (
@@ -268,6 +275,7 @@ const SETUP_SQL = [
   )`,
 
   `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS nas_path text`,
+  `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS lease_token text`,
 
   // conversion_jobs
   `CREATE TABLE IF NOT EXISTS conversion_jobs (

@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
-import { closePool, conversionJobsTable, db, organizationJobsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { closePool } from "@workspace/db";
 import { stopAiEnrichment } from "./ai-enrichment.ts";
 import { stopFaceRecognition } from "./face-recognition.ts";
 import { stopLibraryJobs } from "./library-engine/index.ts";
@@ -10,6 +9,7 @@ import { stopLibraryWatcher } from "./library-watcher.ts";
 import { stopThumbnailReconciliation } from "./library-engine/index.ts";
 import { logger } from "./logger.ts";
 import { markShuttingDown } from "./shutdown-state.ts";
+import { stopActiveConversionJobs } from "./conversion-runtime.ts";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -54,23 +54,6 @@ function closeHttpServer(server: Server | null): Promise<void> {
   });
 }
 
-async function checkpointExternalJobs(): Promise<void> {
-  const now = new Date();
-  const conversion = await db.update(conversionJobsTable)
-    .set({ cancelledAt: now })
-    .where(eq(conversionJobsTable.status, "running"));
-  const organize = await db.update(organizationJobsTable)
-    .set({
-      status: "failed",
-      error: "Interrupted by server shutdown — partial work is recoverable",
-      stageUpdatedAt: now,
-    })
-    .where(eq(organizationJobsTable.status, "executing"));
-  logger.info({
-    conversionJobs: conversion.rowCount ?? 0,
-    organizeJobs: organize.rowCount ?? 0,
-  }, "Checkpointed external jobs for shutdown");
-}
 
 export interface ShutdownDependencies {
   stopLibraryMonitor: () => Promise<void>;
@@ -80,7 +63,7 @@ export interface ShutdownDependencies {
   stopFaceRecognition: () => Promise<void>;
   stopThumbnailReconciliation: () => Promise<void>;
   stopLibraryJobs: () => Promise<void>;
-  checkpointExternalJobs: () => Promise<void>;
+  stopActiveConversionJobs: () => Promise<void>;
   closeHttpServer: (server: Server | null) => Promise<void>;
   closePool: () => Promise<void>;
 }
@@ -93,7 +76,7 @@ const defaultShutdownDependencies: ShutdownDependencies = {
   stopFaceRecognition,
   stopThumbnailReconciliation,
   stopLibraryJobs,
-  checkpointExternalJobs,
+  stopActiveConversionJobs,
   closeHttpServer,
   closePool,
 };
@@ -119,14 +102,12 @@ export function createShutdownCoordinator(
         bounded("AI enrichment", dependencies.stopAiEnrichment(), timeoutMs),
         bounded("face recognition", dependencies.stopFaceRecognition(), timeoutMs),
         bounded("thumbnail reconciliation", dependencies.stopThumbnailReconciliation(), timeoutMs),
+        bounded("conversion jobs", dependencies.stopActiveConversionJobs(), timeoutMs),
       ]);
 
-      // These writes must happen before the pool is closed. Library scans retain
-      // their durable pause checkpoint; derived jobs receive a terminal signal.
-      await bounded("job checkpoint", Promise.all([
-        dependencies.checkpointExternalJobs(),
-        dependencies.stopLibraryJobs(),
-      ]).then(() => undefined), timeoutMs);
+      // Library scans persist their pause checkpoint. Organization jobs use
+      // database leases and are left untouched so another instance can keep running them.
+      await bounded("library job checkpoint", dependencies.stopLibraryJobs(), timeoutMs);
 
       // Stop accepting requests and allow active requests, including SSE, to drain.
       await bounded("HTTP drain", dependencies.closeHttpServer(server), timeoutMs);

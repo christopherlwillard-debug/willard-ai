@@ -35,6 +35,16 @@ test("media listing validates scalar filters and escapes literal folder/search p
   assert.doesNotMatch(route, /req\.query\["(?:mediaType|favorites|folder|search|sort)"\]\s+as\s+string/);
 });
 
+test("legacy file search validates scalar filters and escapes literal filename wildcards", () => {
+  const route = readFileSync(new URL("../routes/files.ts", import.meta.url), "utf8");
+  assert.ok(route.includes('import { escapeLikePattern } from "../lib/sql-like.ts";'));
+  assert.ok(route.includes("escapeLikePattern(q)"));
+  assert.match(route, /ILIKE.*ESCAPE E'/);
+  for (const field of ["q", "fileType", "source", "after", "before"]) {
+    assert.ok(route.includes('parseOptionalQueryString(req.query["' + field + '"], "' + field + '")'), field);
+  }
+});
+
 test("Explorer rejects repeated path parameters before resolving filesystem paths", () => {
   const route = readFileSync(new URL("../routes/explorer.ts", import.meta.url), "utf8");
   assert.ok(route.includes('parseOptionalQueryString(req.query.path, "path")'));
@@ -55,19 +65,25 @@ test("PostgreSQL LIKE filters match wildcard characters literally", { skip: !dat
     const result = await pool.query(
       "SELECT $1::text LIKE $2::text ESCAPE E'\\\\' AS search_matches, " +
         "$3::text LIKE $4::text ESCAPE E'\\\\' AS folder_matches, " +
-        "$5::text LIKE $2::text ESCAPE E'\\\\' AS wildcard_non_match",
+        "$5::text LIKE $2::text ESCAPE E'\\\\' AS wildcard_non_match, " +
+        "$6::text ILIKE $2::text ESCAPE E'\\\\' AS ilike_literal_match, " +
+        "$7::text ILIKE $2::text ESCAPE E'\\\\' AS ilike_wildcard_non_match",
       [
         "family_100%\\photos_2026.jpg",
         searchPattern,
         "albums_100%\\family/child/photo.jpg",
         folderPattern,
         "familyX100Yphotos_2026.jpg",
+        "FAMILY_100%\\PHOTOS_2026.JPG",
+        "FAMILYX100YPHOTOS_2026.JPG",
       ],
     );
     assert.deepEqual(result.rows[0], {
       search_matches: true,
       folder_matches: true,
       wildcard_non_match: false,
+      ilike_literal_match: true,
+      ilike_wildcard_non_match: false,
     });
   } finally {
     await pool.end();

@@ -1,9 +1,12 @@
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import {
   buildNoResultSuggestions,
+  buildSuggestionPattern,
   buildSearchQuery,
   emptyIntent,
+  localSearchClearFilters,
   mergeRefinedIntent,
   scoreRow,
   type RawRow,
@@ -34,6 +37,52 @@ test("refinement preserves prior media types while adding new constraints", () =
   assert.deepEqual(merged.mediaTypes, ["image"]);
   assert.equal(merged.dateFrom, "2025-06-01");
   assert.deepEqual(merged.objects, ["waterfall"]);
+});
+
+test("refinement suggestions can remove inherited filters instead of only adding constraints", () => {
+  const previous = intent({
+    semanticQuery: "vacation photos",
+    keywords: ["vacation", "photos"],
+    mediaTypes: ["image"],
+    dateFrom: "2025-06-01",
+    dateTo: "2025-09-01",
+    objects: ["truck", "waterfall"],
+    exclude: ["screenshots", "watermarks"],
+    favoriteOnly: true,
+    location: "Seattle",
+  });
+  const cleared = mergeRefinedIntent(previous, emptyIntent(), {
+    semanticQuery: true,
+    keywords: true,
+    mediaTypes: true,
+    dateRange: true,
+    objects: true,
+    exclude: ["screenshots"],
+    favoriteOnly: true,
+    location: true,
+  });
+  assert.equal(cleared.semanticQuery, null);
+  assert.deepEqual(cleared.keywords, []);
+  assert.deepEqual(cleared.mediaTypes, []);
+  assert.equal(cleared.dateFrom, null);
+  assert.equal(cleared.dateTo, null);
+  assert.deepEqual(cleared.objects, []);
+  assert.deepEqual(cleared.exclude, ["watermarks"]);
+  assert.equal(cleared.favoriteOnly, false);
+  assert.equal(cleared.location, null);
+});
+
+test("local-only search recognizes the built-in no-result clear-filter suggestions", () => {
+  assert.deepEqual(localSearchClearFilters("Remove the date filter — try searching all time"), { dateRange: true });
+  assert.deepEqual(localSearchClearFilters("Search all media instead of just images"), { mediaTypes: true });
+  assert.deepEqual(localSearchClearFilters("Stop excluding \"screenshots\""), { exclude: ["screenshots"] });
+  assert.deepEqual(localSearchClearFilters("Include non-favorites too"), { favoriteOnly: true });
+  assert.deepEqual(localSearchClearFilters("Drop the location \"Seattle\" — many files have no GPS data"), { location: true });
+  assert.deepEqual(localSearchClearFilters("Try just \"truck\" on its own"), {
+    objects: true,
+    keywords: true,
+    semanticQuery: true,
+  });
 });
 
 test("search query normalizes image intent to the stored photo media type", () => {
@@ -96,4 +145,41 @@ test("no-result suggestions explain the active constraints", () => {
     "Try fewer or more general words",
     "Browse your collections instead",
   ]);
+});
+
+const aiSearchSource = await readFile(
+  new URL("../lib/ai-search.ts", import.meta.url),
+  "utf8",
+);
+
+const searchRouteSource = await readFile(
+  new URL("../routes/search.ts", import.meta.url),
+  "utf8",
+);
+
+test("local-only route applies explicit clear-filter refinements", () => {
+  assert.match(searchRouteSource, /localSearchClearFilters\(query\)/);
+  assert.match(searchRouteSource, /mergeRefinedIntent\(previous, fallback, clear\)/);
+});
+
+test("AI intent parser accepts explicit clear-filter instructions", () => {
+  assert.match(aiSearchSource, /"clearFilters"/);
+  assert.match(aiSearchSource, /mergeRefinedIntent\(previous, parsed, effectiveClear\)/);
+  assert.match(aiSearchSource, /const localClear: SearchIntentClear = previous \? localSearchClearFilters\(query\) : \{\}/);
+  assert.match(aiSearchSource, /localSearchClearFilters\(query\)/);
+});
+
+test("search suggestions treat SQL wildcard characters as literal text", () => {
+  assert.ok(aiSearchSource.includes("const like = buildSuggestionPattern(prefix);"));
+  assert.equal(
+    buildSuggestionPattern("  100%_\\Archive  "),
+    "%100\\%\\_\\\\archive%",
+  );
+  assert.match(aiSearchSource, /term LIKE \$2 ESCAPE E'\\\\\\\\'/);
+});
+test("explicit UI media and favorite filter values can clear inherited constraints", () => {
+  assert.match(searchRouteSource, /if \(Array\.isArray\(f\.mediaTypes\)\) \{\s*intent\.mediaTypes = f\.mediaTypes\.map\(String\)\.slice\(0, 6\);\s*\}/);
+  assert.match(searchRouteSource, /if \(typeof f\.favoriteOnly === "boolean"\) intent\.favoriteOnly = f\.favoriteOnly;/);
+  assert.doesNotMatch(searchRouteSource, /Array\.isArray\(f\.mediaTypes\) && f\.mediaTypes\.length/);
+  assert.doesNotMatch(searchRouteSource, /if \(f\.favoriteOnly === true\)/);
 });

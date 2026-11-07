@@ -23,11 +23,55 @@ import * as crypto from "crypto";
  */
 export async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hash   = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data",  chunk => hash.update(chunk));
-    stream.on("end",   () => resolve(hash.digest("hex")));
-    stream.on("error", reject);
+    const initial = fs.lstatSync(filePath);
+    if (initial.isSymbolicLink() || !initial.isFile()) {
+      reject(new Error("SHA-256 source must be a regular, non-symlink file"));
+      return;
+    }
+
+    const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    let stream: fs.ReadStream;
+    try {
+      // A supplied descriptor does not emit an "open" event, so validate the
+      // opened inode synchronously before handing it to the read stream.
+      const opened = fs.fstatSync(fd);
+      const current = fs.lstatSync(filePath);
+      if (
+        !opened.isFile() ||
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+        (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+      ) {
+        throw new Error("SHA-256 source changed or became a symlink while opening");
+      }
+      stream = fs.createReadStream(filePath, { fd, autoClose: true });
+    } catch (error) {
+      fs.closeSync(fd);
+      reject(error);
+      return;
+    }
+    const hash = crypto.createHash("sha256");
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy();
+      reject(error);
+    };
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(hash.digest("hex"));
+    });
+    stream.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -200,12 +244,32 @@ export function canDeleteOrganizationJob(status: string, fileMoves: unknown): bo
  * This keeps an unverified partial result out of the final destination and
  * prevents a retry from silently treating it as a completed move.
  */
+function assertRegularFileWithoutSymlink(filePath: string, label: string): void {
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Organization ${label} must be a regular file, not a symlink or special filesystem entry.`);
+  }
+}
+
+function assertDestinationIsNotSymlink(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("Organization destination is a symlink or non-regular filesystem entry.");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export async function verifiedMove(
   from: string,
   to:   string,
-  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; beforeMove?: () => Promise<void>; beforeRestore?: () => Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
 ): Promise<FileMoveRecord> {
-  // Hash before moving; an unreadable source must never be moved.
+  // Reject final-component symlinks before hashing; hashing a symlink would
+  // otherwise follow it and could read a different file than the journaled path.
+  assertRegularFileWithoutSymlink(from, "source");
   const sourceHash = await sha256File(from);
   if (opts?.expectedSourceHash && sourceHash !== opts.expectedSourceHash) {
     throw new Error(`Source changed after its recovery intent was recorded: ${path.basename(from)}`);
@@ -213,9 +277,15 @@ export async function verifiedMove(
   let destinationCreated = false;
 
   try {
+    // Re-check the fencing token after hashing, immediately before the
+    // irreversible filesystem mutation.
+    await opts?.beforeMove?.();
+    assertRegularFileWithoutSymlink(from, "source");
+    assertDestinationIsNotSymlink(to);
     // A concurrent job may have created the destination after its conflict
     // check. Never let rename semantics overwrite that independent file.
     moveFileNoReplace(from, to);
+    assertRegularFileWithoutSymlink(to, "destination");
     destinationCreated = true;
 
     // Optional hook (test-only) — e.g. corrupt destination before re-hashing.
@@ -238,7 +308,11 @@ export async function verifiedMove(
     // destination rather than deleting the only remaining copy.
     if (destinationCreated && !fs.existsSync(from) && fs.existsSync(to)) {
       try {
+        await opts?.beforeRestore?.();
+        assertRegularFileWithoutSymlink(to, "recovery destination");
+        assertDestinationIsNotSymlink(from);
         moveFileNoReplace(to, from);
+        assertRegularFileWithoutSymlink(from, "restored source");
       } catch (restoreError) {
         throw new AggregateError(
           [error, restoreError],
@@ -368,11 +442,15 @@ export async function verifiedReplace(
 export async function rollbackMoves(
   moves:  FileMoveRecord[],
   logFn?: (msg: string) => void,
+  beforeEachMove?: (move: FileMoveRecord) => Promise<void>,
 ): Promise<number> {
   const log = logFn ?? (() => {});
   let rolledBack = 0;
 
   for (const mv of [...moves].reverse()) {
+    // Lease checks must escape the per-file recovery catch. A stale worker
+    // must stop immediately rather than treating lost ownership as a file error.
+    await beforeEachMove?.(mv);
     try {
       if (mv.replacement) {
         const replacementResult = await rollbackReplacementMove(mv, log);
@@ -426,13 +504,17 @@ export async function rollbackMoves(
           ) {
             const restoredHash = await sha256File(mv.from);
             if (restoredHash === mv.sourceHash) {
+              await beforeEachMove?.(mv);
               fs.unlinkSync(mv.to);
               rolledBack++;
               log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hard-link finalized`);
               continue;
             }
           }
-        } catch { /* normal no-replace move below will preserve any conflict */ }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("lease")) throw error;
+          /* normal no-replace move below will preserve any conflict */
+        }
       }
 
       // Never hash or move a symlink/FIFO/device as though it were the
@@ -471,6 +553,7 @@ export async function rollbackMoves(
         continue;
       }
 
+      await beforeEachMove?.(mv);
       moveFileNoReplace(mv.to, mv.from);
 
       // Re-check the restored path without following links. This closes the
@@ -479,6 +562,7 @@ export async function rollbackMoves(
       const restoredStat = fs.lstatSync(mv.from);
       if (!restoredStat.isFile() || restoredStat.isSymbolicLink()) {
         try {
+          await beforeEachMove?.(mv);
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; entry returned to destination`);
         } catch (preserveError: any) {
@@ -493,6 +577,7 @@ export async function rollbackMoves(
       const restoredHash = await sha256File(mv.from);
       if (restoredHash !== mv.sourceHash) {
         try {
+          await beforeEachMove?.(mv);
           moveFileNoReplace(mv.from, mv.to);
           log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; unverified file returned to destination`);
         } catch (preserveError: any) {
@@ -504,6 +589,7 @@ export async function rollbackMoves(
       rolledBack++;
       log(`ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
     } catch (re: any) {
+      if (re instanceof Error && re.message.includes("lease")) throw re;
       log(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);
     }
   }

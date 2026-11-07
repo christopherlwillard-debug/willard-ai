@@ -1,5 +1,6 @@
-import { execFile, spawnSync, type SpawnSyncReturns } from "child_process";
+import { execFile, spawnSync, type ChildProcess, type SpawnSyncReturns } from "child_process";
 import { logger } from "./logger.ts";
+import { isShuttingDown } from "./shutdown-state.ts";
 
 /**
  * Shared helpers for the external media binaries (ffmpeg / ffprobe).
@@ -37,6 +38,227 @@ export function formatMediaToolError(
   return `${bin} exited with code ${result.status}${suffix}`;
 }
 
+export interface MediaToolExecutionOptions {
+  timeoutMs: number;
+  maxBufferBytes?: number;
+}
+
+export interface MediaToolExecutionResult {
+  stdout: string;
+  stderr: string;
+}
+
+type MediaToolExecutionError = Error & {
+  code?: string | number;
+  killed?: boolean;
+  signal?: NodeJS.Signals | null;
+  stdout?: string;
+  stderr?: string;
+};
+
+const activeMediaProcesses = new Set<ChildProcess>();
+
+const MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS = 2_000;
+
+export function assertMediaProcessStartAllowed(): void {
+  if (!isShuttingDown()) return;
+  const failure = new Error("Cannot start an external media/archive subprocess while the API server is shutting down.") as MediaToolExecutionError;
+  failure.code = "ERR_SERVER_SHUTTING_DOWN";
+  throw failure;
+}
+
+/** Register a directly spawned archive/media child with the shared shutdown owner. */
+export function trackActiveMediaProcess(child: ChildProcess): () => void {
+  activeMediaProcesses.add(child);
+  const removeChild = () => activeMediaProcesses.delete(child);
+  child.once("close", removeChild);
+  child.once("error", removeChild);
+  return removeChild;
+}
+
+function isMediaProcessRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function waitForMediaProcess(child: ChildProcess): Promise<void> {
+  if (!isMediaProcessRunning(child)) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      child.off("close", finish);
+      child.off("error", finish);
+      resolve();
+    };
+    child.once("close", finish);
+    child.once("error", finish);
+    if (!isMediaProcessRunning(child)) finish();
+  });
+}
+
+/**
+ * Stop tracked media and archive subprocesses before the server closes its
+ * database and exits. These children write only staged/cache/scratch outputs,
+ * so terminating them preserves originals and leaves incomplete work available
+ * for recovery.
+ */
+async function waitForMediaProcessWithin(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (!isMediaProcessRunning(child)) return true;
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      waitForMediaProcess(child).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Stop one owned media/archive child with the same bounded TERM-to-KILL policy used at shutdown. */
+export async function stopMediaProcess(
+  child: ChildProcess,
+  graceMs = MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS,
+): Promise<void> {
+  if (!isMediaProcessRunning(child)) return;
+  try {
+    child.kill("SIGTERM");
+  } catch (error) {
+    logger.warn({ err: error, pid: child.pid }, "Unable to request graceful media subprocess shutdown");
+  }
+  if (await waitForMediaProcessWithin(child, graceMs)) return;
+  if (!isMediaProcessRunning(child)) return;
+
+  try {
+    child.kill("SIGKILL");
+  } catch (error) {
+    logger.warn({ err: error, pid: child.pid }, "Unable to force-stop a media subprocess");
+  }
+  if (!await waitForMediaProcessWithin(child, 1_000) && isMediaProcessRunning(child)) {
+    logger.error({ pid: child.pid }, "Media subprocess remained active after forced shutdown");
+  }
+}
+
+/**
+ * Stop tracked media and archive subprocesses before the server closes its
+ * database and exits. These children write only staged/cache/scratch outputs,
+ * so terminating them preserves originals and leaves incomplete work available
+ * for recovery.
+ */
+export async function stopActiveMediaTools(graceMs = 2_000): Promise<void> {
+  const active = [...activeMediaProcesses].filter(isMediaProcessRunning);
+  if (active.length === 0) return;
+  await Promise.all(active.map((child) => stopMediaProcess(child, graceMs)));
+  const stillRunning = active.filter(isMediaProcessRunning);
+  if (stillRunning.length > 0) {
+    logger.error({ count: stillRunning.length }, "Media subprocesses remained active after forced shutdown");
+  }
+}
+
+/**
+ * Run a media binary without blocking the API event loop. Conversion requests
+ * can take minutes, so they must remain asynchronous for cancellation, health,
+ * and unrelated API traffic to be serviced while the child process runs.
+ */
+export function runMediaToolAsync(
+  bin: string,
+  args: string[],
+  options: MediaToolExecutionOptions,
+): Promise<MediaToolExecutionResult> {
+  try {
+    assertMediaProcessStartAllowed();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return new Promise((resolve, reject) => {
+    let child: ChildProcess | null = null;
+    let timeoutEscalationTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+    const cleanup = () => {
+      if (timeoutEscalationTimer) clearTimeout(timeoutEscalationTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (child) activeMediaProcesses.delete(child);
+    };
+    child = execFile(bin, args, {
+      encoding: "utf8",
+      timeout: options.timeoutMs,
+      killSignal: "SIGTERM",
+      maxBuffer: options.maxBufferBytes ?? 1024 * 1024,
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      cleanup();
+      if (error) {
+        const failure = error as MediaToolExecutionError;
+        failure.stdout = String(stdout ?? "");
+        failure.stderr = String(stderr ?? "");
+        reject(failure);
+        return;
+      }
+      resolve({
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? ""),
+      });
+    });
+    activeMediaProcesses.add(child);
+    child.once("close", cleanup);
+    child.once("error", cleanup);
+
+    // execFile sends SIGTERM at timeoutMs but waits for the child to close.
+    // Escalate if a tool ignores that signal so a hung encoder cannot retain
+    // the request and its process indefinitely.
+    if (options.timeoutMs > 0) {
+      timeoutEscalationTimer = setTimeout(() => {
+        if (!child?.pid || !isMediaProcessRunning(child)) return;
+        forceKillTimer = setTimeout(() => {
+          if (!child?.pid || !isMediaProcessRunning(child)) return;
+          try {
+            child.kill("SIGKILL");
+          } catch (error) {
+            logger.warn({ err: error }, "Unable to force-stop a timed-out media subprocess");
+          }
+        }, MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS);
+        forceKillTimer.unref?.();
+      }, options.timeoutMs + 100);
+      timeoutEscalationTimer.unref?.();
+    }
+  });
+}
+
+/** Format an asynchronous child-process failure with bounded diagnostics. */
+export function formatMediaToolExecutionError(
+  bin: "ffmpeg" | "ffprobe",
+  error: unknown,
+  timeoutMs: number,
+): string {
+  const failure = error instanceof Error
+    ? error as MediaToolExecutionError
+    : new Error(String(error)) as MediaToolExecutionError;
+  if (failure.code === "ERR_SERVER_SHUTTING_DOWN") {
+    return `${bin} was not started because the API server is shutting down`;
+  }
+  if (failure.code === "ENOENT") {
+    return `${bin} is not installed or not on PATH. ${FFMPEG_INSTALL_HINT}`;
+  }
+
+  const detail = String(failure.stderr ?? "").trim().slice(-500);
+  if (failure.code === "ETIMEDOUT") {
+    return `${bin} timed out after ${Math.ceil(timeoutMs / 1000)} seconds${detail ? `: ${detail}` : ""}`;
+  }
+  if (failure.killed || failure.signal) {
+    return `${bin} was stopped before completion${detail ? `: ${detail}` : ""}`;
+  }
+  if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+    return `${bin} output exceeded the configured diagnostic limit`;
+  }
+
+  const suffix = detail || failure.message;
+  return `${bin} exited with code ${failure.code ?? "unknown"}${suffix ? `: ${suffix}` : ""}`;
+}
+
 let alreadyChecked = false;
 
 export interface MediaToolsHealth {
@@ -52,9 +274,13 @@ let healthProbe: Promise<MediaToolsHealth> | null = null;
 const HEALTH_CACHE_MS = 30_000;
 
 function probeTool(bin: "ffmpeg" | "ffprobe"): Promise<boolean> {
-  return new Promise(resolve => {
-    execFile(bin, ["-version"], { timeout: 5000 }, (error) => resolve(!error));
-  });
+  return runMediaToolAsync(bin, ["-version"], {
+    timeoutMs: 5_000,
+    maxBufferBytes: 64 * 1024,
+  }).then(
+    () => true,
+    () => false,
+  );
 }
 
 /**

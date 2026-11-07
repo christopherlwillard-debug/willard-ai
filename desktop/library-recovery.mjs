@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { link, lstat, mkdir, open as openFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const LIBRARY_IDENTITY_FORMAT = "willard-library-identity";
@@ -22,6 +23,43 @@ function identityPath(libraryRoot) {
   return path.join(normalizeLibraryRoot(libraryRoot), LIBRARY_IDENTITY_RELATIVE_PATH);
 }
 
+/**
+ * Resolve/create a library-relative directory without traversing a symlink
+ * below the configured NAS root. The root itself may be a legitimate mount
+ * alias; descendants must remain ordinary directories on that library.
+ */
+export async function ensureLibraryDirectory(libraryRoot, relativePath, create = false) {
+  const root = await realpath(normalizeLibraryRoot(libraryRoot));
+  const rawRelative = String(relativePath);
+  if (path.isAbsolute(rawRelative) || path.win32.isAbsolute(rawRelative) || /^[A-Za-z]:/.test(rawRelative)) {
+    throw new Error("Library directory path must be relative to the configured NAS root.");
+  }
+  const components = rawRelative.split(/[\\/]+/).filter(Boolean);
+  if (components.some((component) => component === "." || component === ".." || component.includes("\0"))) {
+    throw new Error("Library directory path contains an invalid component.");
+  }
+  let current = root;
+  for (const component of components) {
+    current = path.join(current, component);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (!create || error?.code !== "ENOENT") throw error;
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (mkdirError?.code !== "EEXIST") throw mkdirError;
+      }
+      info = await lstat(current);
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error("Library storage path contains a symlink or non-directory component.");
+    }
+  }
+  return current;
+}
+
 function validateIdentity(identity) {
   if (
     !identity ||
@@ -37,9 +75,83 @@ function validateIdentity(identity) {
   return identity;
 }
 
+/**
+ * Read one media file by library-relative path without following any
+ * descendant symlink. Used during recovery verification before trusting NAS
+ * paths restored from a database backup.
+ */
+export async function readLibraryFileNoFollow(libraryRoot, relativePath) {
+  if (
+    typeof relativePath !== "string" ||
+    !relativePath ||
+    path.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    /^[A-Za-z]:/.test(relativePath)
+  ) {
+    throw new Error("Library media path must be a non-empty relative path.");
+  }
+  const components = relativePath.split(/[\\/]+/);
+  if (components.some((component) => !component || component === "." || component === ".." || component.includes("\0"))) {
+    throw new Error("Library media path contains an invalid component.");
+  }
+  const fileName = components.pop();
+  const parent = await ensureLibraryDirectory(libraryRoot, components.join(path.sep));
+  const filePath = path.join(parent, fileName);
+  const initial = await lstat(filePath);
+  if (initial.isSymbolicLink() || !initial.isFile()) {
+    throw new Error("Library media path is a symlink or non-regular file.");
+  }
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(filePath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(filePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("Library media path changed or became a symlink while opening.");
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readLibraryIdentity(libraryRoot) {
-  const markerPath = identityPath(libraryRoot);
-  const bytes = await readFile(markerPath);
+  const configDir = await ensureLibraryDirectory(libraryRoot, path.join("WillardAI", "config"));
+  const markerPath = path.join(configDir, "library-identity.json");
+  try {
+    const markerStat = await lstat(markerPath);
+    if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+      throw new Error("The NAS library identity marker must be a regular file inside the configured library.");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    throw error;
+  }
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(markerPath, fsConstants.O_RDONLY | noFollow);
+  let bytes;
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(markerPath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("The NAS library identity marker changed or became a symlink while opening.");
+    }
+    bytes = await handle.readFile();
+  } finally {
+    await handle.close();
+  }
   const identity = validateIdentity(JSON.parse(bytes.toString("utf8").replace(/^\uFEFF/, "")));
   return {
     ...identity,
@@ -57,7 +169,8 @@ export async function ensureLibraryIdentity(libraryRoot) {
     if (error?.code !== "ENOENT") throw error;
   }
 
-  const markerPath = identityPath(root);
+  const configDir = await ensureLibraryDirectory(root, path.join("WillardAI", "config"), true);
+  const markerPath = path.join(configDir, "library-identity.json");
   const identity = {
     format: LIBRARY_IDENTITY_FORMAT,
     version: LIBRARY_IDENTITY_VERSION,
@@ -65,12 +178,15 @@ export async function ensureLibraryIdentity(libraryRoot) {
     createdAt: new Date().toISOString(),
   };
   const temporary = `${markerPath}.${process.pid}.${randomUUID()}.partial`;
-  await mkdir(path.dirname(markerPath), { recursive: true });
-  await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   try {
-    await rename(temporary, markerPath);
+    // Hard-link publication is atomic and exclusive: rename() would replace
+    // an identity another concurrent startup had just created on POSIX.
+    await link(temporary, markerPath);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+  } finally {
+    await unlink(temporary).catch(() => {});
   }
   return readLibraryIdentity(root);
 }
@@ -112,6 +228,7 @@ export const DURABLE_PATH_COLUMNS = Object.freeze([
   ["collections", "nas_path", "exact"],
   ["conversion_jobs", "nas_path", "exact"],
   ["conversion_jobs", "backup_dir", "prefix"],
+  ["faces", "crop_path", "prefix"],
   ["indexed_files", "path", "prefix"],
   ["indexed_files", "folder", "prefix"],
   ["library_activity", "nas_path", "exact"],
@@ -119,6 +236,7 @@ export const DURABLE_PATH_COLUMNS = Object.freeze([
   ["library_jobs", "root_path", "prefix"],
   ["media_files", "nas_path", "exact"],
   ["media_files", "thumbnail_path", "prefix"],
+  ["media_scan_jobs", "nas_path", "exact"],
   ["organization_jobs", "nas_path", "exact"],
   ["organization_jobs", "source_path", "prefix"],
   ["organization_jobs", "report_path", "prefix"],

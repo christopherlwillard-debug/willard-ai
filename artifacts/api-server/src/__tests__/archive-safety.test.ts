@@ -356,3 +356,62 @@ test("7-Zip organize extraction explicitly disables symbolic-link materializatio
   assert.match(extractionOptions, /\$raw:\s*\["-snl-"\]/);
   assert.match(extractionOptions, /on\("error"/);
 });
+
+test("archive publication never replaces a regular destination created before publication", () => {
+  const outputRoot = path.join(root, "staging");
+  const output = path.join(outputRoot, "existing.txt");
+  fs.mkdirSync(outputRoot, { recursive: true });
+  fs.writeFileSync(output, "user file");
+
+  assert.throws(
+    () => writeArchiveFileAtomically(outputRoot, output, Buffer.from("archive replacement")),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as NodeJS.ErrnoException).code, "EEXIST");
+      return true;
+    },
+  );
+  assert.equal(fs.readFileSync(output, "utf8"), "user file");
+  assert.deepEqual(fs.readdirSync(outputRoot), ["existing.txt"]);
+});
+
+
+test("archive peek does not mislabel corrupt archives as password protected", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+  assert.match(routeSource, /if \(\/password\|wrong password\|encrypted\|cannot open encrypted\/i\.test\(message\)\)/);
+  assert.match(routeSource, /reject\(err instanceof Error \? err : new Error\(String\(err\)\)\)/);
+  assert.match(routeSource, /shouldTreatAsStandaloneCompressedFile\(archive\.filename, entries\.length, failureKind\)/);
+  assert.match(routeSource, /Never persist a partial listing as a successful archive preview/);
+  assert.match(routeSource, /throw new Error\(`Archive preview failed: \$\{error\}`\)/);
+  assert.match(routeSource, /if \(error instanceof ArchiveSafetyError\) throw error;/);
+});
+
+
+test("password-protected ZIP and 7-Zip previews verify the original archive snapshot", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+
+  const sevenZipErrorStart = routeSource.indexOf('stream.on("error", (err: Error) => {');
+  assert.notEqual(sevenZipErrorStart, -1, "7-Zip preview error handler should exist");
+  const sevenZipErrorEnd = routeSource.indexOf("\n    });", sevenZipErrorStart);
+  assert.ok(sevenZipErrorEnd > sevenZipErrorStart, "7-Zip preview error handler should close");
+  const sevenZipErrorHandler = routeSource.slice(sevenZipErrorStart, sevenZipErrorEnd);
+  const sevenZipPasswordStart = sevenZipErrorHandler.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg))");
+  assert.notEqual(sevenZipPasswordStart, -1, "7-Zip password-error branch should exist");
+  const sevenZipPasswordBranch = sevenZipErrorHandler.slice(sevenZipPasswordStart);
+  const sevenZipSnapshotCheck = sevenZipPasswordBranch.indexOf("assertArchiveFileUnchanged(filePath, archiveSnapshot)");
+  const sevenZipAccept = sevenZipPasswordBranch.indexOf("resolve({ entries, isPasswordProtected, format, error: msg })");
+  assert.ok(sevenZipSnapshotCheck >= 0 && sevenZipAccept > sevenZipSnapshotCheck,
+    "7-Zip must verify the original archive before accepting a password-protected result");
+
+  const zipStart = routeSource.indexOf("if (ZIP_EXTS.has(ext))");
+  const zipEnd = routeSource.indexOf("const category = computeCategoryFromContent(entries, isPasswordProtected);", zipStart);
+  assert.ok(zipStart >= 0 && zipEnd > zipStart, "ZIP preview branch should exist");
+  const zipPreview = routeSource.slice(zipStart, zipEnd);
+  const zipPasswordStart = zipPreview.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(message))");
+  assert.notEqual(zipPasswordStart, -1, "ZIP password-error branch should exist");
+  const zipPasswordBranch = zipPreview.slice(zipPasswordStart);
+  const zipSnapshotCheck = zipPasswordBranch.indexOf("assertArchiveFileUnchanged(archivePath, archiveSnapshot)");
+  const zipAccept = zipPasswordBranch.indexOf("isPasswordProtected = true");
+  assert.ok(zipSnapshotCheck >= 0 && zipAccept > zipSnapshotCheck,
+    "ZIP must verify the original archive before accepting a password-protected result");
+});

@@ -11,18 +11,18 @@ $problems = @()
 
 # -- Clear stale state from a crashed previous run ----------------------------
 $tracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $tracked
 if ($tracked) {
     $apiAlive = Test-ProcessAlive $tracked.api
     $webAlive = Test-ProcessAlive $tracked.web
     if ($apiAlive -or $webAlive) {
         Write-Info "Willard AI is currently running - stopping it so it can be repaired..."
-        Stop-TrackedProcesses | Out-Null
-        Start-Sleep -Seconds 2
-        Write-Ok "Stopped the running copy."
     } else {
-        Clear-TrackedPids
-        Write-Ok "Cleared leftover state from a previous run."
+        Write-Info "Checking that no service processes remain from a previous run..."
     }
+    Stop-TrackedProcesses | Out-Null
+    Start-Sleep -Seconds 2
+    Write-Ok "Stopped or verified the previous service processes."
 }
 
 # -- Helper programs ----------------------------------------------------------

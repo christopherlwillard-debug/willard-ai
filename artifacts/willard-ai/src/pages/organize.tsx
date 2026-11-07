@@ -167,14 +167,11 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
           <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="keep_existing">Keep existing — skip source file (safe default)</SelectItem>
-            <SelectItem value="replace">Replace — overwrite destination with source</SelectItem>
+            <SelectItem value="replace" disabled>Replace — temporarily unavailable (safe recovery not supported)</SelectItem>
             <SelectItem value="rename">Rename — add suffix to source (file_1.jpg, file_2.jpg…)</SelectItem>
             <SelectItem value="skip">Skip — same as keep existing</SelectItem>
           </SelectContent>
         </Select>
-        {form.conflictPolicy === "replace" && (
-          <p className="text-xs text-amber-400/80 font-mono">⚠ Existing destination files will be permanently overwritten.</p>
-        )}
       </div>
 
       <Button
@@ -1567,11 +1564,26 @@ function OrganizeJobRow({
   const deleteBlocked = ["analyzing", "executing", "rolling_back"].includes(currentJob.status) || hasUnresolvedJournal;
   const total = typeof plan?.totalFiles === "number" ? plan.totalFiles : 0;
   const progress = total > 0 ? Math.min(100, (moved / total) * 100) : 0;
+  const sourceName = currentJob.sourcePath.replaceAll("\\", "/").split("/").pop() || currentJob.sourcePath;
 
   return (
-    <TableRow className="cursor-pointer hover:bg-secondary/30" onClick={onOpen}>
+    <TableRow
+      className="cursor-pointer hover:bg-secondary/30"
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        onOpen();
+      }}
+    >
       <TableCell className="font-mono text-xs max-w-[180px] truncate" title={currentJob.sourcePath}>
-        <span className="font-medium">{currentJob.sourcePath.split("/").pop()}</span>
+        <button
+          type="button"
+          className="max-w-full truncate text-left font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label={"Open organization job " + sourceName}
+          onClick={onOpen}
+          data-testid={"button-open-organize-job-" + currentJob.id}
+        >
+          {sourceName}
+        </button>
       </TableCell>
       <TableCell>
         <span className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
@@ -1595,24 +1607,34 @@ function OrganizeJobRow({
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{formatDate(currentJob.createdAt)}</TableCell>
       <TableCell>
-        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex gap-1">
           {currentJob.status === "completed" || currentJob.status === "rolled_back" ? (
             <Button
+              type="button"
               variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono text-primary/80 hover:text-primary"
               onClick={onOpen}
+              aria-label={"View report for organization job " + sourceName}
               title="View Report"
             >
               <FileText className="w-3.5 h-3.5 mr-1" /> Report
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpen}>
+            <Button
+              type="button"
+              variant="ghost" size="sm" className="h-7 w-7 p-0"
+              onClick={onOpen}
+              aria-label={"Open organization job " + sourceName}
+              title="Open job"
+            >
               <Eye className="w-3.5 h-3.5" />
             </Button>
           )}
           <Button
+            type="button"
             variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
             disabled={deleteBlocked || deletePending}
-            title={hasUnresolvedJournal ? "Resume this job or complete rollback before deleting its recovery journal" : undefined}
+            aria-label={"Delete organization job " + sourceName}
+            title={hasUnresolvedJournal ? "Resume this job or complete rollback before deleting its recovery journal" : "Delete job"}
             onClick={onDelete}
           >
             <Trash2 className="w-3.5 h-3.5" />

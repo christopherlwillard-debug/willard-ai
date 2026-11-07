@@ -5,15 +5,12 @@ import { eq, desc, inArray, or, and, isNull, isNotNull, lt, sql } from "drizzle-
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawn, spawnSync } from "child_process";
-import { pipeline } from "stream/promises";
-import { createGunzip } from "node:zlib";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import Seven from "node-7z";
-import { getSevenZipPath } from "../lib/sevenzip.ts";
+import { createTrackedSevenZipStream, getSevenZipPath, stopTrackedSevenZipStream } from "../lib/sevenzip.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
+import { getWillardAIDir, getTempDir, cleanTempDir, assertWithinRoot, resolveWithinRoot, ensurePrivateDir, ensureDirectoryWithinRoot, ensureDataDirectoryWithinRoot, pruneOperationalFiles } from "../lib/nas-storage";
 import { archiveByIdScope, resolveActiveArchivePath } from "../lib/archive-scope.ts";
 import { getActiveAppSettings, getActiveNasPath } from "../lib/active-library.ts";
 import {
@@ -22,7 +19,6 @@ import {
   assertArchiveFileUnchanged,
   assertBufferedZipFile,
   createArchiveBudget,
-  createArchiveExpansionLimiter,
   inspectExtractedTree,
   isZipSymlinkEntry,
   isTarLinkEntry,
@@ -31,17 +27,18 @@ import {
   validateArchiveEntry,
   writeArchiveFileAtomically,
 } from "../lib/archive-safety.ts";
-import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, verifiedReplace, rollbackMoves, walkDirectoryFiles, canDeleteOrganizationJob, type FileMoveRecord } from "../lib/organize-helpers";
+import { moveFileNoReplace, sha256File, sha256Buffer, verifiedMove, rollbackMoves, walkDirectoryFiles, canDeleteOrganizationJob, type FileMoveRecord } from "../lib/organize-helpers";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { canSendToAiProvider, getAiPrivacySettings, isMediaExcluded } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
 import { parseAllowedString, parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 import { redactOperationalData, redactText } from "../lib/log-redaction.ts";
-import { StoragePolicyError } from "../lib/storage-policy.ts";
+import { withTarInput } from "../lib/archive-tar-input.ts";
 import {
   reserveCapacity,
   releaseCapacity,
   evaluateCapacity,
+  probeFilesystemCapacity,
   CapacityAdmissionError,
   type CapacityReservation,
 } from "../lib/capacity-service.ts";
@@ -59,6 +56,11 @@ async function getScopedOrganizationJob(id: number, nasPath: string) {
     eq(organizationJobsTable.nasPath, nasPath),
   )).limit(1);
   return job;
+}
+
+function publicOrganizationJob<T extends { leaseToken?: string | null }>(job: T) {
+  const { leaseToken: _leaseToken, ...publicJob } = job;
+  return publicJob;
 }
 
 /**
@@ -120,50 +122,6 @@ function parseOrganizationMoveJournal(value: unknown, nasPath: string): FileMove
   });
 }
 
-async function describeReplacementDestination(
-  destinationPath: string,
-  jobId: number,
-): Promise<NonNullable<FileMoveRecord["replacement"]>> {
-  const stat = fs.lstatSync(destinationPath);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(`Cannot replace a destination that is not a regular file: ${path.basename(destinationPath)}`);
-  }
-  return {
-    backupPath: path.join(
-      path.dirname(destinationPath),
-      `.${path.basename(destinationPath)}.willard-${jobId}-${crypto.randomUUID()}.replace-backup`,
-    ),
-    previousHash: await sha256File(destinationPath),
-  };
-}
-
-async function cleanupCommittedReplacementBackups(
-  moves: FileMoveRecord[],
-  log: (message: string) => void,
-): Promise<void> {
-  for (const move of moves) {
-    if (!move.replacement) continue;
-    try {
-      const destinationStat = fs.lstatSync(move.to);
-      const backupStat = fs.lstatSync(move.replacement.backupPath);
-      if (
-        !destinationStat.isFile() || destinationStat.isSymbolicLink() ||
-        !backupStat.isFile() || backupStat.isSymbolicLink() ||
-        await sha256File(move.to) !== move.sourceHash ||
-        await sha256File(move.replacement.backupPath) !== move.replacement.previousHash
-      ) {
-        log(`REPLACE_BACKUP_RETAINED: verified replacement copy was not safe to remove; inspect ${move.replacement.backupPath}`);
-        continue;
-      }
-      fs.unlinkSync(move.replacement.backupPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        log(`REPLACE_BACKUP_RETAINED: could not remove prior destination copy at ${move.replacement.backupPath}`);
-      }
-    }
-  }
-}
-
 const ORGANIZATION_EXECUTION_LEASE_MS = 5 * 60 * 1000;
 const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
 
@@ -172,19 +130,35 @@ const ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 * 1000;
  * A resume request may reclaim an "executing" job only after this heartbeat
  * becomes stale, which distinguishes a crashed worker from a live one.
  */
-function startOrganizationJobHeartbeat(id: number, nasPath: string, status: "executing" | "rolling_back" = "executing"): () => void {
+async function assertOrganizationLease(id: number, nasPath: string, leaseToken: string): Promise<void> {
+  const [owner] = await db.select({ id: organizationJobsTable.id })
+    .from(organizationJobsTable)
+    .where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, leaseToken),
+      inArray(organizationJobsTable.status, ["executing", "rolling_back"]),
+    ))
+    .limit(1);
+  if (!owner) throw new Error("Organization worker lease was lost; this worker stopped before making further changes.");
+}
+
+function startOrganizationJobHeartbeat(id: number, nasPath: string, leaseToken: string, status: "executing" | "rolling_back" = "executing"): () => void {
   let inFlight = false;
   const timer = setInterval(async () => {
     if (inFlight) return;
     inFlight = true;
     try {
-      await db.update(organizationJobsTable)
+      const [owner] = await db.update(organizationJobsTable)
         .set({ stageUpdatedAt: new Date() })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, leaseToken),
           eq(organizationJobsTable.status, status),
-        ));
+        ))
+        .returning({ id: organizationJobsTable.id });
+      if (!owner) logger.warn({ jobId: id, status }, "Organization worker lost its heartbeat lease");
     } catch (error) {
       logger.warn({ err: error, jobId: id, status }, "Organization job heartbeat failed");
     } finally {
@@ -207,72 +181,6 @@ function getArchiveExt(filename: string): string {
   if (fn.endsWith(".tar.bz2")) return "tar.bz2";
   if (fn.endsWith(".tar.xz"))  return "tar.xz";
   return path.extname(filename).replace(".", "").toLowerCase();
-}
-
-type TarCompression = "none" | "gzip" | "bzip2" | "xz";
-
-function getTarCompression(filename: string): TarCompression {
-  const fn = filename.toLowerCase();
-  if (fn.endsWith(".tar.gz") || fn.endsWith(".tgz") || fn.endsWith(".gz")) return "gzip";
-  if (fn.endsWith(".tar.bz2") || fn.endsWith(".tbz2") || fn.endsWith(".bz2")) return "bzip2";
-  if (fn.endsWith(".tar.xz") || fn.endsWith(".txz") || fn.endsWith(".xz")) return "xz";
-  return "none";
-}
-
-/**
- * Make a plain TAR file available to the tar library. tar itself supports gzip,
- * but not bzip2 or xz; those formats are decompressed with argument-array
- * child processes so archive filenames are never interpreted by a shell.
- *
- * The caller owns the staging area. Keep the compressed-TAR scratch file beside
- * it, on the same NAS, but outside the extracted tree that is verified below.
- * Never decompress into OS temp: the output can be large and this operation
- * requires NAS storage.
- */
-async function withTarInput<T>(
-  archivePath: string,
-  filename: string,
-  scratchDir: string,
-  callback: (tarPath: string, options: Record<string, unknown>) => Promise<T>,
-): Promise<T> {
-  const compression = getTarCompression(filename);
-  if (compression === "none") return callback(archivePath, {});
-  if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
-
-  const tarPath = path.join(
-    path.dirname(path.resolve(scratchDir)),
-    ".willard-input-" + crypto.randomUUID() + ".tar",
-  );
-  const child = compression === "gzip" ? null : spawn(compression === "bzip2" ? "bzip2" : "xz", ["-dc", "--", archivePath], { stdio: ["ignore", "pipe", "pipe"] });
-  let stderr = "";
-  child?.stderr?.setEncoding("utf8");
-  child?.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4096); });
-  const exit = child ? new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error((compression === "bzip2" ? "bzip2" : "xz") + " failed" + (signal ? " (" + signal + ")" : "") + ": " + (stderr.trim() || "exit code " + code)));
-    });
-  }) : Promise.resolve();
-
-  try {
-    const limiter = createArchiveExpansionLimiter(ARCHIVE_LIMITS.maxDecompressedTarBytes);
-    const output = fs.createWriteStream(tarPath, { flags: "wx", mode: 0o600 });
-    if (compression === "gzip") {
-      await pipeline(fs.createReadStream(archivePath), createGunzip(), limiter, output);
-    } else {
-      if (!child?.stdout) throw new Error("Archive decompressor did not provide output");
-      await pipeline(child.stdout, limiter, output);
-    }
-    await exit;
-    return await callback(tarPath, {});
-  } catch (error) {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await exit.catch(() => {});
-    throw error;
-  } finally {
-    try { fs.rmSync(tarPath, { force: true }); } catch { /* best effort */ }
-  }
 }
 
 function getFileType(ext: string): string {
@@ -343,18 +251,10 @@ function crc32(buf: Buffer): number {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-/** Safe disk-free check — uses spawnSync with argument array; no shell interpolation. */
-function getDiskFreeBytes(dirPath: string): number | null {
-  try {
-    const checkDir = fs.existsSync(dirPath) ? dirPath : path.dirname(dirPath);
-    const result = spawnSync("df", ["-B1", checkDir], { encoding: "utf8", stdio: "pipe" });
-    if (result.status !== 0 || !result.stdout) return null;
-    const lines = result.stdout.trim().split("\n");
-    if (lines.length < 2) return null;
-    const fields = lines[1].trim().split(/\s+/);
-    const n = parseInt(fields[3] ?? "");
-    return isNaN(n) ? null : n;
-  } catch { return null; }
+/** Read destination free space through the shared asynchronous filesystem probe. */
+async function getDiskFreeBytes(dirPath: string): Promise<number | null> {
+  const snapshot = await probeFilesystemCapacity(dirPath);
+  return snapshot.known ? snapshot.freeBytes : null;
 }
 
 
@@ -406,27 +306,33 @@ async function peekArchiveEntries(archivePath: string, filename: string, scratch
       if (validationError) throw validationError;
     });
   } else if (SEVENZIP_EXTS.has(ext)) {
+    const sevenZipPath = await getSevenZipPath();
     let validationError: Error | undefined;
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+      const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
+      const rejectUnsafeEntry = (error: Error) => {
+        if (validationError) return;
+        validationError = error;
+        void stopTrackedSevenZipStream(s);
+      };
       s.on("data", (d: any) => {
         if (d.file !== undefined && !validationError) {
           const info = getSevenZipEntryInfo(d);
           const isDir = info.isDirectory;
           if (info.isLink) {
-            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`);
+            rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${d.file}" in 7z`));
             return;
           }
           try {
             const checked = validateArchiveEntry({ path: d.file, sizeBytes: info.sizeBytes, isDirectory: isDir }, budget);
             entries.push({ path: d.file, sizeBytes: checked.sizeBytes, isDirectory: isDir, fileType: isDir ? "directory" : getFileTypeFromName(d.file) });
           } catch (error) {
-            validationError = error instanceof Error ? error : new Error(String(error));
+            rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
           }
         }
       });
       s.on("end", () => validationError ? reject(validationError) : resolve());
-      s.on("error", (error: Error) => reject(error));
+      s.on("error", (error: Error) => reject(validationError ?? error));
     });
   }
   assertArchiveFileUnchanged(archivePath, archiveSnapshot);
@@ -485,14 +391,20 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
         if (validationError) throw validationError;
       });
     } else if (SEVENZIP_EXTS.has(ext)) {
+      const sevenZipPath = await getSevenZipPath();
       let validationError: Error | undefined;
       await new Promise<void>((resolve, reject) => {
-        const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+        const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
+        const rejectUnsafeEntry = (error: Error) => {
+          if (validationError) return;
+          validationError = error;
+          void stopTrackedSevenZipStream(s);
+        };
         s.on("data", (entry: any) => {
           if (validationError || entry.file === undefined) return;
           const info = getSevenZipEntryInfo(entry);
           if (info.isLink) {
-            validationError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`);
+            rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.file}" in 7z`));
             return;
           }
           try {
@@ -503,11 +415,11 @@ async function validateArchive(archivePath: string, scratchDir: string): Promise
             }, budget);
             count++;
           } catch (error) {
-            validationError = error instanceof Error ? error : new Error(String(error));
+            rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
           }
         });
         s.on("end", () => validationError ? reject(validationError) : resolve());
-        s.on("error", (error: Error) => reject(error));
+        s.on("error", (error: Error) => reject(validationError ?? error));
       });
     } else {
       return { ok: false, detail: `Unsupported format: .${ext}`, entryCount: 0 };
@@ -758,17 +670,19 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     });
 
   } else if (SEVENZIP_EXTS.has(ext)) {
+    const sevenZipPath = await getSevenZipPath();
     const filePaths: string[] = [];
     let sevenZipCrcCount = 0;
     const sevenZipBudget = createArchiveBudget();
 
     // Pass 1: enumerate, validate, and record CRC metadata from archive headers
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.list(archivePath, { $bin: getSevenZipPath(), $progress: false, techInfo: true } as any);
+      const s = createTrackedSevenZipStream(() => Seven.list(archivePath, { $bin: sevenZipPath, $progress: false, techInfo: true } as any));
       let failed = false;
       const fail = (error: unknown) => {
         if (failed) return;
         failed = true;
+        void stopTrackedSevenZipStream(s);
         reject(error instanceof Error ? error : new Error(String(error)));
       };
       s.on("data", (d: any) => {
@@ -797,8 +711,8 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
     // Pass 2: extract
     assertArchiveFileUnchanged(archivePath, archiveSnapshot);
     await new Promise<void>((resolve, reject) => {
-      const s = Seven.extractFull(archivePath, stagingDir, {
-        $bin: getSevenZipPath(),
+      const s = createTrackedSevenZipStream(() => Seven.extractFull(archivePath, stagingDir, {
+        $bin: sevenZipPath,
         overwrite: "a",
         // Never let 7-Zip materialize archive-provided symbolic links. The
         // metadata preflight below rejects known link entries; this explicit
@@ -806,7 +720,7 @@ async function safeExtractArchive(archivePath: string, stagingDir: string, nasRo
         // incomplete link metadata through the list parser.
         $raw: ["-snl-"],
         $progress: false,
-      } as any);
+      } as any));
       s.on("end",   resolve);
       s.on("error", (e: any) => reject(new Error(`7z extract error: ${e?.message ?? e}`)));
     });
@@ -933,21 +847,28 @@ router.post("/organize/jobs", async (req, res) => {
       res.status(400).json({ error: "archiveDisposition must be 'keep' for folder source jobs" }); return;
     }
     const resolvedDisposition = sourceType === "archive" ? requestedDisposition : "keep";
-    const resolvedPolicy = parseAllowedString(conflictPolicy, ["keep_existing", "replace", "rename", "skip"], "keep_existing");
+    if (conflictPolicy === "replace") {
+      res.status(400).json({
+        error: "Replace is temporarily unavailable until existing destination files can be backed up and recovered safely. Choose Rename or Keep Existing.",
+        code: "REPLACE_RECOVERY_UNAVAILABLE",
+      });
+      return;
+    }
+    const resolvedPolicy = parseAllowedString(conflictPolicy, ["keep_existing", "rename", "skip"], "keep_existing");
     if (!resolvedPolicy) {
       res.status(400).json({ error: "Invalid conflictPolicy" }); return;
     }
     const [job] = await db.insert(organizationJobsTable)
       .values({ sourceType, sourcePath: canonicalSourcePath, archiveId: parsedArchiveId, archiveDisposition: resolvedDisposition, conflictPolicy: resolvedPolicy, nasPath })
       .returning();
-    res.status(201).json(job);
+    res.status(201).json(job ? publicOrganizationJob(job) : job);
   } catch { res.status(500).json({ error: "Failed to create organize job" }); }
 });
 
 router.get("/organize/jobs", async (_req, res) => {
   try {
     const jobs = await db.select().from(organizationJobsTable).orderBy(desc(organizationJobsTable.createdAt)).limit(50);
-    res.json(jobs);
+    res.json(jobs.map(publicOrganizationJob));
   } catch { res.status(500).json({ error: "Failed to list organize jobs" }); }
 });
 
@@ -959,7 +880,7 @@ router.get("/organize/jobs/:id", async (req, res) => {
     if (!nasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
     const job = await getScopedOrganizationJob(id, nasPath);
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    res.json(job);
+    res.json(publicOrganizationJob(job));
   } catch { res.status(500).json({ error: "Failed to get organize job" }); }
 });
 
@@ -1008,22 +929,65 @@ router.delete("/organize/jobs/:id", async (req, res) => {
 router.post("/organize/jobs/:id/analyze", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let analysisLeaseToken = "";
+  let analysisNasPath = "";
+  let analysisClaimed = false;
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
+    analysisNasPath = job.nasPath;
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "Job is already being processed" }); return;
+    }
 
-    await db.update(organizationJobsTable).set({ status: "analyzing" }).where(eq(organizationJobsTable.id, id));
+    // Claim analysis with a unique owner token. Concurrent requests may both
+    // read the same prior status, but only one can transition it to analyzing.
+    // Every later write is fenced by this token so an older request cannot
+    // overwrite a newer plan or recovery state.
+    analysisLeaseToken = crypto.randomUUID();
+    const [claimedAnalysis] = await db.update(organizationJobsTable)
+      .set({ status: "analyzing", leaseToken: analysisLeaseToken, error: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.status, job.status),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedAnalysis) {
+      res.status(409).json({ error: "This job changed while analysis was starting. Refresh and try again." }); return;
+    }
+    analysisClaimed = true;
+
+    const failAnalysis = async (message: string) => {
+      await db.update(organizationJobsTable)
+        .set({ status: "failed", error: message, leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, analysisNasPath),
+          eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+          eq(organizationJobsTable.status, "analyzing"),
+        ));
+    };
 
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
+    if (path.resolve(nasPath) !== path.resolve(analysisNasPath)) {
+      await failAnalysis("The active library changed while analysis was starting");
+      res.status(409).json({ error: "The active library changed. Refresh and retry analysis." }); return;
+    }
     if (!nasPath || !path.isAbsolute(nasPath)) {
-      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing." }).where(eq(organizationJobsTable.id, id));
+      await db.update(organizationJobsTable).set({ status: "failed", error: "NAS path is not configured — set an absolute path in Settings before analyzing.", leaseToken: null }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running organize jobs." }); return;
     }
     try { resolveWithinRoot(job.sourcePath, nasPath); }
-    catch { res.status(403).json({ error: "Job source is outside the configured library" }); return; }
+    catch { await failAnalysis("Job source is outside the configured library"); res.status(403).json({ error: "Job source is outside the configured library" }); return; }
 
     let entries: Array<{path: string; sizeBytes: number; isDirectory: boolean; fileType: string}> = [];
     let archiveInspectionWarning: string | null = null;
@@ -1031,7 +995,12 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     if (job.sourceType === "archive") {
       const archivePath = resolveActiveArchivePath(job.sourcePath, nasPath);
       if (!fs.existsSync(archivePath) || !fs.statSync(archivePath).isFile()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Archive file not found", leaseToken: null }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "Archive file not found on disk" }); return;
       }
       if (job.archiveId) {
@@ -1039,14 +1008,17 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           .where(archiveByIdScope(job.archiveId, nasPath))
           .limit(1);
         if (!arc) {
+          await failAnalysis("Archive record not found in the active library");
           res.status(404).json({ error: "Archive record not found in the active library" }); return;
         }
         let recordPath: string;
         try { recordPath = resolveActiveArchivePath(arc.path, nasPath); }
         catch {
+          await failAnalysis("Archive record is outside the active library");
           res.status(403).json({ error: "Archive record is outside the active library" }); return;
         }
         if (recordPath !== archivePath) {
+          await failAnalysis("Archive record does not belong to this source path");
           res.status(403).json({ error: "Archive record does not belong to this source path" }); return;
         }
         if (arc?.peekStatus === "peeked" && Array.isArray(arc.peekEntries) && (arc.peekEntries as any[]).length > 0) {
@@ -1083,7 +1055,12 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
           }
         } catch (error) {
           if (error instanceof CapacityAdmissionError) {
-            await db.update(organizationJobsTable).set({ status: "failed", error: error.message }).where(eq(organizationJobsTable.id, id));
+            await db.update(organizationJobsTable).set({ status: "failed", error: error.message, leaseToken: null }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
             res.status(507).json({ code: "CAPACITY_UNSAFE", error: "Insufficient safe storage capacity", message: error.message });
             return;
           }
@@ -1095,11 +1072,21 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
       }
     } else {
       if (!fs.existsSync(job.sourcePath)) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "Source folder not found", leaseToken: null }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "Source folder not found on disk" }); return;
       }
       if (!fs.statSync(job.sourcePath).isDirectory()) {
-        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job" }).where(eq(organizationJobsTable.id, id));
+        await db.update(organizationJobsTable).set({ status: "failed", error: "sourcePath is not a directory for folder job", leaseToken: null }).where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ));
         res.status(422).json({ error: "sourcePath must be a directory for folder source jobs" }); return;
       }
       entries = walkDir(job.sourcePath).map(w => ({ path: w.relativePath, sizeBytes: w.sizeBytes, isDirectory: false, fileType: w.fileType }));
@@ -1171,14 +1158,29 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
     };
 
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: "planned", planJson })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: "planned", planJson, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      ))
       .returning();
-    res.json(updated);
+    if (!updated) {
+      res.status(409).json({ error: "Analysis lost ownership before the plan could be saved. Refresh and try again." });
+      return;
+    }
+    analysisClaimed = false;
+    res.json(publicOrganizationJob(updated));
   } catch (err) {
-    await db.update(organizationJobsTable)
-      .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error" })
-      .where(eq(organizationJobsTable.id, id)).catch(() => {});
+    if (analysisClaimed) await db.update(organizationJobsTable)
+      .set({ status: "failed", error: err instanceof Error ? err.message : "Unknown error", leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, analysisNasPath),
+        eq(organizationJobsTable.leaseToken, analysisLeaseToken),
+        eq(organizationJobsTable.status, "analyzing"),
+      )).catch(() => {});
     res.status(500).json({ error: "Analysis failed" });
   }
 });
@@ -1187,12 +1189,33 @@ router.post("/organize/jobs/:id/analyze", async (req, res) => {
 router.patch("/organize/jobs/:id/plan", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let planEditToken = "";
+  let planEditNasPath = "";
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "This job is currently being processed" }); return;
+    }
+
+    // Serialize plan edits against each other and against execution claims.
+    planEditToken = crypto.randomUUID();
+    planEditNasPath = job.nasPath;
+    const [claimedPlanEdit] = await db.update(organizationJobsTable)
+      .set({ leaseToken: planEditToken })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, planEditNasPath),
+        eq(organizationJobsTable.status, job.status),
+        isNull(organizationJobsTable.leaseToken),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedPlanEdit) {
+      res.status(409).json({ error: "This job changed while the plan was being updated. Refresh and try again." }); return;
+    }
 
     const plan = job.planJson as any;
     const { excludeCategories = [], excludePaths = [] } = req.body as any;
@@ -1218,22 +1241,47 @@ router.patch("/organize/jobs/:id/plan", async (req, res) => {
     };
 
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: "planned", planJson: updatedPlan, preflightJson: null })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: "planned", planJson: updatedPlan, preflightJson: null, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, planEditNasPath),
+        eq(organizationJobsTable.leaseToken, planEditToken),
+        eq(organizationJobsTable.status, job.status),
+      ))
       .returning();
-    res.json(updated);
-  } catch { res.status(500).json({ error: "Failed to update plan" }); }
+    if (!updated) { res.status(409).json({ error: "Plan update lost ownership. Refresh and try again." }); return; }
+    res.json(publicOrganizationJob(updated));
+  } catch {
+    // Do not leave a plan-edit claim behind if validation or persistence fails.
+    // The token predicate prevents this cleanup from clearing a newer owner's claim.
+    if (planEditToken && planEditNasPath) {
+      await db.update(organizationJobsTable)
+        .set({ leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, planEditNasPath),
+          eq(organizationJobsTable.leaseToken, planEditToken),
+        )).catch(() => {});
+    }
+    res.status(500).json({ error: "Failed to update plan" });
+  }
 });
 
 router.post("/organize/jobs/:id/preflight", async (req, res) => {
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
+  let preflightLeaseToken = "";
+  let preflightNasPath = "";
+  let preflightClaimed = false;
   try {
     const nasPathForJob = await getNasPath();
     const job = nasPathForJob ? await getScopedOrganizationJob(id, nasPathForJob) : undefined;
     if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    if (!job.nasPath) { res.status(409).json({ error: "Job is not scoped to an active library" }); return; }
     if (!job.planJson) { res.status(422).json({ error: "Run analyze first" }); return; }
-    if (job.status === "executing") { res.status(409).json({ error: "Job is currently executing" }); return; }
+    if (["executing", "analyzing", "rolling_back"].includes(job.status)) {
+      res.status(409).json({ error: "This job is currently being processed" }); return;
+    }
 
     const plan = job.planJson as any;
     const settings = await getActiveAppSettings();
@@ -1241,6 +1289,28 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       res.status(422).json({ error: "NAS path is not configured. Set an absolute NAS path in Settings before running preflight." }); return;
     }
+
+    if (path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      res.status(409).json({ error: "The active library changed. Refresh the job before running preflight." }); return;
+    }
+
+    // Hold the same row lease used by execution so preflight cannot finish
+    // late and reset a worker's status back to verified/planned.
+    preflightLeaseToken = crypto.randomUUID();
+    preflightNasPath = job.nasPath;
+    const [claimedPreflight] = await db.update(organizationJobsTable)
+      .set({ leaseToken: preflightLeaseToken })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, preflightNasPath),
+        eq(organizationJobsTable.status, job.status),
+        isNull(organizationJobsTable.leaseToken),
+      ))
+      .returning({ id: organizationJobsTable.id });
+    if (!claimedPreflight) {
+      res.status(409).json({ error: "This job changed while preflight was starting. Refresh and try again." }); return;
+    }
+    preflightClaimed = true;
     const checks: any[] = [];
 
     // Active routes = plan.activeRoutes (if exclusions applied) or plan.routes
@@ -1333,20 +1403,33 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
     });
     const seenFs = new Set<string>();
     for (const dest of uniqueDests) {
-      const checkDir = fs.existsSync(dest) ? dest : path.dirname(dest);
+      let checkDir = dest;
+      try {
+        await fs.promises.stat(checkDir);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          checkDir = path.dirname(dest);
+        } else {
+          checks.push({
+            name: `Disk space (${path.basename(dest)})`,
+            ok: false,
+            detail: "Destination filesystem could not be inspected",
+          });
+          continue;
+        }
+      }
       let fsKey = checkDir;
-      try { fsKey = fs.realpathSync(checkDir); } catch { /* best effort */ }
+      try { fsKey = await fs.promises.realpath(checkDir); } catch { /* best effort */ }
       if (seenFs.has(fsKey)) continue;
       seenFs.add(fsKey);
-      const free = getDiskFreeBytes(checkDir);
-      let diskOk = true;
-      let diskDetail = "Check unavailable on this system";
-      if (free !== null) {
-        diskOk = free >= totalBytes;
-        diskDetail = diskOk
+      const free = await getDiskFreeBytes(checkDir);
+      const diskOk = free !== null && free >= totalBytes;
+      const diskDetail = free === null
+        ? "Filesystem free space could not be measured"
+        : diskOk
           ? `Need ${(totalBytes / 1e9).toFixed(2)} GB, ${(free / 1e9).toFixed(2)} GB free`
           : `Need ${(totalBytes / 1e9).toFixed(2)} GB but only ${(free / 1e9).toFixed(2)} GB free`;
-      }
       checks.push({ name: `Disk space (${path.basename(dest)})`, ok: diskOk, detail: diskDetail });
     }
 
@@ -1422,11 +1505,30 @@ router.post("/organize/jobs/:id/preflight", async (req, res) => {
       conflictPolicy, conflictList,
     };
     const [updated] = await db.update(organizationJobsTable)
-      .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message })
-      .where(eq(organizationJobsTable.id, id))
+      .set({ status: capacityAllOk ? "verified" : "planned", preflightJson, error: capacity.allowed ? null : capacity.message, leaseToken: null })
+      .where(and(
+        eq(organizationJobsTable.id, id),
+        eq(organizationJobsTable.nasPath, preflightNasPath),
+        eq(organizationJobsTable.leaseToken, preflightLeaseToken),
+        eq(organizationJobsTable.status, job.status),
+      ))
       .returning();
-    res.json(updated);
-  } catch { res.status(500).json({ error: "Preflight check failed" }); }
+    if (!updated) { res.status(409).json({ error: "Preflight lost ownership. Refresh and try again." }); return; }
+    preflightClaimed = false;
+    res.json(publicOrganizationJob(updated));
+  } catch {
+    // Release only this preflight's claim; never clear a replacement worker's lease.
+    if (preflightClaimed && preflightLeaseToken && preflightNasPath) {
+      await db.update(organizationJobsTable)
+        .set({ leaseToken: null })
+        .where(and(
+          eq(organizationJobsTable.id, id),
+          eq(organizationJobsTable.nasPath, preflightNasPath),
+          eq(organizationJobsTable.leaseToken, preflightLeaseToken),
+        )).catch(() => {});
+    }
+    res.status(500).json({ error: "Preflight check failed" });
+  }
 });
 
 /**
@@ -1445,6 +1547,10 @@ router.get("/organize/jobs/:id/dry-run", async (req, res) => {
     const plan = job.planJson as any;
     const settings = await getActiveAppSettings();
     const nasPath = (settings?.nasPath ?? "").trim();
+
+    if (!job.nasPath || !nasPath || !path.isAbsolute(nasPath) || path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      res.status(409).json({ error: "The active library changed. Refresh the job before running the dry run." }); return;
+    }
 
     const activeRoutes: any[] = plan.activeRoutes ?? plan.routes ?? [];
 
@@ -1620,6 +1726,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
   const operationLogger = logger.child({ correlationId, operation: "organize", jobId: id });
   let capacityReservation: CapacityReservation | null = null;
   let stopHeartbeat: (() => void) | null = null;
+  let executionLeaseToken = "";
   let logWriteFailureReported = false;
   const opLog = (line: string) => {
     try {
@@ -1646,6 +1753,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     if (!nasPath || !path.isAbsolute(nasPath)) {
       send("error", { message: "NAS path is not configured. Set an absolute NAS path in Settings before executing." }); res.end(); return;
     }
+    if (!job.nasPath || path.resolve(nasPath) !== path.resolve(job.nasPath)) {
+      send("error", { message: "The active library changed. Refresh the job before executing." }); res.end(); return;
+    }
     cleanupNasPath = nasPath;
     let canonicalJobSourcePath: string;
     try { canonicalJobSourcePath = resolveActiveArchivePath(job.sourcePath, nasPath); }
@@ -1654,8 +1764,9 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Claim the job atomically before capacity reservation or staging. Two
     // requests can both read "verified"; only one may transition it to
     // "executing" and own the deterministic per-job staging directory.
+    executionLeaseToken = crypto.randomUUID();
     const [claimedJob] = await db.update(organizationJobsTable)
-      .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date() })
+      .set({ status: "executing", lastStage: "claiming", stageUpdatedAt: new Date(), leaseToken: executionLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -1667,7 +1778,7 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       res.end();
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, executionLeaseToken);
 
     // Active routes respect any category/path exclusions set via PATCH /plan
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
@@ -1689,10 +1800,11 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       stopHeartbeat?.();
       stopHeartbeat = null;
       await db.update(organizationJobsTable)
-        .set({ status: "verified", error: message, stageUpdatedAt: new Date() })
+        .set({ status: "verified", error: message, stageUpdatedAt: new Date(), leaseToken: null })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, executionLeaseToken),
           eq(organizationJobsTable.status, "executing"),
         ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
@@ -1725,10 +1837,18 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     // Stage checkpoint helper — fire-and-forget; persists lastStage + stageUpdatedAt for Recovery Center
     const setStage = async (stage: string): Promise<void> => {
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ lastStage: stage, stageUpdatedAt: new Date() })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before its stage checkpoint.");
       } catch (e: any) {
+        if (e instanceof Error && e.message.includes("lease was lost")) throw e;
         opLog(`WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}`);
       }
     };
@@ -1840,19 +1960,19 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       }
       const destDir  = planDest;
       let destFile   = path.join(destDir, path.basename(sf.relativePath));
-      let replacement: FileMoveRecord["replacement"];
 
       // Enforce NAS root boundary — destination must be within configured nasPath
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
+      ensureDataDirectoryWithinRoot(destDir, nasPath);
 
       // Apply conflict policy when destination file already exists
       if (fs.existsSync(destFile)) {
         const filename = path.basename(sf.relativePath);
         if (conflictPolicy === "replace") {
-          replacement = await describeReplacementDestination(destFile, id);
-          opLog("CONFLICT_REPLACE: existing destination preserved until the replacement is verified and committed");
-          conflictResolutions.push({ filename, destDir, action: "replace" });
-          // fall through to move normally
+          throw new Error(
+            "Replace is temporarily unavailable because this operation cannot yet preserve the existing destination for crash recovery. " +
+            "Choose Rename or Keep Existing; no destination file was changed.",
+          );
         } else if (conflictPolicy === "rename") {
           const ext  = path.extname(filename);
           const base = filename.slice(0, filename.length - ext.length);
@@ -1888,13 +2008,19 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
         destHash: sourceHash,
         verified: false,
         sourceRelPath: sf.relativePath,
-        replacement,
       };
       fileMoves.push(intent);
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: fileMoves as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before the move intent was saved.");
       } catch (e: any) {
         fileMoves.pop();
         throw new Error(`File-move intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
@@ -1902,14 +2028,19 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // verifiedMove computes the source hash again, performs an exclusive
       // no-replace move, and verifies the destination bytes.
-      const record = replacement
-        ? await verifiedReplace(sf.fullPath, destFile, {
-            backupPath: replacement.backupPath,
-            expectedPreviousHash: replacement.previousHash,
-            sourceRelPath: sf.relativePath,
-            expectedSourceHash: sourceHash,
-          })
-        : await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      await assertOrganizationLease(id, nasPath, executionLeaseToken);
+      const record = await verifiedMove(sf.fullPath, destFile, {
+        sourceRelPath: sf.relativePath,
+        expectedSourceHash: sourceHash,
+        beforeMove: async () => {
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
+          ensureDataDirectoryWithinRoot(destDir, nasPath);
+        },
+        beforeRestore: async () => {
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
+          ensureDataDirectoryWithinRoot(path.dirname(sf.fullPath), nasPath);
+        },
+      });
       fileMoves[fileMoves.length - 1] = record;
       moved++;
 
@@ -1917,9 +2048,16 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
 
       // Replace the durable intent with the completed, checksum-verified move.
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: fileMoves as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, executionLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization worker lease was lost before its verified move was saved.");
       } catch (e: any) {
         // The persisted intent remains sufficient for crash recovery. The
         // in-memory verified record lets this process roll the move back now.
@@ -2006,10 +2144,12 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
           const processedDir = ensureDirectoryWithinRoot(path.join(getWillardAIDir(nasPath), "archive-index", "processed"), nasPath);
           const dest = path.join(processedDir, path.basename(job.sourcePath));
           dispositionSourceHash = await sha256File(job.sourcePath);
+          await assertOrganizationLease(id, nasPath, executionLeaseToken);
           moveFileNoReplace(job.sourcePath, dest);
           const destinationHash = await sha256File(dest);
           if (destinationHash !== dispositionSourceHash) {
             try {
+              await assertOrganizationLease(id, nasPath, executionLeaseToken);
               moveFileNoReplace(dest, job.sourcePath);
             } catch (restoreError) {
               throw new Error("Archive move checksum verification failed and the archive could not be restored: " + (restoreError instanceof Error ? restoreError.message : String(restoreError)));
@@ -2085,14 +2225,20 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     logStream?.end();
 
     const safeReport = redactOperationalData(report) as Record<string, unknown>;
-    await db.update(organizationJobsTable).set({
+    const [completedJob] = await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: fileMoves as any,
       reportJson: safeReport as any,
       reportPath: reportPath || null,
       completedAt,
-    }).where(eq(organizationJobsTable.id, id));
-    await cleanupCommittedReplacementBackups(fileMoves, message => opLog(message));
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, executionLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).returning({ id: organizationJobsTable.id });
+    if (!completedJob) throw new Error("Organization worker lease was lost before completion could be committed.");
     void requestLibraryBackup("completed organization job");
 
     send("complete", { ...safeReport, progress: 100 });
@@ -2103,8 +2249,26 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
     opLog(`ERROR: ${errMsg}`);
     send("status", { stage: "rolling_back", message: "Error — rolling back all moves…", progress: -1 });
 
+    // Do not let a worker that lost ownership roll back files now owned by a replacement.
+    try {
+      await assertOrganizationLease(id, cleanupNasPath, executionLeaseToken);
+    } catch {
+      send("error", { message: "This worker lost ownership of the job. Its recovery journal was preserved for the current owner.", rolledBack: 0 });
+      return;
+    }
+
     // rollbackMoves reverses in LIFO order, verifies each restored file against sourceHash
-    const rolledBack = await rollbackMoves(fileMoves, line => opLog(line));
+    let rolledBack = 0;
+    try {
+      rolledBack = await rollbackMoves(fileMoves, line => opLog(line), async (move) => {
+        await assertOrganizationLease(id, cleanupNasPath, executionLeaseToken);
+        ensureDataDirectoryWithinRoot(path.dirname(move.from), cleanupNasPath);
+        ensureDataDirectoryWithinRoot(path.dirname(move.to), cleanupNasPath);
+      });
+    } catch {
+      send("error", { message: "This worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
+      return;
+    }
     opLog(`=== Job #${id} ROLLED_BACK ${rolledBack}/${fileMoves.length} moves reversed ===`);
     logStream?.end();
 
@@ -2117,7 +2281,13 @@ router.get("/organize/jobs/:id/execute", async (req, res) => {
       error: recoveryError,
       fileMoves: fileMoves as any,
       completedAt: new Date(),
-    }).where(eq(organizationJobsTable.id, id)).catch(() => {});
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, cleanupNasPath),
+      eq(organizationJobsTable.leaseToken, executionLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
   } finally {
@@ -2285,7 +2455,7 @@ router.get("/organize/recovery", async (_req, res) => {
       ))
       .orderBy(desc(organizationJobsTable.createdAt))
       .limit(50);
-    res.json({ interrupted: jobs });
+    res.json({ interrupted: jobs.map(publicOrganizationJob) });
   } catch { res.status(500).json({ error: "Failed to query recovery data" }); }
 });
 
@@ -2298,6 +2468,7 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
   let stopHeartbeat: (() => void) | null = null;
   let nasPath = "";
+  let rollbackLeaseToken = "";
   try {
     const configuredNasPath = await getNasPath();
     if (!configuredNasPath) { res.status(404).json({ error: "Storage library is not configured" }); return; }
@@ -2318,8 +2489,9 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
     // Rollback moves files and changes the recovery journal. Claim it only
     // after the previous worker is failed or its heartbeat has expired.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    rollbackLeaseToken = crypto.randomUUID();
     const [claimedRollback] = await db.update(organizationJobsTable)
-      .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date() })
+      .set({ status: "rolling_back", lastStage: "rolling_back", stageUpdatedAt: new Date(), leaseToken: rollbackLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -2339,35 +2511,47 @@ router.post("/organize/jobs/:id/rollback", async (req, res) => {
       res.status(409).json({ error: "This job is still running. Wait for its heartbeat to expire before rolling it back." });
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, "rolling_back");
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, rollbackLeaseToken, "rolling_back");
 
     const logs: string[] = [];
-    const rolledBack = await rollbackMoves(moves, line => logs.push(line));
+    await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
+    const rolledBack = await rollbackMoves(moves, line => logs.push(line), async (move) => {
+      await assertOrganizationLease(id, nasPath, rollbackLeaseToken);
+      ensureDataDirectoryWithinRoot(path.dirname(move.from), nasPath);
+      ensureDataDirectoryWithinRoot(path.dirname(move.to), nasPath);
+    });
     const isComplete = rolledBack === moves.length;
 
     // Only mark rolled_back when ALL moves were reversed.
     // Partial rollback keeps failed status so the user knows manual intervention is needed.
-    await db.update(organizationJobsTable).set({
+    const [updatedRollback] = await db.update(organizationJobsTable).set({
       status: isComplete ? "rolled_back" : "failed",
       error: isComplete
         ? `Rolled back via Recovery Center: ${rolledBack}/${moves.length} move(s) reversed.`
         : `Partial rollback: only ${rolledBack}/${moves.length} move(s) reversed — manual intervention may be required.`,
       completedAt: isComplete ? new Date() : null,
+      leaseToken: null,
     }).where(and(
       eq(organizationJobsTable.id, id),
       eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, rollbackLeaseToken),
       eq(organizationJobsTable.status, "rolling_back"),
-    ));
+    )).returning({ id: organizationJobsTable.id });
+    if (!updatedRollback) {
+      res.status(409).json({ error: "Rollback worker lost ownership before its final recovery status could be saved. The recovery journal remains available." });
+      return;
+    }
 
     res.json({ ok: isComplete, rolledBack, total: moves.length, partial: !isComplete, logs });
   } catch (e: any) {
     if (nasPath) {
       try {
         await db.update(organizationJobsTable)
-          .set({ status: "failed", error: e.message ?? "Rollback failed", stageUpdatedAt: new Date() })
+          .set({ status: "failed", error: e.message ?? "Rollback failed", stageUpdatedAt: new Date(), leaseToken: null })
           .where(and(
             eq(organizationJobsTable.id, id),
             eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, rollbackLeaseToken),
             eq(organizationJobsTable.status, "rolling_back"),
           ));
       } catch (persistError) {
@@ -2496,6 +2680,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
   let existingMoves: FileMoveRecord[] = [];
   let capacityReservation: CapacityReservation | null = null;
   let stopHeartbeat: (() => void) | null = null;
+  let resumeLeaseToken = "";
 
   try {
     const [job] = await db.select().from(organizationJobsTable).where(eq(organizationJobsTable.id, id)).limit(1);
@@ -2529,8 +2714,9 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // stale. The conditional update is the cross-process compare-and-swap:
     // only one resume request can acquire the lease.
     const staleBefore = new Date(Date.now() - ORGANIZATION_EXECUTION_LEASE_MS);
+    resumeLeaseToken = crypto.randomUUID();
     const [claimedResume] = await db.update(organizationJobsTable)
-      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date() })
+      .set({ status: "executing", lastStage: "resuming", stageUpdatedAt: new Date(), leaseToken: resumeLeaseToken })
       .where(and(
         eq(organizationJobsTable.id, id),
         eq(organizationJobsTable.nasPath, nasPath),
@@ -2551,7 +2737,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       res.end();
       return;
     }
-    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath);
+    stopHeartbeat = startOrganizationJobHeartbeat(id, nasPath, resumeLeaseToken);
 
     const excludedCategories = new Set<string>(plan.excludeCategories ?? []);
     const excludedPaths = new Set<string>(plan.excludePaths ?? []);
@@ -2571,10 +2757,11 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       stopHeartbeat?.();
       stopHeartbeat = null;
       await db.update(organizationJobsTable)
-        .set({ status: job.status, lastStage: job.lastStage, stageUpdatedAt: job.stageUpdatedAt, error: message })
+        .set({ status: job.status, lastStage: job.lastStage, stageUpdatedAt: job.stageUpdatedAt, error: message, leaseToken: null })
         .where(and(
           eq(organizationJobsTable.id, id),
           eq(organizationJobsTable.nasPath, nasPath),
+          eq(organizationJobsTable.leaseToken, resumeLeaseToken),
           eq(organizationJobsTable.status, "executing"),
         ));
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
@@ -2587,10 +2774,18 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     // Stage checkpoint helper for resume — awaited, non-throwing
     const setStage = async (stage: string): Promise<void> => {
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ lastStage: stage, stageUpdatedAt: new Date() })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease.");
       } catch (e: any) {
+        if (e instanceof Error && e.message.includes("lost its lease")) throw e;
         send("log", { message: `WARN: Stage checkpoint '${stage}' failed: ${e.message ?? String(e)}` });
       }
     };
@@ -2661,7 +2856,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
 
       const destDir = planDest;
       let destFile  = path.join(destDir, path.basename(sf.relativePath));
-      let replacement: FileMoveRecord["replacement"];
 
       assertWithinRoot(path.resolve(destDir), path.resolve(nasPath));
 
@@ -2681,7 +2875,10 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // Conflict handling for files not yet moved
       if (fs.existsSync(destFile)) {
         if (conflictPolicy === "replace") {
-          replacement = await describeReplacementDestination(destFile, id);
+          throw new Error(
+            "Replace is temporarily unavailable because this operation cannot yet preserve the existing destination for crash recovery. " +
+            "Choose Rename or Keep Existing; no destination file was changed.",
+          );
         } else if (conflictPolicy === "rename") {
           const ext  = path.extname(path.basename(sf.relativePath));
           const base = path.basename(sf.relativePath).slice(0, path.basename(sf.relativePath).length - ext.length);
@@ -2696,7 +2893,7 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         }
       }
 
-      fs.mkdirSync(destDir, { recursive: true });
+      ensureDataDirectoryWithinRoot(destDir, nasPath);
       const sourceHash = await sha256File(sf.fullPath);
       const intent: FileMoveRecord = {
         from: sf.fullPath,
@@ -2705,7 +2902,6 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
         destHash: sourceHash,
         verified: false,
         sourceRelPath: sf.relativePath,
-        replacement,
       };
       newMoves.push(intent);
 
@@ -2713,31 +2909,50 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       // and the verified checkpoint still leaves a recoverable journal entry.
       const intentJournal = [...existingMoves, ...newMoves];
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: intentJournal as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease before saving its move intent.");
       } catch (e: any) {
         newMoves.pop();
         throw new Error(`Resume move-intent checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
       }
 
-      const record = replacement
-        ? await verifiedReplace(sf.fullPath, destFile, {
-            backupPath: replacement.backupPath,
-            expectedPreviousHash: replacement.previousHash,
-            sourceRelPath: sf.relativePath,
-            expectedSourceHash: sourceHash,
-          })
-        : await verifiedMove(sf.fullPath, destFile, { sourceRelPath: sf.relativePath, expectedSourceHash: sourceHash });
+      await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+      const record = await verifiedMove(sf.fullPath, destFile, {
+        sourceRelPath: sf.relativePath,
+        expectedSourceHash: sourceHash,
+        beforeMove: async () => {
+          await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+          ensureDataDirectoryWithinRoot(destDir, nasPath);
+        },
+        beforeRestore: async () => {
+          await assertOrganizationLease(id, nasPath, resumeLeaseToken);
+          ensureDataDirectoryWithinRoot(path.dirname(sf.fullPath), nasPath);
+        },
+      });
       newMoves[newMoves.length - 1] = record;
       moved++;
 
       // Replace the durable intent with the checksum-verified move record.
       const merged = [...existingMoves, ...newMoves];
       try {
-        await db.update(organizationJobsTable)
+        const [owned] = await db.update(organizationJobsTable)
           .set({ fileMoves: merged as any })
-          .where(eq(organizationJobsTable.id, id));
+          .where(and(
+            eq(organizationJobsTable.id, id),
+            eq(organizationJobsTable.nasPath, nasPath),
+            eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+            eq(organizationJobsTable.status, "executing"),
+          ))
+          .returning({ id: organizationJobsTable.id });
+        if (!owned) throw new Error("Organization resume worker lost its lease before saving the verified move.");
       } catch (e: any) {
         // The persisted intent remains sufficient for Recovery Center rollback.
         throw new Error(`Resume file-move recovery checkpoint failed: ${e.message ?? String(e)}`, { cause: e });
@@ -2793,13 +3008,19 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       checksumVerified, resumedFrom: existingMoves.length,
     };
 
-    await db.update(organizationJobsTable).set({
+    const [completedJob] = await db.update(organizationJobsTable).set({
       status: "completed",
       fileMoves: allMoves as any,
       reportJson: report as any,
       completedAt,
-    }).where(eq(organizationJobsTable.id, id));
-    await cleanupCommittedReplacementBackups(allMoves, message => logger.warn({ jobId: id, message }, "Organization replacement backup cleanup warning"));
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, nasPath),
+      eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).returning({ id: organizationJobsTable.id });
+    if (!completedJob) throw new Error("Organization resume worker lost its lease before completion could be committed.");
     void requestLibraryBackup("completed organization recovery");
 
     send("complete", { ...report, progress: 100 });
@@ -2808,8 +3029,26 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
     const errMsg = err instanceof Error ? err.message : "Unknown error";
     send("status", { stage: "rolling_back", message: "Resume error — rolling back new moves…", progress: -1 });
 
+    // A worker that lost ownership must not undo files handled by its replacement.
+    try {
+      await assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken);
+    } catch {
+      send("error", { message: "This resume worker lost ownership. Its durable recovery journal was preserved.", rolledBack: 0 });
+      return;
+    }
+
     // Roll back only the moves performed in THIS resume pass (existingMoves stay at destination)
-    const rolledBack = await rollbackMoves(newMoves, () => {});
+    let rolledBack = 0;
+    try {
+      rolledBack = await rollbackMoves(newMoves, () => {}, async (move) => {
+        await assertOrganizationLease(id, cleanupNasPath, resumeLeaseToken);
+        ensureDataDirectoryWithinRoot(path.dirname(move.from), cleanupNasPath);
+        ensureDataDirectoryWithinRoot(path.dirname(move.to), cleanupNasPath);
+      });
+    } catch {
+      send("error", { message: "This resume worker lost ownership during rollback. Remaining recovery records were preserved.", rolledBack });
+      return;
+    }
     const resumeRollbackComplete = rolledBack === newMoves.length;
     // Only discard this pass's journal when every new move was restored and
     // checksum-verified. Keep all records if rollback is partial so Recovery
@@ -2822,7 +3061,13 @@ router.get("/organize/jobs/:id/resume", async (req, res) => {
       status: "failed",
       fileMoves: retainedMoves as any,
       error: recoveryError,
-    }).where(eq(organizationJobsTable.id, id)).catch(() => {});
+      leaseToken: null,
+    }).where(and(
+      eq(organizationJobsTable.id, id),
+      eq(organizationJobsTable.nasPath, cleanupNasPath),
+      eq(organizationJobsTable.leaseToken, resumeLeaseToken),
+      eq(organizationJobsTable.status, "executing"),
+    )).catch(() => {});
 
     send("error", { message: errMsg, rolledBack });
   } finally {

@@ -6,7 +6,7 @@ import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable }
 import { eq, and, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { canonicalizePath, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { parseBoundedInteger, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
@@ -15,7 +15,8 @@ import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandl
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
-import { renameFileWithPersistence } from "../lib/media-rename.ts";
+import { findPortableNameCollision, isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
+import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 
 const router = Router();
 
@@ -352,8 +353,9 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
   if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
   
 
-  const newName: string = (req.body?.name ?? "").trim();
-  if (!newName || newName.length > 255 || /[/\\<>:"|?*]/.test(newName)) {
+  const requestedName = req.body?.name;
+  const newName = typeof requestedName === "string" ? requestedName.trim() : "";
+  if (!isPortableMediaFileName(newName)) {
     res.status(400).json({ error: "Invalid file name" }); return;
   }
 
@@ -384,24 +386,98 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     return;
   }
 
+  // Resolve the stored relative path component-by-component without
+  // following descendant symlinks. resolveLibraryPath intentionally returns
+  // a canonical path, so checking only oldAbs would hide a symlinked catalog
+  // path and rename its target instead of the catalog entry.
+  try {
+    const lexicalRoot = path.resolve(nasPath);
+    const normalizedRelative = file.relativePath.replace(/[\\/]/g, path.sep);
+    const lexicalSource = path.resolve(lexicalRoot, normalizedRelative);
+    const relativeSource = path.relative(lexicalRoot, lexicalSource);
+    if (!relativeSource || relativeSource === ".." || relativeSource.startsWith(".." + path.sep) || path.isAbsolute(relativeSource)) {
+      throw new Error("Stored media path is not a regular child of the configured library");
+    }
+    let currentPath = canonicalizePath(nasPath);
+    const components = relativeSource.split(path.sep).filter(Boolean);
+    for (let index = 0; index < components.length; index += 1) {
+      currentPath = path.join(currentPath, components[index]!);
+      const stat = fs.lstatSync(currentPath);
+      if (stat.isSymbolicLink()) throw new Error("Stored media path contains a symbolic link");
+      if (index < components.length - 1 && !stat.isDirectory()) throw new Error("Stored media path has a non-directory parent");
+      if (index === components.length - 1 && !stat.isFile()) throw new Error("Stored media path is not a regular file");
+    }
+    if (path.resolve(currentPath) !== path.resolve(oldAbs)) {
+      throw new Error("Stored media path changed canonical location");
+    }
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : "Source file is not a regular library file" });
+    return;
+  }
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
+  try {
+    const sourceStat = fs.lstatSync(oldAbs);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isFile() || sourceStat.size !== Number(file.sizeBytes ?? 0)) {
+      res.status(409).json({ error: "Source file no longer matches the indexed media record. Refresh the library and try again." });
+      return;
+    }
+    if (typeof file.contentHash === "string" && /^[a-f0-9]{64}$/i.test(file.contentHash)) {
+      const sourceHash = await sha256File(oldAbs);
+      if (sourceHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+        res.status(409).json({ error: "Source file contents changed since indexing. Refresh the library and try again." });
+        return;
+      }
+    }
+  } catch {
+    res.status(409).json({ error: "Source file could not be verified. Refresh the library and try again." });
+    return;
+  }
+  const siblingCollision = findPortableNameCollision(
+    fs.readdirSync(path.dirname(oldAbs)),
+    newName,
+    path.basename(oldAbs),
+  );
+  if (siblingCollision) {
+    res.status(409).json({ error: `A file named "${siblingCollision}" already exists on a case-insensitive filesystem.` });
+    return;
+  }
+  if (newRelPath === file.relativePath) {
+    res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
+    return;
+  }
   if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
 
-  const updated = await renameFileWithPersistence(
-    oldAbs,
-    newAbs,
-    async () => {
-      const [row] = await db
-        .update(mediaFilesTable)
-        .set({ name: newName, relativePath: newRelPath })
-        .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-        .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
-      return row;
-    },
-    (from, to) => fs.renameSync(from, to),
-  );
-
-  res.json(updated);
+  try {
+    const updated = await renameFileWithPersistence(
+      oldAbs,
+      newAbs,
+      async () => {
+        const [row] = await db
+          .update(mediaFilesTable)
+          .set({ name: newName, relativePath: newRelPath })
+          .where(and(
+            eq(mediaFilesTable.id, id),
+            eq(mediaFilesTable.nasPath, nasPath),
+            eq(mediaFilesTable.relativePath, file.relativePath),
+            ACTIVE_MEDIA,
+          ))
+          .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+        return row;
+      },
+      (from, to) => moveFileNoReplace(from, to),
+    );
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof MediaRenameConflictError) {
+      res.status(409).json({ error: "Media record changed during rename. Refresh the library and try again." });
+      return;
+    }
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+      res.status(409).json({ error: "A file with that name already exists" });
+      return;
+    }
+    throw error;
+  }
 });
 
 // ── GET /api/media/timeline — year/month buckets ─────────────────────────────

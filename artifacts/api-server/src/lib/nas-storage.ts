@@ -134,6 +134,42 @@ export function assertWithinRoot(targetPath: string, root: string): void {
  * the configured root. Unlike recursive mkdir, each component is checked
  * before the next one is created, and the returned path is canonical.
  */
+export function ensureDataDirectoryWithinRoot(
+  targetPath: string,
+  root: string,
+  mode = 0o755,
+): string {
+  const canonicalRoot = canonicalizePath(root);
+  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("Directory path escapes the configured library root.");
+  }
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Configured library root is a symlink or is not a directory.");
+  }
+
+  let current = canonicalRoot;
+  for (const component of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    try {
+      fs.mkdirSync(current, { mode });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error("Directory path contains a symlink or non-directory component.");
+    }
+    const resolved = canonicalizePath(current);
+    const resolvedRelative = path.relative(canonicalRoot, resolved);
+    if (resolvedRelative === ".." || resolvedRelative.startsWith(`..${path.sep}`) || path.isAbsolute(resolvedRelative)) {
+      throw new Error("Directory path resolves outside the configured library root.");
+    }
+  }
+  return current;
+}
+
 export function ensureDirectoryWithinRoot(
   targetPath: string,
   root: string,
@@ -599,7 +635,9 @@ export class LazyNasLogStream extends Writable {
   async setNasPath(nasPath: string): Promise<void> {
     try {
       const logDir = path.join(getWillardAIDir(nasPath), "logs");
-      if (!fs.existsSync(logDir)) return;
+      if (!fs.existsSync(logDir)) {
+        throw new Error("NAS operational log directory is unavailable");
+      }
       ensurePrivateDir(logDir);
       const { createStream } = await import("rotating-file-stream");
       const newStream = createStream("willard-ai.log", {
@@ -614,8 +652,14 @@ export class LazyNasLogStream extends Writable {
         (old as any).destroy();
       }
     } catch {
-      // NAS not accessible — continue with stdout, but make the degraded
-      // logging state visible to the operator.
+      // Never keep writing to the previous library after a switch fails:
+      // that would leak the new library's operational activity into the old
+      // NAS. Fall back to process logs until the correct destination is ready.
+      const old = this.rfsStream;
+      this.rfsStream = null;
+      if (old && "destroy" in old && typeof (old as any).destroy === "function") {
+        try { (old as any).destroy(); } catch { /* best-effort stream teardown */ }
+      }
       process.emitWarning("NAS operational log stream unavailable; using process logs only", {
         code: "WILLARD_NAS_LOG_STREAM_UNAVAILABLE",
       });

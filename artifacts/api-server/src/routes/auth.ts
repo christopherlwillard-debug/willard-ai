@@ -9,7 +9,8 @@ import { UAParser } from "ua-parser-js";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { logger } from "../lib/logger.ts";
-import { persistSessionUnderCredentialLock, type CredentialLock } from "../lib/auth-session-guard.ts";
+import { credentialVersion, isSessionCredentialCurrent, persistSessionUnderCredentialLock, type CredentialLock } from "../lib/auth-session-guard.ts";
+import { isSessionRevoked, revokeOtherSessions, revokeSession, revokeSessionForCredential } from "../lib/auth-session-revocation.ts";
 
 const router: IRouter = Router();
 
@@ -37,6 +38,11 @@ function regenerateSession(req: Request): Promise<void> {
 }
 
 async function establishSession(req: Request): Promise<void> {
+  // Session regeneration is also a revocation boundary: an older in-flight
+  // request can still save the previous SID after express-session destroys it.
+  if ((req.session as any)?.authenticated === true) {
+    await revokeSession(req.sessionID);
+  }
   await regenerateSession(req);
   const sess = req.session as any;
   const now = new Date().toISOString();
@@ -55,20 +61,23 @@ function saveSession(req: Request): Promise<void> {
 
 async function destroySession(req: Request): Promise<void> {
   const sid = req.sessionID;
+  const wasAuthenticated = (req.session as any)?.authenticated === true;
+  // Persist the tombstone before deleting the session row. If this write fails,
+  // propagate the error so callers cannot report revocation as successful.
+  if (wasAuthenticated) await revokeSession(sid);
   try {
     await new Promise<void>((resolve, reject) => {
       req.session.destroy((err) => (err ? reject(err) : resolve()));
     });
   } catch (error) {
-    // The session store normally uses this same database. Retry the exact
-    // session row directly if the store callback fails during revocation.
+    // The tombstone is authoritative even if the session-store delete fails.
     try {
       await pool.query("DELETE FROM session WHERE sid = $1", [sid]);
     } catch (fallbackError) {
-      throw new AggregateError(
-        [error, fallbackError],
-        "Could not revoke a stale authentication session",
-      );
+      if (!wasAuthenticated) {
+        throw new AggregateError([error, fallbackError], "Could not destroy an unauthenticated session");
+      }
+      logger.warn({ err: fallbackError, operation: "revoked_session_row_cleanup", sid }, "Session row cleanup failed; durable revocation tombstone remains active");
     }
   }
 }
@@ -123,6 +132,9 @@ async function establishSessionForPassword(
     () => acquireCredentialLock(settingsId),
     async () => {
       await establishSession(req);
+      const sess = req.session as any;
+      sess.credentialSettingsId = settingsId;
+      sess.credentialVersion = credentialVersion(expectedPasswordHash);
       await saveSession(req);
     },
     () => destroySession(req),
@@ -254,9 +266,18 @@ router.get("/auth/status", async (req: Request, res: Response) => {
       return;
     }
     const sess = req.session as any;
-    res.json({ setup: false, authenticated: sess?.authenticated === true });
+    const sessionRevoked = sess?.authenticated === true ? await isSessionRevoked(req.sessionID) : false;
+    const authenticated = sess?.authenticated === true && !sessionRevoked &&
+      sess.credentialSettingsId === settings.id &&
+      isSessionCredentialCurrent(sess.credentialVersion, settings.passwordHash);
+    if (sess?.authenticated === true && !authenticated) {
+      await destroySession(req);
+      res.clearCookie("willard.sid");
+    }
+    res.json({ setup: false, authenticated });
   } catch {
-    res.status(500).json({ error: "Failed to check auth status" });
+    res.clearCookie("willard.sid");
+    res.status(503).json({ error: "Session status could not be verified. Please retry." });
   }
 });
 
@@ -354,15 +375,16 @@ router.post("/auth/login", loginRateLimiter, async (req: Request, res: Response)
   }
 });
 
-router.post("/auth/logout", (req: Request, res: Response) => {
-  req.session.destroy((err) => {
-    if (err) {
-      res.status(500).json({ error: "Logout failed" });
-      return;
-    }
+router.post("/auth/logout", async (req: Request, res: Response) => {
+  try {
+    await destroySession(req);
     res.clearCookie("willard.sid");
     res.json({ ok: true });
-  });
+  } catch (error) {
+    logger.error({ err: error, operation: "auth_logout_revocation" }, "Logout could not be durably confirmed");
+    res.clearCookie("willard.sid");
+    res.status(503).json({ error: "Logout could not be confirmed. Please retry." });
+  }
 });
 
 router.post("/auth/recover", recoverRateLimiter, async (req: Request, res: Response) => {
@@ -416,8 +438,16 @@ router.get("/auth/sessions", async (req: Request, res: Response) => {
   }
   try {
     const currentSid = req.sessionID;
+    const currentSession = req.session as any;
     const result = await pool.query<{ sid: string; sess: any; expire: Date }>(
-      `SELECT sid, sess, expire FROM session WHERE expire > NOW() ORDER BY (sess->>'createdAt') DESC NULLS LAST`
+      `SELECT sid, sess, expire
+         FROM session
+        WHERE expire > NOW()
+          AND sess->>'credentialSettingsId' = $1
+          AND sess->>'credentialVersion' = $2
+          AND NOT EXISTS (SELECT 1 FROM revoked_sessions r WHERE r.sid = session.sid)
+        ORDER BY (sess->>'createdAt') DESC NULLS LAST`,
+      [String(currentSession.credentialSettingsId), currentSession.credentialVersion],
     );
     const sessions = result.rows.map((row) => ({
       sid: row.sid,
@@ -440,12 +470,21 @@ router.delete("/auth/sessions/:sid", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const { sid } = req.params;
+    const sidParam = req.params.sid;
+    const sid = Array.isArray(sidParam) ? sidParam[0] : sidParam;
+    if (typeof sid !== "string" || sid.length === 0 || sid.length > 256) {
+      res.status(400).json({ error: "Invalid session id." });
+      return;
+    }
     if (sid === req.sessionID) {
       res.status(400).json({ error: "Use /auth/logout to end the current session." });
       return;
     }
-    await pool.query("DELETE FROM session WHERE sid = $1", [sid]);
+    const currentSession = req.session as any;
+    await revokeSessionForCredential(sid, {
+      settingsId: currentSession.credentialSettingsId,
+      credentialVersion: currentSession.credentialVersion,
+    });
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Failed to revoke session" });
@@ -459,7 +498,11 @@ router.delete("/auth/sessions", async (req: Request, res: Response) => {
   }
   try {
     const currentSid = req.sessionID;
-    await pool.query("DELETE FROM session WHERE sid != $1 AND expire > NOW()", [currentSid]);
+    const currentSession = req.session as any;
+    await revokeOtherSessions(currentSid, {
+      settingsId: currentSession.credentialSettingsId,
+      credentialVersion: currentSession.credentialVersion,
+    });
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Failed to revoke other sessions" });

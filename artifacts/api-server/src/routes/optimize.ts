@@ -4,17 +4,17 @@ import { appSettingsTable, conversionJobsTable } from "@workspace/db";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { spawnSync, execFile } from "child_process";
-import { promisify } from "util";
 import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
-import { formatMediaToolError } from "../lib/media-tools";
+import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
-import { walkForOptimize, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
+import { createConcurrencyLimiter, mapSettledWithConcurrency, walkForConversion, walkForOptimize, type OptimizeConversionFile, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
 import { logger } from "../lib/logger.ts";
+import { isShuttingDown } from "../lib/shutdown-state.ts";
+import { trackConversionRequest } from "../lib/conversion-runtime.ts";
 import { parsePositiveIntegerParam } from "../lib/request-validation.ts";
 import {
   evaluateCapacity,
@@ -39,7 +39,6 @@ import {
   type ConversionJobLockClient,
 } from "../lib/conversion-job-lock.ts";
 
-const execFileAsync = promisify(execFile);
 
 const router: IRouter = Router();
 
@@ -339,15 +338,13 @@ function getCachePath(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", CACHE_FILENAME);
 }
 
-function readScanCache(
+async function readScanCache(
   nasPath: string,
   profile?: string,
   rawConversionEnabled?: boolean,
-): (Record<string, unknown> & { scannedAt: string }) | null {
+): Promise<(Record<string, unknown> & { scannedAt: string }) | null> {
   try {
-    const cachePath = getCachePath(nasPath);
-    if (!fs.existsSync(cachePath)) return null;
-    const raw  = fs.readFileSync(cachePath, "utf-8");
+    const raw = await fs.promises.readFile(getCachePath(nasPath), "utf-8");
     const data = JSON.parse(raw) as Record<string, unknown> & { scannedAt: string; cacheVersion?: number };
     if (!data.scannedAt) return null;
     if ((data.cacheVersion ?? 0) < CACHE_VERSION) return null;
@@ -361,11 +358,15 @@ function readScanCache(
   }
 }
 
-function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
+async function writeScanCache(nasPath: string, data: Record<string, unknown>): Promise<void> {
   try {
     const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
-    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(getCachePath(nasPath), JSON.stringify({ ...data, cacheVersion: CACHE_VERSION }), "utf-8");
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    await fs.promises.writeFile(
+      getCachePath(nasPath),
+      JSON.stringify({ ...data, cacheVersion: CACHE_VERSION }),
+      "utf-8",
+    );
   } catch {
     // Non-fatal — cache write is best-effort
   }
@@ -378,34 +379,6 @@ function writeScanCache(nasPath: string, data: Record<string, unknown>): void {
 const PER_FILE_EXTS = new Set(["jpg","jpeg","png","mp4","m4v","mov","mkv"]);
 
 const SKIP_DIRS = new Set(["WillardAI", "node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", ".Trash-1000"]);
-
-function walkForConversion(
-  dir: string,
-  approvedExtSet: Set<string>,
-  results: Array<{ fullPath: string; ext: string }>,
-  skipDirs: Set<string>,
-): void {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to scan conversion directory "${dir}": ${reason}`);
-  }
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".") && !skipDirs.has(fullPath)) {
-        walkForConversion(fullPath, approvedExtSet, results, skipDirs);
-      }
-    } else if (entry.isFile()) {
-      const ext = path.extname(entry.name).slice(1).toLowerCase();
-      if (approvedExtSet.has(ext)) {
-        results.push({ fullPath, ext });
-      }
-    }
-  }
-}
 
 // ── Per-file JPEG characteristic analysis ─────────────────────────────────────
 
@@ -424,7 +397,11 @@ async function analyzeJpegFile(filePath: string): Promise<string[]> {
     // Issue 2: Non-optimized Huffman tables — detectable via significant entropy gap.
     // A well-optimized JPEG has chromaSubsampling set and effective entropy coding.
     // We compare EXIF overhead vs image size: large EXIF relative to total size suggests duplication.
-    const totalBytes = fs.statSync(filePath).size;
+    const fileStat = await fs.promises.lstat(filePath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+      throw new Error("JPEG source is no longer a regular file");
+    }
+    const totalBytes = fileStat.size;
     const exifBytes  = meta.exif?.length ?? 0;
     if (totalBytes > 0 && exifBytes / totalBytes > 0.05) {
       issues.push("excessive metadata overhead (EXIF > 5% of file size)");
@@ -465,11 +442,16 @@ const LOSSLESS_CODECS = new Set(["prores", "prores_ks", "dnxhd", "dnxhr", "huffy
 const MODERN_CODECS   = new Set(["h264", "hevc", "av1", "vp9", "vp8"]);
 const LEGACY_IMG_CODECS = new Set(["mjpeg", "mpeg4", "msmpeg4v3", "wmv1", "wmv2", "wmv3", "rv30", "rv40", "h263", "svq3", "indeo3", "cinepak"]);
 
+// A process-wide cap prevents concurrent Optimize scans from spawning thousands of ffprobe children.
+const withVideoProbeSlot = createConcurrencyLimiter(4);
+
 async function detectVideoCodec(filePath: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("ffprobe", [
-      "-v", "quiet", "-print_format", "json", "-show_streams", filePath,
-    ], { timeout: 12_000 });
+    const { stdout } = await withVideoProbeSlot(() => runMediaToolAsync(
+      "ffprobe",
+      ["-v", "quiet", "-print_format", "json", "-show_streams", filePath],
+      { timeoutMs: 12_000, maxBufferBytes: 1024 * 1024 },
+    ));
     const data = JSON.parse(stdout) as { streams: Array<{ codec_type: string; codec_name: string }> };
     const vs   = data.streams.find(s => s.codec_type === "video");
     return vs?.codec_name ?? null;
@@ -535,6 +517,19 @@ function buildExplainerText(ext: string, rule: FormatRule, profile: OptimizeProf
 
 // ── Image conversion via sharp ─────────────────────────────────────────────────
 
+async function runFfmpeg(args: string[], timeoutMs: number): Promise<string | null> {
+  try {
+    await runMediaToolAsync(
+      "ffmpeg",
+      ["-nostdin", "-v", "error", ...args],
+      { timeoutMs, maxBufferBytes: 1024 * 1024 },
+    );
+    return null;
+  } catch (error) {
+    return formatMediaToolExecutionError("ffmpeg", error, timeoutMs);
+  }
+}
+
 const RAW_EXTS = new Set(["cr2","cr3","nef","nrw","arw","srf","sr2","dng","raf","orf","rw2","pef","x3f","rwl","raw","mrw"]);
 
 async function convertImageAsync(
@@ -555,17 +550,15 @@ async function convertImageAsync(
     if (RAW_EXTS.has(srcExt)) {
       const ffmpegTmp = destPath + ".raw_tmp.jpg";
       try {
-        const result = spawnSync("ffmpeg", [
+        const ffmpegError = await runFfmpeg([
           "-y", "-i", srcPath,
           "-q:v", "2",              // quality ~98 (q:v 1 = quality 100; spec says 98 not 100)
           "-pix_fmt", "yuvj444p",   // 4:4:4 chroma subsampling — no chroma data loss
           "-huffman", "optimal",    // Huffman optimization passes
           "-map_metadata", "0",     // preserve EXIF, ICC color profile, GPS, timestamps
           ffmpegTmp,
-        ], { encoding: "utf8", stdio: "pipe", timeout: 300_000 });
-        if (result.status !== 0) {
-          return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-        }
+        ], 300_000);
+        if (ffmpegError) return ffmpegError;
 
         // Step 2: post-process with sharp for progressive encoding and visual auto-rotation.
         // sharp.rotate() with no argument reads EXIF orientation and rotates pixels, then
@@ -580,7 +573,7 @@ async function convertImageAsync(
         return null;
       } finally {
         // Always clean up temp file regardless of success or failure
-        try { fs.unlinkSync(ffmpegTmp); } catch { /* already gone or never created */ }
+        try { await fs.promises.unlink(ffmpegTmp); } catch { /* already gone or never created */ }
       }
     }
 
@@ -604,12 +597,8 @@ async function convertImageAsync(
         .toFile(destPath);
     } else {
       // Generic ffmpeg fallback for other image formats
-      const result = spawnSync("ffmpeg", ["-y", "-i", srcPath, destPath], {
-        encoding: "utf8", stdio: "pipe", timeout: 300_000,
-      });
-      if (result.status !== 0) {
-        return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-      }
+      const ffmpegError = await runFfmpeg(["-y", "-i", srcPath, destPath], 300_000);
+      if (ffmpegError) return ffmpegError;
     }
     return null;
   } catch (err: any) {
@@ -618,17 +607,13 @@ async function convertImageAsync(
 }
 
 /** Convert a video to H.265 MP4 using ffmpeg. Returns null on success, error string on failure. */
-function convertVideo(srcPath: string, destPath: string): string | null {
-  const result = spawnSync("ffmpeg", [
+async function convertVideo(srcPath: string, destPath: string): Promise<string | null> {
+  return runFfmpeg([
     "-y", "-i", srcPath,
     "-c:v", "libx265", "-crf", "28", "-preset", "medium",
     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
     destPath,
-  ], { encoding: "utf8", stdio: "pipe", timeout: 3_600_000 });
-  if (result.status !== 0) {
-    return formatMediaToolError("ffmpeg", result, (result.stderr ?? "").slice(-500));
-  }
-  return null;
+  ], 3_600_000);
 }
 
 // ── Post-conversion verification ───────────────────────────────────────────────
@@ -650,9 +635,7 @@ async function verifyConvertedFile(
   destPath: string,
   category = "image",
   isSameExt = true,
-  originalBytes = (() => {
-    try { return fs.statSync(srcPath).size; } catch { return 0; }
-  })(),
+  originalBytes = 0,
   isRawSource = false,
 ): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
@@ -662,16 +645,18 @@ async function verifyConvertedFile(
     return { passed: false, checks, failedCheck: `${name}: ${details}` };
   };
 
-  // Check 1: Output file exists and non-zero.
-  if (!fs.existsSync(destPath)) {
-    return fail("output-exists", "Output file does not exist");
-  }
-  let convertedBytes = 0;
+  // Check 1: Output is a regular file and non-zero. Use async lstat so
+  // verification does not block API requests during large conversion batches.
+  let destinationStat: fs.Stats;
   try {
-    convertedBytes = fs.statSync(destPath).size;
+    destinationStat = await fs.promises.lstat(destPath);
   } catch {
-    return fail("output-exists", "Output file cannot be inspected");
+    return fail("output-exists", "Output file does not exist or cannot be inspected");
   }
+  if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+    return fail("output-exists", "Output is not a regular file");
+  }
+  const convertedBytes = destinationStat.size;
   if (convertedBytes === 0) {
     return fail("output-nonzero", "Output file is empty");
   }
@@ -847,7 +832,7 @@ router.get("/optimize/status", async (_req, res) => {
       return;
     }
 
-    const cached = readScanCache(nasPath, profile, rawConversionEnabled);
+    const cached = await readScanCache(nasPath, profile, rawConversionEnabled);
     if (!cached) {
       res.json({ available: false });
       return;
@@ -902,8 +887,14 @@ router.get("/optimize/scan", async (req, res) => {
   try {
     const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const library = await getActiveLibraryContext();
-    const nasPath = library?.nasPath;
-    if (!nasPath || !fs.existsSync(nasPath)) {
+    if (!library || !library.nasPath.trim()) {
+      res.status(400).json({ error: "NAS path is not configured or not accessible" });
+      return;
+    }
+    const nasPath = library.nasPath;
+    let nasDirectoryAvailable = false;
+    try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
+    if (!nasDirectoryAvailable) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
@@ -913,7 +904,7 @@ router.get("/optimize/scan", async (req, res) => {
     const force = req.query.force === "true";
 
     if (!force) {
-      const cached = readScanCache(nasPath, profile, rawConversionEnabled);
+      const cached = await readScanCache(nasPath, profile, rawConversionEnabled);
       if (cached) {
         res.json({ ...cached, libraryKey: library.libraryKey, fromCache: true, profile });
         return;
@@ -923,7 +914,7 @@ router.get("/optimize/scan", async (req, res) => {
     const FORMAT_RULES = getFormatRules(profile, rawConversionEnabled);
     const groups = new Map<string, ExtGroup>();
     const counter = { total: 0, limitReached: false };
-    walkForOptimize(nasPath, groups, OPTIMIZE_SCAN_MAX_FILES, counter, SKIP_DIRS);
+    await walkForOptimize(nasPath, groups, OPTIMIZE_SCAN_MAX_FILES, counter, SKIP_DIRS);
 
     const result = [];
     let totalSavingsBytes = 0;
@@ -932,6 +923,7 @@ router.get("/optimize/scan", async (req, res) => {
     // Results go into `fileDecisions` for use by the execute loop (codec override enforcement).
     // `jpegIssuesMap` and `detectedCodecMap` hold representative group-level data for UI display only.
     const enrichPromises: Promise<void>[] = [];
+    const videoProbeTasks: Array<{ path: string; ext: string; includeFileDecision: boolean }> = [];
     const jpegIssuesMap    = new Map<string, string[]>();  // ext → issues (for explainer text)
     const detectedCodecMap = new Map<string, string>();    // ext → codec (for group-level override)
     const pngAttentionMap  = new Map<string, string>();
@@ -1003,38 +995,40 @@ router.get("/optimize/scan", async (req, res) => {
       }
 
       if (ext === "mov" || ext === "mkv" || ext === "mp4" || ext === "m4v") {
-        // Per-file codec detection: analyze EVERY container file (not just one sample)
-        enrichPromises.push((async () => {
-          const codecResults = await Promise.allSettled(
-            paths.map(async (p) => {
-              const codec = await detectVideoCodec(p);
-              return { path: p, codec };
-            })
-          );
-          for (const r of codecResults) {
-            if (r.status === "fulfilled" && r.value.codec) {
-              const { path: p, codec } = r.value;
-              const codecRule = buildCodecOverride(codec, ext);
-              fileDecisions[p] = {
-                convert:   codecRule?.status === "convert",
-                targetExt: codecRule?.targetExt ?? (codecRule?.status === "convert" ? "mp4" : ext),
-                reasons:   [codecRule?.reason ?? `Codec: ${codec}`],
-                codec,
-              };
-              // Take the first codec found for group-level override display
-              if (!detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
-            }
-          }
-        })());
-
-        // Also run on the sample if paths was capped and sample file is not in paths
+        // Queue every per-file probe for one bounded worker pool below. The
+        // process-wide limiter also caps probes across simultaneous scan requests.
+        for (const filePath of paths) {
+          videoProbeTasks.push({ path: filePath, ext, includeFileDecision: true });
+        }
         if (samples.length > 0 && !paths.includes(samples[0].path)) {
-          enrichPromises.push((async () => {
-            const codec = await detectVideoCodec(samples[0].path);
-            if (codec && !detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
-          })());
+          videoProbeTasks.push({ path: samples[0].path, ext, includeFileDecision: false });
         }
       }
+    }
+
+    if (videoProbeTasks.length > 0) {
+      enrichPromises.push((async () => {
+        const codecResults = await mapSettledWithConcurrency(videoProbeTasks, 4, async (task) => ({
+          ...task,
+          codec: await detectVideoCodec(task.path),
+        }));
+        for (const result of codecResults) {
+          if (result.status !== "fulfilled" || !result.value.codec) continue;
+          const { path: filePath, ext, codec, includeFileDecision } = result.value;
+          if (includeFileDecision) {
+            const codecRule = buildCodecOverride(codec, ext);
+            fileDecisions[filePath] = {
+              convert: codecRule?.status === "convert",
+              targetExt: codecRule?.targetExt ?? (codecRule?.status === "convert" ? "mp4" : ext),
+              reasons: [codecRule?.reason ?? `Codec: ${codec}`],
+              codec,
+            };
+          }
+          // Results retain input order, so the first successful codec remains
+          // deterministic for the group-level explainer.
+          if (!detectedCodecMap.has(ext)) detectedCodecMap.set(ext, codec);
+        }
+      })());
     }
 
     // Run all per-file analysis in parallel (best-effort — individual failures are swallowed)
@@ -1114,7 +1108,7 @@ router.get("/optimize/scan", async (req, res) => {
       fromCache: false,
     };
 
-    writeScanCache(nasPath, payload);
+    await writeScanCache(nasPath, payload);
     res.json(payload);
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Scan failed" });
@@ -1196,7 +1190,11 @@ router.post("/optimize/run", async (req, res) => {
 
     const settings = await getActiveAppSettings() ?? {} as typeof appSettingsTable.$inferSelect;
     const nasPath: string | null | undefined = settings.nasPath;
-    if (!nasPath || !fs.existsSync(nasPath)) {
+    let nasDirectoryAvailable = false;
+    if (nasPath) {
+      try { nasDirectoryAvailable = (await fs.promises.stat(nasPath)).isDirectory(); } catch { /* reported below */ }
+    }
+    if (!nasDirectoryAvailable) {
       res.status(400).json({ error: "NAS path is not configured or not accessible" });
       return;
     }
@@ -1208,7 +1206,7 @@ router.post("/optimize/run", async (req, res) => {
     // Load scan cache to check per-file decisions for codec-detected formats.
     // Container formats (mp4/mov/mkv/m4v) may show as "optimal" in static rules but
     // have per-file codec overrides in the scan cache making some files convertible.
-    const cachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const cachedScan = await readScanCache(nasPath, profile, rawConversionEnabled);
     const cachedDecisions = (cachedScan?.fileDecisions as Record<string, { convert: boolean; targetExt: string }> | undefined) ?? {};
 
     for (const ext of approvedExts) {
@@ -1331,9 +1329,19 @@ router.post("/optimize/jobs/:id/cancel", async (req, res) => {
     }
     const [updated] = await db.update(conversionJobsTable)
       .set({ cancelledAt: new Date() })
-      .where(eq(conversionJobsTable.id, id))
+      .where(and(
+        eq(conversionJobsTable.id, id),
+        eq(conversionJobsTable.nasPath, job.nasPath),
+        eq(conversionJobsTable.status, "running"),
+      ))
       .returning();
-    res.json({ id, status: updated?.status ?? job.status, cancellationRequested: true });
+    if (!updated) {
+      res.status(409).json({
+        error: "Conversion job changed before cancellation could be recorded. Refresh the job and try again.",
+      });
+      return;
+    }
+    res.json({ id, status: updated.status, cancellationRequested: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message ?? "Failed to cancel conversion job" });
   }
@@ -1592,10 +1600,10 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // The database now records a verified completed operation. Cleanup is
     // intentionally last; a cleanup failure leaves extra recoverable bytes.
     try {
-      if (resultData.stagingDir && fs.existsSync(resultData.stagingDir)) {
+      if (resultData.stagingDir) {
         filesystemJobLock.assertOwned();
         assertWithinRoot(resultData.stagingDir, nasPath);
-        fs.rmSync(resultData.stagingDir, { recursive: true, force: true });
+        await fs.promises.rm(resultData.stagingDir, { recursive: true, force: true });
       }
     } catch (error) {
       logger.error({ err: error, jobId: id, stagingDir: resultData.stagingDir }, "Conversion completed but staging cleanup was not finished");
@@ -1657,11 +1665,19 @@ router.post("/optimize/jobs/:id/execute-token", async (req, res) => {
  * Streams events: status | file_done | summary | error
  */
 router.get("/optimize/jobs/:id/execute", async (req, res) => {
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "The server is shutting down; retry conversion after it restarts." });
+    return;
+  }
   const id = parsePositiveIntegerParam(req.params.id);
   if (id === null) { res.status(400).json({ error: "Invalid job id" }); return; }
 
   if (!await consumeActionToken(req, req.query.token, "optimize-execute", String(id))) {
     res.status(403).json({ error: "A valid one-time execution token is required." });
+    return;
+  }
+  if (isShuttingDown()) {
+    res.status(503).json({ error: "The server is shutting down; retry conversion after it restarts." });
     return;
   }
 
@@ -1676,6 +1692,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
+  const releaseConversionRequest = trackConversionRequest(id);
   let capacityReservation: CapacityReservation | null = null;
   let jobLockClient: ConversionJobLockClient | null = null;
   let filesystemJobLock: ConversionFilesystemJobLock | null = null;
@@ -1684,6 +1701,11 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
     if (!jobLockClient) {
       send("error", { message: "This conversion job is already owned by another worker." });
+      res.end();
+      return;
+    }
+    if (isShuttingDown()) {
+      send("error", { message: "The server is shutting down; retry conversion after it restarts." });
       res.end();
       return;
     }
@@ -1718,6 +1740,14 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       return;
     }
     jobClaimed = true;
+    if (isShuttingDown()) {
+      await db.update(conversionJobsTable)
+        .set({ status: "cancelled", cancelledAt: new Date(), completedAt: new Date(), error: "Server shutdown before conversion processing began." })
+        .where(and(eq(conversionJobsTable.id, id), eq(conversionJobsTable.status, "running")));
+      send("status", { stage: "cancelled", message: "Conversion cancelled because the server is shutting down.", progress: 0 });
+      res.end();
+      return;
+    }
 
     // Read current profile from settings for this run
     const settings = await getActiveAppSettings();
@@ -1731,7 +1761,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
     // Load per-file decisions from scan cache — used to enforce codec-specific convert/skip
     // and to get the correct targetExt for codec-overridden container files.
-    const execCachedScan = readScanCache(nasPath, profile, rawConversionEnabled);
+    const execCachedScan = await readScanCache(nasPath, profile, rawConversionEnabled);
     const execFileDecisions = (execCachedScan?.fileDecisions as
       Record<string, { convert: boolean; targetExt: string; reasons: string[] }> | undefined) ?? {};
 
@@ -1741,8 +1771,8 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       path.resolve(backupDir),
       path.resolve(path.join(nasPath, "WillardAI")),
     ]);
-    const filesToConvert: Array<{ fullPath: string; ext: string }> = [];
-    walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, skipDirs);
+    const filesToConvert: OptimizeConversionFile[] = [];
+    await walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, SKIP_DIRS, skipDirs);
 
     const totalFiles = filesToConvert.length;
     await db.update(conversionJobsTable).set({ totalFiles }).where(eq(conversionJobsTable.id, id));
@@ -1758,9 +1788,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       return;
     }
 
-    const estimatedStagingBytes = filesToConvert.reduce((sum, file) => {
-      try { return sum + fs.statSync(file.fullPath).size; } catch { return sum; }
-    }, 0);
+    const estimatedStagingBytes = filesToConvert.reduce((sum, file) => sum + file.sizeBytes, 0);
     try {
       capacityReservation = await reserveCapacity({
         nasPath,
@@ -1817,7 +1845,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     for (let i = 0; i < filesToConvert.length; i++) {
       const [currentJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-      if (currentJob?.cancelledAt) break;
+      if (currentJob?.cancelledAt || isShuttingDown()) break;
       const { fullPath, ext } = filesToConvert[i];
       filesystemJobLock.assertOwned();
 
@@ -1923,16 +1951,24 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const shortName = path.basename(fullPath);
       send("status", { stage: "converting", message: `[${i + 1}/${totalFiles}] ${shortName}`, progress, currentFile: fullPath, processed: i, total: totalFiles });
 
-      if (!fs.existsSync(fullPath)) {
-        skipped++;
-        results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
-        send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
-        continue;
+      let originalStat: fs.Stats;
+      try {
+        originalStat = await fs.promises.lstat(fullPath);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          skipped++;
+          results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
+          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
+          continue;
+        }
+        throw error;
       }
-
-      let originalBytes = 0;
-      try { originalBytes = fs.statSync(fullPath).size; } catch { /* best effort */ }
+      if (!originalStat.isFile() || originalStat.isSymbolicLink()) {
+        throw new Error(`Conversion source is no longer a regular file: "${fullPath}"`);
+      }
+      const originalBytes = originalStat.size;
 
       // ── Build staged path (mirrors NAS directory structure) ──────────────────
       const relPath    = path.relative(path.resolve(nasPath), path.resolve(fullPath));
@@ -1949,7 +1985,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       if (category === "image") {
         convertError = await convertImageAsync(fullPath, stagedPath, targetExt, profile);
       } else if (category === "video") {
-        convertError = convertVideo(fullPath, stagedPath);
+        convertError = await convertVideo(fullPath, stagedPath);
       } else {
         convertError = `Unsupported category for conversion: ${category}`;
       }
@@ -1958,7 +1994,9 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       if (convertError) {
         try {
           filesystemJobLock.assertOwned();
-          if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath);
+          await fs.promises.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+          });
         } catch { /* best effort; never clean up without current filesystem ownership */ }
         failed++;
         results.push({ filePath: fullPath, status: "failed", error: convertError });
@@ -1973,7 +2011,9 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       if (!verification.passed) {
         try {
           filesystemJobLock.assertOwned();
-          if (fs.existsSync(stagedPath)) fs.unlinkSync(stagedPath);
+          await fs.promises.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+          });
         } catch { /* best effort; never clean up without current filesystem ownership */ }
         const isRegression = verification.failedCheck?.includes("not smaller");
         if (isRegression) {
@@ -1991,7 +2031,10 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       }
 
       let convertedBytes = 0;
-      try { convertedBytes = fs.statSync(stagedPath).size; } catch { /* best effort */ }
+      try {
+        const stagedStat = await fs.promises.lstat(stagedPath);
+        if (stagedStat.isFile() && !stagedStat.isSymbolicLink()) convertedBytes = stagedStat.size;
+      } catch { /* verification already records any output inspection failure */ }
 
       // ── Success: original is safe, staged file is verified ──────────────────
       succeeded++;
@@ -2012,25 +2055,32 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       // converted and verified, preserving all completed staged files.
       const [afterFileJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
         .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-      if (afterFileJob?.cancelledAt) break;
+      if (afterFileJob?.cancelledAt || isShuttingDown()) break;
     }
 
     const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
-    const resultJson = { files: results, totalSaved, stagingDir };
     const [finishedJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
       .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
-    const wasCancelled = Boolean(finishedJob?.cancelledAt);
+    const wasCancelled = Boolean(finishedJob?.cancelledAt) || isShuttingDown();
+    // A cancelled run may still have completed, verified staged outputs. Keep
+    // those outputs actionable: finalize accepts awaiting_action jobs, while
+    // cancelledAt and resultJson.cancelled preserve the user's cancellation.
+    const needsFinalization = succeeded > 0;
+    const nextStatus = needsFinalization ? "awaiting_action" : "cancelled";
+    const resultJson = { files: results, totalSaved, stagingDir, cancelled: wasCancelled };
 
     // Stage 4: Await user action — originals are untouched; staged files ready for user decision.
     await db.update(conversionJobsTable).set({
-      status: wasCancelled ? "cancelled" : "awaiting_action", processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
+      status: nextStatus, processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
       skippedFiles: skipped, completedAt: new Date(), resultJson,
     }).where(eq(conversionJobsTable.id, id));
 
     send("status", {
-      stage: wasCancelled ? "cancelled" : "awaiting_action",
+      stage: nextStatus,
       message: wasCancelled
-        ? `Conversion cancelled after ${results.length} of ${totalFiles} files — staged files are preserved`
+        ? needsFinalization
+          ? `Conversion cancelled after ${results.length} of ${totalFiles} files — ${succeeded} verified staged file(s) are ready for your action`
+          : `Conversion cancelled after ${results.length} of ${totalFiles} files — no successful staged files need finalization`
         : "Conversions staged — choose what to do with your originals",
       progress: wasCancelled ? Math.round(5 + (results.length / totalFiles) * 90) : 100,
       processed: results.length,
@@ -2054,10 +2104,13 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     res.end();
   } finally {
     if (filesystemJobLock) {
-      try { filesystemJobLock.release(); } catch (error) {
+      try {
+        filesystemJobLock.release();
+      } catch (error) {
         logger.error({ err: error, jobId: id }, "Unable to release conversion filesystem ownership");
       }
     }
+    releaseConversionRequest();
     if (jobLockClient) {
       try {
         await releaseConversionJobLock(jobLockClient, id);

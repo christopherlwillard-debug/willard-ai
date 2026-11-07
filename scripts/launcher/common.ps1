@@ -922,42 +922,159 @@ function quoteIdentifier(identifier) {
     }
 }
 
+function Get-DeveloperListeningPorts {
+    $listeners = @()
+    foreach ($port in @(8080, 5000)) {
+        try {
+            $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+        } catch {
+            # Get-NetTCPConnection reports an empty filtered result as
+            # ObjectNotFound on supported Windows builds. That is a verified
+            # empty port, not a query failure.
+            if ($_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound) {
+                $connections = @()
+            } else {
+                throw "Windows could not verify whether Willard service port $port is free: $($_.Exception.Message)"
+            }
+        }
+        foreach ($connection in $connections) {
+            $ownerPid = 0
+            if (-not [int]::TryParse([string]$connection.OwningProcess, [ref]$ownerPid) -or $ownerPid -le 0) {
+                throw "Windows found a listener on Willard service port $port but could not verify its owning process."
+            }
+            $listeners += [pscustomobject]@{ port = $port; pid = $ownerPid }
+        }
+    }
+    return $listeners
+}
+
+function Assert-NoUntrackedDeveloperServices($tracked) {
+    # A complete journal is checked against exact process identity by the
+    # existing stop path. With no journal or only one recorded process, any
+    # listener on either application port is unowned until proven otherwise.
+    $completeJournal = $tracked -and $tracked.api -and $tracked.web
+    if ($completeJournal) { return }
+
+    $listeners = @(Get-DeveloperListeningPorts)
+    if ($listeners.Count -gt 0) {
+        $details = ($listeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard found a listener on $details, but its developer services state file is missing or incomplete. It did not stop the process or change application files. Keep the state file for diagnosis, inspect the listed process, and close only the confirmed Willard service before retrying."
+    }
+}
+
 function Test-PortFree($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-    return (-not $conn)
+    return (@(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port }).Count -eq 0)
 }
 
 function Get-PortOwnerPid($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($conn) { return $conn.OwningProcess }
+    $listener = @(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port } | Select-Object -First 1)
+    if ($listener.Count -gt 0) { return $listener[0].pid }
     return $null
 }
 
-function Read-TrackedPids {
-    if (-not (Test-Path $PidFile)) { return $null }
-    try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
-}
-
-function Get-ProcessIdentity($processId) {
-    if (-not $processId) { return $null }
+function Stop-LauncherStartedProcessHandle($process) {
+    if (-not $process) { return }
     try {
-        $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
-        if (-not $process) { return $null }
-        return @{
-            pid = [int]$process.ProcessId
-            path = [string]$process.ExecutablePath
-            commandLine = [string]$process.CommandLine
-            creationDate = [string]$process.CreationDate
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            $process.Kill()
+            if (-not $process.WaitForExit(10000)) {
+                throw "Process $($process.Id) did not exit after a direct stop request."
+            }
         }
     } catch {
+        Write-Warn ("Willard could not stop a process started by this launcher: " + $_.Exception.Message)
+    }
+}
+
+function Read-TrackedPids {
+    if (-not (Test-Path -LiteralPath $PidFile)) { return $null }
+    try {
+        if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
+            throw "The services state path is not a file."
+        }
+        $state = Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($state -isnot [System.Management.Automation.PSCustomObject] -or $state.version -notin @(1, 2)) {
+            throw "The services state has an unsupported structure or version."
+        }
+        foreach ($name in @("api", "web")) {
+            if ($null -eq $state.PSObject.Properties[$name]) {
+                throw "The services state is missing the '$name' process record."
+            }
+        }
+        if ($state.version -eq 2 -and
+            ($state.runToken -isnot [string] -or [string]::IsNullOrWhiteSpace($state.runToken))) {
+            throw "The services state is missing its run token."
+        }
+        foreach ($process in @($state.api, $state.web)) {
+            if ($null -eq $process) { continue }
+            if ($process -isnot [System.Management.Automation.PSCustomObject]) {
+                throw "A services process record has an invalid structure."
+            }
+            $recordedPid = 0
+            if (-not [int]::TryParse([string]$process.pid, [ref]$recordedPid) -or $recordedPid -le 0) {
+                throw "A services process record has an invalid process ID."
+            }
+            if ($process.path -isnot [string] -or [string]::IsNullOrWhiteSpace($process.path) -or
+                $process.commandLine -isnot [string] -or [string]::IsNullOrWhiteSpace($process.commandLine)) {
+                throw "A services process record is missing executable identity information."
+            }
+        }
+        return $state
+    } catch {
+        throw "The developer services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard services remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
+    }
+}
+
+function Get-ProcessIdentity($processId, $expectedCreationDate, $expectedPath, $expectedCommandLine) {
+    if (-not $processId) { return $null }
+    try {
+        $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
+    } catch {
+        throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
+    }
+    if (-not $process) { return $null }
+    $currentCreationDate = [string]$process.CreationDate
+    if ([string]::IsNullOrWhiteSpace($currentCreationDate)) {
+        throw "Windows did not return a process creation time for Willard process $processId."
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+        -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
         return $null
+    }
+    $executablePath = [string]$process.ExecutablePath
+    $commandLine = [string]$process.CommandLine
+    # WMI can omit optional identity fields for a process that is still the
+    # same instance. Reuse persisted values only after the exact creation
+    # timestamp matches; a missing timestamp never falls back to PID alone.
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedPath)) {
+            $executablePath = [string]$expectedPath
+        } else {
+            throw "Windows did not return an executable path for Willard process $processId."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedCommandLine)) {
+            $commandLine = [string]$expectedCommandLine
+        } else {
+            throw "Windows did not return a command line for Willard process $processId."
+        }
+    }
+    return @{
+        pid = [int]$process.ProcessId
+        path = $executablePath
+        commandLine = $commandLine
+        creationDate = $currentCreationDate
     }
 }
 
 function Test-ProcessIdentity($tracked) {
     if (-not $tracked) { return $false }
     $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
-    $current = Get-ProcessIdentity $trackedProcessId
+    $current = Get-ProcessIdentity $trackedProcessId $tracked.creationDate $tracked.path $tracked.commandLine
     if (-not $current) { return $false }
     # Refuse to act on legacy PID-only records. A reused PID must never be
     # mistaken for a Willard process.
@@ -965,6 +1082,15 @@ function Test-ProcessIdentity($tracked) {
     return ($current.path -eq $tracked.path -and
         $current.commandLine -eq $tracked.commandLine -and
         (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
+}
+
+function Wait-ForProcessIdentityExit($process, $timeoutSeconds = 5) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    do {
+        if (-not (Test-ProcessIdentity $process)) { return $true }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return (-not (Test-ProcessIdentity $process))
 }
 
 function Save-TrackedPids($apiPid, $webPid) {
@@ -991,17 +1117,24 @@ function Stop-TrackedProcesses {
     # Stops ONLY what the launcher started (tracked PIDs + their children).
     # Retain the PID manifest if any owned process survives the stop attempt.
     $pids = Read-TrackedPids
+    Assert-NoUntrackedDeveloperServices $pids
     $stopped = 0
     $remaining = @()
+    $taskkillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+    if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+        throw "Windows taskkill.exe was not found in the system directory. The process list was retained for diagnosis."
+    }
     if ($pids) {
         foreach ($p in @($pids.api, $pids.web)) {
             if ($p -and (Test-ProcessIdentity $p)) {
-                & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
+                $killOutput = @(& $taskkillPath /PID $p.pid /T /F 2>&1)
+                $killExitCode = $LASTEXITCODE
                 try {
                     Wait-Process -Id $p.pid -Timeout 10 -ErrorAction SilentlyContinue
                 } catch {}
-                if (Test-ProcessIdentity $p) {
-                    $remaining += $p
+                if (-not (Wait-ForProcessIdentityExit $p 5)) {
+                    $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
+                    $remaining += "PID $($p.pid) (taskkill exit code $killExitCode; $killText)"
                 } else {
                     $stopped++
                 }
@@ -1009,8 +1142,12 @@ function Stop-TrackedProcesses {
         }
     }
     if ($remaining.Count -gt 0) {
-        $remainingPids = ($remaining | ForEach-Object { $_.pid }) -join ", "
-        throw "Could not stop tracked Willard process(es): $remainingPids. The process list was retained for a safe retry."
+        throw "Could not stop tracked Willard process(es): $($remaining -join '; '). The process list was retained for a safe retry."
+    }
+    $remainingListeners = @(Get-DeveloperListeningPorts)
+    if ($remainingListeners.Count -gt 0) {
+        $details = ($remainingListeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard services still have listening connections on $details. The process list was retained for a safe retry."
     }
     Clear-TrackedPids
     return $stopped

@@ -135,6 +135,11 @@ async function defaultProbe(target: CapacityTarget, targetPath: string): Promise
   }
 }
 
+/** Probe a specific destination filesystem using the shared asynchronous provider. */
+export async function probeFilesystemCapacity(targetPath: string): Promise<CapacitySnapshot> {
+  return probe("nas", targetPath);
+}
+
 function pruneExpiredReservations(now = Date.now()): void {
   for (const [id, reservation] of reservations) {
     if (Date.parse(reservation.expiresAt) <= now) reservations.delete(id);

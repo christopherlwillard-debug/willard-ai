@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,11 +13,14 @@ import {
   createPrivateBackupWorkDirectory,
   findWindowsPostgresBinary,
   overwriteFileWithZeroes,
+  readRegularFileNoFollow,
   runTool,
 } from "./database-backup.mjs";
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
   ensureLibraryIdentity,
+  readLibraryFileNoFollow,
+  readLibraryIdentity,
 } from "./library-recovery.mjs";
 import {
   loadLibraryDurabilityManifest,
@@ -31,6 +34,125 @@ import {
 import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("concurrent NAS identity initialization never replaces the first published identity", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-race-"));
+  try {
+    const [first, second, persisted] = await Promise.all([
+      ensureLibraryIdentity(root),
+      ensureLibraryIdentity(root),
+      ensureLibraryIdentity(root),
+    ]);
+    assert.equal(first.libraryId, second.libraryId);
+    assert.equal(first.libraryId, persisted.libraryId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("backup input reader refuses symlinked manifest and dump files", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-backup-input-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-backup-outside-"));
+  try {
+    const target = path.join(outside, "secret.bin");
+    const link = path.join(root, "dump.enc");
+    await writeFile(target, "sensitive external bytes");
+    try {
+      await symlink(target, link, "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readRegularFileNoFollow(link), /regular, non-symlink file/);
+    assert.equal(await readRegularFileNoFollow(target, "utf8"), "sensitive external bytes");
+    await assert.rejects(() => readRegularFileNoFollow(target, undefined, 4), /permitted size limit/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("recovery media verification refuses symlinked library paths", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-media-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-media-outside-"));
+  try {
+    const outsideFile = path.join(outside, "secret.jpg");
+    await writeFile(outsideFile, "external media bytes");
+    await mkdir(path.join(root, "photos"), { recursive: true });
+    try {
+      await symlink(outside, path.join(root, "linked-photos"), "dir");
+      await symlink(outsideFile, path.join(root, "photos", "linked.jpg"), "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readLibraryFileNoFollow(root, "linked-photos/secret.jpg"), /symlink or non-directory component/);
+    await assert.rejects(() => readLibraryFileNoFollow(root, "photos/linked.jpg"), /symlink or non-regular file/);
+    await writeFile(path.join(root, "photos", "family.jpg"), "family media");
+    assert.equal((await readLibraryFileNoFollow(root, "photos/family.jpg")).toString("utf8"), "family media");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("NAS library identity refuses symlinked config directories", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-identity-outside-"));
+  try {
+    await mkdir(path.join(root, "WillardAI"), { recursive: true });
+    try {
+      await symlink(outside, path.join(root, "WillardAI", "config"), "dir");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => ensureLibraryIdentity(root), /symlink or non-directory component/);
+    assert.deepEqual(await readdir(outside), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("NAS library identity refuses a symlinked marker file", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-root-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "willard-identity-outside-"));
+  try {
+    const config = path.join(root, "WillardAI", "config");
+    await mkdir(config, { recursive: true });
+    const outsideMarker = path.join(outside, "marker.json");
+    await writeFile(outsideMarker, JSON.stringify({
+      format: "willard-library-identity",
+      version: 1,
+      libraryId: "12345678-1234-1234-1234-123456789abc",
+      createdAt: new Date().toISOString(),
+    }));
+    try {
+      await symlink(outsideMarker, path.join(config, "library-identity.json"), "file");
+    } catch (error) {
+      if (["EPERM", "EACCES"].includes(error?.code)) {
+        t.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(() => readLibraryIdentity(root), /regular file inside the configured library/);
+    assert.equal((await readFile(outsideMarker, "utf8")).length > 0, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
 
 test("plaintext backup work directory is private before pg_dump writes", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "willard-backup-test-"));
@@ -283,6 +405,9 @@ test(
     const reattachedNasRoot = path.join(root, "reattached-nas-library");
     const foreignNasRoot = path.join(root, "foreign-nas-library");
     const originalPath = path.join(nasRoot, "photos", "family.jpg");
+    const recycledPath = path.join(nasRoot, "photos", "recycled.jpg");
+    const deletedPath = path.join(nasRoot, "photos", "deleted.jpg");
+    const recycledTrashPath = path.join(nasRoot, "WillardAI", ".Trash", "recycled.jpg");
     const optionalCache = path.join(nasRoot, "WillardAI", "cache", "thumbnails", "1.webp");
     const localModelCache = path.join(root, "lost-laptop", "models", "face.onnx");
     const useInstalledService = process.platform === "win32";
@@ -322,13 +447,18 @@ test(
       const sourceUrl = `${databasePrefix}/${sourceDatabase}`;
       const targetUrl = `${databasePrefix}/${targetDatabase}`;
       await mkdir(path.dirname(originalPath), { recursive: true });
+      await mkdir(path.dirname(recycledTrashPath), { recursive: true });
       await mkdir(path.dirname(optionalCache), { recursive: true });
       await mkdir(path.dirname(localModelCache), { recursive: true });
       const originalBytes = Buffer.from("representative-original-photo-bytes");
       const originalSha256 = createHash("sha256").update(originalBytes).digest("hex");
+      const recycledBytes = Buffer.from("recycled-photo-bytes");
+      const recycledSha256 = createHash("sha256").update(recycledBytes).digest("hex");
       await writeFile(originalPath, originalBytes);
+      await writeFile(recycledTrashPath, recycledBytes);
       await writeFile(optionalCache, "rebuildable thumbnail");
       await writeFile(localModelCache, "rebuildable model cache");
+      await mkdir(foreignNasRoot, { recursive: true });
       await ensureLibraryIdentity(foreignNasRoot);
       await run(psqlBin, [
         "-X",
@@ -349,11 +479,17 @@ test(
           CREATE TABLE media_files (
             id integer PRIMARY KEY, nas_path text NOT NULL, relative_path text NOT NULL,
             content_hash text, favorite boolean NOT NULL DEFAULT false, name text NOT NULL,
-            thumbnail_path text
+            thumbnail_path text, last_scan_action text
           );
-          INSERT INTO media_files VALUES
+          INSERT INTO media_files
+            (id, nas_path, relative_path, content_hash, favorite, name, thumbnail_path, last_scan_action)
+          VALUES
             (1, ${sqlLiteral(nasRoot)}, 'photos/family.jpg', ${sqlLiteral(originalSha256)}, true, 'family.jpg',
-             ${sqlLiteral(optionalCache)});
+             ${sqlLiteral(optionalCache)}, NULL),
+            (2, ${sqlLiteral(nasRoot)}, 'photos/recycled.jpg', ${sqlLiteral(recycledSha256)}, false, 'recycled.jpg',
+             NULL, 'RECYCLED'),
+            (3, ${sqlLiteral(nasRoot)}, 'photos/deleted.jpg', ${sqlLiteral(originalSha256)}, false, 'deleted.jpg',
+             NULL, 'DELETED');
           CREATE TABLE media_ai (
             media_file_id integer PRIMARY KEY, description text, user_description text,
             user_tags jsonb, hidden_tags jsonb, notes text, embedding text
@@ -394,6 +530,8 @@ test(
             (46, ${sqlLiteral(originalPath)}, ${sqlLiteral(path.dirname(originalPath))});
           CREATE TABLE library_activity (id integer PRIMARY KEY, nas_path text);
           INSERT INTO library_activity VALUES (47, ${sqlLiteral(nasRoot)});
+          CREATE TABLE media_scan_jobs (id integer PRIMARY KEY, nas_path text NOT NULL);
+          INSERT INTO media_scan_jobs VALUES (49, ${sqlLiteral(nasRoot)});
           CREATE TABLE organization_jobs (
             id integer PRIMARY KEY, nas_path text, source_path text, report_path text,
             plan_json jsonb, preflight_json jsonb, file_moves jsonb, report_json jsonb
@@ -401,7 +539,7 @@ test(
           INSERT INTO organization_jobs VALUES
             (48, ${sqlLiteral(nasRoot)}, ${sqlLiteral(originalPath)},
              ${sqlLiteral(path.join(nasRoot, "WillardAI", "reports", "organize.json"))},
-             ${sqlLiteral(JSON.stringify({ source: originalPath }))}::jsonb,
+             ${sqlLiteral(JSON.stringify({ source: originalPath, emptyObject: {}, emptyArray: [], nested: { emptyObject: {}, emptyArray: [] } }))}::jsonb,
              ${sqlLiteral(JSON.stringify({ root: nasRoot }))}::jsonb,
              ${sqlLiteral(JSON.stringify([{ from: originalPath, to: path.join(nasRoot, "organized", "family.jpg") }]))}::jsonb,
              ${sqlLiteral(JSON.stringify({ report: path.join(nasRoot, "WillardAI", "reports", "organize.json") }))}::jsonb);
@@ -440,9 +578,12 @@ test(
       assert.equal(manifest.encryption.algorithm, "aes-256-gcm");
       assert.equal(manifest.library.root, path.resolve(nasRoot));
       assert.match(manifest.library.libraryId, /^[0-9a-f-]{36}$/);
+      assert.equal(manifest.library.catalogInventoryScope, "active");
+      assert.equal(manifest.library.catalogMediaCount, 1, "recycled and deleted rows are not active canonical media");
+      assert.equal(manifest.library.mediaSamples.length, 1);
       assert.equal(manifest.compatibility.applicationSchemaVersion, 2);
       assert.equal(manifest.verification.rowCounts["public.catalog_items"], "2");
-      assert.equal(manifest.verification.rowCounts["public.media_files"], "1");
+      assert.equal(manifest.verification.rowCounts["public.media_files"], "3");
       assert.equal(manifest.verification.rowCounts["public.empty_table"], "0");
       assert.ok(!encrypted.includes(Buffer.from("nas photo")));
       await runCli(["verify", "--backup-dir", backupDir], {
@@ -538,6 +679,17 @@ test(
         targetUrl,
       ]);
       assert.equal(restored.stdout.trim(), "2:nas photo,family video");
+      const restoredMediaStates = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-c",
+        "SELECT count(*) || ':' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED') FROM media_files",
+        targetUrl,
+      ]);
+      assert.equal(restoredMediaStates.stdout.trim(), "3:1", "recycled and deleted catalog history remains while active media is verified");
       const recoveredKnowledge = await run(psqlBin, [
         "-X",
         "--no-password",
@@ -598,11 +750,104 @@ test(
           "family Alex",
         ]).join("|"),
       );
+      const recoveredEmptyJson = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-F",
+        "|",
+        "-c",
+        `
+          SELECT
+            jsonb_typeof(plan_json -> 'emptyObject'),
+            jsonb_typeof(plan_json -> 'emptyArray'),
+            jsonb_array_length(plan_json -> 'emptyArray'),
+            jsonb_typeof(plan_json #> '{nested,emptyObject}'),
+            jsonb_typeof(plan_json #> '{nested,emptyArray}'),
+            jsonb_array_length(plan_json #> '{nested,emptyArray}')
+          FROM organization_jobs
+          WHERE id = 48
+        `,
+        targetUrl,
+      ]);
+      assert.equal(
+        recoveredEmptyJson.stdout.trim(),
+        "object|array|0|object|array|0",
+        "path remapping must preserve empty JSON objects and arrays, including nested values",
+      );
+      const remappedFaceAndScanPaths = await run(psqlBin, [
+        "-X",
+        "--no-password",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-At",
+        "-F",
+        "|",
+        "-c",
+        `
+          SELECT f.crop_path, msj.nas_path
+          FROM faces f
+          CROSS JOIN media_scan_jobs msj
+          WHERE f.id = 31 AND msj.id = 49
+        `,
+        targetUrl,
+      ]);
+      assert.equal(
+        remappedFaceAndScanPaths.stdout.trim(),
+        [
+          path.join(reattachedNasRoot, "WillardAI", "cache", "faces", "31.webp"),
+          path.resolve(reattachedNasRoot),
+        ].join("|"),
+        "face crop and media scan history paths must follow the reattached NAS root",
+      );
       assert.equal(
         createHash("sha256").update(await readFile(reattachedOriginalPath)).digest("hex"),
         originalSha256,
       );
       await assert.rejects(readFile(optionalCache), /ENOENT/);
+
+      await assert.rejects(
+        runCli([
+          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+          "--confirm-library-id", manifest.library.libraryId,
+        ], {
+          WILLARD_RESTORE_DATABASE_URL: targetUrl,
+          WILLARD_BACKUP_PASSPHRASE: passphrase,
+        }),
+        /not empty/,
+      );
+      const recoveryJournal = path.join(
+        reattachedNasRoot,
+        "WillardAI",
+        "config",
+        "recovery-attempts",
+        `${manifest.integrity.encryptedSha256}.json`,
+      );
+      const completeJournalBytes = await readFile(recoveryJournal);
+      const resumable = JSON.parse(completeJournalBytes.toString("utf8"));
+      resumable.state = "REMAP_FAILED";
+      await writeFile(recoveryJournal, `${JSON.stringify(resumable, null, 2)}\n`);
+      await assert.rejects(
+        runCli([
+          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+          "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
+        ], {
+          WILLARD_RESTORE_DATABASE_URL: targetUrl,
+          WILLARD_BACKUP_PASSPHRASE: passphrase,
+        }),
+        /journal authentication failed/,
+      );
+      await writeFile(recoveryJournal, completeJournalBytes);
+      await runCli([
+        "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
+        "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
+      ], {
+        WILLARD_RESTORE_DATABASE_URL: targetUrl,
+        WILLARD_BACKUP_PASSPHRASE: passphrase,
+      });
+      assert.equal(JSON.parse(await readFile(recoveryJournal, "utf8")).state, "COMPLETE");
 
       for (const probe of [
         {
@@ -667,52 +912,15 @@ test(
           `,
           targetUrl,
         ]);
-        assert.equal(
-          remapped.stdout.trim(),
-          [probe.target, probe.expectedCache, probe.expectedMedia, probe.expectedMedia].join("|"),
+        const expectedRemapRow = [probe.target, probe.expectedCache, probe.expectedMedia, probe.expectedMedia].join("|");
+        assert.deepEqual(
+          remapped.stdout.trim().split(/\r?\n/),
+          [expectedRemapRow, expectedRemapRow, expectedRemapRow],
+          "path remapping must update active, recycled, and deleted media rows",
         );
       }
 
-      await assert.rejects(
-        runCli([
-          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-          "--confirm-library-id", manifest.library.libraryId,
-        ], {
-          WILLARD_RESTORE_DATABASE_URL: targetUrl,
-          WILLARD_BACKUP_PASSPHRASE: passphrase,
-        }),
-        /not empty/,
-      );
-      const recoveryJournal = path.join(
-        reattachedNasRoot,
-        "WillardAI",
-        "config",
-        "recovery-attempts",
-        `${manifest.integrity.encryptedSha256}.json`,
-      );
-      const completeJournalBytes = await readFile(recoveryJournal);
-      const resumable = JSON.parse(completeJournalBytes.toString("utf8"));
-      resumable.state = "REMAP_FAILED";
-      await writeFile(recoveryJournal, `${JSON.stringify(resumable, null, 2)}\n`);
-      await assert.rejects(
-        runCli([
-          "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-          "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
-        ], {
-          WILLARD_RESTORE_DATABASE_URL: targetUrl,
-          WILLARD_BACKUP_PASSPHRASE: passphrase,
-        }),
-        /journal authentication failed/,
-      );
-      await writeFile(recoveryJournal, completeJournalBytes);
-      await runCli([
-        "restore", "--backup-dir", backupDir, "--library-root", reattachedNasRoot,
-        "--confirm-library-id", manifest.library.libraryId, "--resume-recovery",
-      ], {
-        WILLARD_RESTORE_DATABASE_URL: targetUrl,
-        WILLARD_BACKUP_PASSPHRASE: passphrase,
-      });
-      assert.equal(JSON.parse(await readFile(recoveryJournal, "utf8")).state, "COMPLETE");
+
 
       await cp(backupDir, tamperedBackup, { recursive: true });
       const tamperedFile = path.join(tamperedBackup, "database.dump.enc");
@@ -791,4 +999,81 @@ test("backup manifest uses the canonical authenticated active-library settings r
     source,
     /SELECT nas_path FROM app_settings ORDER BY \(password_hash IS NOT NULL\) DESC, id ASC LIMIT 1/,
   );
+});
+
+
+test("secure plaintext backup cleanup refuses symlink targets", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function secureRemove");
+  const end = source.indexOf("\nasync function sourceDatabaseName", start);
+  assert.ok(start >= 0 && end > start);
+  const cleanup = source.slice(start, end);
+  assert.match(cleanup, /const info = await lstat\(filePath\)/);
+  assert.match(cleanup, /info\.isSymbolicLink\(\) \|\| !info\.isFile\(\)/);
+  assert.match(cleanup, /fsConstants\.O_RDWR \| noFollow/);
+  assert.match(cleanup, /current\.isSymbolicLink\(\)/);
+});
+
+
+test("restore target safety checks schemas, relations, routines, types, and extensions", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function cleanTarget");
+  const end = source.indexOf("\nasync function recoveryJournalPath", start);
+  assert.ok(start >= 0 && end > start);
+  const check = source.slice(start, end);
+  for (const catalog of ["pg_class", "pg_proc", "pg_type", "pg_namespace", "pg_extension"]) {
+    assert.match(check, new RegExp(`pg_catalog\\.${catalog}\\b`));
+  }
+  assert.match(check, /nspname NOT IN \('pg_catalog', 'information_schema', 'public'\)/);
+  assert.match(check, /extname <> 'plpgsql'/);
+  assert.doesNotMatch(check, /pg_catalog\.pg_tables/);
+});
+
+
+
+
+test("NAS reattachment remaps face crop and media scan history roots", async () => {
+  const source = await readFile(new URL("./library-recovery.mjs", import.meta.url), "utf8");
+  assert.match(source, /\["faces", "crop_path", "prefix"\]/);
+  assert.match(source, /\["media_scan_jobs", "nas_path", "exact"\]/);
+});
+
+test("backup and restore media inventories are scoped to the authenticated NAS root", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const sourceStart = source.indexOf("async function sourceLibrary");
+  const sourceEnd = source.indexOf("\nexport async function createPrivateBackupWorkDirectory", sourceStart);
+  assert.ok(sourceStart >= 0 && sourceEnd > sourceStart);
+  const sourceLibrary = source.slice(sourceStart, sourceEnd);
+  assert.match(sourceLibrary, /FROM media_files WHERE nas_path = \$\{sqlLiteral\(root\)\}/);
+  assert.match(sourceLibrary, /WHERE nas_path = \$\{sqlLiteral\(root\)\} AND last_scan_action/);
+
+  const restoreStart = source.indexOf("async function verifyRestoredLibraryInventory");
+  const restoreEnd = source.indexOf("\nfunction sqlLiteral", restoreStart);
+  assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+  const restoreInventory = source.slice(restoreStart, restoreEnd);
+  assert.match(restoreInventory, /catalogRoot = targetLibrary\.root/);
+  assert.match(restoreInventory, /normalizeLibraryRoot\(catalogRoot\)/);
+  assert.match(restoreInventory, /nas_path = \$\{sqlLiteral\(canonicalCatalogRoot\)\}/);
+
+  const restoreFlowStart = source.indexOf("async function restoreBackup");
+  const restoreFlowEnd = source.indexOf("\nasync function verifyBackup", restoreFlowStart);
+  assert.ok(restoreFlowStart >= 0 && restoreFlowEnd > restoreFlowStart);
+  const restoreFlow = source.slice(restoreFlowStart, restoreFlowEnd);
+  assert.match(restoreFlow, /recoveryJournalState === "COMPLETE"/);
+  assert.match(restoreFlow, /catalogRootBeforeRemap[\s\S]*?manifest\.library\.root/);
+  assert.match(restoreFlow, /await verifyRestoredLibraryInventory\([\s\S]*?catalogRootBeforeRemap/);
+  assert.match(restoreFlow, /await remapRestoredLibrary\(environment, manifest\.library\.root, targetLibrary\.root\)/);
+  assert.match(restoreFlow, /await verifyRestoredLibraryInventory\(environment, manifest\.library, targetLibrary\)/);
+});
+
+test("database snapshot lease delegates lifecycle ownership to the shared process helper", async () => {
+  const source = await readFile(new URL("./database-backup.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function openDatabaseSnapshot(environment)");
+  const end = source.indexOf("function quoteIdentifier", start);
+  assert.ok(start >= 0 && end > start);
+  const lease = source.slice(start, end);
+  assert.ok(lease.includes("waitForExportedSnapshot(child)"));
+  assert.ok(lease.includes("releaseExportedSnapshot(child)"));
+  assert.equal(lease.includes("setTimeout("), false);
+  assert.equal(lease.includes('child.once("close"'), false);
 });

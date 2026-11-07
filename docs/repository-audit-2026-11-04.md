@@ -505,11 +505,10 @@ Remaining archive hardening:
 
 ## Organization conflict replacement is not rollback-safe (2026-11-05)
 
-- Confirmed a high-priority data-loss risk in both initial execution and resume paths. When `conflictPolicy === "replace"`, `organize.ts` calls `fs.unlinkSync(destFile)` before `verifiedMove` installs and hashes the replacement. If that move/hash fails, or a later file/verification step fails, the catch path calls `rollbackMoves(fileMoves)`; `FileMoveRecord` contains only the new source/destination hashes and `rollbackMoves` has no backup record for the previous destination. The old destination is therefore not restored even though the job reports a rollback.
-- Left unchanged because a safe correction requires durable per-file backup intents, crash recovery for the interval between backup/move/checkpoint, and rollback support in both initial and resumed execution. A temporary rename without journaled recovery could strand the only old copy after a process crash; changing `replace` to skip/abort would alter user-visible semantics and needs approval.
-- Until that transactional backup design and its crash-recovery tests exist, treat `replace` as unsafe for valuable existing destination files. The default `keep_existing` path is not affected by this finding.
-
-
+- Confirmed a high-priority data-loss risk in the original implementation: `conflictPolicy === "replace"` deleted an existing destination before the replacement was durably journaled and verified. The old destination could not be restored after a failed move or process crash.
+- **Mitigation confirmed on 2026-11-06:** both execute and resume now reject Replace collisions with an explicit no-files-changed error. The Organize UI disables the Replace option. `organize-replace-safety.test.ts` asserts both route guards and the disabled UI control.
+- **Current status:** the destructive Replace path is blocked, not repaired. The user-facing Replace feature remains unavailable until a durable displaced-file backup intent, crash recovery, and rollback state machine is implemented and tested. The active route no longer deletes an existing destination under this policy.
+- The default `keep_existing` path is not affected by the historical finding.
 ## Explicitly disable 7-Zip symbolic-link materialization (2026-11-05)
 
 - Follow-up review focused on the remaining gap between metadata-based link rejection and actual extraction. The organize route rejected links reported by Seven.list, but Seven.extractFull did not explicitly disable link materialization. That left extraction behavior dependent on the 7-Zip build and archive format if link metadata was incomplete.
@@ -567,17 +566,11 @@ Remaining archive hardening:
 - Test commit: `16c3aa9092ce6d21eead71f4764928a0e409401a`.
 - Remaining limitation: Windows CI verifies symlink metadata parsing and updater behavior, but it still does not run the complete organize route against a crafted malicious archive on Windows. The Linux paired control proves the switch behavior on the official Linux 26.05 binary, not every Windows archive-format combination.
 
-## Organization worker lease is not fenced against stale workers (2026-11-04)
+## Organization worker lease is not fenced against stale workers (2026-11-04; historical finding superseded)
 
-- Confirmed a multi-worker correctness and data-loss risk in the organization execution/recovery lifecycle. The five-minute lease is represented only by `status` and `stageUpdatedAt`; it has no unique owner/fencing token.
-- `startOrganizationJobHeartbeat` updates a row using only job ID, NAS path, and status. If worker A is paused long enough for its lease to expire and worker B successfully reclaims the job, worker A can resume and refresh worker B's lease because both workers share the same status. The old worker can also continue filesystem operations.
-- Related stage and file-move checkpoints are not fenced to a specific execution attempt: stage writes filter only by job ID, and file-move journal writes also filter only by job ID. A stale worker can therefore overwrite the new worker's stage timestamp or recovery journal. This undermines the intended stale-lease compare-and-swap and can produce overlapping work or incomplete rollback records.
-- Source evidence: `startOrganizationJobHeartbeat` filters by `id`, `nasPath`, and `status` only; the resume claim changes the same status to `executing` without assigning an attempt identity; `setStage` and the per-file `fileMoves` checkpoint do not include an attempt identity in their update predicates.
-- No code change was made. A safe fix needs a durable per-attempt lease/fencing token (or equivalent database-backed ownership generation), conditional heartbeat/stage/journal updates, and checks that prevent a superseded worker from beginning additional filesystem mutations. The design must cover initial execute, resume, rollback, capacity-admission failure, and crash recovery. An in-memory mutex or status-only predicate is insufficient across processes.
-- Validation: source inspection only; no regression test or runtime concurrency test was run because the ownership mechanism is not implemented. Do not treat this as fixed or validated.
-- Priority: high. Until fencing is implemented, a worker paused beyond the five-minute lease can potentially overlap a recovery worker. Avoid manually resuming or rolling back a job while its original worker may still be alive.
-
-
+- The original source finding was valid: workers shared status and heartbeat timestamps without a unique owner token, allowing stale heartbeat and checkpoint writes to overwrite a replacement worker's state.
+- **Superseded by the 2026-11-06 high-severity follow-up** at the later section titled `2026-11-06 high-severity follow-up — organization workers lacked durable ownership fencing`. The current implementation has a nullable `lease_token`, unique tokens for execute/resume/rollback, token-conditional heartbeat/stage/journal/terminal writes, and ownership callbacks around verified moves and rollback mutations.
+- **Remaining status:** implementation and source regressions are committed; runtime multi-process takeover, database-loss, Windows, and SMB validation remain pending. A database check immediately before a filesystem mutation is not an atomic filesystem fence; preserve the documented residual check-to-mutation and crash windows until those integration tests prove the supported behavior.
 ## Rollback success now requires checksum verification (2026-11-05)
 
 - Found that `rollbackMoves` incremented its success count immediately after moving a file back to its source, then merely logged a checksum mismatch. The rollback endpoint uses that count to decide whether to mark the whole job `rolled_back`; a corrupted or externally modified file could therefore be reported as successfully recovered.
@@ -896,8 +889,8 @@ Remaining archive hardening:
 - **AI search, enrichment, and chat:** local-only saved-search policy, active-library scoping, folder/extension exclusions, and Windows separator normalization reviewed and regression-tested. A live provider-payload capture and two-library DB integration test remain outstanding.
 - **Collections, faces, and metadata:** active-library scoping reviewed; face/media paths and assignment flows inspected. Full browser interaction coverage remains outstanding.
 - **Cleanup and archive handling:** empty-folder scanning and media orphan cleanup now fail closed on incomplete scans. Archive traversal/link/reparse-point protections and official 7-Zip metadata checks are covered; a complete malicious Windows organize-route test remains outstanding.
-- **Organization jobs:** exclusive destination moves, pre-move intents, checksum-verified rollback, journal checkpoint failure handling, resume journal retention, and final destination integrity checks have been added across the branch. Stale-worker fencing and durable backups for `conflictPolicy=replace` remain critical open items.
-- **Conversion/optimization:** pending jobs now use an atomic execution claim. Finalization remains critical: partial per-file failures can still be followed by staging deletion and a `done` status, and retry can discard staging after interrupted finalization. Do not use replace/archive/recycle on the only copy of valuable files until the durable finalization journal and recovery design is implemented.
+- **Organization jobs:** exclusive destination moves, pre-move intents, checksum-verified rollback, journal checkpoint failure handling, resume journal retention, and final destination integrity checks are implemented. Per-attempt database lease tokens and pre-mutation ownership callbacks are also implemented, but multi-process takeover/Windows/SMB runtime validation remains pending; filesystem-level fencing is not yet proven. Replace collisions are rejected in both API execution paths and disabled in the UI until durable displaced-file backup/recovery is implemented.
+- **Conversion/optimization:** pending jobs use an atomic execution claim; finalization persists per-move intents before mutation, verifies no-overwrite publication, attempts checksum-verified rollback, and runs staging cleanup only after the database records `done`. Startup and request-path recovery reconcile interrupted finalization journals. The critical remaining issue is stale-worker fencing: session advisory-lock loss can leave an old worker mutating shared job-level staging/publish paths while a retry or recovery starts. Attempt-specific staging, durable per-file conversion checkpoints, and a filesystem mutation fence still require an architectural batch and fault-injection tests.
 - **Database backup/restore:** canonical active settings row selection and recovery-drill fixture corrected. Multi-library backup manifests and restore remapping remain unsupported/uncertain when one database contains multiple NAS roots.
 - **Desktop web server, updater, and installer:** request-target/path handling and updater journal/rollback checks are covered. Clean-machine installer lifecycle, browser SVG CSP, and full Windows malicious-archive route validation remain outstanding.
 
@@ -1723,7 +1716,9 @@ Validation for this continuation: the targeted organization-helper, conversion-j
 |---|---|---|---|---|
 | Critical | Organize → replace can lose the previous destination during replacement or recovery | **mitigated; restart validation pending** | 16286b416dcc7d10e69547885c436d26cb959bae | Durable intent, verified backup, no-replace publication, and recovery retention are implemented and unit-tested. Confirm the existing process-restart recovery task against the database route and supported Windows/NAS paths before closing. |
 | Critical | Conversion worker can continue filesystem writes after losing its PostgreSQL advisory-lock connection | **blocked** | — | Design process-lifetime filesystem mutation fencing and validate on Windows, local disks, SMB, and supported NAS filesystems. |
-| High | Packaged updater → malformed or unreadable update journal is silently treated as absent (Read-UpdateJournal catches and returns null) | **found / blocked** | — | A corrupt journal can prevent recovery from discovering the displaced installation backup. Design explicit absent/valid/corrupt states, preserve ambiguous backups, and add crash/corruption recovery tests; do not blindly select a backup. |
+| High | Packaged updater → malformed or unreadable update journal is silently treated as absent | **integration-tested** | `83b9cf1f1ac002c87e31af21b187049c18654e35`; Windows packaged journal smoke in Fast Validation #822 | Existing journals now fail closed, schema/path validation is enforced, ambiguous missing-backup states are preserved, and same-process rollback uses its captured backup path. This is not full installed-product validation. |
+| High | Packaged updater → crash after the install directory is moved can leave the shortcut target unavailable | **found / blocked** | Source inspection: `installer/WillardMediaCenter.iss` shortcuts target `{app}\\desktop\\WillardMediaCenter.ps1`; `Invoke-PackagedVersionSwap` temporarily renames `{app}` | If the process dies after renaming the install root and before activating the candidate, the shortcut points into a missing directory and cannot run the recovery code. Design a stable bootstrapper outside the swap root or a versioned-directory layout; add process-crash tests. |
+| High | Packaged updater → stale non-terminal journal after backup cleanup | **found / blocked** | Source inspection: `Remove-UpdateJournal` suppresses deletion errors; success and restore paths can leave `swapped`/`backup-created` journal after backup removal | Add durable `committed` and `restored` terminal phases before deleting rollback directories; make cleanup/recovery idempotent and test journal-delete failures. |
 | High | Windows release workflow → manual validate_only still runs with workflow-level contents: write and receives production manifest-signing and Authenticode secrets | **found / blocked** | — | Split validation and publication into separate jobs. Give validation read-only permissions and ephemeral test signing identities; expose production signing secrets and write permission only to the protected publish job. No workflow dispatch was run. |
 | High | Windows installer → complete standard-user install/upgrade/interruption/rollback/uninstall lifecycle | **blocked** | — | Requires a non-publishing test-signing path; current release workflow requires Authenticode secrets. |
 | Medium | Release minimumWindowsVersion metadata is informational only | **found** | — | make-release.ps1 writes "10", but the installed launcher does not enforce it and the Inno Setup script has no explicit MinVersion. Align the installer and updater with the signed minimum before declaring OS compatibility complete. |
@@ -1732,10 +1727,2221 @@ Validation for this continuation: the targeted organization-helper, conversion-j
 
 ### Branch and PR preservation
 
+Earlier local audit snapshot (historical):
+
 The latest fetched remote audit branch was `f44f1c6629bc8f9382f7b1291a46bfe85d1de6ac`, the then-current head of open, unmerged PR #2 targeting `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`. GitHub's earlier report showed 833 commits ahead and 1 behind; the fetched refs counted 834 ahead and 1 behind with `git rev-list`. The local Replit workspace had no audit branch and was on `main`; the existing remote PR branch was recovered, and the local audit commits were joined with the three subsequently fetched PR commits using a local non-fast-forward merge. This does not merge the GitHub PR or change `main`. No force-push or history rewrite was performed; the local merge remains unpushed.
 
 The ancestry check found that local `main` includes the earlier audit history through `1a971f7cd647b8c3688e115635a48839dcbf21af` via local merge commit `405cd29b6f366813f8a4b7ab2cfd267d8abf745e`. The current remote PR head is not merged into `main`. Patch-equivalence comparison found 79 audit-branch-only commits and four local-main-only commits: `694a055` (the PR base update), `9dcce45` (audit-runner isolation and generated API updates), `e621e9e` (local audit verification), and `5ce1269` (the organize replacement fix). The relevant `5ce1269` fix was preserved as `16286b4`; `9dcce45` and `e621e9` remain intact on local `main` and were not imported into the audit branch. The PR base update was not merged into the audit branch.
 
 The cherry-picked organize commit had also included two unreferenced test-generated cache JSON files. They were removed from the audit branch in a separate cleanup commit; the original commit and files remain recoverable in Git history and local `main`. No `main` ref was changed.
 
+
+Subsequent remote PR snapshot (historical; not a current-state check):
+
+The remote `audit/full-repository-review-2026-11` branch is still the exact head of PR #2 at `1ef0e77c28006e05622a4847320ea639c3a8e342`. It is 841 commits ahead of `main` and 1 behind; GitHub currently reports the PR as mergeable. No rebase, force-push, merge, or main-branch update was performed. The separate Replit workspace previously reported on `main` was not modified by this GitHub-side work; if it still shows `main`, it must fetch and check out the existing audit branch before local Replit work resumes.
+
 No production data, credentials, or published releases were changed.
+
+
+## 2026-11-05 audit batch — packaged updater journal fail-closed recovery
+
+**Confirmed defects:** `Read-UpdateJournal` previously converted every read/JSON error into `$null`, making a corrupt journal indistinguishable from no pending update. `Recover-InterruptedUpdateSwap` also treated a missing backup as cleanup-safe even in `backup-created` or `swapped` phases, which could discard the candidate and journal while the installation was incomplete. In-process rollback read the journal before using the backup path already captured by the running process, so a damaged journal could prevent that process from restoring the directory it had just displaced.
+
+**Implemented:**
+- A missing journal is the only state that returns `$null`; an existing non-file, unreadable, malformed, unsupported, or path-mismatched journal now stops startup without deleting recovery data.
+- Validate the journal version, phase, required fields, install root, and expected sibling candidate/backup naming and parent paths.
+- Preserve the journal and candidate when a phase that requires the previous installation backup cannot find it. Only a `prepared` journal with the original installation still present can discard the unused candidate.
+- Capture the trusted in-process backup path immediately after moving the old install and before writing the next journal phase. Same-process rollback now uses that captured path even if the journal becomes unreadable afterward.
+- Extend `scripts/windows/update-journal-smoke.ps1` to exercise the production functions in isolated temporary directories: atomic journal writes, corrupt JSON preservation, path escape rejection, missing-backup preservation, safe prepared-phase cleanup, in-memory rollback with a corrupt journal, and valid previous-version restoration.
+
+**Commits:** final launcher implementation `83b9cf1f1ac002c87e31af21b187049c18654e35`; packaged journal regression coverage `077bdb0ac7b5473efe206dfc51cf97d88758d053`. The test fixture cleanup correction is in `f35300fe6d133c96a3d14da6599ec0e4839e20eb`.
+
+**Validation:** [Fast Validation #822](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42114708776) passed both Linux and Windows jobs. Linux passed typecheck/generated contracts, release/storage contracts, release-contract tests (65/65), installer configuration tests (19/19), UI accessibility contracts (6/6), PostgreSQL media LIKE integration, PostgreSQL conversion-lock and finalization-recovery integration, and targeted backend regressions (255 passed, 0 failed, 3 skipped). Windows passed PowerShell parsing (19 scripts), launcher mutex, environment-file encoding, storage concurrency/no-overwrite, NAS temp cleanup, conversion rollback, official 7-Zip and symlink metadata, packaged updater journal smoke, and developer updater preservation/rollback. [Dependency Review #585](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42114708793) passed.
+
+**Validation correction:** Fast Validation #821 failed because the first launcher source replacement duplicated the script body; the existing launcher-flow source contract caught it. Commit `83b9cf1` restored the original single launcher body and reapplied the journal changes. The matching latest Fast Validation #822 then passed. Superseded runs #817–#819 were cancelled and are not counted as passes.
+
+**Remaining risk / design work:** This batch is Windows integration-tested at the helper level, not a complete installed-product lifecycle. The Start Menu/Desktop shortcuts point to a script inside `{app}`, while the swap temporarily renames that directory; a process crash in that window can leave no launcher available to run recovery. A stable bootstrapper outside the swap root or a versioned-directory design is required. Journal cleanup also suppresses deletion errors, and there are no durable `committed`/`restored` terminal phases yet; a failed journal deletion after backup cleanup can leave a stale phase. Both require an idempotent state-machine design and crash-injection tests. No installer was published, no release was created, and the validation-only release workflow was not dispatched.
+
+
+## 2026-11-05 follow-up — organization worker lease fencing and current validation
+
+### Validation confirmation
+
+- [Fast Validation #824](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42115395491) completed successfully on the current PR head `2969ca26638a2a75db2438b9f8f8d812c53105e5`.
+- Linux job passed workspace typecheck/generated API contracts, Expo CLI configuration smoke, desktop web-server safety, release/storage contracts, official 7-Zip download retry and binary compatibility, PostgreSQL media wildcard integration, PostgreSQL conversion advisory-lock and finalization-recovery integration, and targeted backend regressions.
+- Windows job passed PowerShell parsing, concurrent launcher serialization, fresh environment-file encoding, storage migration concurrency/no-overwrite, NAS temp-path cleanup, conversion finalization rollback, official 7-Zip staging and symlink metadata preservation, packaged updater journal writes, and developer updater preservation/rollback.
+- [Dependency Review #587](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42115395467) passed.
+- These are Fast Validation and Dependency Review results, not full CI, a complete installed-product lifecycle, or full malicious-archive organize-route integration on Windows.
+
+### Newly confirmed high-priority finding — organization worker lease is not a filesystem fencing mechanism
+
+**Affected workflow:** Organize → execute/resume/rollback and Recovery Center.
+
+**Source inspection:** `artifacts/api-server/src/routes/organize.ts`.
+
+- `startOrganizationJobHeartbeat` renews `stageUpdatedAt` every 30 seconds, but catches database errors, logs a warning, and lets the worker continue.
+- The heartbeat update is conditional on job ID, library path, and status, but does not use `RETURNING` or inspect whether any row was actually updated. A zero-row update after another actor changes the status is therefore indistinguishable from a successful lease renewal.
+- The execute and resume stage-checkpoint helpers also catch and suppress checkpoint failures. Their updates are scoped by job ID only, rather than by the worker's ownership generation and expected status.
+- Recovery Center considers an executing/rolling-back job reclaimable after the five-minute heartbeat lease becomes stale. A worker that is still performing filesystem operations can therefore outlive its database lease after a prolonged database outage or ownership transition. A stale worker's stage checkpoint can also update `stageUpdatedAt` after another actor has changed the status.
+
+**Status:** found; critical concurrency/data-integrity risk; blocked pending fencing design. No partial heartbeat-only workaround applied.
+
+**Required safe design:**
+1. Give every claimed execution/resume/rollback attempt a unique owner generation/token persisted by the atomic claim.
+2. Make heartbeat renewal return and verify the claimed generation and expected status; a failed or zero-row renewal must transition the worker to a no-more-mutations state.
+3. Require the same owner generation at every durable journal update and before each filesystem mutation. A process-local abort signal alone is insufficient if a mutation is already in flight or if another process can reclaim ownership.
+4. Add a filesystem mutation gate/fencing mechanism that prevents a stale process from writing after a newer owner is admitted. Validate its semantics on Windows, local filesystems, SMB, and supported NAS configurations.
+5. Add PostgreSQL-backed race tests: lost DB connection, zero-row heartbeat renewal after ownership changes, slow/in-flight copy, stale worker resumption, and concurrent Recovery Center rollback/resume. Assert that no two generations can mutate the same job's paths.
+6. Preserve the existing move journal and never clear recovery records when ownership or rollback completion is ambiguous.
+
+**Remaining risk:** Current five-minute timestamp lease is a liveness heuristic, not proof that the previous process has stopped. The existing conversion-worker advisory-lock concern has the same class of problem. Both need filesystem-level fencing, not just a database recheck.
+
+### Replacement-policy source confirmation
+
+The current organize execute and resume paths still unlink an existing destination for `conflictPolicy === "replace"` before calculating/persisting the incoming file's move intent. The pre-move intent journal protects the incoming move, but does not preserve the displaced destination. This remains critical and blocked; replacement backup/recovery must be designed as part of the durable journal rather than patched by adding an untracked rename.
+
+### Current PR/branch snapshot
+
+- PR #2 remains open, draft, unmerged, and reported mergeable.
+- Head branch: `audit/full-repository-review-2026-11`.
+- Head SHA: `2969ca26638a2a75db2438b9f8f8d812c53105e5`.
+- Base: `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`.
+- GitHub reports 842 commits and 141 changed files in the PR.
+- No merge, close, rebase, force-push, or main-branch modification was performed.
+- No production data, credentials, or release artifacts were changed.
+
+
+## 2026-11-05 follow-up — signed minimum-Windows-version requirement is not enforced
+
+### Finding — update compatibility metadata is authenticated but ignored by the installed updater
+
+**Affected workflow:** Installed Windows app → automatic update check and installation.
+
+**Evidence:**
+- `desktop/release-contract.mjs` includes `minimumWindowsVersion` in `SIGNED_FIELDS`, so the value is covered by the release signature.
+- `validateReleaseManifest` accepts an optional string for `minimumWindowsVersion` but does not validate a version format or expose a compatibility decision.
+- `desktop/WillardMediaCenter.ps1` verifies the signed manifest and compares release versions, then downloads and installs the newer package. It does not inspect `remote.minimumWindowsVersion` or compare it with the current Windows version.
+- `scripts/windows/validate-release.mjs` separately checks the packaged `version.json` prerequisite is `10+`, but that is a fixed payload validation assertion; it does not enforce a signed per-release minimum against the end user's machine.
+
+**Impact:** If a future signed release raises its minimum supported Windows version (for example, to a newer Windows release), an older unsupported machine can still be offered and can begin installing that release. The update may then fail at runtime or leave the user with an incompatible installation.
+
+**Status:** Confirmed source-level compatibility gap. No update behavior changed in this pass.
+
+**Safe fix requirements:**
+1. Define one canonical supported value format and comparison function for the signed minimum Windows version (avoid loose string comparison).
+2. Determine the actual Windows version using a supported Windows API/runtime source; do not trust a user-editable environment variable.
+3. Check compatibility after signature verification and before artifact download or service shutdown.
+4. If incompatible, keep the installed version untouched, display a clear message that names the minimum required Windows version, and record a non-sensitive diagnostic.
+5. Add Windows tests for absent requirement (backward-compatible), current OS equal to minimum, newer OS, older OS, malformed signed values, and version-boundary cases.
+6. Keep the check in the shared release/update contract where possible so validation, updater, and tests cannot drift.
+
+**Risk classification:** Medium (availability / failed update), elevated because the update path can replace a previously working installation. The signed metadata is not currently an enforced compatibility boundary.
+
+
+## 2026-11-05 follow-up — media rename input and no-overwrite safety
+
+### Finding: media rename could throw on non-string JSON and overwrite a racing destination
+
+**Severity:** Medium (data integrity and cross-platform correctness).
+**Affected workflow:** Media Explorer → rename file.
+**Source inspection:** `artifacts/api-server/src/routes/media.ts`, `artifacts/api-server/src/lib/media-rename.ts`, and existing `moveFileNoReplace` in `organize-helpers.ts`.
+
+The rename route called `.trim()` on `req.body.name` before checking its JSON type, so an array/number/object could throw rather than return HTTP 400. It also performed an `existsSync(newAbs)` preflight and then used `fs.renameSync`; another process could create the destination between those operations, and POSIX rename semantics can replace that file. The route also accepted Windows-reserved device basenames and Windows-invalid trailing dots/characters, making names non-portable when a library is moved between supported operating systems.
+
+**Fixes:**
+- Added `isPortableMediaFileName` to validate a single portable filename component, including reserved device names with extensions, COM/LPT superscript variants, control characters, invalid Windows characters, trailing dots/spaces, dot components, and the 255-character component limit.
+- Non-string JSON values now produce HTTP 400 rather than throwing.
+- Reused the existing `moveFileNoReplace` helper for forward rename and rollback so a destination created after preflight is not overwritten.
+- Renaming a file to its existing relative path is a no-op, but only after confirming the source still exists.
+- A racing `EEXIST` is returned as HTTP 409 rather than a generic HTTP 500.
+- Added focused regression tests for the filename matrix, malformed JSON values, a destination created between preflight and move, no-op ordering, and route wiring.
+
+**Commits:**
+- `e9507fce5739b46f303695a7847917588b77d0f6` — portable filename validation and no-replace rename.
+- `5c8afebe4d969bacc519bae563a278709bddcfbb` — corrected regression assertions.
+- `225f2d33e60bb15b6b3823323ec470f9689f4c60` — source-check ordering, HTTP 409 mapping, and Windows test step.
+
+**Status:** target-tested.
+**Validation:** Fast Validation #828 passed Linux targeted tests on the implementation/test head. Fast Validation #829 passed Linux and Windows, including the new Windows media-rename test ([#829](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122492014)); Dependency Review #592 passed ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42122491867)).
+**Remaining risk:** The no-replace helper's cross-device fallback uses an exclusive copy; preservation of all platform-specific extended metadata on every NAS implementation is not proven. The filesystem-to-database crash window is not journaled, and case-only rename on case-insensitive filesystems remains a separate UX edge case.
+
+## 2026-11-05 follow-up — media rename race response and Windows test coverage
+
+Fast Validation #828 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121778144)) passed Linux typecheck/generated contracts, release/storage contracts, PostgreSQL media wildcard and conversion integration, targeted backend regressions, and the Windows launcher/storage/conversion/7-Zip/updater smoke job. Its Windows job did not yet execute the media-rename test file. Dependency Review #591 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42121777938)) passed.
+
+A source-order review found that the initial no-op branch could return success before confirming the source still existed. The branch was moved after the source existence check. The route also maps a racing `EEXIST` from the no-replace operation to HTTP 409. The Windows Fast Validation job now executes `media-rename.test.ts`, exercising the no-overwrite and portable filename behavior on Windows.
+
+**Status:** target-tested by Fast Validation #829 on both Linux and Windows. See the finding above for exact commits and remaining risk.
+
+## 2026-11-05 follow-up — media rename UI state and accessibility
+
+**Source finding:** The MediaViewer rename dialog updated only the in-memory `file.name` after a successful API rename. It left `file.relativePath` stale and did not notify the parent page, so the viewer path and React Query media-list cache could continue showing the old path. The dialog also lacked a programmatic name/label, did not announce validation errors, and had no keyboard focus loop or explicit focus restoration.
+
+**Fixes:**
+- The rename request now returns the server's authoritative `id`, `name`, and `relativePath`.
+- MediaViewer exposes an `onRenameChange` callback; the parent updates matching cached media rows and invalidates the media query.
+- The viewer uses the returned relative path rather than reconstructing it from stale state.
+- The dialog now has `role=dialog`, `aria-modal`, and a labelled title; the filename input has a real label, invalid state, and described error.
+- Error messages use an assertive alert.
+- Focus moves into the input on open, Tab/Shift+Tab are kept within the dialog, Escape closes it, and focus returns to the Rename trigger.
+
+**Commit:** `8075d59e25aa9419f59b4d24fcfec5cbc38292ca`.
+
+**Status:** target-tested by Fast Validation #830 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42123498776)). Linux typecheck/generated contracts, release/storage/UI contracts (including the new media rename accessibility and cache-state assertions), PostgreSQL media wildcard and conversion integration, and targeted backend regressions passed. The Windows job also passed, including the media-rename no-overwrite/portable-filename test and the packaged/developer updater recovery tests. Dependency Review #593 passed ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42123498763)).
+
+**Remaining risk:** Browser-based keyboard and screen-reader verification is still outstanding. The rename filesystem-to-database crash window remains separate and needs a durable reconciliation design; this UI batch does not solve it.
+
+### Prioritized findings ledger addendum — 2026-11-05
+
+| Severity | Affected workflow | Status | Commit / validation | Remaining risk |
+|---|---|---|---|---|
+| Critical | Organize → replace existing destination | blocked | Existing audit findings; source reconfirmed | Displaced original still lacks a durable, verified replacement journal. |
+| Critical | Organize execute/resume/rollback ownership | blocked | Source inspection in current audit | Timestamp heartbeat is not filesystem fencing; stale workers may outlive database ownership. |
+| Critical | Conversion worker ownership | blocked | Existing PostgreSQL lock/recovery tests pass, but do not prove filesystem fencing | A stale worker may still write after losing its advisory-lock connection. |
+| High | Windows updater recovery bootstrap | found | Source inspection of installer shortcuts and directory swap | Launcher is inside the directory moved during update; stable bootstrapper/versioned directory design needed. |
+| High | Updater journal terminal cleanup | found | Source inspection and packaged updater tests | Terminal phase ordering and backup cleanup need crash-safe reconciliation. |
+| High | Minimum Windows version enforcement | found | Signed release metadata is generated but not enforced by installer/updater | Unsupported Windows systems may attempt an update; enforce signed minimum before download/install. |
+| High | Validation-only release workflow permissions/secrets | found | Workflow source inspection | Separate read-only validation and protected publishing/signing identities. |
+| Medium | Media rename input, portable names, and no-overwrite race | target-tested | `e9507fc`, `5c8afeb`, `225f2d3`; Fast Validation #829 | No durable rename journal; cross-device metadata and case-only rename need further verification. |
+| Medium | MediaViewer rename state and dialog accessibility | target-tested | `8075d59`; Fast Validation #830 | Browser/screen-reader verification remains outstanding. |
+| High | Complete standard-user installer lifecycle | found | Fast Validation smoke tests are not a full installed-product lifecycle | Clean install, real upgrade, interruption, rollback, and uninstall still need isolated end-to-end execution. |
+
+### Current PR snapshot
+
+- PR #2 remains open, draft, unmerged, and reported mergeable.
+- Branch: `audit/full-repository-review-2026-11`.
+- Head: `8075d59e25aa9419f59b4d24fcfec5cbc38292ca`.
+- GitHub reports 848 commits and 143 changed files.
+- Comparison with `main`: 848 ahead, 1 behind; merge base `bd206ed99f06fb08fa792bbc94b03312fe01a0f0`.
+- No review threads were returned.
+- No merge, close, force-push, rebase, main-branch change, production-data change, credential change, or release publication was performed.
+
+**Validation classification:** Fast Validation #829 and #830 plus Dependency Review #592/#593 passed. These are targeted, integration, and Windows smoke validations. They are not full CI, a complete installed-product lifecycle, or browser-based accessibility validation.
+
+## 2026-11-05 audit batch — keyboard-operable media workflows and artifact base-path routing
+
+### Findings and fixes
+
+**Medium — Search result cards were pointer-only.** The result card was a clickable `div`, so keyboard users had no native open action. The Similar action was nested inside the same click surface and hidden until hover. The card now has a labelled native open button, while Similar is a separate button; its visibility works on touch and keyboard focus.
+
+**Medium — Media grid actions could trigger the wrong action.** The thumbnail container used `role="button"` with nested select/favorite buttons. Its key handler could also open the viewer when a keyboard user activated a child control. Selection and favorite controls also lacked reliable accessible names and were visually hidden on touch. The card now uses a native open button with independent labelled select/favorite buttons, `aria-pressed` state, focus indicators, and touch-visible controls. The selected check remains visible.
+
+**Medium — People grid had the same nested-action problem.** A role-button tile contained a Move face button. It is now a native open button with a separate labelled Move face action; the action is visible on touch and keyboard focus.
+
+**Medium — Documents and Organize history rows were not keyboard-operable.** Their table rows opened only through pointer clicks. Both now expose a labelled native button in the primary filename cell. Full-row pointer opening is retained, with an event guard so activating an inner button does not trigger the row action a second time. Organize's filename label also normalizes Windows backslashes before extracting the basename, so it no longer displays the full Windows source path.
+
+**Medium — Cleanup duplicate choices were pointer-only.** The candidate tile is now a native button with a descriptive accessible name, `aria-pressed` selection state, and a visible focus indicator.
+
+**Medium — Three frontend API URLs bypassed the configured artifact base path.** Vite sets `BASE_PATH` per artifact, but Cleanup thumbnails, Media Detail streaming, and Optimize scans hardcoded root-relative `/api` URLs. Those requests now use the shared `apiUrl` helper. A source scan of the audited web page set found no remaining hardcoded root-relative `/api/` URLs in those pages.
+
+### Focused regression coverage
+
+Expanded `scripts/ui-accessibility.test.mjs` with source-contract checks for Search, Media, People, Documents, Organize, Cleanup, Windows path basename handling, and the three base-path URLs. These are focused source-contract tests, not browser or screen-reader tests.
+
+### Validation
+
+- Fast Validation #856 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42126912114)) passed on code head `83bd8216c2dad78346baefff67161ea9ebf458f2`. Both jobs passed: Linux `validate` and `windows-archive-and-updater-smoke`.
+- Linux validation included workspace typecheck/generated API contracts, Expo configuration, desktop web-server safety, release/storage contracts (including the new UI source-contract tests), official 7-Zip checks, PostgreSQL media-filter and conversion-lock/finalization integration, and targeted backend regressions.
+- Windows smoke included PowerShell parsing, launcher concurrency, environment-file encoding, media rename, storage migration concurrency/no-overwrite, NAS temporary-path cleanup, conversion finalization, official 7-Zip symlink metadata, packaged updater journal writes, and developer updater preservation/rollback.
+- Dependency Review #619 ([run](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42126912567)) passed on the same code head.
+- Earlier Fast Validation attempts #842, #848, and #853 exposed defects in the newly added static test assertions (invalid regex escaping and over-specific source matching); those test-only issues were corrected before #856. The application typecheck passed in those attempts. Only #856 is counted as the successful latest-head validation.
+- No browser-based keyboard/screen-reader run, real non-root Replit deployment, or complete installed-product lifecycle was performed. The Windows job above is the existing archive/updater smoke, not the full Inno Setup clean-install/upgrade/uninstall lifecycle. No release workflow was run.
+
+### Prioritized findings ledger — current batch
+
+| Priority | Workflow / finding | Status | Commit / evidence | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search result card keyboard and touch access | target-tested | `e4ff6ade`, `bfb83d89`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Media grid open/select/favorite action separation | target-tested | `aa1ce941`, `940e2adb`, `186c29c7`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | People face-grid open/Move face controls | target-tested | `1fafc482`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Documents and Organize table navigation | target-tested | `191a86d9`, `552914e6`, `7cdfe938`, `4854e134`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Cleanup duplicate keep selection | target-tested | `1e7cb573`; Fast Validation #856 | Browser and assistive-technology verification |
+| Medium | Cleanup, Media Detail, and Optimize artifact base-path URLs | target-tested | `ff270f26`, `49ae062a`, `390361b6`; Fast Validation #856 | Live non-root Replit deployment verification |
+| Low | Windows source-path basename in Organize history | target-tested | `bb567532`, `c372c25a`; Fast Validation #856 | Browser verification on an actual Windows library path |
+
+### PR and safety snapshot
+
+- The validated application-code head was `83bd8216c2dad78346baefff67161ea9ebf458f2`.
+- PR #2 remained open, draft, unmerged, and mergeable at that head.
+- All code and audit updates remain on `audit/full-repository-review-2026-11`. No changes were made to `main`, production data, credentials, or published releases.
+
+**Next batch:** prioritize the Critical Organize `replace` displaced-file journal and stale organization/conversion worker filesystem fencing. These need durable ownership/recovery design and race/crash tests; do not apply a superficial rename or heartbeat-only workaround. The separate Windows installer lifecycle and signed minimum-Windows-version enforcement findings remain open.
+
+
+## 2026-11-05 follow-up — enforce the signed minimum Windows version before updating
+
+### Finding and correction
+
+**Medium — The signed `minimumWindowsVersion` field was not enforced by the packaged updater.** The release signature authenticated the field, but manifest validation only checked that a truthy value was a string. The Windows launcher verified the signature and then proceeded to download and install a newer release without checking the operating system. A future release raising its Windows requirement could therefore be offered to an unsupported computer.
+
+**Fix in this batch:** the release contract now validates a numeric Windows NT version in `MAJOR[.MINOR[.BUILD]]` form and exposes a comparator used by the packaged PowerShell launcher. The launcher reads the local OS version from `Win32_OperatingSystem.Version`, checks the signed minimum after signature verification and before artifact download, and skips the update without stopping the current working installation when the machine is below the requirement. If Windows version detection fails, the update fails closed while normal startup continues. The current manifest value `10` means Windows NT major version 10 or later (Windows 10/11); a future Windows 11 build requirement can be expressed as `10.0.22000`.
+
+### Regression coverage
+
+- Release-contract tests cover numeric version ordering, Windows 10/11 build boundaries, malformed values, and signed manifest validation.
+- The Windows updater journal smoke now exercises the production comparison helper and verifies the local CIM version probe.
+- Installer source-contract tests assert signature verification precedes the compatibility check and the compatibility check precedes artifact download.
+
+### Prioritized findings ledger — current batch
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Packaged updater ignores signed minimum Windows version | integration-tested | `6c0518f5`; Fast Validation #858 and Dependency Review #621 | Actual Windows 10/11 machine update and full installer lifecycle were not run |
+
+**Validation classification:** Fast Validation #858 passed on code head `6c0518f59ff723e7098cb19b60d0af27e682dbba`; both Linux validation and the Windows archive/updater smoke job succeeded. Dependency Review #621 passed. The Windows smoke exercised the CIM version probe and production comparison helper, and the Linux job ran the signed-manifest and version-comparison regressions. This is integration coverage for the compatibility helper, not an end-to-end signed release update on Windows 10 and Windows 11, a full installer lifecycle, or release-readiness validation.
+
+
+## 2026-11-05 follow-up — safe Windows uninstall and fail-closed service tracking
+
+### Findings
+
+**Medium — The Inno Setup installer stopped services before an upgrade but did not stop them before uninstall.** The only shutdown event was `PrepareToInstall`; the uninstaller could begin deleting the bundled Node runtime while the packaged API and web server were still running. The existing installed-lifecycle smoke reached uninstall only after an injected database-startup failure had already left the services stopped, so it did not exercise this real-user path.
+
+**Medium — Corrupt process state and WMI errors could be mistaken for no running services.** `Read-Pids` returned `$null` for malformed JSON, and `Get-ProcessIdentity` returned `$null` for every CIM query error. `Stop-Services` could therefore delete the state file and report success without proving that tracked processes were gone. That behavior was unsafe for both installer shutdown and packaged updates.
+
+### Fixes
+
+- Added one shared Inno Setup shutdown helper for upgrades and uninstall.
+- Added `CurUninstallStepChanged(usUninstall)` so the uninstaller stops Willard after the user confirms uninstall and before payload deletion. If the shutdown helper cannot run or returns a failure code, the uninstaller logs the error, displays an actionable message when interactive, and aborts instead of deleting files.
+- `Read-Pids` now validates the JSON structure, supported journal versions, run token, process IDs, and executable identity fields. A corrupt or incomplete file is preserved and raises an actionable error rather than being treated as an empty process list.
+- `Get-ProcessIdentity` now distinguishes a process that no longer exists from a failed CIM query. Query failures and incomplete executable identity information abort shutdown rather than silently allowing installation changes.
+- The startup failure handler now preserves the original startup error while separately reporting any failure to stop services safely.
+- Expanded the Windows updater smoke with corrupt/incomplete process-journal regressions. Expanded the installed-lifecycle smoke to start both services immediately before uninstall and assert both listening ports close and the external media, settings, and PostgreSQL markers remain intact.
+
+### Prioritized findings ledger — current batch
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Inno Setup uninstall while Willard services are running | fixed / target-tested pending CI | this batch | The installed-lifecycle smoke is source-updated but has not run on this PR branch; Inno compile/runtime uninstall validation remains pending |
+| High | Corrupt or unreadable packaged service process journal treated as no services | fixed / target-tested pending CI | this batch | Windows smoke and real stop/uninstall integration pending; stale PID reuse is still intentionally handled by refusing to kill a process whose identity does not match |
+
+**Validation classification:** source inspection and focused regression-test changes complete. The Windows updater smoke is expected to exercise the process-state parser; the actual Inno uninstall-while-running lifecycle is covered by the updated lifecycle script but is not part of ordinary Fast Validation. No new test or CI pass is claimed until the matching branch-head run completes.
+
+### Follow-up correction — rollback must not move the installation after an unverified stop
+
+Source review of the new fail-closed process handling found an additional consequence: the launcher startup failure handler attempted to restore the previous release even if `Stop-Services` itself failed. That could rename the active installation while a service process was still using it. The handler now gates rollback on a successful service-stop result, retains the previous release backup if shutdown cannot be verified, and uses the original `Process` handles to stop only API/web processes started by the current launcher attempt. It does not kill processes discovered only by an untrusted or corrupt PID journal.
+
+Fast Validation #860 exposed one test-only assertion error: the uninstall source test searched for the shutdown-helper error text inside the event-procedure slice even though the text correctly lives in the shared helper. The assertion now inspects the helper separately. This was a source-contract test failure, not an Inno compile or Windows runtime result. The corrected assertion and the new rollback-gating regression are included in the next validation batch.
+
+The installed lifecycle smoke also now treats an incomplete TCP connection probe as inconclusive and retries rather than reporting the port closed prematurely. Its process-path fixture was normalized to a single Windows path separator.
+
+**Current validation status:** the preceding Fast Validation #860 failed at the source-contract assertion described above; Dependency Review #623 passed. The corrected tests and rollback-gating change are committed in the following batch. The actual Inno Setup uninstall-while-running lifecycle remains unexecuted on this PR branch and must not be described as integration-tested.
+
+### Follow-up test correction — anchor the rollback assertion to the outer startup handler
+
+Fast Validation #861 reached the release/storage contract suite and failed one newly added source-contract assertion. The assertion used `lastIndexOf("} catch {")`, which selected the nested `Stop-Services` catch rather than the outer startup failure handler. The test now anchors on the outer handler assignment `$startupError = $_` and verifies the stop attempt, rollback gate, and restore call in that scope. This is a test-selection correction; the runtime rollback-gating code remains unchanged.
+
+The corrupt-process-state error now also gives an explicit recovery path: preserve a copy for diagnosis, manually confirm all Willard processes are stopped, then rename or delete the invalid state file and retry. This avoids leaving a user with an error that says to retry while the same unreadable file remains in place.
+
+**Validation status:** Fast Validation #861 failed only at the rollback source-contract assertion; the Windows job was skipped because Linux validation failed. Dependency Review #624 passed. The corrected assertion and explicit recovery instructions are in the next branch-head validation batch.
+
+## 2026-11-05 follow-up — extend fail-closed service ownership to the developer launcher
+
+Source inspection found the same process-state weakness in the developer launcher (`scripts/launcher/common.ps1`): `Read-TrackedPids` treated malformed JSON as an absent process list, and `Get-ProcessIdentity` treated every CIM failure as a process that no longer existed. The startup function also attempted journal-based cleanup after a tracking failure but did not retain a direct cleanup path for the API/web `Process` handles it had just created.
+
+**Fix in this batch:** the developer launcher now validates the versioned process journal and executable identity fields, preserves invalid state for manual recovery, and distinguishes a missing process from a failed CIM query. The developer startup failure handler attempts the existing tracked-process shutdown and then stops only the exact process handles created by that startup attempt. The Windows updater journal smoke now parses the production developer process-state reader, tests valid and corrupt records, and injects a synthetic CIM failure into the production identity helper. Linux source-contract tests cover the developer shutdown fallback.
+
+Fast Validation #862 failed at the rollback-gating source assertion because the test file still contained the prior `lastIndexOf` selector. The assertion is now explicitly anchored to the outer handler marker `$startupError = $_`; this is a test-selection correction, not a change to the already committed runtime gate. Dependency Review #625 passed. The current batch includes the corrected assertion and the developer-launcher regression coverage; validation is pending.
+
+### Prioritized findings ledger — developer launcher follow-up
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Developer launcher treats corrupt process journal or WMI query failure as no running services | fixed / target-tested pending CI | this batch | Windows process-state smoke and real developer launch/stop integration pending |
+| Medium | Developer launcher may leave a just-started API/web process untracked if PID persistence fails | fixed / target-tested pending CI | this batch | Direct `Process` handle cleanup is covered by source-contract tests; full failure injection on Windows remains pending |
+
+**Validation classification:** source inspection and focused regression tests added. The Windows updater smoke now exercises both packaged and developer process-state readers, but the full installed Inno uninstall-while-running lifecycle and a real developer launcher fault-injection run remain unexecuted on this PR branch.
+
+### Follow-up test correction — explicit CIM class argument
+
+Fast Validation #863 ran 73 installer/source-contract tests: 72 passed and one existing developer-startup assertion failed because it expected the older positional `Get-CimInstance Win32_Process` syntax. The production helper now uses the explicit `Get-CimInstance -ClassName Win32_Process` form so its target class is unambiguous; the source assertion now matches that intentional form. The Windows job was skipped after the Linux validation failure. Dependency Review #626 passed. The synthetic WMI-failure fixture was also tightened to declare the cmdlet-style parameters and common parameters so it exercises the intended exception path rather than a parameter-binding error.
+
+**Validation status:** the code changes remain source-reviewed; the corrected Linux source-contract test and Windows process-state smoke are pending the next matching branch-head run.
+
+### Follow-up Windows parser correction and remaining missing-journal risk
+
+Fast Validation #864 passed Linux validation, including 73 installer/source-contract tests, but the Windows job caught a real PowerShell parse error in the new WMI error message: PowerShell interpreted `$processId:` as a scoped variable reference. Both packaged and developer launchers now delimit the variable as `${processId}:`. The Windows job stopped at the launcher parse step, so the updater journal smoke did not run in #864. Dependency Review #627 passed. The next branch-head Windows run must confirm the corrected scripts parse and the new process-state smoke executes.
+
+**Additional high-priority finding — a missing PID journal is still treated as no running services.** The new readers fail closed when the journal exists but is malformed or incomplete. However, `Read-Pids` and `Read-TrackedPids` still return `$null` when the file is absent, and the stop routines then assume there are no tracked services. A crash between process creation and the first durable PID write, manual deletion, or filesystem loss can therefore leave a live service untracked; a later start or uninstall may proceed without stopping it.
+
+**Safe implementation plan (not patched in this batch):** add a read-only orphan-service discovery step for the missing-journal case. It must identify only processes whose executable path exactly matches the packaged/developer Node runtime and whose command line contains the expected API or web entrypoint under the active install root. If any such process is found, fail closed and require explicit stop/recovery; do not kill by process name or port alone. Add Windows tests for missing journal + matching process, missing journal + unrelated Node process, and PID reuse. Longer term, use a Windows Job Object with kill-on-close semantics so a launcher crash cannot leave child services running before their process identities are journaled.
+
+This means the new corrupt-journal and WMI-error protections are useful but do not make installer shutdown fully safe when the journal is missing. The Inno uninstall hook remains source-reviewed; its full installed lifecycle has not been executed on this PR branch.
+
+## 2026-11-06 follow-up — detect untracked packaged Windows services
+
+### Finding: missing or partial service journals could hide a live packaged process
+
+**Severity:** High (installer reliability, update safety, and service lifecycle integrity).
+**Affected workflows:** Packaged Windows launcher startup and stop; installer upgrade and uninstall.
+
+**Source inspection:** `desktop/WillardMediaCenter.ps1` writes the API process record immediately after starting the API, then starts the web process and writes the complete pair. A crash between those steps leaves a valid journal with `web = null`. A crash before the first journal write, or deletion/loss of `services.json`, leaves no journal at all. Previously, `Read-Pids` returned `$null` for a missing file and `Stop-Services` stopped only processes named in the journal. An orphaned packaged API or web service could therefore survive while a later launcher, update, or Inno uninstall proceeded as if nothing were running.
+
+**Fix in this batch:**
+- Added read-only process discovery using the existing Windows CIM process provider. A candidate must use the exact packaged Node executable and its command line must contain the exact absolute API or desktop web-server entrypoint path with argument boundaries.
+- Compared discovered processes against the journal using PID, executable path, command line, and creation date. A reused PID is not treated as ownership.
+- Startup and stop now refuse to proceed when an untracked packaged service is found. They also fail closed when CIM cannot enumerate processes or when a matching process identity is incomplete.
+- Discovery does not kill processes, clear the journal, move installation directories, or modify user data. The diagnostic lists role and PID and instructs the user to verify and close only the confirmed Willard process.
+- Stop repeats discovery immediately before acting, rather than relying solely on an earlier startup check.
+
+**Regression coverage added:**
+- Missing journal with a matching API process.
+- Partial API-only journal with a live web process.
+- PID reuse with a different executable identity.
+- Unrelated Node process and a path-prefix lookalike.
+- CIM query failure, missing command line for the packaged Node runtime, missing executable path for a matching entrypoint, and missing process creation time. Legacy journal records without creation time are not trusted to prove ownership against PID reuse.
+- Source-contract checks that discovery is read-only and runs before startup decisions and before journal-based shutdown.
+
+**Implementation commits:** `78902ad4c15f520886d26ad90cc5066a8dfdd8ee`, `ddcb2c726b0a5e11bab71422323897289e668237`, `cf538676f511e40b54a56c8fa5e9d2c7d9e45a4b`, `9a1abb920654d9b4fd160208cf894134fe5ae803`.
+**Test commits:** `18cd7ac09159458b7c99edab6d48faf5e7f02c0a`, `fd9df23d33e921b2cf9bf8946eb7ebb01cbec15b`, `7ef1095e054636a225e08de0886c540a8ece9a5d`, `13f97b0678d2196017cc6fd2689c3b3d9243dfea`, `eb5742ee5b15e365491c3f10d866438f91c2d8f5`, `29e9cd0b5f2779a57a05ba118e71cb154d35c721`.
+
+**Status:** implementation and focused regression cases committed; target validation pending the matching branch-head CI run. The Windows smoke exercises the production PowerShell functions with synthetic process records; it does not launch or terminate a real orphan process.
+
+**Remaining risk:** This batch covers the packaged Windows launcher only. The developer launcher has the analogous missing/partial journal gap and remains open for a separate follow-up. CIM process visibility can also vary by Windows security context; the implementation fails closed when a candidate entrypoint is visible but its executable identity is not. A Windows Job Object remains a stronger future design for eliminating the process-start-to-journal crash window rather than detecting it on the next launch.
+
+### Prioritized findings ledger — packaged service ownership
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Packaged launcher may miss API/web processes when `services.json` is missing or only partially written | fixed; target validation pending | implementation: `cf538676`; regression tests: `fd9df23d` | Matching Fast Validation and Windows smoke pending; full installed installer lifecycle remains separate |
+| High | Developer launcher may miss an orphan when its process journal is missing or partial | found / blocked for next batch | not fixed | Needs exact process-tree ownership for Node API and pnpm/Vite web process; do not kill by port or process name |
+
+
+## 2026-11-06 follow-up — do not uninstall or upgrade past a missing shutdown helper
+
+### Finding: Inno Setup silently skipped service shutdown when the launcher file was missing
+
+**Severity:** High (installer lifecycle and orphaned service risk).
+**Affected workflows:** In-place installer upgrade and uninstall.
+
+**Source inspection:** `installer/WillardMediaCenter.iss` previously called `StopWillardServices` only when `{app}\desktop\WillardMediaCenter.ps1` existed. If the installed launcher had been deleted or a prior installation was partially damaged while the Node services remained active, the helper returned success without attempting shutdown. Inno Setup could then replace or remove the payload while the old service processes continued running.
+
+**Fix in this batch:**
+- `StopWillardServices` now accepts an explicit `RequireLauncher` flag and returns an actionable error if the shutdown helper is missing when it is required.
+- A fresh install is still allowed when no previous packaged Node runtime exists.
+- An in-place upgrade requires the launcher whenever the existing packaged Node runtime is present; it stops before payload deletion if the helper is missing.
+- Uninstall always requires the launcher and aborts before removing the installation if shutdown cannot be attempted or verified.
+- The recovery message directs the user to reinstall/repair the same installation to restore the helper before retrying.
+
+**Regression coverage:** Added source-contract tests for the fresh-install exception, existing-runtime upgrade guard, and unconditional uninstall requirement.
+
+**Implementation commit:** `36c715dd2e9ea72c95e317534558b9fd15aa0e92`.
+**Test commits:** `08759c294e886ab686ccda71b31543859290fd72`, `acd8d8822feb60fcf256d5b27e5d323bd46495e9`.
+
+**Status:** source-reviewed and regression assertions committed; matching Fast Validation pending. The Inno Setup script has not yet been compiled or exercised by the real standard-user installer lifecycle on this branch.
+
+**Remaining risk:** This guard intentionally blocks upgrade/uninstall when the shutdown helper is missing, even if no services are currently running. That is safer than silently proceeding, but the user must repair the launcher first. Full installer compile, fresh install, upgrade, running-service uninstall, and external-data preservation remain required integration validation.
+
+### Prioritized findings ledger — installer shutdown helper
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Inno Setup previously proceeded when the packaged shutdown helper was missing | fixed; source-contract tested | `36c715dd`; tests: `acd8d882` | Inno compilation and real standard-user lifecycle integration pending |
+
+
+### Upgrade compatibility boundary — prior installed launchers
+
+The new orphan-process discovery lives in the packaged launcher payload. During an in-place upgrade, Inno Setup's `PrepareToInstall` runs the **previously installed** launcher before the new payload is copied. Therefore, when upgrading from a release that predates this discovery, its `-Stop` implementation can still miss a missing or partial `services.json`. The new launcher protects subsequent starts, stops, and uninstall operations after the upgrade, but this batch does **not** yet prove that an upgrade from every older release is safe when its process journal is missing.
+
+**Status:** found / blocked; no partial workaround applied.
+
+**Safe implementation plan:**
+1. Add one small process-verification helper to the release payload and embed a temporary copy in the Inno Setup package.
+2. During `PrepareToInstall`, run the previous launcher shutdown first, then run the embedded helper against the exact old `{app}\runtime\node.exe` path. Refuse the upgrade if any process still uses that runtime or if Windows cannot inspect process identity.
+3. Install the same helper beside the new launcher so future uninstalls can verify that no process remains even if the launcher journal is missing or the launcher itself cannot be started.
+4. Keep this check read-only: never kill by process name or port; show process IDs and abort so the user can close only the confirmed processes.
+5. Add Windows integration coverage using a disposable install tree and real child processes for missing journal, API-only journal, normal complete journal, PID reuse, and WMI failure. Run the standard-user installer upgrade and uninstall lifecycle before declaring this path validated.
+
+This requires coordinated release-stager, Inno Setup, and Windows integration changes; it is intentionally not represented as fixed by the current launcher-only detection.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Upgrade from an older installed launcher may still leave an orphan service because Inno invokes the old `-Stop` before copying the new detector | found / blocked | none | Needs an installer-embedded verifier and real Windows upgrade lifecycle test |
+
+
+## 2026-11-06 follow-up — developer launcher must not update over orphaned service listeners
+
+### Finding: missing or partial developer process journal could let setup, repair, or update proceed while an old service remained active
+
+**Severity:** High (installer/developer lifecycle, file consistency, and update reliability).
+**Affected workflows:** Developer Start, Setup, Repair, Update, and tracked-service shutdown.
+
+**Source inspection:** `scripts/launcher/common.ps1` returned success from `Stop-TrackedProcesses` when `willard.pids.json` was missing, and the repair path could clear a stale process journal without checking whether a descendant service still owned either application port. The previous `Test-PortFree` and `Get-PortOwnerPid` helpers used `-ErrorAction SilentlyContinue`; a Windows TCP-query failure could therefore look like an unused port.
+
+**Fix in this batch:**
+- Added one shared strict listener query for the developer API (8080) and web app (5000) ports. Query failures or invalid owner PIDs now fail closed rather than looking like an empty result.
+- Start, Setup, Repair, and Update inspect the process journal and refuse to proceed when a listener exists but the journal is missing or incomplete.
+- Setup now routes any existing journal through the shared stop path before changing dependencies or database state.
+- Repair no longer clears a stale journal directly. It uses the shared stop path, which verifies both application ports are no longer listening before clearing ownership state.
+- The shared stop path retains its journal if a listener remains after tracked processes have been stopped.
+- Added a Windows smoke test for missing journal, partial journal, TCP-query failure, and a listener that remains after tracked processes exit. Added source-contract coverage and wired the smoke test into Fast Validation's Windows job.
+
+**Implementation commits:** `89ff7db50dd63d6c4abe27dc998e995704214793` (shared strict listener inspection), `a609d14f5fda684794cc28679e49d4ffee2d2746` (Start guard), `82ab2bba58781a6c80e6bed78b59436c84e4f458` and `31e57268a455df450e2cbce8438a749fcf262534` (Setup guard and tracked stop), `be03828c6ab41873bd8f630a58653e48d2f8c72e` and `bb4f695ca805f827146c0f8aeb8620345143b830` (Repair guard and no blind journal clearing), `fd216718fa1f665835b6720b024f2f05b4d08f12` (Update guard).
+
+**Regression and CI commits:** `e70039663400b160efb19cd875b64ffd940066df`, `671939f174b3bc2f64db613dac1b47b9462cf36d`, `16e5138be6e53816cb1ccc841de20fa7ce681771`, and `318cb2c8dc945520ed042b956da128c425519d9d`; source-assertion correction `ca070d4bc0b1bafecc3a25d839050e9f9697f1c6`.
+
+**Status:** implementation committed; targeted PowerShell smoke and source-contract tests added; matching Fast Validation run is pending. No Windows test result is claimed yet.
+
+**Remaining risk:** This is a conservative listener-based guard, not complete process-tree fencing. It detects services that have already bound ports 8080 or 5000. It does not close the process-start-before-listen race, prove ownership of every background child, or serialize a second independent developer launcher that starts between the check and filesystem swap. A durable process-tree ownership design (for example, a Windows Job Object plus a shared lifecycle lock) remains a separate architectural follow-up. If Windows cannot inspect the TCP listener state, the operation stops rather than proceeding.
+
+### Prioritized findings ledger — developer service ownership
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Start, Setup, Repair, or Update could miss a live service when the developer PID journal was missing/partial; TCP-query errors could look like free ports | fixed; target validation pending | implementation: `89ff7db5`, `a609d14f`, `82ab2bba`, `31e57268`, `be03828c`, `bb4f695c`, `fd216718`; tests/CI: `671939f1`, `16e5138b`, `318cb2c8`, `ca070d4b` | Await Windows smoke and Fast Validation; process-start-before-listen race and concurrent launcher fencing remain open |
+
+
+## 2026-11-06 architecture review — durable organization Replace recovery
+
+### Confirmed critical finding
+
+Both normal organization execution and resume still call `fs.unlinkSync(destFile)` when `conflictPolicy === "replace"`, before a journal entry describes the existing destination. A failure or process crash after that unlink can permanently lose the pre-existing destination file. This is distinct from the already-fixed no-replace race in `verifiedMove`: exclusive publication protects a destination that appears concurrently, but it does not preserve the file intentionally removed by the Replace policy.
+
+**Affected workflows:** Organize → Execute, Organize → Resume, Recovery Center rollback, and completed-job verification.
+**Severity:** Critical (user media/data loss).
+**Status:** found / blocked for an architectural change; no partial filesystem workaround applied.
+
+### Existing architecture that can be reused
+
+Conversion finalization already provides a useful pattern:
+- `finalizeConversionFiles` persists each move intent before mutation through `onMoveIntent`.
+- It stores the original in a recoverable backup location before publishing converted output.
+- It verifies both moves and records the result through `onMoveComplete`.
+- `recoverConversionFinalizationMoves` replays the shared checksum-verified rollback helper after restart.
+
+Organization already uses the same `FileMoveRecord`, `verifiedMove`, `moveFileNoReplace`, and `rollbackMoves` primitives. This is preferable to creating another journal system, but organization has different resume and plan-count invariants that must be updated deliberately.
+
+### Safe implementation plan
+
+1. Add an explicit move kind (ordinary source move versus replacement backup) and a stable association to the source relative path. Preserve compatibility with existing journal records that do not have the new field; treat those as ordinary moves.
+2. For each Replace collision, compute the existing destination's SHA-256 and reserve a unique backup path in the same destination directory/filesystem. Persist the backup intent before changing the destination. Do not use `unlinkSync` to discard the old file.
+3. Prefer a no-overwrite same-filesystem backup operation that preserves the original file's inode metadata. If the filesystem/NAS does not support the required operation, fail closed for that file rather than silently falling back to a metadata-losing copy. Test the actual supported Windows/NTFS and SMB/NAS behavior before enabling the path.
+4. Verify the backup hash, then persist and perform the incoming source move using the existing no-replace verified move. Persist both records in order so reverse-order rollback first restores the incoming source, then restores the displaced destination.
+5. Make resume inspect the move kind and both paths/hashes. If the backup was completed but the incoming move was not, resume may continue from the preserved backup. If either side is ambiguous or changed, preserve all copies and stop for manual recovery.
+6. Update plan coverage, moved-file counts, progress, and destination recounts to count ordinary source moves, not backup journal entries. Keep checksum verification over both ordinary moves and backups.
+7. Only remove temporary replacement backups after the completed job status and full final hash verification are durably persisted. If cleanup fails or the process crashes before cleanup, retain the backup path in the job journal so recovery/cleanup can retry safely.
+8. Add fault-injection tests for crash before backup, after backup intent, after backup creation, after incoming intent, after incoming move, and during rollback; include destination replacement races, changed files, same-inode hard-link interruption, backup-path collision, and SMB/Windows behavior. Verify the old destination is never silently discarded.
+
+**Important compatibility note:** Resume currently builds `alreadyMovedRelPaths` from every journal entry with a `sourceRelPath`, and its plan coverage assumes one move record per planned source. The new backup record must not be mistaken for a completed source move or inflate user-facing moved counts. Existing unverified intents also need a deliberate source/destination hash reconciliation rule before resume is considered complete.
+
+**User-visible behavior:** Keep the current Replace meaning (the incoming file becomes the destination) and retain the displaced original only as a temporary recovery copy until the job is durably complete. Long-term post-completion version history would be a separate product decision and is not assumed here.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Critical | Replace deletes an existing organization destination before journaling or preserving it | found / blocked | design review only; no code change | Requires move-kind journal extension, same-filesystem no-overwrite backup, resume/count compatibility, crash tests, and Windows/SMB integration |
+
+
+## 2026-11-06 follow-up — archive publication and Trash read-side effects
+
+### Finding: ZIP extraction could replace a destination created after preflight
+**Severity:** High (data integrity). **Workflow:** ZIP extraction during archive organization.
+**Status:** Fixed; focused regression added; CI validation pending.
+`writeArchiveFileAtomically` previously checked the destination and then called `renameSync`. On POSIX, rename can replace a regular file created after the check. The temporary file now publishes through the existing `moveFileNoReplace` helper, which uses exclusive creation semantics and refuses an existing destination. The helper is reused rather than duplicating platform-specific no-replace logic. A regression verifies that an existing regular file is preserved and the temporary extraction file is cleaned up.
+**Implementation:** `c9c85a52255624fca8ffb17108ea45d12f8c25aa` (exclusive publication) and `644b3e0c75a57d5b0a519104d75fecf8092e266b` (shared helper import).
+**Test:** `12c3c601cdb7ff997feb1ca15ecb521d806ead8d`.
+**Remaining risk:** This focused regression covers an already-present regular destination; an orchestrated concurrent-writer test and full malicious-archive Windows integration remain outstanding.
+
+### Finding: reading the Trash page triggered permanent deletion
+**Severity:** High (unexpected destructive side effect). **Workflow:** Cleanup → Trash listing.
+**Status:** Fixed; route contract regression added; CI validation pending.
+The GET /cleanup/trash handler called `purgeExpiredTrashEntries`, so simply opening or refreshing the page could permanently remove files. The GET handler is now read-only and only reads the manifest. Existing startup recovery remains the retention-cleanup trigger; no new scheduler or dependency was introduced. A route-level source-contract test asserts that the GET handler does not invoke permanent-retention cleanup.
+**Implementation:** `d958b5b7c976c7b184618f755e2e060fc0a53175`.
+**Test:** `1ddfd33e8aac1cb024ddd336af15bf6f79e5129d`.
+**Remaining risk:** Expiration cleanup still lacks content-hash verification before permanent removal. The next retention batch must verify the trash object is a regular file, matches recorded size and a valid SHA-256, and remains inside the canonical trash root before deleting it. Missing or mismatched integrity metadata must be preserved for manual review. Startup-only execution also means expiration cleanup is not guaranteed to run until the next restart.
+
+### Validation record
+The two changes above are committed to `audit/full-repository-review-2026-11`. Focused regression tests were added but have not yet been executed in a local checkout or confirmed by the matching latest CI run. Do not mark this batch integration-tested or fully validated until the corresponding workflow results are available.
+
+
+## 2026-11-06 follow-up — verified Trash retention
+
+### Finding: expired Trash entries could permanently delete modified or unverifiable content
+**Severity:** High (data loss). **Workflow:** Cleanup → local Trash retention.
+**Status:** Fixed; focused filesystem regressions added; CI validation pending.
+Before permanent deletion, retention now requires a regular non-symlink file, an exact manifest size match, and a syntactically valid SHA-256 that matches the file's bytes. Entries with missing/invalid hashes, changed content, size mismatch, symlinks, or special filesystem objects are preserved and reported for review. This intentionally leaves legacy manifest records without hashes untouched rather than guessing that they are safe to delete.
+**Implementation:** `20f19bde27af5e3c0515b2c295ca7e5e1a54ba94`.
+**Tests:** `72cc15b5d52737b413cc8e2a4e78771dbe2eda5d` covers valid files, changed content, missing hashes, and symlink preservation.
+**Remaining risk:** Filesystem deletion and database/manifest reconciliation still span separate durability domains. A crash after unlink but before database and tombstone updates requires additional recovery handling. Startup currently triggers retention cleanup once after launch; no recurring scheduler was added.
+
+
+## 2026-11-06 follow-up — fail-closed Trash retention identity checks
+
+### Finding: retention could delete a file before confirming its canonical media row still represented that exact recycled item
+
+**Severity:** High (data loss and stale-manifest handling). **Workflow:** Cleanup → local Trash retention.
+
+**Fix:** Retention now refuses to proceed when the trash file is already missing, the manifest has no canonical media ID, or the matching canonical row is absent/not in the recycled state/does not resolve to the manifest's original path. It validates the file's size and SHA-256 only after the canonical identity check, then unlinks it and requires exactly one canonical row deletion before writing the manifest tombstone. This prevents an ambiguous missing file or stale manifest from silently deleting unrelated/restored database state.
+
+**Implementation:** `61b0923b38a87ad5ed6d9b618a306b31d7a29a74`.
+**Regression:** `33c2960910506b6b54e5b75aa7e713b947ed25e9` adds a source-order contract test for the fail-closed guards.
+
+**Validation:** Regression added; no local test execution or matching branch-head CI result confirmed.
+
+**Remaining critical risk:** This does not close the cross-resource crash window. A process can still stop after the verified file unlink and before canonical-row deletion/tombstone append. The next safe step is a durable permanent-delete intent and restart reconciliation, likely requiring a new operation type/status and coordinated schema migration. Until that is implemented, any resulting missing-file entry is now preserved for manual review rather than silently finalized.
+
+
+## 2026-11-06 follow-up — literal wildcard handling in legacy file search
+
+### Finding: filename searches treated wildcard characters as pattern syntax
+**Severity:** Medium (search correctness). **Workflow:** canonical media search through `GET /files/search`.
+
+**Source inspection:** `routes/files.ts` passed the user's query directly to Drizzle's `ilike` operator. PostgreSQL therefore interpreted `%` and `_` as wildcards rather than literal filename characters. It also trusted a TypeScript cast for scalar query parameters, so repeated `q`, `fileType`, `source`, `after`, or `before` parameters were not rejected at runtime. The media-list route already had the intended pattern behavior: it reuses `escapeLikePattern` and supplies an explicit PostgreSQL `ESCAPE` clause.
+
+**Fix in this batch:** Reused the existing `sql-like.ts` helper in the legacy-compatible file search route, applying the same escaped, case-insensitive substring semantics as media listing. Replaced the unchecked query cast with the existing `parseOptionalQueryString` validator for all scalar text filters so repeated parameters fail with a clear 400 response. No dependency or new abstraction was added.
+
+**Regression coverage:**
+- Added route contract assertions that `/files/search` validates scalar text filters, escapes the user query, and uses an explicit `ILIKE ... ESCAPE` clause.
+- Extended the PostgreSQL-backed query regression to prove escaped `ILIKE` matches case-insensitively while literal wildcard lookalikes do not match.
+
+**Validation:** implementation and tests committed together. The Fast Validation workflow is the matching validation path; its result must be checked against the exact resulting branch head before this batch is marked target-tested.
+
+**Implementation commits:** `eb7874a085776b2cd58ac0f53b3931ce18622706` (literal wildcard escaping); `8092dfeeb57f03a8d44b9478e11b4c1bd4c7e79e` (scalar query validation).
+**Regression-test commits:** `6d5ccbed42aac7886e9bb56f370624247b19494a` (wildcard semantics); `5820377ea0efe09cc6447acc02d1db21dc4563e2` (scalar query validation).
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | `GET /files/search` treated `%` and `_` as filename wildcards | fixed; target validation pending | this batch | PostgreSQL-backed regression and full Fast Validation result pending |
+
+
+## 2026-11-06 safety mitigation — organization Replace now fails closed
+
+### Confirmed critical finding: Replace could permanently discard an existing destination
+
+The full recovery design for Replace requires durable backup intents, checksums, resume compatibility, rollback ordering, and crash-injection coverage. Until that coordinated change is ready, leaving the destructive unlink enabled is not acceptable.
+
+**Mitigation committed:** Both normal organization execution and resume now stop with an actionable error when a Replace collision is encountered. They do not unlink, overwrite, or rename the existing destination. Users can select Rename or Keep Existing to proceed. If earlier files in the same operation were already moved, the existing operation error/rollback path is invoked; this mitigation does not claim to replace or validate that broader rollback architecture.
+
+**Implementation:** `d0a5062e41eb5f6432f03ace315f1abdbec61d23`.
+**Regression:** `413e98d6c98de4af72fe97a49d5bd297c02e6eb4` asserts both execute and resume branches fail closed and contain no destructive filesystem operation.
+
+**Status:** Safety mitigation and source-contract regression committed. Test execution and matching CI are pending.
+
+**Product impact:** Replace is temporarily unavailable for collisions. This is an intentional safety restriction, not a completed Replace implementation. Restore Replace only after the durable backup/journal/resume/rollback design above is implemented and Windows/SMB crash tests pass.
+
+
+## 2026-11-06 follow-up — duplicate storage estimates overstate reclaimable space
+
+**Finding — Medium (product correctness):** Cleanup and the library scan summary estimated reclaimable duplicate storage as `(count - 1) × largest file size` for the summary, and as `(count - 1) × average file size` for detailed groups. These formulas are wrong when perceptually similar files have different sizes. The first overstates savings whenever the retained copy is the largest; the second can overstate or understate savings. The correct theoretical amount when keeping one copy is `SUM(size_bytes) - MAX(size_bytes)`.
+
+**Fix:** Updated both confirmed and unconfirmed duplicate summary queries to sum all candidate bytes and subtract the largest retained copy. Updated the detailed Cleanup endpoint to fetch each group's largest file size, calculate reclaimable bytes consistently, and sort groups using the corrected estimate. This keeps the existing API shape and database architecture.
+
+**Regression:** Added a focused source-contract test to the existing library consistency suite, asserting the SQL formula and the detailed endpoint calculation use the same definition. This is a targeted source-contract regression, not a PostgreSQL integration test.
+
+**Implementation commits:** helper `480fc48553a54d87a22a6bd943066728531e5a13`; route `0982bc6b1a0a90e9d37bea8998bd44010fd903f0`.
+**Test commit:** `afd1a41897cf6e83141272074eb703cd665a2b38`.
+**Validation:** Source inspection and regression addition complete. Test execution, typecheck, PostgreSQL-backed verification, and matching Fast Validation are pending on the resulting branch head.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Cleanup / library duplicate summary overstates reclaimable bytes for unequal-sized perceptual matches | fixed; targeted test pending | `<HELPER>`, `<ROUTE>`, `<TEST>` | Confirm with PostgreSQL-backed fixture covering 100, 60, and 40 byte candidates; browser summary and staging behavior remain to be integration-tested |
+
+
+**Implementation follow-up:** The detailed endpoint now carries `largest_file_size` through both exact-hash and perceptual group mappings; the focused regression checks both mappings and the aggregate/per-group calculations. Commits: `8b5bbcc79e6ee18107eb4db62b8bc2716b13da02` (mapping correction), `d6c5ca028ed74f209bcd7e4425f2753be7cede74` (assertion correction). These follow-ups were made after source review caught a missing perceptual mapping and overly escaped assertions before validation; they are included in the pending validation head.
+
+
+## 2026-11-06 follow-up — cancelled conversions with successful staging remain actionable
+
+**Finding — High (workflow correctness / stranded staged output):** The conversion execute handler preserved successfully converted staging files after cancellation, but persisted the job as `cancelled`. The finalization endpoint accepts only `awaiting_action`, so a user could not apply Recycle, Replace, Keep Both, or Archive to those already verified outputs. The UI/API exposed preserved files without a supported path to finish the operation.
+
+**Fix:** A cancelled run with one or more successful staged conversions now transitions to `awaiting_action`, which is the state accepted by the existing finalization and recovery paths. The job retains `cancelledAt` and records `resultJson.cancelled` so cancellation is not lost. A cancelled run with no successful staged files remains `cancelled`. The SSE status message distinguishes the two cases.
+
+**Regression:** Added `optimize-cancel-finalization.test.ts`, a source-contract test for the cancelled/successful and cancelled/no-success branches. This test is added but has not yet been executed.
+
+**Implementation:** `00311e42e9adf6017ee48e8e7d2f3aa20a8de10e`.
+**Test:** `c81fa89f6d76386c468fba5da1413af8ae627d56`.
+
+**Validation status:** Test execution, API integration test, and matching Fast Validation are pending. The regression asserts the status contract; it does not yet exercise a live cancellation mid-conversion. A follow-up integration test should cancel after the first verified file and prove the action endpoint accepts the job and finalizes only the staged successes.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Cancelled conversion with successful staged outputs could not be finalized | fixed in route; source-contract regression added; validation pending | implementation `00311e42`; test `c81fa89f` | Live mid-run cancellation/finalization integration coverage and matching CI pending |
+
+
+## Cancelled conversion finalization UI follow-up (2026-11-06)
+- Followed the server-side cancellation correction through the Optimize page and found two UI paths that still treated a cancelled summary as terminal even when successful files were staged: both live SSE summary handlers gated finalization on `!data.cancelled`.
+- The reconnect/polling path also did not recognize the new `awaiting_action` server status as terminal/actionable, and mapped legacy cancelled jobs directly to the done screen.
+- Updated both SSE summary handlers to expose finalization whenever at least one file succeeded, regardless of the cancellation flag. Reconnect polling now stops on `awaiting_action` and opens the finalization controls for that server state. The cancelled-state copy now explicitly tells the user to choose what to do with originals.
+- Added `artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts` to guard both SSE paths and reconnect state mapping.
+- UI commit: `d8f186b0a91d9b915c1f595c8e718caa1c5bf7aa`; regression commit: `2a3d48a9f997764356c8baae7aaaeedbad1c6f12`.
+- Validation is pending on the current branch head. The new test is source-contract coverage; a browser-level cancellation/reconnect test remains desirable.
+
+
+## 2026-11-06 high-severity follow-up — organization workers lacked durable ownership fencing
+
+**Finding — High (data integrity / competing workers):** Organization execution, resume, and rollback previously relied on a shared status plus a heartbeat timestamp. A worker reclaimed after a stale heartbeat could use the same `executing` status as the old worker. The old worker's heartbeat and checkpoint writes were scoped by job ID/status rather than a unique ownership identity, so a resumed stale process could continue moving files or overwrite the replacement worker's recovery journal.
+
+**Correction:** Added nullable `organization_jobs.lease_token` and schema version 3 migration. Each execute, resume, and rollback claim generates a cryptographically random token. Heartbeats, stage checkpoints, move-intent writes, verified-move writes, completion, and terminal failure transitions are now conditional on the current token and expected state. Lost-lease workers stop instead of rolling back files owned by another worker. Tokens are cleared on terminal or capacity-admission release transitions.
+
+**Filesystem fencing:** `verifiedMove` accepts ownership checks after source hashing and immediately before moving, plus before its local restoration path. `rollbackMoves` accepts an ownership callback, checks before each file and before rollback filesystem mutations, and propagates lost-lease errors instead of treating them as ordinary file failures. Execute, resume, and Recovery Center rollback pass the active token guard.
+
+**Regression coverage:** Updated the schema bootstrap test to require the existing-install migration and added a source-contract test covering the schema field, unique tokens for all three workflows, token-conditional updates, and filesystem guard hooks.
+
+**Implementation commits:** schema `652cc6847b1da08e4be670cf3cabe77473921866`; bootstrap migration `0521dfb83be1c490b856671f19fc736f7f8884d6`; bootstrap test `0624e9bcec71aa5bfd22af2ddae4777ecc2b1b5c`; execution fencing `967639a456096a4b3e006a5944268f22af1f3b3a`; resume fencing `0d390fe2884d866a6f1b84a4ff0c5bcdcb1ded89`; rollback fencing `71747fd2c868bd4faf40c6ee4323cfd847ce72c2`; lease transition hardening `1094788dc6d64e7b9270113fd18420af881fb0a5`; rollback helper guard `244b96a688c64c45985489cf18fc66ea7f6c6dc7`; verified-move fencing `ce3de5ccc8a6cc6fc908921ac9fd6636b68662f6`; route guard integration `56edcbf9cc80d32e194b6b0bab42b477163c2b36`; regression contract `12ff609b4ba725757a07984492c946d5d4d374f7`; rollback mutation guard `46021c6d328e1f547570a4c5e65331723b7aab4b`; lost-lease propagation `e5c794969447383aa5b44820013b48541cb810d7`.
+
+**Validation:** Source inspection and regression additions complete. Matching CI, TypeScript validation, PostgreSQL migration execution, multi-process takeover tests, Windows/SMB crash injection, and full end-to-end recovery are pending. A worker can still be interrupted during a multi-step filesystem primitive; the durable intent journal and subsequent recovery remain essential. Do not treat source-contract checks as proof of crash safety.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Organization execute/resume/rollback did not fence stale workers with unique ownership | implementation and source regression committed; runtime validation pending | commits listed above | Exercise stale-worker takeover while paused before/after every filesystem mutation on Linux, Windows, and SMB; verify only the current token owner can mutate and that all journal states recover |
+
+
+**Additional filesystem guard:** The follow-up review extended the ownership check to archive disposition moves into the processed folder and their attempted restoration, not just ordinary file routing. Commit `112b3b92be5fa0c86b27e793484f8f1dae405a91`. Rollback helper checks ownership again after potentially long hash operations and propagates lost-lease errors so the caller stops rather than continuing with later entries. Helper commits: `46021c6d328e1f547570a4c5e65331723b7aab4b`, `e5c794969447383aa5b44820013b48541cb810d7`.
+
+
+**Filesystem regression tests added:** `organize-helpers.test.ts` now exercises a lost lease after source hashing (source remains untouched), a lost lease before failed-move restoration (destination evidence is preserved), and a lease loss after rollback checksum work (the rollback mutation is refused). Test commit: `c6fd37e97f6589f9ac750e81e7af963cf15e2fbc`. These are local filesystem unit tests; they do not simulate PostgreSQL multi-process takeover or power loss.
+
+
+**Additional high-severity shutdown race fixed:** The API shutdown hook previously marked *all* `executing` organization jobs as failed. In a multi-instance deployment, shutting down one instance could therefore invalidate a different instance's live job and allow a premature resume/rollback. Shutdown now leaves organization job ownership unchanged and relies on the durable heartbeat becoming stale after the owning process exits. Added a source regression to ensure shutdown does not update organization job status. Commits: `f822e0bab98d196c4e24df8d6eb4ccb8dc532aea` and `800b2334287cf43fd2dceab46a871887fa825e08`. This preserves correct behavior across instances; recovery may wait up to the five-minute lease timeout after an ungraceful shutdown.
+
+
+## Optimize start-failure and backup-timeout batch (2026-11-06)
+- Confirmed Optimize entered `running` before starting the API request, but left that phase unchanged when `POST /optimize/run` returned a non-2xx response or the request/token setup threw. Since the dialog refuses to close while running, users could become trapped in a permanently busy dialog. Both failure paths now transition to `done` while retaining the actionable error message. Added coverage to `optimize-cancel-ui-finalization.test.ts`.
+- Confirmed the database backup's 30-minute timeout sent SIGTERM only to the direct Node child. The backup helper already had a platform-aware process-tree terminator (Windows taskkill /T /F; POSIX TERM then KILL escalation), but the timeout did not use it. The timeout now invokes that helper so spawned backup descendants are terminated too. Added `backup-timeout-process-tree.test.ts` and wired it into Fast Validation.
+- Commits: Optimize UI `475cac0ca57858abb2cfec80ca250dda9680940e`; Optimize regression `a555a7d597252042f73eb4c73def991cafc78e11`; backup timeout `d9f8391debcaf1f9e79e84901f51e714b9590dba`; backup regression `eaa916dfd56e7c95fb7ebf6ee7b6055a36d3e6a0`; workflow wiring `7ef83a671d7ab9a17eab0b1647ff80b18ad37f25`.
+- Validation is pending on the current head. The new checks are source-contract regressions; process-tree timeout behavior still merits a controlled integration test with a child process that spawns a grandchild on Windows and POSIX.
+
+
+## Library-job failure persistence correction (2026-11-06)
+- Confirmed `failJob` swallowed every PostgreSQL update error, then removed the job from the in-memory active map and logged that the job had FAILED. If the database was unavailable, the durable row could remain `RUNNING` while the process falsely reported a terminal failure and allowed another job to start.
+- The failure transition now requires exactly one updated row before removing the active entry or logging a durable FAILED state. A failed write propagates and leaves the job registered, preventing a duplicate in-process job while the database still reports it active. The user-facing force-discard/restart-recovery paths remain the explicit ways to clear an unresolved job after database connectivity is restored.
+- Added `library-job-failure-persistence.test.ts` and wired it into Fast Validation.
+- Commits: implementation `4285392ab9f5ac16cf7fba0f8c31988ef74fc98f`; regression `0a65572c00247235ca843e7220e7f58924067feb`; workflow `6aa52fa79dca52d78b6d73ea347d4e6dceb1d452`.
+- Validation pending. This source-contract test does not replace a PostgreSQL fault-injection test that forces the terminal update to fail and verifies the active-job guard and recovery behavior end to end.
+
+
+## Backup timeout process-tree hardening (2026-11-06)
+- Revisited the backup timeout after the earlier fix and found that the existing helper was not truly tree-safe on POSIX: it signaled only the direct child. On Windows it returned after `taskkill` completed without waiting for the child close event. A timeout also did not record a timeout-specific failure, and stdout/stderr were accumulated without a memory bound.
+- Backup children now start in a dedicated POSIX process group; timeout termination signals the whole group with TERM and escalates to KILL after two seconds. Windows termination uses `taskkill /T /F` and waits for the child close event. The timeout is reported as an explicit 30-minute failure.
+- Child output and error diagnostics are bounded to the latest 8 KiB each, and spawn errors clear the timeout and active-child state.
+- Updated `backup-timeout-process-tree.test.ts` to cover platform-specific process-group/tree termination, timeout reporting, bounded output, and error cleanup. The test is already wired into Fast Validation.
+- Implementation commit `22f424795ef26f163d1a1cca65a30827da8b7258`; regression commit `84b34c0d70ff9fef76d8b5b520a6f87a14093cd8`.
+- Validation pending. The current regression is source-contract coverage; controlled child-plus-grandchild execution tests on Windows and POSIX remain necessary to prove the operating-system behavior.
+
+
+## Windows release permission isolation (latest)
+- Confirmed the validation/build job inherited workflow-level `contents: write` even when a manual run selected `validate_only: true`. The release action was conditional, but the build job still had an unnecessary write-capable token.
+- Changed the workflow default to `contents: read`, explicitly kept the Windows build job read-only, and moved GitHub Release creation into a separate Ubuntu publisher job with `contents: write` only.
+- The build job now uploads the installer, update ZIP, source ZIP, and manifest only when publication is requested. The publisher downloads those exact artifacts and uses the version output from the validated build.
+- Validation-only manual runs skip both artifact upload and the publisher. Push-to-main and manual publish runs still require the full Windows build/lifecycle checks to succeed before publication.
+- Commits: workflow permission split `b19152c8be8427f00ac9dead2d1859e801f60a4d`; artifact path correction `0b3630849708350b6ff9e166efa746e4f4f0afdb`.
+- This workflow is not triggered by the audit branch, so its GitHub Actions execution remains unverified here. YAML structure and artifact path behavior require CI validation before relying on the new publisher path. No release was dispatched or published.
+
+
+## Windows backup termination failure fallback (latest)
+- Found that the Windows timeout path awaited the taskkill.exe callback but ignored its error, then waited indefinitely for the backup child to close. If taskkill was unavailable or denied, the timeout handler could hang and leave the coordinator stuck.
+- The handler now force-stops the direct child as a fallback, waits for its close event, and raises an explicit process-tree termination error so a possible surviving descendant is not silently treated as safely terminated.
+- Added a regression assertion for the taskkill failure fallback and diagnostic.
+- Commits: implementation 234fef2e2ac488a4498df870757e234558ea5983; regression fecd59d13c947a38244bfb55877bebc956dee0c6; matcher correction 51be838f32b86d8eaf91312250c0c21e4ccf524c.
+- This is source-contract coverage only. Controlled Windows taskkill failure and descendant-process integration tests remain outstanding; the fallback cannot guarantee termination of grandchildren when Windows tree termination itself fails.
+
+## 2026-11-06 follow-up — non-publishing Windows installer lifecycle validation
+
+**Finding — High (Windows installation / upgrade reliability):** The repository already contained a comprehensive standard-user installer lifecycle smoke, but its only invocation was inside `.github/workflows/windows-release.yml`. That workflow requires production Authenticode and release-manifest signing material and has a separate publishing path. Running it for an audit would unnecessarily couple validation to production signing and release controls, so the clean-machine install, upgrade, interrupted-update recovery, diagnostics, and uninstall lifecycle remained blocked.
+
+**Correction:** Added `.github/workflows/windows-installer-lifecycle-validation.yml`, a separate Windows PR/manual validation path. It builds the installer from the audited source using the existing unsigned local-build mode, stages the official pinned Node and 7-Zip payloads through existing scripts, provisions disposable portable PostgreSQL, and runs the existing standard-user lifecycle smoke. The workflow has only `contents: read`, is scoped to the audit branch for manual dispatch, and contains no production secrets, release action, artifact publication, or write permission.
+
+**Coverage exercised by the existing lifecycle smoke:** standard-user first install and startup; upgrade to a newer compiled installer; preservation of external PostgreSQL, settings, and media; recovery from interrupted packaged update phases; database-failure diagnostics; and uninstall while services are running.
+
+**Regression:** Extended `scripts/windows/installer-config.test.mjs` to require the isolated workflow and reject production signing secrets, write permissions, release publishing, and artifact upload.
+
+**Validation status:** Workflow and regression are committed together. Fast Validation and the new Windows lifecycle workflow are pending; no Windows integration pass is claimed until the matching run completes. The workflow intentionally validates installer behavior without Authenticode trust or SmartScreen reputation, which remain separate release-readiness checks.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → clean standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall | fixed validation path; Windows integration pending | this batch | Matching Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
+
+## 2026-11-06 follow-up — literal wildcard handling in AI search suggestions
+
+**Finding — Medium (search correctness):** AI-search suggestions interpolated the raw user prefix into a PostgreSQL LIKE pattern. Unlike the main media-list search, which already escapes percent, underscore, and backslashes, this path treated those characters as SQL pattern syntax. A query containing wildcard characters could therefore return unrelated suggestions instead of literal matches.
+
+**Fix:** Reused the existing escapeLikePattern helper, added a small buildSuggestionPattern boundary, and paired the escaped pattern with an explicit PostgreSQL ESCAPE clause. No dependency or schema change was needed.
+
+**Regression:** Added a focused unit/source-contract regression covering percent, underscore, backslash, whitespace trimming, lowercase normalization, and the SQL escape clause.
+
+**Validation status:** Implementation and regression are committed. Targeted AI-search test, workspace typecheck, and matching Fast Validation are pending; this is not yet PostgreSQL-backed route integration.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | AI search → suggestion prefix treats percent, underscore, and backslashes as SQL wildcards | fixed; targeted test pending | this batch | PostgreSQL-backed suggestion endpoint test and browser search workflow remain to be integration-tested |
+
+
+
+## Organization analysis ownership fencing (latest)
+- Confirmed that the analyze route read a job, then changed it to `analyzing` without a conditional claim. Two concurrent requests could both pass the initial status check, and a delayed analysis could overwrite a newer plan or failure state.
+- Analysis now claims the job with a unique lease token using a compare-and-set transition scoped to the active NAS and the status read at request start. Concurrent or already-processing requests receive HTTP 409.
+- Final plan persistence and failure updates are fenced by the claim token and `analyzing` status. The token is cleared on completion/failure. Rejected source/archive references also release the claim as failed instead of leaving the job stuck in `analyzing`.
+- Added source-contract regression coverage for the claim, token-fenced success/failure writes, and rejected archive reference cleanup.
+- Commits: route claim `5b92fa4834092b45d85bd89356af2651d15b27e8`, regression `da615b6663290e0781a0ebe00b7715b4a3d2cc92`, rejected-path cleanup `121dde95615d1257f17f55e5731e8eba2d533ca4`, and regression follow-up `a3e723b00b48c9f0099451c1038f67d84a85d993`.
+- Fast Validation is pending for the latest branch head. A crash during analysis can still leave an `analyzing` row requiring recovery; automatic stale-analysis reclamation remains open and should be handled separately from concurrent-request fencing.
+
+
+## Organization plan-edit concurrency fencing (latest)
+- Confirmed the plan-exclusion route only rejected `executing` jobs and wrote the updated plan by job ID alone. A plan edit could race another plan edit or a worker claim, and could overwrite newer state.
+- The route now rejects jobs in `executing`, `analyzing`, or `rolling_back`; atomically claims the row with a unique token only when no other lease exists; and persists the plan only while that token and the original status still match. The claim is cleared on success and best-effort cleared on errors without clearing a newer owner's token.
+- Added source-contract regression coverage for busy-state rejection, exclusive claim, owner-fenced persistence, and error cleanup.
+- Commits: implementation `b712ad812ddc183542165fa386d961b13ee6e210`, cleanup `5edb297f836ed3dfd8e038e4a9840426ecf59732`, type-safe claim state `9c53bddb35c9586e2df1a5003a5f827f651e2499`, regression `8484f62aee6ca005fa46e126438914b725c722f0`, and assertion correction `df35eddc11262468b55712394ccefb72c98d30fe`.
+- Validation is pending. The regression is a source-contract test; a PostgreSQL-backed concurrent PATCH test is still desirable.
+
+## 2026-11-06 follow-up — truthful backup timeout diagnostics
+
+**Finding — Medium (backup reliability / operator diagnostics):** The Windows process-tree fallback deliberately reports when taskkill fails because force-stopping only the direct child cannot guarantee that descendants were stopped. However, the outer timeout error still said the process tree had been terminated. The API's persisted backup error could therefore overstate cleanup certainty even though the server log recorded the fallback failure.
+
+**Fix:** Changed the persisted timeout diagnostic to say tree termination was attempted and direct operators to the server log if cleanup may remain incomplete. This does not change process signaling, retry policy, or backup contents.
+
+**Regression:** Tightened the existing timeout process-tree source-contract test to require the honest message and reject the old success claim.
+
+**Validation status:** Targeted backup timeout regression and Fast Validation are pending. This remains source-contract coverage; Windows taskkill failure and descendant-process behavior still need controlled OS integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Scheduled backup → timeout diagnostic overstated process-tree cleanup after Windows taskkill fallback | fixed; target test pending | this batch | OS-level descendant termination under forced taskkill failure remains unverified |
+
+
+
+## Organization preflight ownership fencing (latest)
+- Confirmed preflight checked only whether a job was already executing, then performed filesystem/capacity checks and finally wrote `verified` or `planned` by job ID alone. An execution worker could claim the job while preflight was running, then have its status overwritten by the late preflight result.
+- Preflight now rejects executing/analyzing/rolling-back states, atomically claims the row only when its lease is empty, and writes the final status only while its token and original status still match. The token is cleared on success and best-effort released on errors.
+- Added source-contract regression coverage for busy-state rejection, exclusive claim, token-fenced final persistence, and error cleanup.
+- Commits: implementation `c7b2392bd87cd1d238bbf79f17a69b4eb2ee8aa8`, regression `3309b775fefb75b4f0b5a83db4d6478de4826bd7`.
+- Validation pending. A PostgreSQL-backed concurrent preflight-versus-execute integration test remains desirable.
+
+
+## Batch validation follow-up: lease typing and media rename hash import
+- The first typecheck after the concurrency batch exposed nullable library-scope values in the new lease predicates and a missing `sha256File` import used by a concurrent media-rename integrity change.
+- Analysis now keeps its claimed library path/token outside the try block, fences catch cleanup only when its claim is still owned, and uses the stable non-null path for all predicates. Plan-edit and preflight routes explicitly reject unscoped jobs and use stable path variables for their claim predicates. The media route imports the existing shared `sha256File` helper rather than duplicating hashing logic.
+- Commits: analysis lease typing/cleanup `5a9823d93bd8887d201ca9eda22b31fb1b42d85c`, scoped path guards `3d08a3edea9542025a08ea282594a71757f5fbb4`, media import `5250b7729bb963de9f5e21077a6971e7920a6f5b`, stable plan/preflight scope `b947da299d44b9d9f99614ad1df2cb3367ab3d7f`, and analysis scope `d816f5d49ec60d4a0a2d95cf1fec6673510cb102`.
+- A prior typecheck run reported these issues; the repaired head has not yet completed Fast Validation. The media hash check and the concurrency changes still require the next CI pass.
+
+
+## Thumbnail lock ownership: aged-lock stealing removed
+- Confirmed the thumbnail lock implementation unlinked any lock older than two minutes without proving that its owner had exited. Slow but valid generation could therefore overlap with a second process and race publication.
+- Removed age-only lock reclamation. A worker now waits for the existing lock and fails with a timeout rather than stealing it. This deliberately prefers a recoverable stuck cache entry over concurrent writers/corrupt publication. An abandoned lock after a crashed process may need operator cleanup; automatic stale-owner recovery remains open until ownership can be verified safely across supported NAS/SMB hosts.
+- Added a regression assertion that age-only lock stealing remains absent and the bounded timeout remains present.
+- Commits: implementation `b0d469423cd5d010576f7a243b337045e9026868`; regression `ccaa8105b10fe7a996d0d974fbee92751151728f`.
+- Validation is pending; this source-contract test does not replace a multi-process NAS/SMB lock integration test.
+
+## 2026-11-06 follow-up — recovery drill foreign-library fixture
+
+**Finding — Medium (CI reliability / backup recovery validation):** Fast Validation exposed a failure in the database recovery drill: it called ensureLibraryIdentity with a foreign-library path that had never been created. The production helper correctly requires an existing library root and failed at realpath with ENOENT before the test reached its foreign-library identity assertion. This was a test-fixture defect, not evidence of a recovery product failure.
+
+**Fix:** Create the disposable foreign NAS root before asking the recovery helper to initialize its library identity. The existing test still verifies that recovery refuses a backup attached to a different library identity.
+
+**Validation status:** The exact failing test is part of the release/storage-contract validation step. The fixture correction is committed; a matching successful run is pending.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Backup recovery drill → foreign-library identity fixture failed before reaching the intended assertion | fixed; target test pending | this batch | The recovery drill still needs a successful matching CI run; Windows installed-PostgreSQL path remains separately covered by the installer lifecycle workflow |
+
+
+
+## Organization analysis lease cleanup and terminal-write handling
+- Follow-up inspection found that some analysis failure branches changed the status to `failed` but retained the analysis lease token, which could block subsequent plan edits/preflight. Also, a lost final update returned an empty successful response rather than an explicit conflict.
+- Failure branches now clear the owned lease token, catch cleanup runs only when the request still owns the claim, and final persistence returns HTTP 409 when ownership was lost rather than reporting success.
+- Added regression assertions for lease cleanup and lost-final-write handling. Commits: implementation `d2220a71cdb3a51817f0dd7db4e3f3774973924a`; regression `ef26d581e53f2d4011a648a0dca8bc9828664bba`.
+- Fast Validation is not yet confirmed on this change; latest runs are frequently cancelled by subsequent hourly commits. Crash recovery for an analysis request that dies without executing its catch remains a separate open item.
+
+## 2026-11-06 follow-up — symlinked parent paths in verified media moves
+
+**Severity: High — blocked for safe design**
+
+**Finding:** The shared verified-move boundary rejects a symlink or special file only at the final source/destination component. Its no-replace move helper creates destination parents recursively, and conversion finalization uses lexical assertWithinRoot checks plus final-component lstat. Those checks do not prove that every parent directory remains inside the active library. A symlinked parent such as NAS/photos -> an external directory can therefore make a lexically in-root media path resolve to an outside file. The conversion finalizer and its startup rollback path both pass persisted paths through this boundary; organize moves also use the same verifiedMove helper. The organize scanner rejects symlinks during its initial walk, but the move and recovery paths do not revalidate the full parent chain immediately before mutation.
+
+**Impact:** A parent symlink introduced after scan/conversion (or present in a persisted recovery journal) could redirect a hash/read, move, or rollback outside the configured library. This is a data-integrity and unintended-file-mutation risk, not merely a scan omission.
+
+**Why no partial patch was applied:** Adding only another lstat loop before verifiedMove would reduce the static-symlink case but leave a check-to-mutation race: a parent can be replaced after validation and before link/copy/unlink/rename. The existing PostgreSQL lease checks do not fence filesystem path resolution. A superficial path check would overstate protection and could still move external user data.
+
+**Safe implementation plan:**
+1. Define one cross-platform no-follow move primitive in the existing filesystem helper boundary. It must anchor operations to already-open directory handles and reject symlink/reparse-point ancestors, not merely inspect the final file.
+2. On POSIX, evaluate dirfd-relative open/stat and no-replace rename/link semantics (for Linux, openat2 with RESOLVE_BENEATH and RESOLVE_NO_SYMLINKS plus renameat2 where supported); on Windows, use handles opened with FILE_FLAG_OPEN_REPARSE_POINT and handle-based rename with no-replace semantics. NAS compatibility and unsupported filesystems must fail closed rather than silently fall back to path-based mutation.
+3. Reuse that primitive for verifiedMove, rollbackMoves, conversion finalization/recovery, and organization moves so the safety boundary is not duplicated.
+4. Add adversarial Linux and Windows tests for a symlink/junction at every ancestor, a parent swapped between validation and mutation, recovery from a persisted journal, and cross-volume/NAS fallback behavior. Assert that outside bytes are never read, moved, overwritten, or deleted.
+5. Keep the current final-component and lexical checks as defense in depth, but do not mark the finding resolved until the handle-anchored primitive and both OS integration suites pass.
+
+**Status:** Blocked pending the filesystem-operation design and supported-NAS compatibility decision. No source workaround was applied.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Organize and Optimize conversion → verified move / rollback / startup recovery can follow a symlinked parent outside the active library | found; blocked for safe design | this documentation batch | Existing path checks are lexical plus final-component only; full parent-chain and race-safe filesystem confinement remain unresolved |
+
+## 2026-11-06 follow-up — media viewer keyboard accessibility
+
+**Finding — Medium (UI / accessibility):** The full-screen media viewer declared itself modal but did not contain keyboard focus or restore focus to the opening control. Its tag editor and delete confirmation overlays lacked complete dialog semantics and focus handling; the tag editor also allowed the viewer's global Escape handler to close the entire viewer. Several icon-only actions relied only on title text, the detail link nested a button inside an anchor, and ignored-folder/extension removal controls exposed only an X icon.
+
+**Fix:** Added a reusable focus-trap/restore helper for the viewer and its nested delete/tag dialogs; suspended the parent trap and hid the parent dialog from assistive technology while a nested dialog is active; kept auto-hidden controls visible while keyboard-focused; routed Escape to the active nested dialog; added dialog labels, descriptions, accessible action names and expanded state; replaced the nested anchor/button with a single labelled link; and labelled settings removal actions.
+
+**Regression:** Extended the UI accessibility source-contract suite for modal focus containment/restoration, nested dialog roles, Escape isolation, icon-only actions, valid navigation semantics, and settings removal labels.
+
+**Validation status:** UI source-contract and workspace typecheck are pending. These are static accessibility contracts; browser-level keyboard/screen-reader testing remains outstanding.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media viewer → modal focus escapes, nested dialog semantics and icon-only action names | fixed; target tests pending | this batch | Browser/assistive-technology integration and mobile touch/focus behavior remain unverified |
+
+
+
+## Organization library identity fencing
+- Confirmed analysis, preflight, dry-run, and execute each re-read active NAS settings after initially scoping the job to a library. A settings change between those reads could cause a job created for one library to validate or operate against another library's paths.
+- Added explicit canonical path equality checks against the job's persisted `nasPath` before analysis filesystem inspection, preflight, dry-run, and execution. Mismatch now returns a conflict rather than proceeding against a different library.
+- Added a route-level regression test covering all four paths. Commits: implementation `e64c95a58cedb8c9329b43adff7959dd2308ef51`; regression `90ab702fac81511a6699051d0dc21d159933ec60`.
+- Validation pending; the existing recovery suite should still be run against a real configured NAS path. This guard compares normalized path strings and does not establish filesystem identity across symlink or mount aliases.
+
+## 2026-11-06 follow-up — installer lifecycle validation must run on PR updates
+
+**Finding — High (Windows installer validation coverage):** The isolated standard-user installer lifecycle workflow listened only for pull-request `opened` and `reopened` events. Pull request #2 was already open when this workflow was added, so later commits to the same PR could not trigger the clean-install, upgrade, interrupted-update, diagnostics, and uninstall smoke through the normal pull-request event. The existing source-contract test explicitly required `synchronize` to be absent. Although manual dispatch was available, the normal audit branch update path silently skipped this expensive but important Windows integration check.
+
+**Fix:** Added the `synchronize` pull-request event while retaining the focused path filter for installer and packaging inputs. The workflow remains read-only, uses an unsigned local test installer, and has no production signing secrets, release publishing, artifact upload, or write permission. The workflow file itself remains in the path filter, so this correction triggers the lifecycle validation on the next PR synchronization without changing production or release configuration.
+
+**Regression:** Updated the installer configuration contract to require `opened`, `reopened`, and `synchronize` together. Existing assertions still enforce read-only permissions and isolation from production signing and release publishing.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the final push/PR trigger contract. The path-filtered push event started Windows lifecycle run [#42154854501](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154854501) on the current audit head; standard-user install/upgrade/recovery/uninstall validation is still in progress. No installed-product integration pass is claimed yet.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → standard-user install, upgrade, interrupted-update recovery, diagnostics, uninstall validation skipped on later PR commits | target-tested; Windows lifecycle integration pending | eb15580d7770723bf36173e5799e228bfa5454e5 | Matching push-triggered Windows lifecycle workflow must pass; Authenticode trust, SmartScreen reputation, and crash-at-every-instruction coverage remain separate |
+
+## 2026-11-06 follow-up — database recovery remapping must verify both roots and preserve empty JSON
+
+**Finding — High (data recovery and catalog integrity):** The live PostgreSQL backup drill failed during restore to a reattached NAS. After `pg_restore`, catalog rows still correctly referenced the original NAS root, but `verifyRestoredLibraryInventory` queried using the new target root before the durable path-remap transaction ran. The recovery therefore reported zero rows against an authenticated backup count of one and refused a valid restore. The same ordering would also block a resume from the authenticated `RESTORED` or `REMAP_FAILED` journal state. Separately, the recursive JSONB path-remap function returned SQL NULL for empty objects and arrays because `jsonb_object_agg` and `jsonb_agg` return NULL on empty input; this silently changed durable metadata during otherwise successful remaps.
+
+**Fix:** Inventory verification now checks the source-root catalog while reading the actual media from the attached target NAS, performs the transactional remap, then verifies the target-root catalog again. A recovery journal already marked `COMPLETE` is verified against the target root when resumed, while interrupted pre-remap states continue to use the source root. Recursive JSONB remapping now preserves empty objects as `{}` and empty arrays as `[]` at every nesting level. The durable path allowlist also now remaps face crop paths and the legacy media-scan job root, which were omitted despite being NAS-rooted database fields.
+
+**Regression:** Extended the PostgreSQL-backed recovery drill to restore a library at a different root, resume an authenticated completed recovery, assert that nested empty JSON objects/arrays survive path remapping, and verify both face-crop and media-scan-history paths are remapped. This is the exact integration test that failed in Fast Validation; it has not yet been rerun against the complete fix.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) completed successfully, including the PostgreSQL-backed restore drill: restore to a reattached NAS root, source-to-target catalog remap, authenticated completed-resume, nested empty-JSON preservation, face-crop and media-scan-history path remapping, and Windows/UNC remap probes. The same run also passed Windows archive/updater smoke. This is integration-tested against PostgreSQL and a local filesystem; the separate installed-product Windows lifecycle run and real NAS/SMB remount validation remain pending.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Encrypted PostgreSQL backup → restore to reattached NAS → durable path remap → resume recovery | integration-tested (Linux PostgreSQL + local filesystem); Windows pending | 0d35ff08127d0e5975e3db4fc3ea03866950b1c5; d4e5ff0851d3091d7d86e016cdeb6d3807f0b61a; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Real NAS/SMB remount, filesystem aliases, Windows installed recovery, and crash-at-each-remap-boundary validation remain |
+| High | NAS recovery path remap → JSONB durable metadata preservation | integration-tested (Linux PostgreSQL + local filesystem) | 0d35ff08127d0e5975e3db4fc3ea03866950b1c5; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Windows/SMB recovery and broader durable JSON-column coverage remain |
+| High | NAS reattachment → face crop paths and media scan history remain bound to the old root | integration-tested (Linux PostgreSQL + local filesystem); Windows pending | d4e5ff0851d3091d7d86e016cdeb6d3807f0b61a; a4389f374e5127cbbe5f023c640f2ec7b3e55c97 | Windows/SMB recovery and installed-product face-view validation remain |
+
+## 2026-11-06 follow-up — targeted backend regression environment and source matcher
+
+**Finding — Medium (validation pipeline reliability):** Fast Validation reached the targeted backend regression batch after the recovery and release/storage-contract checks passed. Two unrelated harness failures blocked the rest of that run: `ai-search.test.ts` imports the shared PostgreSQL pool, but the targeted-regression step did not set `DATABASE_URL` even though the PostgreSQL service was available; and the organization-analysis lease source test still expected a `const analysisLeaseToken` declaration after the route had moved to an outer `let` so the catch path could fence cleanup.
+
+**Fix:** The targeted-regression step now receives the isolated PostgreSQL service URL used by the preceding DB tests. The organization-analysis source contract now checks the outer mutable token declaration and the subsequent `crypto.randomUUID()` assignment before the conditional claim.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the targeted backend regression batch after these changes, including the AI-search module import and organization-analysis lease source contract. This is target-tested; it does not substitute for route-level concurrency or production database integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation targeted regressions → missing DATABASE_URL for AI-search module import and stale organization lease source assertion | target-tested | eb15580d7770723bf36173e5799e228bfa5454e5 | Source-contract tests remain distinct from PostgreSQL route-level concurrency tests |
+
+## 2026-11-06 follow-up — targeted backend regression environment and source matcher
+
+**Finding — Medium (validation pipeline reliability):** Fast Validation reached the targeted backend regression batch after the recovery and release/storage-contract checks passed. Two unrelated harness failures blocked the rest of that run: `ai-search.test.ts` imports the shared PostgreSQL pool, but the targeted-regression step did not set `DATABASE_URL` even though the PostgreSQL service was available; and the organization-analysis lease source test still expected a `const analysisLeaseToken` declaration after the route had moved to an outer `let` so the catch path could fence cleanup.
+
+**Fix:** The targeted-regression step now receives the isolated PostgreSQL service URL used by the preceding DB tests. The organization-analysis source contract now checks the outer mutable token declaration and the subsequent `crypto.randomUUID()` assignment before the conditional claim.
+
+**Validation status:** Fast Validation run [#42154861605](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154861605) passed the targeted backend regression batch after these changes, including the AI-search module import and organization-analysis lease source contract. This is target-tested; it does not substitute for route-level concurrency or production database integration tests.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation targeted regressions → missing DATABASE_URL for AI-search module import and stale organization lease source assertion | target-tested | eb15580d7770723bf36173e5799e228bfa5454e5 | Source-contract tests remain distinct from PostgreSQL route-level concurrency tests |
+
+## 2026-11-06 follow-up — library job progress stream reconnect and cursor safety
+
+**Finding — Medium (user-facing job progress reliability):** The EventSource error handler closed the shared `source` variable and scheduled a delayed retry. If the browser fired `online` or `visibilitychange` before that timer elapsed, the reconnect handler opened another EventSource without cancelling the timer. The timer could then open a second connection, and a delayed error callback from the older connection could close the newer one. The cursor helper also accepted every cursorless snapshot, allowing an unversioned event to overwrite progress after a sequenced stream had already been established.
+
+**Fix:** Reconnect now keeps one live EventSource, cancels a pending retry when reconnecting manually, binds event/open/error handlers to the exact source instance, and ignores callbacks from superseded sources. Cursorless snapshots are accepted only before the first valid cursor; stream IDs and non-negative safe-integer sequences are validated before advancing the cursor.
+
+**Regression:** Added unit coverage for cursorless and malformed cursors, and included the library job recovery unit suite in Fast Validation. Added a UI source-contract regression for single-source ownership, retry cancellation, and source-instance guards.
+
+**Validation status:** The first Fast Validation attempt was rejected before jobs started because the newly added TypeScript unit-test command was indented outside the shell block. The YAML indentation is corrected; the rerun must pass before target-tested is claimed. Browser-level offline/online and tab-visibility stress testing remains outstanding.
+
+| Severity | Workflow / finding | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Library job progress → duplicate EventSource connections and cursorless snapshot rollback after reconnect | fixed; targeted tests pending | this batch | Browser-level network interruption, visibility race, and long-running job stress tests remain |
+
+
+## 2026-11-06 follow-up — trash manifest descriptor I/O must not follow a swapped symlink
+
+**Finding — Medium (cleanup recovery integrity / local filesystem boundary):** The trash-manifest helper checked the final path with `lstat`, then separately used path-based `openSync(filePath, "a")` and `readFileSync(filePath)`. A concurrent process with write access to the NAS log directory could replace the manifest between validation and open/read. The append and tombstone paths could then follow a final-component symlink and write outside the configured library; the read path could consume an attacker-substituted file. The existing symlink and hard-link checks did not close this time-of-check/time-of-use window.
+
+**Fix:** Manifest access now opens one descriptor and performs the operation through that descriptor. It uses `O_NOFOLLOW` where Node/platform support is available, creates a missing manifest with exclusive `O_CREAT | O_EXCL`, and validates the opened descriptor against a fresh `lstat` (regular-file type, link count, device, and inode) before reading or writing. Appends and tombstones use descriptor writes plus `fsync`; reads use descriptor-based `readFileSync(fd)`; permission hardening uses `fchmod` on the opened descriptor rather than following the path again. Tombstone append does not recreate a manifest that disappeared after the read/check phase.
+
+**Regression:** Added direct descriptor tests that reject final-component symlinks for both read and append, reject hard-linked manifest files before append, and assert production manifest read/write paths use validated descriptors rather than path-based file I/O.
+
+**Validation status:** Fast Validation [#42155568974](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42155568974) and Dependency Review [#42155569007](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42155569007) passed on the preceding head `4d7c181d542d78b74cfe206bc679f10ee03eb293`; those runs include the library job-progress regression batch but predate this manifest change. The new manifest regressions are included in the Fast Validation targeted backend command and are awaiting a matching run on this batch. No full CI or Windows installed-product validation is inferred from those earlier runs.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Cleanup → trash manifest listing, recycle journal append, and removal tombstones | fixed; targeted tests pending | `8a3336f88595aa424ba6d42904fbd9cb1263bb27` (implementation); `90dbb868fd7a5ec3d6067a3c6e75e40b5d033f43` (regressions); `46e82eb09f422d9516842bf843f282c2dc335bce` (corrected source-contract matchers) | Ancestor-directory replacement remains a separate descriptor-relative traversal design issue; Windows/SMB filesystem behavior and the matching Fast Validation run remain to be verified |
+
+
+## 2026-11-06 follow-up — Windows installer omitted a required PostgreSQL backup helper
+
+**Finding — High (Windows first install / startup / backup readiness):** The isolated standard-user installer lifecycle run [#42154854501](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42154854501) failed on commit `eb15580d7770723bf36173e5799e228bfa5454e5`. Inno Setup successfully compiled and installed the application, but the first installed launcher could not import `desktop/postgres-snapshot-process.mjs` from `desktop/database-backup.mjs`. Node reported `ERR_MODULE_NOT_FOUND`; startup then reported that the required portable recovery export could not be created. Source inspection confirmed the helper existed in the repository, but `scripts/windows/build-release.mjs` copied the backup entry point and its other helpers without copying this imported module into the installer payload.
+
+**Fix:** The Windows release staging script now copies `desktop/postgres-snapshot-process.mjs` beside `desktop/database-backup.mjs`. The release-payload regression derives the local `.mjs` imports from the backup entry point and asserts every helper is included in the staged desktop file set. The Windows lifecycle workflow's PR and audit-branch push path filters now include the helper itself, so changes to it trigger the installed-product test; its workflow contract test requires both path-filter entries.
+
+**Regression:** Added the backup-import/payload consistency test to `scripts/windows/release-payload.test.mjs`, and a workflow contract assertion for both path filters in `scripts/windows/installer-config.test.mjs`. The first matcher draft had over-escaped regex literals; a subsequent source inspection also caught an escaped-template delimiter in the assertion message. Both are corrected in commits `57a7252406df08cd01b9a5dae890b5483247381f` and `e330a73b2baa2f64cfd4599b5209caa9bd5aebba`.
+
+**Validation status:** The failure is confirmed from the completed Windows job log, not inferred from source alone. The implementation and regression commits are `2b7da325739accb3f74568b0f2eef0538c1c1d83`, `a718ad68c127b9c528decb88d1a4a6c94cc03f16`, `57a7252406df08cd01b9a5dae890b5483247381f`, and `e330a73b2baa2f64cfd4599b5209caa9bd5aebba`; workflow trigger coverage is `eb269c30423b1302e5212bdb64540af707c85339` and `6ede04dcf8c3ec146e84d2fbe6cc0dae6f09ceee`. A new Windows lifecycle run on the corrected head and matching Fast Validation are required before this is marked integration-tested. The failed run remains a valid record of the pre-fix defect.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows clean install → first launcher startup → portable PostgreSQL recovery export | fixed; target validation pending | `2b7da325739accb3f74568b0f2eef0538c1c1d83` (payload); `a718ad68c127b9c528decb88d1a4a6c94cc03f16` and `57a7252406df08cd01b9a5dae890b5483247381f` (regression); `eb269c30423b1302e5212bdb64540af707c85339` and `6ede04dcf8c3ec146e84d2fbe6cc0dae6f09ceee` (trigger contract) | Corrected installed-product lifecycle must complete through startup, upgrade, recovery, diagnostics, and uninstall; this does not validate Authenticode trust or SmartScreen reputation |
+
+
+## 2026-11-06 architecture finding — conversion workers are not fenced after advisory-lock connection loss
+
+**Finding — High (conversion reliability / staged-media and job-state integrity):** Source inspection of `conversion-job-lock.ts`, `routes/optimize.ts`, and `conversion-recovery.ts` confirms that conversion ownership depends on a PostgreSQL session advisory lock. The execution and finalization routes acquire a dedicated client and release it in `finally`, but the worker does not subscribe to that client's `error`/`end` lifecycle or otherwise verify that the session lock remains alive during long-running work. PostgreSQL releases a session advisory lock when its connection is lost. Startup recovery can then acquire the lock and mark the row failed while the original process may still be executing.
+
+**Impact path confirmed in source:** A retry reuses the deterministic staging directory `WillardAI/conversions/<jobId>`; progress and per-file counters are updated using the job ID without an attempt/lease discriminator; and finalization journal checkpoints are conditional on job ID and status, not a unique owner generation. If the old worker survives a transient database disconnect long enough for recovery/retry to begin, the old and new attempts can write to the same staging tree and both can update the same job state. Finalization has durable per-move intent callbacks, but those callbacks are not a substitute for fencing the worker that owns the operation.
+
+**Status:** Blocked for implementation pending an architectural batch. This is not being "fixed" by adding a heartbeat alone: a heartbeat or a last-moment ownership query still leaves a race between the query and filesystem mutation, and killing one child process does not prove the entire process tree or stale worker has stopped.
+
+**Safe implementation plan:**
+1. Add a monotonically increasing attempt/lease generation (or equivalent durable owner token) to conversion jobs, with an atomic claim that returns the generation. Backfill existing rows without changing their status or result data.
+2. Give every execution attempt a unique staging directory, such as `conversions/<jobId>/<attemptId>`; never let retries share a writable staging tree.
+3. Include the generation in every progress, result, cancellation, retry, finalization-journal, and terminal-state update. Every update must be conditional on both the expected status and current generation; a zero-row update means the worker is stale and must stop.
+4. Monitor the dedicated lock client's `error` and `end` events. On loss, mark the attempt locally fenced, abort active FFmpeg/ffprobe and all owned subprocess trees, stop scheduling files, and prohibit further writes. Treat a failed liveness query as loss, not as permission to continue.
+5. Keep finalization attempt-specific and journal each move with its generation. Use no-replace publication and a recovery state machine that reconciles the filesystem against the durable intent before a new generation can publish. Do not assume a database check immediately before a filesystem call is atomic with that call.
+6. Add fault-injection integration tests that sever the lock connection during scanning, active conversion, between move intent and rename, after rename but before completion checkpoint, and during finalization; prove stale attempts cannot alter the new attempt's staging files, job counters, result JSON, or published media.
+7. Roll out behind a schema migration and compatibility review for existing running/awaiting-action jobs; do not automatically delete orphaned attempt directories until recovery proves they are unreferenced.
+
+**Validation:** Source inspection only. No implementation or targeted test is claimed. The existing PostgreSQL advisory-lock test proves mutual exclusion and automatic lock release after connection destruction; it does not prove that a still-running worker stops after losing that lock.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Optimize → conversion execution/retry → staged output; finalize/replace/recycle/archive | blocked | documentation and investigation only | Stale workers may continue after advisory-lock loss and race a retry/finalizer; requires generation fencing, isolated staging, subprocess cancellation, migration, and fault-injection integration tests |
+
+
+## 2026-11-06 follow-up — Windows installer omitted the desktop web-server safety module
+
+**Finding — High (Windows first install / desktop service startup):** The standard-user Windows lifecycle run [#31](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42163707879) completed installer compilation and installation but failed during first startup. The installed `desktop/desktop-web-server.mjs` imports `./web-server-safety.mjs`; the release staging script copied the entry point but omitted that helper. The installed launcher consequently exited with `ERR_MODULE_NOT_FOUND` for `desktop/web-server-safety.mjs`, and the lifecycle smoke timed out waiting for the desktop service. The portable PostgreSQL recovery export was created successfully, so this failure occurred after the backup-helper omission had been corrected.
+
+**Fix:** The Windows release builder now stages `desktop/web-server-safety.mjs` beside `desktop/desktop-web-server.mjs`. The payload regression was broadened from the backup entry point alone to verify every direct relative `.mjs` import of both staged desktop runtime entry points (`desktop-web-server.mjs` and `database-backup.mjs`). The installer lifecycle workflow's PR and audit-branch push path filters now include the helper, and the workflow contract test requires both entries.
+
+**Validation status:** The defect is confirmed by the completed Windows job log, not inferred from source. Fast Validation #1156 and Dependency Review #919 passed on the previous head `e576488cb32e1c361ee45dbd2ab0b99d3dbc0a14`, before this correction; they do not validate these new changes. A new Fast Validation run and a full Windows installed-product lifecycle run must complete on the correction commit before this finding is marked target-tested or integration-tested. No full CI or release-readiness claim is made.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows clean install → desktop web service startup → local UI/API availability | fixed; targeted validation pending | this batch | The next lifecycle run must prove first startup, upgrade, recovery, diagnostics, and uninstall; Authenticode trust and SmartScreen reputation remain unverified |
+
+## 2026-11-06 follow-up — compressed TAR previews and partial-listing false success
+
+**Finding — Medium (Archive Library → preview `.tar.bz2` / `.tar.xz` / `.tbz2` / `.txz` and standalone compressed files):** Source inspection found that the archive preview route called `tar.list` directly on the compressed source. It enabled tar's built-in gzip handling only for `.gz` and `.tgz`; the same branch accepted bzip2 and xz suffixes but did not decompress them. The organization route already had a bounded decompression implementation for gzip, bzip2, and xz, so archive preview and organization disagreed about supported formats. The preview handler also ignored a TAR parse error when the listing had already emitted one or more entries, then persisted the partial list with `peekStatus = "peeked"`. For `.tar.bz2` and `.tar.xz`, an empty/error result could also be persisted as a successful empty preview.
+
+**Fix:** Moved the existing bounded TAR-input implementation into `lib/archive-tar-input.ts` and reused it from both the organization and archive-preview routes. The helper keeps the existing 66 GiB decompressed-input cap, uses the already-staged official 7-Zip binary for bzip2/xz (no new runtime dependency or shell interpolation), creates unique exclusive scratch files with private permissions, and removes the temporary TAR in a `finally` block. Archive preview allocates a unique private directory under the existing NAS `WillardAI/temp` root and removes it through the existing safe `cleanTempDir` path in `finally`, rather than placing transient TAR files in the library root. Archive preview now selects compression from the full filename, including compound suffixes, and only treats a bare `.gz`, `.bz2`, or `.xz` as a standalone compressed payload when decompression succeeded, TAR parsing failed, and no entries were emitted. Named TAR wrappers, decompressor failures, safety violations, and partial listings now fail the preview instead of being stored as a successful result. The standalone response reports the actual suffix format rather than always returning `gz`.
+
+**Regression coverage:** Added `archive-tar-input.test.ts` with suffix mapping and standalone-fallback cases; real gzip, bzip2, and xz compressed-TAR fixtures (bzip2/xz created and read with official 7-Zip); temporary-file and private scratch-directory cleanup assertions; invalid compressed-input cleanup; and a route contract asserting that partial parse results cannot be persisted. The bzip2/xz fixture tests skip only when official 7-Zip is unavailable. Fast Validation now runs this suite alongside the existing archive-safety regressions.
+
+**Validation status:** Source changes and regression tests are committed. Fast Validation #1166 failed at API typecheck because an initial draft of the fixture test accessed Error.code; the fixture was rewritten to use the official 7-Zip binary. Fast Validation #1170 was cancelled during subsequent branch updates. The current focused suite and API typecheck have not yet completed on the current head; no target-tested, integration-tested, Windows, or full-CI claim is made for this batch. The Linux Fast Validation job is the next validation gate. The Fast Validation Windows smoke now runs the compressed-TAR suite against the packaged official 7-Zip binary. A clean installed-product archive-preview check remains outstanding.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → preview compressed TARs; catalog persistence after malformed/partial TAR parsing | fixed; targeted validation pending | `da9d0f9d10cad8b0479cceff4278e137f057ae8c` (shared helper); `643549c7feeda349cf74efd34d5e914dc2bcacf1` (organization route reuse); `3fe8cf10d21ac2d301452b68fdccf47328abbc3f` and `7aa68809260e78748b1243f10bc01aed86de1036` (archive preview); `ce14d7e70381daf90b705af252856963f52eb105` and `31d1d056f22f45f2eb4c53eea04ab13e4ee8f986` (regressions); `c5f4ed46b7e3093acfde64231040f558e936cb51` (Fast Validation coverage); `154d0131eb0afe4a738b3c160acfeb971d721999` (official 7-Zip decompression); `6a75f9f2c03dac25945297f0fd1af949ae739136` (cross-platform fixtures); `afdd4cb485c879f6af0994a11f5f527725b4fb5f` (Linux/Windows CI wiring); `1c6980b2521b53cf9208a8cfdc902cc7400798f1` and `1b334e152871bda1a7770308887913816127cb76` (private scratch cleanup) | Clean installed-product archive-preview behavior, NAS scratch-space capacity, and route-level database persistence behavior remain to be verified by integration tests |
+## 2026-11-06 follow-up — Windows launcher PID-reuse handling
+
+**Finding — Medium (Windows installed launcher → stop after upgrade/recovery):** The Windows installed-product lifecycle run #32 successfully built the unsigned installer, completed first install/startup, and stopped the first service instance. The subsequent stop after the in-place upgrade failed with `Windows did not return enough identity information to safely manage Willard process 1736`. Source inspection showed that version-2 service records already persist each process `CreationDate`, but `Get-ProcessIdentity` required `ExecutablePath` and `CommandLine` before `Test-ProcessIdentity` compared that creation time. If Windows has recycled a recorded PID for a different process whose path/command-line fields are unavailable, the launcher could fail instead of safely recognizing that the recorded service has exited.
+
+**Fix:** `Get-ProcessIdentity` now accepts the recorded creation time and compares it with the current process creation time before requiring path/command-line metadata. A known mismatch returns `null` (the PID now belongs to another process); a matching or unavailable creation time still requires full executable and command-line identity and fails closed when those fields are missing. `Test-ProcessIdentity` supplies the persisted creation time. This does not weaken process ownership checks or permit killing an unverified process.
+
+**Regression coverage:** Extended `scripts/windows/installer-config.test.mjs` to assert that creation-time mismatch handling occurs before executable/command-line validation and that the tracked creation time is passed into the identity lookup. The existing Windows lifecycle smoke naturally exercises repeated stops across first install, upgrade, and recovery. A rerun of lifecycle run #32 was cancelled during subsequent branch updates; the original failure remains evidence, not a passing validation.
+
+**Validation status:** Source fix and focused source-contract regression are committed; the latest Fast Validation and Windows lifecycle checks have not yet confirmed this fix. The prior Windows lifecycle run #32 failed at the second stop, after the first stop passed. Do not treat the installer lifecycle as fully validated until the updated branch completes the full standard-user install/upgrade/recovery/uninstall workflow.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installed launcher → PID ownership and stop after upgrade/recovery | fixed; target test pending; integration validation pending | `31da37ad11c8f9414948b8622c084fe093a58407` (safe creation-time discriminator); `d83babe788ae4592da926a44b66b75a1de3e1336` and `e4542577bb81e01086bd03c2b88df56a34a81e99` (regression assertions) | If Windows cannot provide creation time or it matches but executable/command-line metadata remains unavailable, the launcher intentionally continues to fail closed. The updated full lifecycle run is required to determine whether the observed failure was PID reuse or a persistent WMI metadata issue. |
+## 2026-11-06 follow-up — AI Search clear-filter suggestions
+
+**Finding — Medium (AI Search → refine/no-results suggestions):** The UI submits the built-in no-result suggestions as refinements. Source inspection showed that mergeRefinedIntent could only add/union constraints or preserve old values with nullish coalescing/boolean OR. Consequently, suggestions such as “Remove the date filter,” “Search all media,” “Include non-favorites,” “Stop excluding screenshots,” and “Try just truck on its own” could not clear the inherited date/media/favorite/exclusion/object constraints. The UI offered actions that the merge layer could not represent; local-only mode had the same limitation.
+
+**Fix:** Added an explicit SearchIntentClear contract and clearFilters output to the intent prompt/parser. Refinement now clears or replaces the requested fields while retaining all other prior constraints. Specific exclusions can be removed without discarding unrelated exclusions. The exact built-in suggestion phrases are also applied deterministically after AI parsing, so a model response cannot accidentally re-add the filter being removed. The local-only parser recognizes the same phrases without sending the suggestion text back as search keywords; “try just X on its own” replaces the prior semantic query, keywords, and object list with X. The route uses this deterministic path when external AI processing is disabled or unavailable.
+
+**Regression coverage:** Added merge tests for clearing date range, media type, favorite-only, location, object, keyword, and individual exclusion constraints; local-only parser tests for each built-in suggestion; and route/prompt source contracts confirming both AI and local-only flows apply clear-filter semantics.
+
+**Validation status:** Implementation and focused tests are committed. The current Fast Validation run has not yet completed for this head; no target-tested or integration-tested claim is made. The model-generated clearFilters response remains probabilistic for arbitrary phrasing, while the built-in no-result suggestions are deterministic in both AI and local-only modes.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | AI Search → no-result suggestions and local-only refinements | fixed; targeted validation pending | 8dea50868fb92c0d4fed2e06028247e65c466044 (clear contract/parser); cd97c6c23a1067c0a02945528df10bbd1e69feb2 (local-only route); 3e7e66debc16bb760c3a6a096a7d4fd6e06555bb and c62d98f0570c5d9f129b50801dd9cee6e4bdbaaa (regressions); e3e26d5bcc254a27fa59496ec3e55b8665327a32 and dea3682a0dd045dd742c4347e0eb00c806de6a85 (deterministic AI-mode clear actions); 61cc3a44f9010f395686010aed66ed1256647108 and b609340ee493ac7997ee0babcea5b00112eed1a2 (explicit type contracts) | Arbitrary natural-language removal requests depend on the model setting the correct clear flag; exact built-in suggestions are handled locally. |
+## 2026-11-06 validation follow-up — Fast Validation #1188
+
+Fast Validation #1188 ran against head `d0873319afc617c7a5d64e140598b231e251f820`. The following steps completed successfully: TypeScript/generated-contract validation; Expo configuration; desktop web-server safety; release/storage contracts; official Windows 7-Zip download retry policy; official static 7-Zip 26.05 verification; node-7z compatibility; PostgreSQL media LIKE filters; conversion advisory-lock integration; and conversion finalization restart recovery.
+
+The targeted backend regression command failed on two stale source-contract assertions, not on an observed runtime regression: `ai-search.test.ts` expected the pre-annotation `localClear` declaration, and `archive-safety.test.ts` still expected the old gzip-only preview branch. Updated assertions are committed in `96bd13588c69e8fec7fad7fdd7cb78d013f4e2b2` and `4d53d84e9c3bd147ca800e574832bca6e41ed090`. The current branch contains those test corrections, but no new run has yet confirmed them. Fast Validation #1188 therefore remains failed overall; its successful earlier steps do not make the targeted suite or current head fully validated.
+## 2026-11-06 follow-up — Windows lifecycle CI trigger coverage
+
+**Finding — Medium (Windows installer validation → PR update coverage):** The lifecycle workflow listened for pull-request `opened` and `reopened` events, but not `synchronize`. The audit PR was already open, so later installer/launcher commits could update the branch without scheduling the full Windows lifecycle. The push trigger remains useful for direct branch pushes, but GitHub App/API-based branch updates are not a dependable substitute for the PR synchronization event.
+
+**Fix:** Added `synchronize` to the pull-request activity types and added `scripts/windows/installer-config.test.mjs` to both PR and audit-branch push path filters. This ensures installer process-identity and release-contract changes are eligible to trigger the standard-user install/upgrade/recovery/uninstall lifecycle after PR updates.
+
+**Validation status:** Workflow configuration change is committed in `7f27403fdcc859929580438764fa931bf63267d4` and `ef792b956f4d9caa2618ee47ca8616394abf748e`. The current Windows lifecycle has not been observed running on the updated head; the existing run #32 failure remains unresolved until a fresh run completes. Fast Validation #1191 is running on the prior test-corrected head `7d22f204b718e7eb01c342b4171603b9a886a7cb`; it does not include the later workflow-trigger commits. No full Windows or full-CI validation claim is made.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installer lifecycle → PR synchronization and installer contract test changes | fixed; workflow validation pending | `7f27403fdcc859929580438764fa931bf63267d4` and `ef792b956f4d9caa2618ee47ca8616394abf748e` | The updated trigger must still be observed scheduling a current-head Windows lifecycle run; run #32's post-upgrade stop failure is not yet cleared. |
+
+## 2026-11-06 follow-up — malformed compressed archive caused an unhandled decompressor-exit rejection
+
+**Finding — High (Archive Library → preview malformed `.bz2`/`.xz` input → API process availability):** Fast Validation #1195 ran against `e22350d536b2ee8c86dc4ae0b6a4623b78e896b6`. TypeScript/generated-contract validation, desktop safety, release/storage contracts, official 7-Zip verification, PostgreSQL filter checks, and conversion-lock/finalization integration steps passed. The targeted backend regression command reported 325 passed, 1 failed, and 2 skipped. The only failing test was the existing invalid-compressed-input regression in `archive-tar-input.test.ts`.
+
+Source inspection and the failing test identified a timing defect in `withTarInput`: the function created a promise for the 7-Zip child process exit, but did not attach a rejection handler until after the stdout pipeline completed. For malformed xz input, 7-Zip can exit with an error before the pipeline reaches `await exit`. The rejection was therefore temporarily unhandled. In Node's default unhandled-rejection mode, that can be escalated to an uncaught exception and terminate the API process while a malformed archive is being previewed. This is an availability risk, not merely a test-harness issue.
+
+**Fix:** Immediately attach a rejection observer to the child-exit promise when it is created. The original promise is still awaited after the stdout pipeline, so the decompressor error continues to propagate through the existing catch/finally path and the partial scratch TAR is removed. The observer prevents the early rejection from being unhandled; it does not swallow the error returned to the caller.
+
+**Regression coverage:** Extended the corrupted `.tar.xz` fixture test to capture `unhandledRejection`, wait one event-loop turn after the expected rejection, assert that no unhandled rejection occurred, and verify the scratch directory remains empty. This directly exercises the timing window seen in Fast Validation #1195.
+
+**Commits:** helper fix `8fb0ea7b277e354fb64c056e7e4407c90c5bfa0f`; regression `2d7ab28756a343674acb41f49044d9b621c61da1`.
+
+**Validation status:** The fix and regression are committed. Fast Validation #1195 is a failed run on the pre-fix head and does not validate these commits. A new Fast Validation run must pass the API typecheck and targeted backend regression command. Windows archive smoke must also run on the updated head. Dependency Review #958 passed on the pre-fix head; it is not evidence for the new commits. Windows installer lifecycle #40 was still compiling the unsigned installer at the last observation; its installed-product install/upgrade/recovery/uninstall steps had not started. No full-CI or release-readiness claim is made.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Archive preview of malformed bzip2/xz input; API process availability | fixed; target validation pending | `8fb0ea7b277e354fb64c056e7e4407c90c5bfa0f` (helper); `2d7ab28756a343674acb41f49044d9b621c61da1` (regression) | New Linux targeted validation and Windows archive smoke are required. Other decompressor cancellation, scratch-capacity, and installed-product preview behavior remain separate risks. |
+
+
+## 2026-11-06 follow-up — archive classification parity and Windows installed-stop failure
+
+### Archive preview classification parity
+
+**Finding — Medium (Archive Library → preview contents and category summaries):** Source inspection confirmed that `routes/archives.ts` maintained a second, incomplete media-extension list instead of using the canonical media scanner classification. Files already supported by the library scanner were displayed as `other` in archive previews: AVIF/CR3/PSD images; 3GP/TS/MTS/M2TS/MXF/VOB video; audio formats including MP3/FLAC/OPUS/AIFF; and documents including CSV/Markdown/ODS/ODP/Pages/Numbers/Keynote. The archive preview list also omitted supported archive/container extensions such as `.tgz`, `.tbz2`, `.txz`, `.cab`, and `.iso`. The category aggregator had no audio bucket, so audio-heavy archives could not be categorized correctly.
+
+**Fix:** Extracted the canonical media extension sets and `classifyMediaType` into the pure `lib/media-classification.ts` module. The media scanner imports and re-exports that function to preserve existing imports. Archive previews now use `lib/archive-classification.ts`, which maps canonical photo/video/audio/document types into archive entry types, recognizes the archive/container extensions already supported by the preview routes, retains software classification, and adds an Audio Archive category. No dependency was added and no second copy of the media extension lists remains.
+
+**Regression coverage:** Added `archive-classification.test.ts` for AVIF/CR3/PSD, camera/video formats, audio formats, document formats, compound TAR wrappers, CAB/ISO, software files, audio category counts, directory exclusion, password/empty states, both path separator styles, and dot-prefixed extension normalization. Added the suite to the Fast Validation targeted backend command.
+
+**Commits:** `465a85dcb0d1703c244ef013584f42365819269b` (canonical media classifier); `fc27c2971ce4f6baf04f6d3aaacc93caded1d0e0` (archive classifier); `7ca0a68488a5e18a0dbd280696489bd02b3f05df` (scanner reuse); `e565f72f9f69ae26c6fd62694cf9d570d821a26d` (archive route reuse); `ecc92c0d4097545d82913dfdacd7fbdb49939190` (regression suite); `d20e41c749a015eb713739592f69ee3a504bf190` (Fast Validation wiring); `66932a0896c96dcdf36d02fd67b05bdd585c51b9` and `a4ff4f22f332eba717fadb0817750eb15d3e5bc2` (leading-dot normalization and regression).
+
+**Validation status:** Source changes and focused regression tests are committed. Fast Validation #1202 and Windows installer lifecycle #47 were queued on the updated branch at the time this entry was written; neither result is claimed here. The preceding Fast Validation #1198 passed its Linux validation and Windows archive/updater smoke jobs, but it predates this classification batch and does not validate it.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → preview entry type and category | fixed; target validation pending | classifier/route/test/workflow commits listed above | A clean installed-product archive preview and full Windows lifecycle remain outstanding. |
+
+### Windows installed-product lifecycle — stop after upgrade
+
+**Finding — High (Windows installer → stop after in-place upgrade):** Windows lifecycle run #40 successfully built the unsigned installer, completed standard-user installation and startup, and completed two stop operations. The third stop, after the in-place upgrade, did not finish within the lifecycle harness's 180-second timeout. Its captured output reported: `Windows did not return enough identity information to safely manage Willard process 8416.` The current PID-reuse guard had already compared the persisted creation time; the same process identity could not be confirmed because Windows did not return the executable path and command line. The install/upgrade itself completed; the full lifecycle failed at stop and did not reach the remaining recovery/diagnostics/uninstall assertions.
+
+**Safety decision:** Do not weaken process ownership checks or force-kill an unverified PID. The existing fail-closed behavior is retained. A safe follow-up should add bounded WMI/CIM retry and an independent process-handle identity check, then prove that the tracked process is the exact installed API/web child before allowing termination. If identity remains incomplete, stop should return a bounded actionable error rather than hang. The updated lifecycle run #47 is queued; no pass is claimed.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installed launcher → stop after upgrade | found; blocked pending safe process-identity design | current launcher identity implementation remains unchanged in this batch | A standard-user upgrade/stop/recovery/uninstall run must pass. Never terminate a PID using only a reused PID value. |
+
+### Conversion responsiveness and worker ownership — source inspection
+
+**Finding — High (Optimize Center → video/RAW conversion, cancellation, and API responsiveness):** The current `routes/optimize.ts` still calls `spawnSync` for FFmpeg video encoding (up to a one-hour timeout), RAW image decoding, and the generic image fallback. The conversion execute route is async, but these synchronous child-process calls block the Node event loop. The cancel endpoint only writes `cancelledAt`; the worker checks that flag between files, so an active FFmpeg process cannot be interrupted and unrelated API requests can be delayed for the duration of an encode. The route acquires a session-scoped PostgreSQL advisory lock, but does not attach a process-termination strategy to the lock connection's error/end lifecycle. The lock helper explicitly documents that losing the connection releases ownership; that event does not itself stop the running FFmpeg child.
+
+**Status:** Found by source inspection; no partial workaround applied. This requires a coherent asynchronous worker batch: spawn/stream FFmpeg asynchronously, track each child per job, cancel the child and owned subprocess tree, detect lost lock connections, prevent stale workers from publishing results, and use attempt-specific staging plus conditional finalization. Add fault-injection tests for cancellation, process exit, database connection loss, retry overlap, and Windows process-tree termination before claiming the conversion workflow reliable.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Optimize Center → active conversion and cancel | found; architecture required | no code change in this batch | Current synchronous FFmpeg calls still block the event loop; advisory-lock loss can leave a stale child running. |
+
+
+**Archive category UI follow-through:** The new `Audio Archive` category is now available in the Archive Library category filter. Added a UI contract regression in `scripts/ui-accessibility.test.mjs` so computed categories cannot silently become unfilterable. Commits: `b009f43cf026ac793ad489eb017cc5965a43545c` (filter option) and `598cf64b6480682f3b1e6e3a0cb67b527e2d7deb` (UI regression). The Fast Validation run #1202 predates these two commits; the next PR-triggered run must include the UI contract test. Validation remains pending.
+## Conversion cancellation compare-and-set guard — November 6
+
+- **Finding — Medium (Optimize Center → cancel a running conversion):** The cancel route first loaded a job scoped to the active library and verified status === running, but its subsequent UPDATE filtered only by job ID. If the job changed state between the read and UPDATE, the route could still write cancelledAt to a completed/failed job and return cancellationRequested: true. The update also did not repeat the library scope predicate used by the read.
+- **Fix:** The cancellation UPDATE now uses a single conditional predicate over job ID, the exact nasPath from the scoped read, and status = running. If the row no longer matches, the endpoint returns HTTP 409 with a refresh/retry message rather than reporting a cancellation request that was not applied.
+- **Regression:** Added a source-contract test to optimize-job-claim.test.ts asserting all three predicates, the 409 stale-state path, and the absence of the previous ID-only update. This suite is included in Fast Validation's targeted backend regression command.
+- **Implementation/test commits:** f3ba596fbcaec37ee72f8d72a0796d11034c6c21 (conditional update) and 93699683f748640580a09a4340bf6bda6292012b (corrected regression test).
+- **Validation:** Pending for the final test commit. Fast Validation #1205 passed on the preceding head 535a5f6b083eba3090d18088d67782f1202bb530, including typecheck/generated contracts, targeted backend regressions, PostgreSQL advisory-lock and finalization-recovery integration, and the Windows archive/updater smoke job. That result does not cover this cancellation guard. Dependency Review #968 passed on that same preceding head. Windows installer lifecycle #50 failed after installer build/install/upgrade when the post-upgrade stop command could not obtain sufficient process identity metadata for PID 5576; the harness timed out after 180 seconds. The Windows archive/updater smoke job passed, but the installed-product lifecycle remains blocked.
+- **Remaining risk:** This compare-and-set guard prevents stale-state false success; it does not make FFmpeg cancellation immediate. The active conversion still uses synchronous FFmpeg execution and cancellation is observed between files. The asynchronous process-ownership/fencing design remains a separate high-priority architectural finding.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Optimize Center → cancel a conversion | fixed; targeted-test pending | f3ba596fbcaec37ee72f8d72a0796d11034c6c21, 93699683f748640580a09a4340bf6bda6292012b | Fast Validation must execute the regression on the final branch head. Active FFmpeg cancellation remains a separate high-priority issue. |
+## Windows installer lifecycle noninteractive failure handling — November 6
+
+- **Finding — Medium (Windows installer lifecycle validation → stop failure reporting):** The generated child runner in installer-lifecycle-smoke.ps1 set update/recovery variables but did not set WILLARD_NO_PAUSE. When the installed launcher correctly failed closed on incomplete WMI process identity, its error handler reached Pause-BeforeClose and waited on Read-Host. The lifecycle harness waits for the child process for up to 180 seconds, so a known identity failure was reported as a timeout and obscured the actionable cause. This was confirmed by the #50 captured output and the runner/common.ps1 source.
+- **Fix:** The generated lifecycle child runner now sets WILLARD_NO_PAUSE=1 before invoking start/stop/failure modes. The automated test installer-config.test.mjs now asserts that the generated runner disables interactive pauses. This affects only the isolated test process; normal interactive launcher behavior is unchanged.
+- **Commit:** f49c19decb3f306609df8f2b6da96161c54a83b1.
+- **Validation:** Source inspection confirms the generated runner includes the flag and the regression assertion is present. The test is part of the Windows lifecycle workflow's installer-config test step. The next lifecycle run on the final head must execute it. Run #50 failed at the post-upgrade stop: WMI returned incomplete identity metadata for PID 5576, and the harness timed out after 180 seconds. Fast Validation #1205 and Windows archive/updater smoke passed on the preceding head 535a5f6b083eba3090d18088d67782f1202bb530; they do not validate this runner change. The new lifecycle run for this change is pending.
+- **Remaining risk:** This fixes the misleading timeout caused by interactive pause behavior; it does not resolve the underlying Windows process-identity failure. The launcher must continue refusing to terminate an unverified PID. A clean standard-user install → upgrade → stop → recovery → diagnostics → uninstall run must pass before the installer area is fully validated.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installer lifecycle → noninteractive stop error handling | fixed; source-inspected, targeted workflow test pending | f49c19decb3f306609df8f2b6da96161c54a83b1 | The underlying WMI identity failure still blocks the installed-product lifecycle; no PID ownership checks were weakened. |
+
+## Windows installer interrupted-update recovery fixture correction — November 6
+
+- **Finding — Medium (Windows installer lifecycle validation → interrupted packaged-update recovery):** Windows installer lifecycle run #56 successfully built the unsigned installer, completed standard-user first install and startup, completed the in-place upgrade, and completed the stop operations reached before recovery. It then failed at the interrupted-update recovery scenario with: `The update recovery journal paths do not match this installation's expected sibling candidate and backup directories.`
+- **Root cause confirmed by source and captured run logs:** `desktop/WillardMediaCenter.ps1` intentionally validates that recovery candidates are named `.<installLeaf>.candidate-<GUID>` and backups are named `.<installLeaf>.previous-<label>-<14-digit timestamp>`, with both paths as siblings of the installation. The lifecycle fixture instead created `$InstallRoot.lifecycle-backup`, `$InstallRoot.lifecycle-candidate`, `$InstallRoot.prepared-backup`, and `$InstallRoot.prepared-candidate`. The production recovery guard correctly rejected those nonconforming paths without changing the installation. This was a test-fixture defect; the run had not actually exercised successful recovery.
+- **Correction:** Updated both simulated crash phases to create sibling paths using the exact accepted candidate and backup naming contract. The production path-validation guard is unchanged. Added a regression to `installer-config.test.mjs` that checks the accepted naming patterns and rejects the old invalid fixture suffixes.
+- **Implementation and regression commit:** `29ca94c42c89b90776f546878a04d6adcf263e93`.
+- **Validation:** Fast Validation #1210 passed on the prior source head `c6844f585cfdb16189b5edc4d3501f4e02ddf0ed`: the Linux validation job completed typecheck/generated contracts, desktop safety, release/storage contracts, official 7-Zip 26.05 hash and `node-7z` checks, PostgreSQL conversion-lock/finalization integration, and targeted backend regressions; the Windows archive/updater smoke job also passed. Dependency Review #973 passed on that same head. Those results do not validate this new lifecycle fixture commit. A new Fast Validation and Windows installer lifecycle run must execute the new regression and both recovery scenarios.
+- **Process identity follow-up:** The incomplete-WMI stop failure observed in earlier lifecycle attempts did not recur in run #56; the captured lifecycle log shows the reached stop commands returning `[OK] Willard Media Center services stopped.` This is a non-reproduction in this run, not a general Windows process-identity validation.
+- **Remaining risk:** The next complete lifecycle run must prove that the corrected `swapped` and `prepared` journal scenarios restore the prior install, preserve the external PostgreSQL/media state, clear only the valid journal, and continue through diagnostics and uninstall. The product recovery code remains fail-closed.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Windows installer → interrupted-update recovery lifecycle fixture | fixed; targeted validation pending | `29ca94c42c89b90776f546878a04d6adcf263e93` | The prior run failed before exercising the valid recovery path. Full Windows install → upgrade → both recovery phases → diagnostics → uninstall must pass on the corrected head. |
+
+## AI Search no-result suggestions must refine the active intent — November 6
+
+- **Finding — Medium (Search → no-result suggestions → inherited filters):** Source inspection found that each no-result suggestion button called `submit(s, true)`. The second argument forces a new search, so `SearchPage` omitted `previousIntent`. However, both the AI parser and local-only fallback deliberately apply the deterministic built-in clear-filter actions only when a previous intent is supplied. Consequently suggestions such as “Remove the date filter,” “Search all media,” and “Include non-favorites” were being parsed as new search phrases instead of removing the corresponding inherited constraint; in local-only mode the suggestion sentence could become literal keywords.
+- **Fix:** No-result suggestions now call `submit(s)`, which follows the existing refinement path and supplies the current response intent. Starter prompts still explicitly start a new search. No parser or search-query behavior was duplicated.
+- **Regression:** Added a UI contract test asserting no-result suggestions use the refinement call and that the submit handler passes the active intent when refining.
+- **Implementation and test commit:** `c5958eed90da42ab487debb1d90a949490832147`.
+- **Validation:** Pending on the new branch head. The previous Fast Validation #1210 passed on `c6844f585cfdb16189b5edc4d3501f4e02ddf0ed`, including typecheck/generated contracts and the targeted backend regression suite, but predates this UI correction. The corrected suggestion test must pass in Fast Validation before the finding is marked target-tested.
+- **Remaining risk:** The deterministic built-in suggestion strings are covered by the existing `localSearchClearFilters` and `mergeRefinedIntent` tests; AI-provider interpretation of arbitrary user-written refinements remains probabilistic by design.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search → no-result suggestion → clear inherited filters | fixed; targeted validation pending | `c5958eed90da42ab487debb1d90a949490832147` | Fast Validation must execute the new UI regression on the latest branch head. |
+
+## Search refinement filter overrides — November 6
+
+- **Finding — Medium (Search → refine → remove a conventional media/favorites filter):** The search page only sent `mediaTypes` when the selected type was not “all” and only sent `favoriteOnly` when true. On a refinement, returning the controls to “all” or toggling favorites off omitted the corresponding field. The API therefore retained the previous intent's media-type or favorites constraint. This made a visible filter reset appear successful while results remained constrained.
+- **Fix:** The UI now distinguishes untouched controls from explicit user choices. Untouched controls do not override natural-language intent; selecting “all” sends an explicit empty media-type list, and turning favorites off sends explicit `false`. The API now applies empty arrays and both boolean values as intentional overrides. Starting a new search clears the overrides; opening a saved search synchronizes the controls to its saved intent. Built-in “Search all media” and “Include non-favorites” suggestions also clear the matching UI override before refining.
+- **Regression coverage:** Added route contract assertions for empty media-type and false favorites overrides, plus UI contract coverage for explicit clear state, reset behavior, saved-search synchronization, and suggestion handling.
+- **Implementation/test commit:** `b0b75d489dab5e99b623616156601938948bc2fa`.
+- **Validation:** Pending on the new branch head. The preceding Fast Validation #1216 is associated with the earlier no-result suggestion change and does not cover this filter-override batch. The new API/UI regressions must pass in the next Fast Validation run.
+- **Remaining risk:** The UI currently exposes one media-type selection at a time. Multi-type intent from natural language or saved searches remains preserved in the search response; the single-select control displays “all” when more than one type is active rather than silently narrowing it.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Search → refine → clear media type or favorites filter | fixed; targeted validation pending | `b0b75d489dab5e99b623616156601938948bc2fa` | Fast Validation must execute the route and UI regressions on the current head. |
+
+
+## Password-protected archive preview snapshot integrity — November 6
+
+- **Finding — Medium (Archive Library → preview encrypted ZIP/7-Zip files):** Source inspection confirmed that the normal ZIP and 7-Zip listing completion paths call `assertArchiveFileUnchanged`, but their password/encryption error paths accepted and persisted a password-protected classification without the same snapshot check. A file replaced or modified while the library was inspecting it could therefore be recorded as password-protected based on a different file than the one initially snapshotted.
+- **Fix:** The ZIP password-error branch now revalidates the captured archive snapshot before setting `isPasswordProtected`. The 7-Zip error branch performs the same check and rejects if the snapshot changed before resolving the preview. The existing fail-closed snapshot helper and archive size/path checks are reused; no new dependency or alternate integrity mechanism was added.
+- **Regression:** Extended `archive-safety.test.ts` (already included in Fast Validation's targeted backend regression command) with source-contract assertions that both ZIP and 7-Zip password-error paths perform snapshot verification before accepting the protected result. The existing helper regression for source replacement continues to cover the snapshot helper's runtime behavior.
+- **Commits:** implementation `a85dc983574acd95127d0062296a9f03b45e4551`; regression `68a183ff4af333671982bb4c9212a8d3adf78250`.
+- **Validation:** Source inspection confirms the two previously missing checks are now present. The new regression has been added to an existing Fast Validation test file, but no targeted test, integration test, Windows test, or full CI result is yet confirmed for this commit. The PR-triggered Fast Validation run must execute the updated `archive-safety.test.ts` before this finding can be marked target-tested.
+- **Remaining risk:** The check detects changes observable through size, mtime, ctime, device, and inode snapshots. It does not lock a file against all concurrent writers; a stronger open-descriptor-based archive lifecycle would be a separate design. Windows and SMB timestamp/identity semantics still require platform integration coverage.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Fast Validation must run the regression on the final audit head; snapshot metadata is not a cross-platform file lock. |
+
+
+## November 6 follow-up — archive password-preview integrity and installer lifecycle fixture cleanup
+
+### Password-protected archive preview snapshot verification
+- **Finding — Medium (Archive Library → preview encrypted ZIP/7-Zip files):** The normal ZIP and 7-Zip listing completion paths verified the captured archive snapshot, but password/encryption error paths accepted and persisted a password-protected classification without that check. A file replaced or modified during inspection could therefore be classified from a different file than the one initially snapshotted.
+- **Fix:** The ZIP password-error branch now revalidates the captured archive snapshot before setting `isPasswordProtected`. The 7-Zip error branch performs the same check and rejects if the snapshot changed before resolving the preview. The existing fail-closed snapshot helper is reused.
+- **Regression:** Extended `archive-safety.test.ts` (already included in Fast Validation's targeted backend command) with assertions that both password-error branches verify the snapshot before accepting the protected result. The existing runtime helper test continues to verify that a changed source file is rejected.
+- **Commits:** implementation `a85dc983574acd95127d0062296a9f03b45e4551`; regression `68a183ff4af333671982bb4c9212a8d3adf78250`.
+- **Validation:** Source inspection confirms both checks. The regression has been added but has not yet been confirmed by a successful run on the final branch head. Fast Validation #1224 failed in a separate Windows installer contract assertion before reaching the targeted backend regression step; the newer run must execute `archive-safety.test.ts`.
+- **Remaining risk:** Snapshot metadata detects observable replacement/change using size, mtime, ctime, device, and inode; it is not a cross-platform file lock. Windows and SMB/NAS semantics still need integration coverage.
+
+### Windows interrupted-update lifecycle cleanup contract
+- **Finding — Medium (Windows installer lifecycle → recovery fixture validation):** Fast Validation #1224 failed in `scripts/windows/installer-config.test.mjs`. The test correctly asserted that interrupted-update fixtures use the accepted sibling candidate/backup naming scheme, but the lifecycle script's `finally` block still contained two obsolete cleanup expressions for the old `$InstallRoot.lifecycle-backup` and `$InstallRoot.lifecycle-candidate` paths. Those paths were no longer created by either recovery scenario, and their stale presence contradicted the updated fixture contract.
+- **Fix:** Removed the two obsolete cleanup expressions. The lifecycle script still removes its disposable install root; successful recovery asserts the candidate/journal cleanup, while failed runs preserve the unique temporary workspace for diagnostics. No production launcher/recovery behavior or process-identity guard was changed.
+- **Commit:** `3b063902d289a1d08bc7289221e79ee6900f604a`.
+- **Validation:** The failure is confirmed by the #1224 job log and source assertion. The source correction is committed; the existing installer-config regression and Windows lifecycle must run on the latest head before this is marked target-tested or integration-tested.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview | fixed; target-test pending | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Confirm regression on latest Fast Validation; metadata snapshot is not a file lock. |
+| Medium | Windows installer → interrupted-update lifecycle fixture cleanup | fixed; target-test pending | `3b063902d289a1d08bc7289221e79ee6900f604a` | Confirm installer-config test and complete installed-product recovery lifecycle on latest head. |
+
+
+## UI contract test parser correction — November 6
+
+- **Finding — Medium (Fast Validation → UI accessibility/search filter contracts):** Fast Validation #1229 completed TypeScript/generated-contract checks, Expo CLI configuration, and desktop web-server safety, then failed in `test:ui-contracts` (22 passed, 1 failed). The failing test was `search filter controls can explicitly clear inherited media and favorite constraints`. Its test helper used the first literal `>` after a JSX opening tag; for `onClick={() => { ... }}`, that character is the arrow token inside a JSX expression, not the end of the opening tag. The helper therefore truncated the button before `setFavoriteOnlyOverride(next)` and produced a false regression failure. Source inspection of `search.tsx` confirmed the intended setter is present in the click handler.
+- **Fix:** Replaced the first-`>` search with a small brace- and quote-aware JSX opening-tag scanner, and reused it for the favorites-filter button assertion. The scanner ignores arrow tokens and comparison characters inside JSX expression braces, and handles quoted/escaped strings before identifying the actual tag terminator. No application UI code was changed.
+- **Commits:** `e641dd6cfbd3509065ca07f0803c49b3832b9a2a` (parser and regression extraction); `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` (single-backslash escape handling).
+- **Validation:** Fast Validation #1229 is a confirmed failure on head `28fbb4b853e20951ebbff7585d6560796598fa86`; its log identifies the exact assertion above. The updated parser has been source-inspected, but no successful UI contract run is yet confirmed on the corrected head. The next Fast Validation run must pass the entire UI contract suite and then reach the targeted backend regression step.
+- **Remaining risk:** This improves the static JSX contract test helper, not a full browser accessibility audit. Keyboard/screen-reader behavior still needs real browser testing at a later milestone.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Fast Validation → Search filter UI contract | fixed; target-test pending | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Confirm the full UI contract suite on the corrected head; static contract checks do not replace browser accessibility testing. |
+
+
+## November 6 validation milestone — archive, installer-fixture, and UI contract corrections
+
+- **Fast Validation #1232 passed** on audit head `99874ac039961eebc6d42844c356f9273754ea16`. The Linux job completed typecheck/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip 26.05 download/hash verification, Linux node-7z compatibility, PostgreSQL media LIKE behavior, cross-connection advisory locks, PostgreSQL conversion-finalization recovery, and the targeted backend regression suite.
+- The paired **Windows archive/updater smoke job also passed** in #1232. It covered PowerShell launcher parsing, concurrent startup protection, developer-launcher orphan handling, UTF-8 launcher environment files, Windows media rename and storage-migration no-overwrite behavior, NAS temp/cleanup safety, conversion finalization rollback, official Windows 7-Zip symlink metadata, compressed TAR preview, updater journal writes, and developer updater preservation/rollback.
+- **Dependency Review #995 passed** on the same head.
+- The three corrections represented by commits `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250`, `3b063902d289a1d08bc7289221e79ee6900f604a`, `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, and `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` are now **target-tested** by the successful Fast Validation run. This is not full CI and does not constitute the Windows installed-product lifecycle.
+- **Windows installer lifecycle #83 remains in progress** on the same head. Installer compilation completed successfully; standard-user install, first startup, upgrade, interrupted-update recovery, diagnostics, and uninstall have not yet been confirmed. Do not mark the installer fully validated until that workflow completes successfully.
+- Current branch head at this milestone: `99874ac039961eebc6d42844c356f9273754ea16`. No main-branch, production-data, credential, or release changes.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Archive Library → password-protected ZIP/7-Zip preview snapshot integrity | target-tested | `a85dc983574acd95127d0062296a9f03b45e4551`, `68a183ff4af333671982bb4c9212a8d3adf78250` | Snapshot metadata is not a file lock; Windows/SMB source-change semantics remain untested. |
+| Medium | Windows installer → interrupted-update lifecycle fixture cleanup | target-tested | `3b063902d289a1d08bc7289221e79ee6900f604a` | Installer lifecycle #83 still needs to finish its installed-product recovery sequence. |
+| Medium | Fast Validation → Search filter UI contract parser | target-tested | `e641dd6cfbd3509065ca07f0803c49b3832b9a2a`, `fedbcbd0ec3cfa225c1fd7bd29c615eb6eec8db8` | Static UI contracts do not replace browser keyboard/screen-reader testing. |
+
+
+
+## Thumbnail cache clearing preserves in-flight work (2026-11-06)
+
+- Confirmed the thumbnail cache clearing function removed every directory entry, including lock, temporary WebP, and FFmpeg frame files owned by active workers. Removing a live inter-process lock can let another API process acquire the same destination and generate/publish concurrently; deleting an in-flight output can also make the original worker fail.
+- Cache clearing now removes completed cache entries only and leaves lock/partial artifacts in place for their owning worker and existing cleanup policy.
+- Added a regression test that creates a completed thumbnail plus simulated active lock, temporary WebP, and FFmpeg frame files; it verifies the completed derivative is cleared while all in-flight artifacts remain.
+- Targeted test and CI validation are pending. This change does not resolve stale-lock recovery after a crashed worker; that remains an open operational concern.
+
+
+## Validation follow-up — thumbnail cache race and Windows lifecycle (2026-11-06)
+
+- **Fast Validation #1235 passed** on commit 59cf2461c1f0a8467f3c744309eeefa73bd50c9c: both validate and windows-archive-and-updater-smoke jobs succeeded. The passing validate job includes typecheck/generated contracts, Expo CLI configuration, desktop web-server safety, release/storage contracts, official 7-Zip policy and binary compatibility checks, PostgreSQL media LIKE filters, cross-connection conversion advisory locks, conversion finalization restart recovery, and targeted backend regressions. This run includes the thumbnail cache clear regression.
+- **Dependency Review #998 passed** on the same commit.
+- **Windows installer lifecycle #86 failed** on the same commit. The installer built and compiled successfully, but the standard-user install/upgrade/recovery/diagnostics/uninstall exercise failed. The job reports the failure in its single lifecycle step; the available GitHub run metadata does not expose the step console output or preserved runner-local diagnostic files, so the failing lifecycle phase is not yet established. Do not treat this as a product defect until the exact assertion/log is recovered; equally, do not mark the installer lifecycle as passed.
+- Follow-up inspection confirmed the lifecycle script preserves runner-local diagnostics on failure and prints them to the job log. The current connected GitHub metadata view exposes the failed step but not that log body. Next action is to obtain the failing phase/assertion from the job log, reproduce it, and only then make a targeted correction.
+- The thumbnail cache clear change is now **CI-validated** by Fast Validation #1235. It intentionally leaves stale lock recovery open; no age-only lock stealing was reintroduced.
+- PR #2 remains open and draft. No main branch, production data, credentials, release artifacts, or production settings were changed.
+
+
+## November 6 — installer release gate and interrupted-update entrypoint
+
+### Confirmed Windows lifecycle failure
+
+- Windows installer lifecycle run [#87](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208095) completed dependency installation, release staging, installer compilation, standard-user first install/start, in-place upgrade, and the simulated `swapped` recovery case.
+- It then failed in the prepared-phase recovery case. The smoke test deliberately moved the entire install directory to its sibling backup, leaving the configured install path absent, then invoked `$InstallRoot\\desktop\\WillardMediaCenter.ps1`. The captured standard-user stderr is a PowerShell `CommandNotFoundException` for that missing path; the subsequent health check timed out.
+- This exposes a real recovery-entrypoint gap, not merely an arbitrary assertion failure: Inno Setup's Start Menu and desktop shortcuts also point directly to `{app}\\desktop\\WillardMediaCenter.ps1`. When a crash occurs after the old install directory is renamed to its backup but before the candidate becomes the install directory, the ordinary shortcut cannot launch the script that contains `Recover-InterruptedUpdateSwap`. The recovery code is present but unreachable through the normal entrypoint in this exact crash window.
+- **Status: high severity, found / architecture blocked.** Do not mark prepared-phase recovery as validated. A safe fix needs a stable bootstrap entrypoint outside the directory being swapped (for example, a small per-user launcher under LOCALAPPDATA) and shortcuts that target it. The bootstrap must validate the journal and all sibling paths, reject reparse/symlink escapes, restore only a verified backup using same-volume no-overwrite moves, preserve candidate/backup/journal on ambiguous states, and then invoke the restored launcher. The Windows lifecycle test must invoke the same stable shortcut target after simulating the missing install directory. Do not paper over this by invoking a hidden backup launcher from the test; that would not represent normal user recovery.
+- The lifecycle run did pass the earlier first-install/start, upgrade, and `swapped` rollback path. It did **not** reach the database-failure diagnostics or uninstall checks.
+
+### Release validation was not fail-closed
+
+- The same run's release staging log showed `validate-release.mjs` failing because it expected packaged `sharp@0.35.2` while the resolved API runtime dependency and staged package were `0.35.5`. The PowerShell build script continued to compile Setup.exe because it did not inspect `$LASTEXITCODE` after either Node command. Thus a failed payload validation did not stop the local installer build.
+- Fixed the version-drift check to compare the packaged sharp manifest with the actually resolved API-runtime sharp manifest, rather than a stale hard-coded patch version.
+- Added a checked Node-step wrapper in `build-installer.ps1` that throws on a non-zero exit from both release staging and release validation, before installer compilation can run.
+- Added regression assertions for resolved-version parity and fail-closed command ordering.
+- **Commits:** validator `5d32957d24155a10a33695fa7de9b509ca89cfe2`; build gate `487391fc852b9dd359a60e80960f86bb0b057cf1`; tests `693bf789c5ec9657892a59b61cbef1559d1e2221` and correction `dfcae31e1e906c340f1659e41a3e9e9bd9cff856`. These changes are committed. Fast Validation #1242 has passed its Linux validation job and Windows archive/updater smoke; the Windows installer build also completed successfully in lifecycle run #97. The full installed-product lifecycle portion of #97 had not completed at this report update, so it is not counted as a lifecycle pass.
+
+### Prioritized findings ledger update
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows updater → restart after crash between install-root rename and candidate activation | found / architecture blocked | — | Normal shortcuts target a launcher inside the temporarily absent install root. Requires a stable out-of-root bootstrap and a lifecycle test that launches through the real shortcut target. |
+| High | Windows installer build → release staging/validation failure handling | target-tested | `487391fc852b9dd359a60e80960f86bb0b057cf1` | Source-contract regression and normal Windows build passed; an injected non-zero Node-step failure still needs a direct PowerShell behavior test. |
+| Medium | Windows release payload → sharp version parity | integration-tested | `5d32957d24155a10a33695fa7de9b509ca89cfe2` | The Windows release staging/validation/compile step passed; the full installed-product lifecycle remains separately open. |
+
+### Validation snapshot
+
+- Fast Validation [#1236](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208446) passed on the preceding code head `164e2f10726f47aa24ea6c97328bed5812f08742`, including typecheck/generated contracts, PostgreSQL media filters and conversion recovery checks, targeted backend regressions, and the Windows archive/updater smoke job.
+- Windows installer lifecycle [#87](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42207208095) failed as detailed above. The installer compiled, but the full installed-product lifecycle did not pass.
+- Dependency Review #999 passed on the preceding head. The new installer changes still require a fresh dependency-review result.
+- This audit branch remains separate from `main`; PR #2 remains open and draft. No production data, credentials, or release artifacts were changed.
+
+
+## November 6 — conversion crash recovery: partial staged results
+
+- **Finding — Medium (Optimize Center → execute/retry after a worker crash):** The execute route persists per-file counters as work progresses, but writes the per-file `resultJson` only after the entire conversion loop completes. If the process exits or a later database operation throws after one or more files have been successfully converted and verified, those staged files remain under `WillardAI/conversions/<jobId>` but their paths and verification records have not been durably stored. Startup recovery can mark the job failed, but cannot reconstruct which staged files were successful. The retry route clears `resultJson` and reuses the same job-level staging directory.
+- Originals remain untouched during this stage, so this does not establish loss of original media. It does mean completed conversion work can become inaccessible to the user and can leave unreferenced staged files; a retry can then encounter or overwrite files from the abandoned attempt.
+- **Status: found by source inspection; architecture required.** The safe design is already part of the conversion-worker fencing plan: create a unique staging directory per attempt, persist a durable per-file manifest/checkpoint before advancing the job, and make every checkpoint conditional on the current owner generation. Startup recovery must either restore a complete actionable result set or retain an explicit recovery record for the abandoned attempt. Do not simply clear the shared staging directory on retry while stale workers may still be alive.
+- This finding reinforces the existing high-severity FFmpeg/event-loop and worker-fencing work. No partial code workaround was applied.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Optimize Center → crash after successful staged files → retry | found; architecture required | documentation/investigation only | Result JSON is not checkpointed per file; staged successes can become orphaned, and retries reuse the same job-level staging directory. Requires attempt-scoped staging, durable per-file checkpoints, and worker fencing. |
+
+
+## November 6 — additional media and NAS responsiveness findings
+
+### On-demand thumbnail generation still blocks the API event loop
+
+- **Finding — Medium (Media Library → video/PDF thumbnail requests and image fallback):** `thumbnail-engine.ts` exports an asynchronous thumbnail generation flow, but the video, PDF, and FFmpeg image-fallback helpers call `spawnSync` directly with 15–30 second timeouts. A thumbnail request can therefore block the API event loop for the full tool timeout; concurrent media requests, health checks, and cancellation handling in the same API process are delayed. This is separate from the longer Optimize Center FFmpeg blocking path already recorded above.
+- **Status: found by source inspection.** Include thumbnail jobs in the shared asynchronous media-tool runner design. The runner should bound stdout/stderr, time out, terminate the process tree on Windows, clean temporary frames in a finally path, and preserve the existing per-thumbnail lock and atomic publish behavior. Do not convert only the call to a Promise while leaving process ownership/cancellation undefined.
+
+### Organization preflight disk-space probe is synchronous and platform-dependent
+
+- **Finding — Medium (Organize → destination preflight on slow/offline NAS):** `getDiskFreeBytes` calls `fs.existsSync` and `spawnSync("df", ["-B1", ...])` without a timeout. On Linux/macOS, a stalled network mount can block the Node event loop while those synchronous filesystem/command calls wait. On Windows, `df` is not a standard command, so the helper returns `null`; the caller leaves `diskOk` true and reports only “Check unavailable on this system.” The preflight can therefore appear successful even though the per-destination free-space check was not performed.
+- **Status: found by source inspection; no runtime failure is claimed.** Replace this with a bounded, asynchronous, cross-platform capacity probe and represent “unknown” separately from “enough space” in the preflight result. Keep the existing NAS-root capacity check, but do not render an unavailable per-destination check as an unqualified pass. Test Windows local and UNC paths, Linux mounted paths, and an unavailable/stalled NAS without blocking unrelated API requests.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media Library → on-demand video/PDF/fallback thumbnail | found; architecture required | documentation/investigation only | Synchronous FFmpeg calls can block the API event loop for up to 30 seconds per request. |
+| Medium | Organize → per-destination disk-space preflight | found; architecture required | documentation/investigation only | Synchronous `df`/filesystem probes can block on NAS; Windows treats an unavailable per-destination check as non-blocking. Requires an async bounded provider and an explicit unknown state. |
+
+
+### Validation follow-up — November 6, current audit head
+
+- Fast Validation [#1242](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932344) completed successfully on audit head `a9870292e38d6a2e5a596e03447088d1c36a5ad4` (run attempt 1). Both jobs passed: Linux validation/typecheck/release-storage contracts/PostgreSQL conversion checks/targeted backend regressions, and Windows archive/updater smoke including no-overwrite, storage migration, NAS temp cleanup, conversion finalization rollback, official 7-Zip symlink metadata, TAR preview, and updater preservation/rollback.
+- Dependency Review [#1005](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932307) passed on the same audit head.
+- Windows installer lifecycle [#97](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932341) successfully completed the unsigned installer build/compile step, which exercises the corrected resolved-sharp check and fail-closed build wrapper. Its standard-user lifecycle step was still running at the time of this update. Do not count the lifecycle as passed; run #87 already failed at prepared-phase recovery, and the stable-bootstrap defect remains open.
+- No full-repository CI matrix was run. The successful Fast Validation workflow is broad targeted/integration validation, not a claim that every workflow or installed-product scenario passed.
+
+
+### Post-update status — Windows lifecycle run #97
+
+- Run [#97](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42211932341) was **cancelled**, not passed or failed, after the unsigned installer build/compile step had succeeded. Its installed-product lifecycle step was interrupted when the audit branch received the documentation-only ledger correction; the cleanup step then reported failure because cancellation interrupted teardown.
+- Therefore, the new sharp parity and installer build path have a successful Windows build/compile integration result, but run #97 provides no new result for first-start/upgrade/recovery/uninstall. The last completed installed-product lifecycle result remains run #87's prepared-phase recovery failure. Keep that high-severity finding open.
+
+## November 6 — packaged Windows process identity and stop-command reliability
+
+- **Finding — High (Windows installer → stop services after an in-place upgrade):** Windows installer lifecycle run [#99](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42212848059) built and installed the package, completed first startup and upgrade, and passed the earlier swapped-update recovery scenario. The next stop command failed while checking PID 892 because the WMI response did not include enough process identity metadata. The launcher then routed a stop-command error through the generic startup-failure handler, which opened a modal MessageBox. The lifecycle wrapper waited 180 seconds and timed out instead of receiving a prompt failure. The exact omitted WMI field was not recorded in that run; no claim is made that the process was actually stopped.
+- **Fix:** The packaged launcher now requires the current process creation timestamp and checks it against the persisted timestamp before using any fallback. When the PID and exact creation timestamp match, omitted ExecutablePath or CommandLine fields may be filled from the already-persisted record. A missing creation timestamp or a PID/creation-time mismatch still fails closed; any returned path or command-line mismatch still fails the identity comparison. This uses the recorded process-generation identity rather than trusting a PID alone.
+- **Stop UX correction:** An explicit -Stop failure now writes stop-specific diagnostics, releases the launcher mutex, and exits nonzero without showing the startup modal or retrying an unsafe shutdown. The process-state file is retained for diagnosis and later recovery.
+- **Regression coverage:** Updated the installer contract tests for creation-time-gated WMI fallback, required creation timestamps, and non-modal stop failure handling. The installed-product lifecycle remains the real Windows integration check.
+- **Commits:** Packaged launcher implementation is committed in `158f4cc7ac66f29a084e017270808b14cdba446a`; its static regression anchor correction is committed in `16de89037e1201eb7a9f9a6787b25adc238af60a`. Fast Validation #1247 then exposed two stale test expectations (the new fifth mutex-release path and property-specific WMI error text); both are corrected in this follow-up batch. The installed-product lifecycle is still pending.
+- **Remaining risk:** The failed run did not expose whether WMI omitted ExecutablePath, CommandLine, or both. The new logic is intentionally limited to a matching PID plus exact creation timestamp. The next Windows lifecycle run must confirm that the stop path now completes. The separate prepared-phase update bootstrap gap remains high severity and unresolved.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → stop packaged services after upgrade | fixed; targeted validation pending | `158f4cc7ac66f29a084e017270808b14cdba446a` | Must pass Windows installed-product lifecycle; WMI creation timestamp must remain available and match exactly. |
+| Medium | Windows launcher → report stop failure without blocking modal | fixed; targeted validation pending | pending commit | Windows lifecycle must verify a failed stop returns promptly and preserves diagnostics/state. |
+
+## November 6 — Media Center accessibility and control semantics
+
+- **Finding — Medium (Media Center → search, filters, folder navigation, status banners, and view controls):** Source inspection found several icon-only buttons without accessible names (dismiss, close details, clear search, folder disclosure, grid/list, and refresh), a search input and sort select without explicit labels, and toggle-like tag/type/folder/view controls that did not expose their selected state. The folder disclosure control was also rendered as an enabled button for folders with no children.
+- **Fix:** Added explicit accessible names, pressed/expanded state, and native disabled state for non-expandable folder disclosures. Search and sort controls now have labels. Tag, media-type, current-folder, and view-mode choices expose their selected state. Dismiss/close actions identify the notification or file context.
+- **Regression coverage:** Extended the UI accessibility contract suite with assertions for all of these Media Center controls. This is static source-contract coverage; browser keyboard and screen-reader verification remains a separate milestone.
+- **Commit:** pending commit.
+- **Remaining risk:** This batch covers the audited Media Center controls, not every page or a full assistive-technology session. Browser-level accessibility checks and manual screen-reader verification remain open.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| Medium | Media Center → accessible names and state for search, filters, folder tree, status actions, and view controls | fixed; targeted validation pending | pending commit | Must pass UI contract tests; browser keyboard and screen-reader testing still required. |
+
+## November 6 — Windows process identity parity and stop-command fail-closed behavior
+
+- **Follow-up to lifecycle #99:** The packaged launcher now uses the recorded process creation timestamp as the required PID-reuse discriminator before falling back to persisted executable/command-line values when WMI omits those optional fields. This batch extends the same bounded behavior to the developer launcher so its stop/restart path does not fail on the same WMI metadata omission.
+- **Stop lock acquisition:** The packaged launcher now reports an explicit -Stop mutex-acquisition failure through stop-specific diagnostics instead of showing the generic startup MessageBox. The already-fixed outer stop catch also releases the mutex and returns nonzero without retrying a shutdown that could not be verified.
+- **Windows runtime regression:** The developer process-ownership smoke now mocks WMI to prove that missing optional fields are accepted only when the exact creation timestamp matches, a reused PID is rejected, and a missing creation timestamp fails closed.
+- **Fast Validation #1247:** The run reached release/storage contract tests and completed 81 tests before failing two static assertions in installer-config.test.mjs. The failures were stale test expectations introduced by the new stop-failure mutex release and property-specific WMI errors; the new non-modal stop test itself passed. The next run must pass the corrected installer contracts and then execute the UI and backend regression suites.
+- **Windows lifecycle #104:** At this report update it was still in the unsigned installer build/compile stage. No installed-product lifecycle result is claimed; the next run on the updated head must verify first startup, upgrade, stop/restart, recovery, diagnostics, and uninstall.
+- **Remaining architecture risk:** Both launchers still validate a PID and later invoke taskkill by PID. The identity check and termination are separate operations; if the original process exits and Windows reuses its PID between those operations, taskkill could target the replacement process. This is a source-inspected TOCTOU risk, not an observed incident. A safe complete fix needs process-instance-bound handles plus process-tree ownership (likely a Windows Job Object with a stable supervisor/owner); do not replace taskkill with a single-process kill that leaves service descendants behind.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer/developer launcher → verify and stop tracked processes when WMI omits optional fields | fixed; targeted validation pending | pending commit | Exact process creation time remains mandatory; Windows smoke and installed lifecycle must pass. |
+| Medium | Windows launcher → explicit stop when startup mutex cannot be acquired | fixed; targeted validation pending | pending commit | Static contract and Windows lifecycle must confirm prompt non-modal failure. |
+| Medium | Windows launcher → process identity check followed by PID-only process-tree termination | found; architecture required | — | TOCTOU PID reuse window remains; requires handle-bound process identity and process-tree ownership design. |
+
+## November 6 — Windows stop diagnostics after lifecycle #104
+
+- **Integration result:** Windows installer lifecycle [#104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42218506198) successfully built and compiled the unsigned installer, created the standard user, installed the product, and completed first startup. The first installed stop command then failed because the tracked process PID 2360 was still present after the shutdown attempt. The process was not force-cleared from the journal and the running installation was left in place. This run does not validate upgrade/recovery/uninstall.
+- **Confirmed diagnostic defect:** Both packaged and developer launchers invoked `taskkill` by command name, discarded all output, and ignored `$LASTEXITCODE`. If the executable could not be resolved or Windows refused termination, the only resulting message was the surviving PID; the actual operating-system reason was lost.
+- **Fix:** Both launchers now resolve taskkill.exe from the Windows system directory, verify that the executable exists, capture its output and exit code, and include sanitized output with the surviving PID in the retained-state error. They still verify process identity after the attempt and do not clear the state file when a tracked process remains.
+- **Remaining risk:** The reason PID 2360 survived in run #104 is not established because the previous code discarded taskkill output. The new diagnostics are intended to distinguish path resolution, access denial, and an actual surviving process in the next Windows lifecycle run. The PID-check-to-taskkill TOCTOU risk remains separately recorded and is not solved by this diagnostic change.
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows installer → stop API/web service tree after first startup or upgrade | fixed diagnostic gap; targeted validation pending | pending commit | Must observe taskkill result on next Windows lifecycle run; process still must be stopped safely. |
+| Medium | Windows developer launcher → stop tracked service tree | fixed diagnostic gap; targeted validation pending | pending commit | Windows process-ownership smoke and targeted contract tests must pass. |
+
+## November 6 — Windows service-stop race and cleanup API responsiveness
+
+### Confirmed Windows stop race — fixed, targeted-tested; lifecycle validation pending
+
+The Windows lifecycle runs on the preceding test-harness commit exposed a repeatable stop failure in both first-start and post-upgrade flows. taskkill.exe returned success and reported that the tracked Node processes had been terminated, but the immediate Win32_Process identity query still returned the same tracked PID. A later stop attempt succeeded after the stale WMI process record disappeared. The stop routine therefore treated a terminated service as still running and aborted the installer lifecycle.
+
+The packaged launcher and developer launcher now poll the exact tracked process identity for up to five additional seconds after the existing process wait. The identity check still includes the recorded executable path, command line, and creation date; an unverified or genuinely surviving process remains a fail-closed error. This does not weaken process ownership checks.
+
+The same batch corrected two stale test contracts: the lifecycle stage assertion now checks the stage helper actually used by the smoke script, and the developer process-identity assertion now inspects Test-ProcessIdentity rather than the preceding Get-ProcessIdentity function block.
+
+- Diagnostic/test-harness commit: 42f57a36fbb48c8dbe89a954ad6e9ad6d746a03c
+- Product stop-race fix and regression-contract commit: bdb60bd57f425cf2392fe09958c33868a7145397
+- Fast Validation #1251: validate job completed successfully, including TypeScript/generated contracts, release/storage contracts, Windows archive/updater smoke, and targeted backend regressions. The workflow run was still finalizing when this section was written.
+- Dependency Review #1014: passed.
+- Windows installer lifecycle #111 and #112: running against the fix; neither is counted as a pass yet.
+
+Remaining risk: the five-second WMI visibility grace still needs the complete installed-product lifecycle run to confirm it is sufficient. The prepared-phase updater recovery entrypoint problem remains open and still requires a stable bootstrap outside the swapped installation directory.
+
+### New confirmed performance finding — Windows cleanup blocks the API event loop
+
+Source inspection of artifacts/api-server/src/routes/cleanup.ts found that the Windows Recycle Bin branch calls spawnSync("powershell", ...) inside the per-file cleanup loop, with a 30-second timeout and up to 500 file IDs accepted by the request. Each synchronous call blocks the API event loop, so a slow or stuck Recycle Bin operation can stall unrelated API requests; a large cleanup batch repeats that risk for every file.
+
+- Severity: Medium (API responsiveness / cleanup workflow).
+- Status: found; no code change in this batch.
+- Planned fix: use the existing Node child-process async pattern with a bounded timeout, pass the path as environment data rather than interpolating it into PowerShell source, and preserve the current per-file PREPARED/MOVING/FAILED/FILESYSTEM_MOVED journal transitions. Add focused runner-injection and route-contract tests.
+- Remaining risk: until changed, Windows cleanup can temporarily block all API request handling while PowerShell runs.
+
+### Prioritized ledger delta
+
+| Severity | Affected workflow | Status | Commit | Remaining risk |
+|---|---|---|---|---|
+| High | Windows launcher stop; installer upgrade/uninstall | fixed; targeted-tested; lifecycle validation pending | bdb60bd57f425cf2392fe09958c33868a7145397 | Full installed-product lifecycle #111/#112 not yet confirmed |
+| Medium | Windows cleanup / Recycle Bin | fixed; target-tested | `04c7823558d9ab4d9d4b6274479861b0be24e883` | Asynchronous bounded PowerShell execution is covered by Fast Validation; actual Windows Recycle Bin runtime behavior and 500-file request duration remain unverified |
+| High | Prepared-phase updater recovery | found; architectural plan documented | existing audit findings | Stable bootstrap is still required; do not treat the packaged in-directory recovery routine as reachable when the install directory is absent |
+| High | Media conversion and thumbnail event-loop blocking | fixed; target-tested; integration-tested | `71bc9720cb953f1db4fdaf378de7b305e1d477bd`, `42564462587aef12e423ab34a63061a2e25bb2e2`, test correction `01c44d2851ed5841eab6b521d819ac37023dc66b` | Full CI not run; installed Windows lifecycle remains pending |
+| Medium | Media subprocess shutdown race | found; follow-up required | none | A new FFmpeg child can start after the shutdown process snapshot; reject new children once shutdown begins |
+| Medium | 7-Zip version resolution on API request paths | found; follow-up required | none | Synchronous 10-second version probes repeat in archive routes and can block unrelated API requests |
+
+
+## November 6 — Windows cleanup Recycle Bin execution moved off the API event loop
+
+- **Finding resolved — Medium (Cleanup → Windows Recycle Bin):** The previous Windows branch used `spawnSync("powershell", ...)` inside the per-file cleanup loop with a 30-second timeout. A blocked shell therefore blocked the entire API event loop. The request accepts batches, so the delay could repeat per file.
+- **Fix in code commit:** `04c7823558d9ab4d9d4b6274479861b0be24e883` adds `artifacts/api-server/src/lib/windows-recycle-bin.ts`, uses the existing Node child-process API through asynchronous `execFile`, caps execution at 30 seconds and output at 64 KiB, runs PowerShell noninteractively, and supplies the target path through the child environment rather than interpolating a filename into PowerShell source. The cleanup route awaits the helper and preserves the existing `MOVING`, `FAILED`, and `FILESYSTEM_MOVED` journal transitions. A failed Recycle Bin operation remains recorded as `FAILED`; the route does not mark it moved.
+- **Regression coverage:** `windows-recycle-bin.test.ts` checks the bounded noninteractive invocation, quote/metacharacter/Unicode-safe path handoff, surfaced stderr, timeout reporting, and route journaling/no-`spawnSync` contract.
+- **Validation:** Fast Validation [run 42226785444](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785444) passed on the exact code commit: Linux `validate` job and Windows `windows-archive-and-updater-smoke` job both completed successfully. The Windows archive/updater job is not a Recycle Bin runtime test. This is targeted/integration validation, not full CI and not proof of the actual Windows Recycle Bin provider behavior.
+- **Status:** fixed; target-tested. Remaining verification: exercise a real Windows Recycle Bin move/failure/timeout under the installed Windows environment, and measure long cleanup batches. The helper is asynchronous but the route still processes files sequentially, so a 500-file request can take a long time without blocking unrelated API requests.
+
+## November 6 — Prepared-phase Windows updater recovery is unreachable without a stable bootstrap
+
+- **Severity: High. Affected workflow:** Windows installer/updater → recovery after interruption between writing the `prepared` journal and completing the directory swap.
+- **Observed integration failure:** Windows installer lifecycle [run 42226785436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785436) successfully built and compiled the unsigned installer, installed it for a standard user, started the product, upgraded it, and completed the simulated `swapped`-phase recovery. It then failed during the prepared-phase recovery scenario. The retained log reports that `C:\\WillardLifecycle\\wl_life_9ac6147a\\desktop\\WillardMediaCenter.ps1` could not be found; the lifecycle subsequently timed out waiting for the API health endpoint. The error occurred in the test's launcher invocation before the packaged recovery code could run.
+- **Root cause confirmed from caller and installer entrypoints:** `scripts/windows/installer-lifecycle-smoke.ps1:278-293` simulates the interruption by moving the entire install root to its sibling backup, then calls `Invoke-InstalledLauncher`. That helper resolves the launcher only at `$InstallRoot\\desktop\\WillardMediaCenter.ps1` (`installer-lifecycle-smoke.ps1:105-106`). The installer creates both Start Menu and desktop shortcuts that invoke the same in-directory script (`installer/WillardMediaCenter.iss:57-61`). When the install directory is absent, neither the test nor a user shortcut has a surviving executable entrypoint. The recovery routine inside the moved install tree cannot recover a directory that must exist before that routine can be started.
+- **Why no partial workaround was applied:** Changing the test to invoke a backup copy or adding a one-off recovery command inside the test would mask the actual user-facing defect. Moving only the recovery function to another script still leaves the shortcut and update entrypoint coupled to the versioned directory. This is a bootstrap/lifecycle design issue, not a safe local patch.
+- **Safe implementation plan:**
+  1. Introduce a small stable per-user bootstrap installed outside the versioned install directory and not replaced during an application swap. Update Start Menu, desktop, post-install, repair, and updater entrypoints to call this bootstrap first.
+  2. Have the bootstrap validate the journal version and phase, canonical install root, and candidate/backup sibling paths before any filesystem mutation. Reject reparse-point/path escapes and ambiguous or missing backups; retain the journal and diagnostics on uncertainty.
+  3. For a `prepared` journal with the live install missing and a verified sibling backup present, restore the previous install atomically, verify its expected identity, clear the journal only after verification, and then launch the restored version. Do not execute the candidate merely because it exists.
+  4. Define installer upgrade/uninstall ownership for the stable bootstrap separately from user data. Bootstrap replacement must itself be atomic and recoverable; uninstall must remove it only after services are stopped and the user-data retention policy is honored.
+  5. Extend the installed-product lifecycle to launch only through the stable bootstrap with the live install absent. Cover `prepared`, `backup-created`, and `swapped` crash points, invalid journal paths, missing/corrupt backups, and preservation of external database/media state on Windows.
+- **Status:** found; architecture plan documented. No product workaround was committed. The existing `swapped` recovery success does not validate `prepared` recovery.
+- **Remaining risk:** if an update is interrupted after the old install directory has been moved but before the new one is in place, the packaged launcher and its shortcuts are unavailable. A user may be unable to start the app without manual recovery. Keep this high-priority blocker open until the stable bootstrap is implemented and the installed-product lifecycle passes.
+
+### Validation snapshot for code head `04c7823558d9ab4d9d4b6274479861b0be24e883`
+
+- Fast Validation [run 42226785444](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785444): **passed**. The Linux `validate` job and Windows `windows-archive-and-updater-smoke` job both passed. The Linux job includes typecheck/generated contracts, desktop and storage checks, PostgreSQL conversion checks, and the configured targeted backend regressions.
+- Dependency Review [run 42226785435](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785435): **passed**. Its separate installed-dependency-graph job was skipped.
+- Windows installer lifecycle [run 42226785436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42226785436): **failed** at prepared-phase update recovery after the unsigned installer build/compile and earlier install/upgrade/swap-recovery stages succeeded. The failure exposes the missing stable bootstrap described above; it is not a successful installed-product lifecycle.
+- **Full CI:** not run/passed. No claim of full-repository validation is made.
+
+
+## November 6 — API media conversion and thumbnail subprocesses moved off the event loop
+
+- **Severity: High. Affected workflows:** media optimization/conversion (video, RAW-image and generic image fallback), thumbnail generation (video, PDF and FFmpeg image fallback), and all unrelated API traffic while those operations run.
+- **Root cause confirmed by source inspection:** `artifacts/api-server/src/routes/optimize.ts` invoked `spawnSync("ffmpeg")` from the request/SSE path for video conversion (up to a one-hour timeout), RAW-image conversion (five minutes), and generic image fallback (five minutes). `artifacts/api-server/src/lib/thumbnail-engine.ts` also used synchronous FFmpeg for video frame extraction, frame-to-WebP conversion, PDF thumbnails, and image fallback (15–30 seconds). Because these operations execute on the single Node API event loop, health checks, cancellation requests, and unrelated API routes could not run until the current child process returned.
+- **Fix:** commits `71bc9720cb953f1db4fdaf378de7b305e1d477bd` and `42564462587aef12e423ab34a63061a2e25bb2e2` replace request-path FFmpeg `spawnSync` calls with the shared asynchronous `execFile` runner. Existing operation timeouts remain bounded; output capture is capped at 1 MiB; FFmpeg runs noninteractively with error-only logging. Video conversion is awaited, and video/PDF/image thumbnail paths now await the same runner. The existing Sharp image path remains unchanged.
+- **Process ownership:** the runner registers each child process. The existing conversion shutdown hook now terminates tracked FFmpeg children with SIGTERM and escalates to SIGKILL after a bounded grace period before draining active conversion requests. This includes thumbnail FFmpeg children, not only conversion jobs.
+- **Regression coverage:** `media-tools-async.test.ts` verifies that the event loop continues ticking while a child runs, process timeouts are enforced, missing FFmpeg remains actionable, conversion and thumbnail routes no longer use synchronous FFmpeg, and shutdown terminates an owned child. The test also runs on Windows.
+- **Validation on exact head `01c44d2851ed5841eab6b521d819ac37023dc66b`:**
+  - Fast Validation [run 42249163822](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163822): **passed**. Linux `validate` job passed typecheck/generated contracts, desktop/release/storage checks, PostgreSQL media filters, conversion advisory-lock and finalization-recovery integration checks, and targeted backend regressions. The targeted run reported **345 tests, 343 passed, 0 failed, 2 skipped**.
+  - The same Fast Validation run's Windows `windows-archive-and-updater-smoke` job **passed**, including the new asynchronous media-process test, storage migration/no-overwrite, NAS temp cleanup, conversion finalization, official Windows 7-Zip symlink metadata, compressed TAR preview, updater journal writes, and developer updater preservation/rollback.
+  - Dependency Review [run 42249163854](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163854): **passed**. Its separate installed-dependency-graph audit was skipped.
+  - Windows installer lifecycle [run 42249163671](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42249163671): **in progress** at this ledger update. The preceding completed lifecycle run [42237900458](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42237900458) failed in prepared-phase recovery as documented below.
+  - **Full CI:** not run/passed. The above is targeted plus selected Windows/PostgreSQL integration validation, not full-repository CI.
+- **Status:** fixed; target-tested; integration-tested. Not fully validated until the installed-product lifecycle and full CI are complete.
+- **Remaining risk:** the process registry takes a snapshot when shutdown starts, but `runMediaToolAsync` does not yet reject a new child after `markShuttingDown`. An in-flight thumbnail request could reach its FFmpeg step after the snapshot and create a late child. Add a shutdown-state guard and regression before treating process ownership as fully closed.
+
+## November 6 — Synchronous 7-Zip version probing (fixed)
+
+- **Severity: Medium. Affected workflows:** 7z/RAR/CAB/ISO catalog/inspection and extraction, plus compressed TAR input that invokes 7-Zip.
+- **Root cause:** `getSevenZipPath()` previously ran `spawnSync(candidate, ["i"], { timeout: 10_000 })` on request paths. Organize preview, validation, extraction, archive preview, and compressed TAR input could repeatedly probe configured, packaged, and PATH candidates. A slow or missing candidate could block the API event loop for up to ten seconds per candidate and call.
+- **Fix:** version probing now uses the existing tracked `runMediaToolAsync` runner with a 10-second timeout and 64 KiB output bound. The resolver is asynchronous; concurrent first probes share one promise; a verified positive path is cached for the process lifetime; negative results are retried so an operator can install 7-Zip without restarting. Organize list/preflight/extract, archive preview, and compressed TAR input now await the resolver and reuse the resolved path within each operation.
+- **Regression coverage:** `sevenzip-path.test.ts` covers candidate precedence, supported/unsupported versions, configured/packaged/Windows/Linux paths, async probe contract, concurrent coalescing, positive caching, and negative-result retry. `archive-tar-input.test.ts` now awaits the resolver and exercises gzip, official 7-Zip bzip2/xz, and invalid compressed input. The official 7-Zip 26.05 TAR preview tests passed in Linux Fast Validation.
+- **Status:** fixed; target-tested; Linux archive integration-tested. Windows compressed TAR validation is running in Fast Validation; not fully validated.
+- **Commits:** batch range starts at prior audited head `1c40b0d9eb68d88e10573fcb57c7c997137c150e` and reaches current code head `64b430c7528b26e3477b4f5ee8798b98174be618` (10 commits in this batch). Individually observed follow-up commits: `658e8b7ea0609ac0933a013276d535f7f777da8c`, `08590557aff4341feec43796c127bc9491a4ba5a`, `594284e5450975448b6429f276a1433098284c40`, `eae046a47d1e829070dc72a5a225df82a30cd5d4`, `446433e72e127ca501408e13f4bf729e48cc571b`, and `64b430c7528b26e3477b4f5ee8798b98174be618`.
+- **Remaining risk:** Windows archive/updater and installer lifecycle workflows are still running at this snapshot; full CI and installed NAS/SMB behavior have not been validated.
+## November 6 — Media child-process shutdown late-spawn race (fixed)
+
+- **Severity: Medium. Affected workflow:** graceful API shutdown during an active thumbnail, conversion, or other media-tool request.
+- **Root cause:** `stopActiveMediaTools` terminates a snapshot of tracked children. Shutdown marks the application as stopping before invoking the conversion shutdown hook, but `runMediaToolAsync` previously accepted new child requests after that snapshot. A request between thumbnail frame extraction and encoding could therefore start an untracked late child.
+- **Fix:** `runMediaToolAsync` now checks `isShuttingDown()` before invoking `execFile` and rejects with `ERR_SERVER_SHUTTING_DOWN` before a new process can start. Existing tracked children still use the existing graceful/forced termination path; the formatter preserves an actionable shutdown message.
+- **Regression coverage:** `media-tools-async.test.ts` confirms active child termination and then marks shutdown and verifies a new process request is rejected before spawn.
+- **Status:** fixed; target-tested on Linux in Fast Validation. The Windows Fast Validation media subprocess smoke step passed, but the complete Windows job and installer lifecycle are still running.
+- **Remaining risk:** this closes the late-spawn race for the shared media-tool runner; other subprocess creation paths still require separate ownership/cancellation review. Full CI has not been run.
+
+## 2026-11-06 validation snapshot — async archive and shutdown batch
+
+- **Branch:** `audit/full-repository-review-2026-11`; exact head `64b430c7528b26e3477b4f5ee8798b98174be618`. Batch range: `1c40b0d9eb68d88e10573fcb57c7c997137c150e` → `64b430c7528b26e3477b4f5ee8798b98174be618`, 10 commits. The individually observed follow-up SHAs are recorded in the 7-Zip section; the GitHub compare confirms the complete batch range.
+- **PR #2:** open, draft, unmerged, base `main`; 188 changed files; 1,334 commits. No branch switch, rebase, merge, or PR state change.
+- **Branch comparison:** 1,334 commits ahead and 1 behind `main`; observed base SHA `694a055aeb10a41ee8e98f5b776faef89cbd449d`. No concurrent commit was observed during the batch writes.
+- **Fast Validation [run 42251591421](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591421):** Linux `validate` job `128007829527` completed successfully. Workspace TypeScript typechecks and generated API contracts passed; Expo config, desktop web-server safety, release/storage contracts, official 7-Zip compatibility, PostgreSQL media-filter/conversion-lock/finalization-recovery integration, and targeted backend regressions passed. Targeted backend suite: 346 passed, 0 failed, 2 skipped. New 7-Zip path, official bzip2/xz TAR preview, invalid compressed input, and media shutdown regressions are present in the successful log.
+- **Fast Validation Windows job `128008770703`:** still in progress at this snapshot. Windows media subprocess smoke, storage migration, NAS temp cleanup, conversion finalization, official 7-Zip staging/symlink metadata, and compressed TAR preview steps had passed; developer updater preservation/rollback remained in progress. Do not count the whole Fast Validation workflow as passed yet.
+- **Dependency Review [run 42251591583](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591583):** passed. The separate installed-dependency-graph audit step was skipped by workflow configuration.
+- **Windows installer lifecycle [run 42251591470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591470):** still in progress during installer build; no lifecycle result is claimed.
+- **Full CI:** not run. These results are Linux targeted/integration validation plus selected Windows checks, not full-repository CI.
+- **Unresolved high-priority risks:** clean-machine installer/recovery bootstrap; conversion worker filesystem fencing and attempt-scoped staging; organization worker runtime takeover/SMB validation; durable Replace backup/recovery (feature remains disabled); complete malicious Windows organize-route archive test; first-run owner provisioning for hosted deployments.
+- **Next batch:** inspect conversion execution/finalization/retry ownership end to end. Focus on advisory-lock loss, shared job-level staging, per-file durable progress, retry/recovery races, and child-process cancellation. Design a safe cross-process mutation fence and attempt-scoped journal before changing filesystem behavior.
+
+
+## 2026-11-06 follow-up — Windows installer lifecycle validation was cancelled by its own concurrency policy
+
+- **Severity: Medium. Affected workflow:** PR validation of standard-user Windows install, upgrade, interrupted-update recovery, diagnostics, and uninstall.
+- **Root cause confirmed from workflow and run logs:** `.github/workflows/windows-installer-lifecycle-validation.yml` used the shared group `windows-installer-lifecycle-${{ github.ref }}` with `cancel-in-progress: true`. The pull-request path filter is evaluated against the complete PR diff, which already contains installer/desktop files. Every later PR synchronize therefore starts another lifecycle run even when the new commit only changes API code or this audit report. The newer run cancels the in-progress installer build. Run [42251591470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591470) was cancelled at the installer build step; the subsequent `pg_ctl` cleanup warning that `postmaster.pid` was absent is secondary cleanup after cancellation, not the initiating failure.
+- **Fix:** changed the lifecycle workflow to `cancel-in-progress: false`. A running 120-minute lifecycle test now finishes instead of being killed by a later audit commit; GitHub may retain only the newest pending run. Added a regression to `scripts/windows/installer-config.test.mjs` that asserts this workflow's own concurrency block does not cancel an active lifecycle run. The release workflow's separate concurrency policy was not changed.
+- **Status:** fixed; target-tested. Fast Validation run 42253408096 passed `scripts/windows/installer-config.test.mjs` 85/85, including this assertion. Do not treat cancelled run 42251591470 as a product pass or a product failure.
+- **Fix commits:** workflow `6d29a99eb392a144f398dd32ee292e6237361c62`; regression test `ddae704b4724a33d93cb0ec2891e03529f4d652f`.
+- **Validation at this snapshot:** prior Fast Validation [run 42251591421](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591421) completed successfully on code head `64b430c7528b26e3477b4f5ee8798b98174be618`: Linux `validate` and Windows `windows-archive-and-updater-smoke` both passed. The Windows job passed PowerShell parsing, media subprocess tests (4/4), storage migration (20/20), NAS path safety (16/16), conversion finalization (12/12), official Windows 7-Zip 26.05 hash/smoke, node-7z metadata, compressed TAR preview (7/7), and developer updater preservation/rollback. Linux workspace typecheck and targeted backend regressions passed (346 passed, 0 failed, 2 skipped).
+- Dependency Review [run 42251591583](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591583) passed; its installed dependency-graph audit step was skipped.
+- The replacement lifecycle run [42252476286](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42252476286), started on the previous audit-report head before the concurrency change, was still building the unsigned installer at this snapshot. A new lifecycle run for the concurrency fix is pending; the current Fast Validation run for the regression test is queued. Do not claim either has passed until its latest matching run completes.
+- **Full CI:** not run. Fast Validation is targeted/integration coverage and is not the full-repository CI suite.
+- **Next batch:** conversion worker ownership/fencing. The source trace confirms the session advisory lock is released on DB disconnect while the old JS worker may continue; retries reuse `WillardAI/conversions/<jobId>`, progress/result checkpoints are job-ID-only, and child processes are not scoped to a conversion attempt. Implement only after a generation-fenced, attempt-scoped staging design and fault-injection tests are agreed.
+
+
+## 2026-11-06 follow-up — compressed TAR decompressor shutdown ownership
+
+- **Severity: Medium. Affected workflow:** archive preview of bzip2/xz-compressed TAR files on NAS or local storage.
+- **Root cause:** `withTarInput` launched the official 7-Zip decompressor directly with `spawn`. The child was not registered with the shared shutdown owner and the path had no shutdown guard. If the API shut down during decompression, `stopActiveMediaTools` could terminate FFmpeg/ffprobe and the async 7-Zip version probe but not this streaming decompressor. The child could continue writing the large scratch TAR and the helper's `finally` cleanup would not run until the child/pipeline ended.
+- **Fix:** reused the existing process registry rather than adding another one. `media-tools.ts` now exports `assertMediaProcessStartAllowed` and `trackActiveMediaProcess`; the TAR helper checks the shutdown state immediately before spawning and registers the child with the same owner that `stopActiveMediaTools` drains. The shutdown documentation now covers media and archive children.
+- **Regression coverage:** `media-tools-async.test.ts` directly spawns a long-lived child, registers it, and verifies the shared shutdown owner terminates it; the final shutdown test verifies no new child can start after shutdown. `archive-tar-input.test.ts` asserts the production TAR helper uses both the pre-spawn guard and shared tracker.
+- **Status:** fixed; target-tested on Linux and Windows in Fast Validation run 42253408096. The direct archive-helper process ownership test passed on both platforms; Windows `media-tools-async.test.ts` passed 5/5 and `archive-tar-input.test.ts` passed 7/7.
+- **Remaining risk:** request-abort cancellation is not yet wired to an `AbortSignal`; this fix covers server shutdown. The `node-7z` list/extract streams in Organize and archive preview still need an explicit child-process ownership/cancellation integration audit. No arbitrary timeout was added to large archive decompression.
+
+## 2026-11-06 validation snapshot — process ownership and workflow repair
+
+- **Code head:** `1e7b1fa5a4967e6db6b3407e8559362ad9f51dee`. This is 19 commits after the prior audit-ledger head `1c40b0d9eb68d88e10573fcb57c7c997137c150e`. The exact commits, oldest to newest, are:
+  `6ebd2b0425b757987bb52ea226834f6d43e2d522`,
+  `f95b218adebc290060ec3d63b3a6155bb01d0ae7`,
+  `2707c14cfbf17622463784b2b8dc0073a7e0d584`,
+  `f27aee4c9251b81a477810383cc4786bf90e78c9`,
+  `658e8b7ea0609ac0933a013276d535f7f777da8c`,
+  `08590557aff4341feec43796c127bc9491a4ba5a`,
+  `594284e5450975448b6429f276a1433098284c40`,
+  `eae046a47d1e829070dc72a5a225df82a30cd5d4`,
+  `446433e72e127ca501408e13f4bf729e48cc571b`,
+  `64b430c7528b26e3477b4f5ee8798b98174be618`,
+  `0cd7148e83a5303c72ecc503a6cce2eb48fc29f0`,
+  `6d29a99eb392a144f398dd32ee292e6237361c62`,
+  `ddae704b4724a33d93cb0ec2891e03529f4d652f`,
+  `4b0c1de5cfd0bd52aa36b6b01d3a22754e2461a4`,
+  `49b0025b3eaa16589570f8532cb6972b90e6463f`,
+  `a9653098bb3b052c6bd31a01750bb55896758dcb`,
+  `a88a1ebf353cc58738b9da355a30e6b26de1c355`,
+  `9f8bca6ddb38363a7972e56b2bb0cdd1dc4bf2e0`,
+  `1e7b1fa5a4967e6db6b3407e8559362ad9f51dee`.
+- **PR #2:** open, draft, unmerged, base `main`; 188 changed files; 1,343 commits. At code head, comparison was 1,343 ahead and 1 behind `main`; base SHA `694a055aeb10a41ee8e98f5b776faef89cbd449d`.
+- **Fast Validation [run 42253408096](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253408096):** fully completed successfully on code head `1e7b1fa...`. Linux `validate` job `128014159749` passed workspace typechecks, generated API contracts, desktop/release/storage checks, PostgreSQL integration, and targeted backend tests: 349 total, 347 passed, 0 failed, 2 skipped. The new shutdown ownership tests, async 7-Zip resolver/cache tests, and workflow concurrency regression all passed.
+- The Windows `windows-archive-and-updater-smoke` job `128015062822` also completed successfully. It parsed 20 PowerShell scripts; passed Windows media rename (11), media-tools async/shutdown (5), storage migration (20), NAS path safety (16), conversion finalization (12), official Windows 7-Zip 26.05 hash/archive smoke, node-7z symlink metadata, compressed TAR preview (7), packaged updater journal writes, and developer updater full-version/preservation/rollback.
+- **Dependency Review [run 42253407954](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253407954):** passed. Its separate installed dependency-graph audit was skipped by workflow configuration.
+- **Windows installer lifecycle:** prior run [42251591470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42251591470) was cancelled by the old `cancel-in-progress: true` concurrency policy. That policy is fixed and its regression test passed. The run [42252476286](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42252476286), started before the fix, is still exercising the standard-user lifecycle; the latest run [42253408506](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42253408506) is pending under the non-cancelling policy. No lifecycle pass is claimed yet.
+- **Full CI:** not run. Fast Validation and Dependency Review are not full-repository CI.
+- **Unresolved high-priority risks:** stable external Windows recovery bootstrap; conversion worker fencing and attempt-scoped staging; organization multi-process takeover/SMB validation; durable Replace backup/recovery (Replace remains disabled); node-7z list/extract child ownership and request-abort cancellation; hosted first-run owner provisioning.
+- **Next batch:** conversion worker ownership/fencing. Trace DB advisory-lock loss, job-ID-only progress writes, retry reuse of `WillardAI/conversions/<jobId>`, per-file durable progress, finalization recovery, and child cancellation. Do not add a partial token check; design an attempt generation, isolated staging, and filesystem mutation fence, then test stale workers and crash/retry interleavings.
+
+
+## 2026-11-06 follow-up — shared ownership for Optimize Center probes; node-7z lifecycle trace
+
+### Fixed — Medium: Optimize Center FFprobe and media-health subprocess ownership
+
+**Affected workflows:** Optimize Center codec detection and Settings/media-tool health checks; API graceful shutdown.
+
+**Evidence and root cause:** Source inspection found two subprocess paths bypassing the existing media-tools.ts process owner:
+- detectVideoCodec in artifacts/api-server/src/routes/optimize.ts used promisified execFile("ffprobe", ...), with a 12-second timeout.
+- probeTool in artifacts/api-server/src/lib/media-tools.ts used a second direct execFile(bin, ["-version"]) path, with a 5-second timeout.
+
+Those children were not in the shared active-process registry and were not rejected by the common shutdown start guard. A shutdown could therefore finish draining owned media processes while one of these bounded probes remained active.
+
+**Fix:** Both callers now use the existing runMediaToolAsync helper. FFprobe retains its 12-second timeout and 1 MiB output ceiling; health probes retain a 5-second timeout and use a 64 KiB output ceiling. No dependency or parallel process registry was added.
+
+**Regression coverage:** media-tools-async.test.ts asserts that the Optimize Center FFprobe and health probe call sites use the shared runner. The same suite's existing behavioral tests exercise the runner's timeout, event-loop responsiveness, process registration, and shutdown termination.
+
+**Status:** fixed; Linux target-tested. Fast Validation run [42255943324](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943324), Linux job 128023065207, completed successfully: workspace typechecks/generated contracts and PostgreSQL integration steps passed; targeted backend suite reported 350 tests, 348 passed, 0 failed, 2 skipped. The new process-ownership assertion passed. Windows archive/updater smoke was still running at this report snapshot; do not claim its result until that job completes.
+
+**Implementation/test commits:** db10a44db2afda0066de4e0deeb46bf0b8ad67a7 (Optimize Center FFprobe); 873cc2b00d2aeab39498f23471ed5fe78345d1a6 (media health probe); 7d6f35d213e89ac6e48407e2b3e7acb4becca3e1 (initial regression); fb293a5c296c5233ec2682e450461607d79f15aa (corrected regression matchers).
+
+**Remaining risk:** This covers the two identified direct probe paths, not every process launched by third-party wrappers. Windows process-level validation is pending.
+
+### Found — High: node-7z listing/extraction children are not integrated with process ownership or cancellation
+
+**Affected workflows:** Archive Preview; Organize archive inspection and extraction; API shutdown and long-running archive safety checks.
+
+**Evidence and root cause:**
+- The lockfile pins node-7z@3.0.0. Inspection of that exact tag's src/lifecycle.js confirms that Seven.list/Seven.extractFull spawn a child process and store it on the returned stream's _childProcess; src/main.js starts and attaches the stream listeners before returning it. The package documents deferred/external-child hooks ($defer, $childProcess, Seven.listen), but the product call sites do not use a shared ownership adapter.
+- routes/archives.ts peek7z and four routes/organize.ts listing/extraction call sites attach stream event handlers but do not call assertMediaProcessStartAllowed or register the child with trackActiveMediaProcess.
+- In the Organize 7-Zip preflight, the first invalid entry calls the local fail function and rejects the wrapper promise; it does not stop the still-running listing child. Other listing paths retain a safety error and wait for the stream's end, so the configured archive entry/size budgets reject the result but do not stop 7-Zip work immediately after the first violation.
+- The Organize SSE handler does not register request/response close handlers or expose an explicit active-operation cancellation path. A disconnected client therefore stops receiving progress but does not cancel the server-owned operation. This behavior must not be changed by automatically aborting destructive work on socket close.
+
+**Status:** found; architecture/integration plan required. No partial process-tracking-only patch applied because it would not define cancellation semantics, child-close ordering, or cleanup ownership for extraction staging.
+
+**Safe implementation plan:**
+1. Add one adapter around the pinned node-7z stream API. Capture the spawned child immediately, reject starts after shutdown begins, register it with the existing media process owner, and resolve/reject only after both the child and stream lifecycle have settled.
+2. Support an explicit AbortSignal for read-only archive preview. On the first archive-safety violation, terminate the listing child and await its close rather than consuming the rest of a hostile listing.
+3. Keep Organize execution server-owned when an SSE client disconnects. Add an explicit, durable cancel request/state transition for mutating jobs; do not infer cancellation from a disconnected progress socket. Cancellation must stop 7-Zip, await child close, then clean staging and run the existing journal/rollback path under the current execution lease.
+4. Wire every Seven.list and Seven.extractFull call site through the adapter. Ensure stream errors, child errors, abort, and server shutdown converge on one idempotent cleanup path.
+5. Add fault-injection tests for shutdown during list/extract, preview disconnect, safety-budget rejection, child spawn/exit failure, cancellation during extraction, and the race between child close and staging cleanup. Run official 7-Zip integration tests on Linux and Windows before marking integration-tested.
+
+**Remaining risk:** Archive preview and Organize 7-Zip operations can currently continue consuming CPU after a safety rejection or client disconnect; their child processes are not included in the shared shutdown registry. The fix must preserve the rule that an SSE disconnect does not silently cancel a destructive job.
+
+### Validation snapshot for this batch
+
+- **Code head:** fb293a5c296c5233ec2682e450461607d79f15aa.
+- **PR #2:** open, draft, unmerged; base main at 694a055aeb10a41ee8e98f5b776faef89cbd449d; 188 changed files and 1,348 commits at this snapshot.
+- **Branch comparison with main:** 1348 commits ahead, 1 behind.
+- **Fast Validation [42255943324](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943324):** Linux validation job 128023065207 passed typecheck/generated contracts, release/storage checks, PostgreSQL conversion-lock/finalization integration, and 350 targeted tests (348 passed, 0 failed, 2 skipped). The Windows archive/updater job 128023913661 was still in progress at developer-updater preservation/rollback; no Windows result is claimed here.
+- **Dependency Review [42255943232](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943232):** passed; the separate installed dependency-graph audit step was skipped.
+- **Windows installer lifecycle [42255943133](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42255943133):** pending. Earlier lifecycle run [42254322661](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42254322661) remained in progress at the standard-user lifecycle step. No lifecycle pass is claimed.
+- **Full CI:** not run; Fast Validation is not the full-repository CI suite.
+
+**Next batch:** Complete Windows archive/updater and installer-lifecycle result diagnosis, then implement the node-7z ownership/cancellation adapter only after the explicit distinction between read-only preview abort and server-owned destructive Organize execution is covered by tests. Continue the conversion attempt-fencing design separately; do not add a token-only workaround.
+
+
+## 2026-11-06 follow-up — hard media-tool timeout and Windows recovery failure diagnosis
+
+### Fixed — Medium: media subprocess timeout now escalates beyond SIGTERM
+
+**Affected workflows:** Optimize conversion, video/PDF/image thumbnail generation, 7-Zip version probing, FFprobe codec detection, and media-health probes.
+
+**Evidence and root cause:** runMediaToolAsync previously relied only on child_process.execFile's timeout option. Node sends the configured kill signal (SIGTERM by default) when the timeout expires, but the runner had no escalation if a child handled/ignored SIGTERM. Since the promise settles only after the child-process callback, a stuck encoder could retain its request, worker slot, and conversion lock beyond the configured timeout. Existing timeout coverage used a child that exited when SIGTERM was delivered and did not exercise this case.
+
+**Fix:** runMediaToolAsync now schedules a bounded SIGKILL escalation after a 2-second grace period beyond the configured timeout. It checks that the child still has a PID and is still running, and clears both timers on process close/error. The existing process registry remains the single owner; no dependency was added. Thumbnail and conversion callers write to temporary/staging paths and publish only after successful validation, so timeout cleanup does not overwrite original media.
+
+**Regression evidence:** media-tools-async.test.ts launches a Node child that deliberately handles SIGTERM and would otherwise remain alive for 8 seconds. The runner rejected after the 2-second escalation window (2,209 ms) instead of waiting for the child's own timer.
+
+**Status:** fixed; target-tested on Linux and Windows smoke.
+- Fast Validation [42257114134](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114134), Linux validation job 128027130518: passed typecheck/generated contracts, PostgreSQL integration and targeted backend tests; 351 tests, 349 passed, 0 failed, 2 skipped. The new ignored-SIGTERM regression passed in 2,209 ms.
+- The same Fast Validation run's Windows archive/updater job 128027885762 passed. The ignored-SIGTERM test was intentionally skipped on Windows because Windows terminates the child directly for this signal; the Windows archive/updater preservation and rollback smoke passed.
+- Dependency Review [42257114045](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114045) passed; its separate installed dependency-graph audit step was skipped.
+
+**Implementation/test commits:** 8808afbb4ec9833483997e2b41f976dcd909dece (SIGKILL escalation); bf3dc6ce88d80b014e555c0c8f5d118a255b9315 (ignored-SIGTERM regression).
+
+**Remaining risk:** This hardens timeout handling but does not add per-job AbortSignal cancellation. A process-kill failure remains an exceptional OS-level case; conversion attempt fencing and job-to-child ownership still require the previously documented design.
+
+### Confirmed — High: packaged Windows recovery cannot start after the install directory is moved
+
+**Affected workflow:** Installed Windows upgrade/recovery, specifically interruption after the old installation directory is moved but before the candidate is swapped into place.
+
+**Latest failure evidence:** Windows installer lifecycle run [42254322661](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42254322661), job 128019096052, failed during the “prepared-phase update recovery” stage. The script then timed out waiting for http://127.0.0.1:8080/api/healthz. The captured stderr states that PowerShell could not find C:\WillardLifecycle\wl_life_13288244\desktop\WillardMediaCenter.ps1.
+
+**Root cause traced through product and test callers:**
+- scripts/windows/installer-lifecycle-smoke.ps1 lines 276–295 intentionally move InstallRoot to a sibling backup, write a prepared journal, then call Invoke-InstalledLauncher.
+- Invoke-InstalledLauncher (lines 105–108) constructs the launcher path as InstallRoot\desktop\WillardMediaCenter.ps1. That path no longer exists after the simulated move.
+- This is not only a test-helper defect: installer/WillardMediaCenter.iss [Icons] and [Run] entries (lines 56–61) also point directly to {app}\desktop\WillardMediaCenter.ps1. Its [InstallDelete] section deletes {app}\desktop before copying the new payload (lines 39–42).
+- The production recovery logic is inside desktop/WillardMediaCenter.ps1, whose InstallRoot is derived from its own path. It cannot execute if the entire directory containing it has been moved.
+
+**Status:** found; blocked pending stable-bootstrap implementation. The test is exercising a real recovery gap; do not weaken or skip the prepared-phase scenario to make the workflow green.
+
+**Safe implementation plan:** Install a small, version-independent bootstrap outside the replaceable {app} tree (for example, under the per-user LocalAppData application directory). Point Start Menu/desktop shortcuts and installer recovery entry points at that bootstrap. It must locate and validate the external update journal, restore the last known-good sibling backup when the live tree is absent, verify the restored launcher before handing off, and remain available until the uninstaller has safely stopped services and removed the payload. Preserve the current path-containment and no-overwrite checks. Add tests for missing live tree, prepared/backup-created/swapped journals, corrupt or redirected journals, repeated recovery, standard-user permissions, and uninstall. Do not merely change the lifecycle test to launch a different path.
+
+**Current lifecycle status:** Windows installer lifecycle run [42257114207](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42257114207) was pending at this report snapshot on code head bf3dc6ce88d80b014e555c0c8f5d118a255b9315. No lifecycle pass is claimed.
+
+### Validation snapshot
+
+- **Code head:** bf3dc6ce88d80b014e555c0c8f5d118a255b9315.
+- **PR #2:** open, draft, unmerged; base main; 188 changed files; 1,351 commits.
+- **Comparison with main:** 1,351 commits ahead, 1 behind.
+- **Full CI:** not run. Fast Validation and the Windows archive/updater smoke are not the complete installer lifecycle or full-repository CI.
+- **Next batch:** resolve the external stable Windows bootstrap and rerun the full lifecycle workflow; then continue node-7z ownership/cancellation and conversion attempt-fencing. Keep read-only archive-preview cancellation distinct from server-owned destructive Organize jobs.
+
+
+## November 6 — desktop database backup module parse failure and startup recovery regression
+
+### Fixed — Critical (P1): malformed snapshot-release refactor prevented desktop startup and backup operations
+
+**Affected workflows:** Installed Windows first startup and portable recovery-export creation; PostgreSQL backup/restore helper loading; Linux Fast Validation database-backup tests. This is a desktop packaging/runtime defect, not a production database or credential change.
+
+**Evidence and root cause:** Fast Validation run [42258840028](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840028), job 128033213739, reached the release/storage-contract step and failed when Node parsed `desktop/database-backup.mjs` at line 372: `SyntaxError: Unexpected token ')'`. The installed Windows lifecycle run [42258840104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840104), job 128034365366, independently reproduced the same parser error in the installed copy at `C:\\WillardLifecycle\\...\\desktop\\database-backup.mjs:372`. The installer compiled and installed, but first startup could not create the required portable recovery export and never reached the API health check or prepared-phase recovery scenario.
+
+The source diff traced this to an incomplete refactor of `openDatabaseSnapshot`: the function had been changed to delegate snapshot acquisition and release to `waitForExportedSnapshot` and `releaseExportedSnapshot`, but the tail of the old inline timeout/close callback remained after the new `release()` method. The orphaned `}, 3000);` and child-close callback made the entire ES module unparsable. This was a real installed-product blocker, not a test-only failure.
+
+**Fix:** Removed the obsolete callback fragment. `openDatabaseSnapshot` now returns the snapshot lease with a valid `release()` method that delegates to the existing shared process owner. No new process registry, dependency, or alternate timeout path was added.
+
+**Regression coverage:** Added a focused source-contract test to `desktop/database-backup.test.mjs` verifying that the snapshot lease uses the shared acquire/release helpers and contains no stale inline timeout or child-close listener. The existing database-backup test module also imports the production module, so Node module parsing is exercised before the suite runs. The shared process helper retains its timeout, SIGTERM/SIGKILL escalation, close-race, output-bound, and stdin-error tests.
+
+**Implementation/test commits:** `7c21a3e080af6f65c406dd673de903f06ea1da9b` (production syntax fix); `90358602bb8f01649c58bb9f0a9e78ba8039bf92` (initial regression test); `6665e37c92f034d6125ee0613be7283517444010` (corrected regression assertions).
+
+**Status:** fixed; CI validation pending on the corrected code/test head. The previous Fast Validation failure was diagnosed as a source syntax defect, not an environment or dependency-install failure.
+
+### Validation evidence and remaining risk
+
+- **Fast Validation [run 42258840028](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840028), code head `767a1632822b2e5f03209632154e4aed203050cd`:** failed at `pnpm run test:database-backup`. Workspace typechecks/generated contracts, Expo CLI config, and desktop web-server safety checks completed before the failure. The database-backup module failed to parse; the separate snapshot-process tests reported 11 passed and 1 failed (the module-load failure). Later validation steps were skipped.
+- **Windows installer lifecycle [run 42258840104](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840104), same code head:** installer build and install completed, then first startup failed at the same syntax error. The required portable recovery export was not created and the API health check was never reached. This run therefore does not validate or invalidate the separate prepared-phase recovery scenario.
+- **Dependency Review [run 42258840118](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42258840118), same code head:** passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- **Corrected code/test head `6665e37c92f034d6125ee0613be7283517444010`:** Fast Validation run [42265234092](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234092) was in progress; Windows installer lifecycle run [42265234139](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234139) was pending; Dependency Review run [42265234216](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265234216) was queued. No pass is claimed for these runs at this snapshot.
+- **Full CI:** not run. Fast Validation, Dependency Review, and the dedicated Windows lifecycle workflow are separate scopes and do not constitute full-repository CI.
+
+**Remaining high-priority risks:** The previously confirmed stable-bootstrap gap remains unresolved: prepared-phase recovery cannot launch when the entire install directory has been moved because the recovery launcher and shortcuts are inside that directory. The current lifecycle failure occurred before that scenario, so the bootstrap fix remains blocked and unvalidated. The node-7z child ownership/cancellation and conversion attempt-fencing findings remain open as documented above.
+
+**Next batch:** Confirm the new Fast Validation run, then rerun the installed Windows lifecycle through first startup, upgrade, prepared-phase recovery, standard-user permissions, and uninstall. Preserve the prepared-phase scenario; do not weaken the test. If startup proceeds, diagnose the next actual lifecycle failure before designing the stable external bootstrap. Continue the node-7z process ownership/cancellation work after the installer blocker is isolated.
+
+
+## November 6 follow-up — conversion worker can outlive its database ownership lock
+
+### Confirmed — High: stale conversion workers are not fenced from retries or shared staging
+
+**Affected workflows:** Optimize Center conversion execute/retry/cancel/finalize; API restart recovery; multi-instance operation and rolling restarts. This is a data-integrity and job-state ownership risk. Original media is staged/untouched during conversion, but stale workers can overwrite staged outputs, publish stale job results, or race a newer attempt's finalization.
+
+**Root cause traced through callers, schema, process ownership, and tests:**
+
+- `artifacts/api-server/src/lib/conversion-job-lock.ts:25-44` acquires a PostgreSQL session advisory lock on a dedicated checked-out pool client. PostgreSQL correctly releases that lock when the session disconnects. The lock helper does not own or terminate the JavaScript request or its FFmpeg child when that happens.
+- `conversion-recovery.ts:17-38` treats an available advisory lock as evidence that a `running` job is abandoned and marks it failed. That is correct for a dead worker, but a lost lock connection does not prove that the separate API request or child process has stopped.
+- `routes/optimize.ts:1683-1723` tracks only a process-local request count, acquires the lock, then claims the row. There is no listener/abort path that stops the worker when the lock connection is lost.
+- `routes/optimize.ts:1291-1318` retries the same row by resetting it to `pending`, clearing `resultJson`, and resetting counters. It does not increment an attempt generation or allocate a new attempt identity.
+- `routes/optimize.ts:1793-1796` uses the shared staging path `WillardAI/conversions/<jobId>`. A retry therefore reuses the same staging directory. A previous request that is still alive can write to the same staged filename as the new request.
+- Numerous progress updates in `routes/optimize.ts:1837-2000` filter only by job ID. The final result/status write at lines 2032-2035 also filters only by job ID. The catch path at lines 2051-2061 filters by job ID and `status = running`; if a newer retry has already claimed the row, the stale worker can still match that status and mark the newer attempt failed. These writes are not fenced by a generation or owner token.
+- `conversion_jobs` schema (`lib/db/src/schema/conversion_jobs.ts:1-22`) contains no attempt ID, generation, or owner token.
+- `media-tools.ts:41-44, 59-75, 107-123, 159-226` provides a global child-process registry and timeout/shutdown handling, but `MediaToolExecutionOptions` has no `AbortSignal` or attempt owner. The registry cannot cancel only the child processes belonging to a particular conversion attempt.
+- The cancel endpoint records `cancelledAt`; the worker checks it between files and after a completed conversion. That cooperative behavior preserves completed staged outputs, but it does not provide a per-attempt process cancellation path if ownership is lost.
+- Existing `conversion-job-lock-postgres.test.ts` verifies lock serialization and automatic lock release after disconnect. `conversion-recovery.test.ts` verifies that recovery skips a locked job. Neither keeps an old worker/child alive after deliberately dropping its lock and then races recovery plus retry. The finalization tests cover per-move journal recovery, not cross-attempt fencing.
+
+**Status:** found; architecture required. No partial token check or cleanup workaround was applied. Clearing the shared staging directory on retry would be unsafe while a stale worker may still be alive, and adding only a post-process status check would not prevent stale filesystem writes.
+
+**Safe implementation plan:**
+
+1. Add a monotonically increasing `attempt_generation` (or immutable attempt UUID) to `conversion_jobs`. Increment it atomically in the pending-to-running claim and return the generation to the worker. Include it in the durable job result and all finalization journal records.
+2. Give each attempt a unique, exclusively created staging directory, e.g. `WillardAI/conversions/<jobId>/<attemptId>`. Never reuse or eagerly delete another attempt's staging tree. Preserve abandoned attempts until recovery proves they are safe to remove or the user explicitly clears them.
+3. Fence every progress, result, error, cancellation, and final-status write with `id + attempt_generation + expected status`. A stale worker must receive a zero-row result and stop; it must never overwrite the new attempt's state.
+4. Bind every spawned media child to an attempt-scoped `AbortController`/owner registry. Monitor the advisory-lock connection's error/end/close events; loss of the lock must abort the attempt and terminate only its children with bounded SIGTERM/SIGKILL escalation. Retain the database generation fence as the authority even if process termination is delayed.
+5. Before every filesystem mutation during finalization, revalidate the attempt generation and lock ownership. Persist intent and verified completion with the attempt ID; preserve the existing no-overwrite/hash checks and unresolved-move journal. Recovery must reconcile only the matching attempt and must not clear a newer attempt's journal.
+6. Make retry allocate a new attempt identity only after recovery has fenced the previous attempt. Keep per-file staged-result checkpoints durable so a crash after a successful conversion does not orphan its verified output.
+7. Add PostgreSQL fault-injection tests that drop the lock connection while an FFmpeg child remains alive, run recovery and a retry, and prove that the old worker cannot update the new row, write into the new staging directory, or finalize files. Also test crash points before/after each durable finalization intent/completion checkpoint and cancellation during a long-running child.
+
+**Validation gap:** Source inspection only for this finding. Existing advisory-lock/recovery tests do not cover the stale-worker interleaving described above. This requires the generation/staging/process-ownership design and PostgreSQL concurrency tests before it can be marked fixed.
+
+**Current validation snapshot at investigation:** PR #2 remained open/draft on branch `audit/full-repository-review-2026-11`. Fast Validation run [42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413) was pending/in progress, Windows installer lifecycle run [42265345436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345436) was pending, and Dependency Review run [42265345459](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345459) was in progress on head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf`. No result is inferred from those states.
+
+**Investigation/report commit:** `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf` (ledger update only). No conversion product code was changed in this batch.
+
+
+## November 6 follow-up — Fast Validation concurrency was cancelling Windows coverage
+
+### Fixed — Medium: new PR commits cancelled the in-progress Windows archive/updater validation
+
+**Affected workflow:** `.github/workflows/fast-validation.yml`, especially the Windows `windows-archive-and-updater-smoke` job that installs the API-server test dependency graph and then exercises Windows archive, storage, media-process, and updater behavior.
+
+**Failure evidence:** Fast Validation run [42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413) on code/test head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf` completed its Linux `validate` job successfully, but the Windows job was cancelled during `pnpm install --filter @workspace/api-server... --frozen-lockfile --ignore-scripts --no-optional`. Its log ends with `##[error]The operation was canceled.` at 17:53:16 UTC. The audit-ledger commit `704631bf79569ba3f90064cc7d8483ae73e90904` had been pushed at 17:53:08 UTC, and the workflow's concurrency policy was `cancel-in-progress: true`. The newer PR run superseded the active Windows validation; the package installation log showed no dependency-resolution error.
+
+**Root cause:** The Fast Validation workflow's ref-level concurrency group cancelled the entire running validation whenever another commit was pushed to the PR. Unlike the dedicated Windows installer lifecycle workflow, Fast Validation had not been changed to preserve an already-running job. Documentation-only audit-ledger commits were therefore interrupting the Windows dependency install and preventing the full Windows smoke scope from completing.
+
+**Fix:** Changed `cancel-in-progress` to `false` in `.github/workflows/fast-validation.yml`, matching the non-cancelling lifecycle workflow policy. The running validation is now allowed to finish; GitHub may replace an older *pending* run with the newest pending run, but it should not cancel the active run merely because another audit commit arrives.
+
+**Commit:** `da327bd5fa6a29fc32a676334dbb033daf47be08`.
+
+**Status:** fixed by source/workflow inspection; regression evidence pending the next overlapping run. The currently running Fast Validation run [42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345) started on the preceding head `704631bf79569ba3f90064cc7d8483ae73e90904`; the new policy commit was pushed while it was running. Confirm that it completes rather than being cancelled before marking this workflow fix target-tested.
+
+### Validation snapshot after the database-backup syntax fix
+
+- **Fast Validation [run 42265345413](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345413), code/test head `dd9f65bf2e6d7c461005c83c0605c27b0d9fbfaf`:** Linux `validate` job passed. Workspace typechecks/generated contracts and Expo/desktop safety checks passed. `pnpm run test:database-backup` passed 33/33, including the new snapshot-lease ownership regression; `postgres-snapshot-process.test.mjs` passed 85/85. PostgreSQL media-query validation passed 6/6, advisory-lock integration passed 1/1, conversion finalization recovery passed 2/2, and the targeted backend batch passed 351 tests (349 passed, 0 failed, 2 skipped). The Windows archive/updater job was cancelled during dependency installation by the concurrency behavior described above; no Windows pass is claimed for this run.
+- **Dependency Review [run 42265345459](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345459), same code/test head:** passed production advisory checks; the separate installed dependency-graph audit was skipped.
+- **Later Fast Validation [run 42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345), head `704631bf79569ba3f90064cc7d8483ae73e90904`:** Linux validation was in progress at this snapshot. Its Windows job had not yet completed. This run predates the non-cancelling workflow commit.
+- **Windows installer lifecycle:** run [42265345436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265345436) was cancelled while pending when a newer pending run replaced it; run [42265706819](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265706819) was the latest pending lifecycle run at this snapshot. The lifecycle workflow already has `cancel-in-progress: false`; pending-run replacement is GitHub's one-pending-run concurrency behavior, not a product test failure.
+- **Full CI:** not run. Fast Validation, Dependency Review, and Windows installer lifecycle remain distinct validation scopes.
+
+**Next batch:** Verify the active Fast Validation run survives the next commit and completes its Windows archive/updater smoke; verify the newest lifecycle run starts and reaches installed first startup. Then address the stable external Windows bootstrap design and continue the generation-fenced conversion-worker work. Do not treat the cancelled Windows job as passed.
+
+
+## November 6 status correction — thumbnail subprocesses are already asynchronous
+
+The earlier finding under **“On-demand thumbnail generation still blocks the API event loop”** is stale for the current audit branch and should not be treated as an open defect.
+
+**Current source evidence:** `artifacts/api-server/src/lib/thumbnail-engine.ts` imports `runMediaToolAsync` and `formatMediaToolExecutionError`; video, PDF, and FFmpeg image-fallback generation all await the shared runner (current source lines 241–312). The file contains no `spawnSync` call. Video frame scratch output is removed in a `finally` path, and the existing per-thumbnail lock plus atomic publish path remains in place.
+
+**Regression coverage:** `artifacts/api-server/src/__tests__/media-tools-async.test.ts` asserts the thumbnail engine does not use synchronous FFmpeg spawning and that video/PDF generation awaits the asynchronous runner. The thumbnail cache/publication suite also exercises concurrent requests, corrupt cache replacement, partial cleanup, and cache reuse.
+
+**Validation:** Fast Validation run [42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345), Linux `validate` job 128056974463, passed the targeted backend batch (351 tests: 349 passed, 0 failed, 2 skipped). The Windows archive/updater job in the same run was still in progress at this snapshot; no Windows result is claimed.
+
+**Status:** fixed; target-tested on Linux. The async refactor is already part of the existing PR diff; its exact introducing commit was not isolated during this pass, and no new thumbnail code was changed. Keep request-abort/per-thumbnail cancellation and process-tree ownership as separate remaining design questions; the current fix covers event-loop responsiveness and shared shutdown ownership, not attempt-scoped cancellation.
+
+
+## November 6 — organization preflight destination-capacity check made asynchronous and fail-closed
+
+### Fixed — High: per-destination disk-space probe blocked the API and failed open on non-GNU systems
+
+**Affected workflow:** Organize Center preflight for archive/folder jobs, especially Windows and NAS/SMB destinations with nested mounts or unavailable shares.
+
+**Evidence and root cause:** `routes/organize.ts` used `spawnSync("df", ["-B1", checkDir])` in the preflight request, with no timeout. A slow or disconnected network filesystem could hold the API event loop while `df` waited on the mount. The command is GNU-specific and unavailable on Windows/macOS; on those systems the helper returned `null`, but the route initialized `diskOk = true` and treated an unknown per-destination capacity result as a passing check. The existing `evaluateCapacity` call checks the configured NAS root, not every unique destination filesystem, so a full nested mount could be missed.
+
+**Fix:** Reused the existing `capacity-service` asynchronous `fs.promises.statfs` provider through new `probeFilesystemCapacity`. Organization preflight now uses asynchronous `fs.promises.stat`/`realpath` for destination path resolution, awaits the per-filesystem capacity probe, and fails closed if the path or free space cannot be measured. Removed the synchronous `df` child process and its import. No new dependency or parallel capacity subsystem was added.
+
+**Regression coverage:**
+- `capacity-service.test.ts`: injected known/unknown destination probes and a real default filesystem probe against the current platform's temporary directory.
+- New `organize-preflight-capacity.test.ts`: verifies preflight awaits the per-destination probe, uses async path checks, and does not pass when free space is unknown.
+- Fast Validation now runs both tests on Linux and Windows.
+
+**Commits:** `1f98f02437b38305df9c51566d14e77d8ed8d5fb` (shared probe); `3cce8c673187063bdb74781f660f9894070cd92c` (probe tests); `33978312046d37ca8fc4d82a4ec21495627a1c42` (preflight fix); `1b290916e748bf58cfa4325b07b7dc122880d540` (route regression test); `60e18c7cf6bad3dd067f111854db5be6522c60f7` (Linux/Windows CI coverage).
+
+**Status:** fixed; targeted and Windows validation pending on the latest code head. Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) was in progress on head `60e18c7cf6bad3dd067f111854db5be6522c60f7`; its Linux job had started and its Windows archive/updater job had not yet completed. Dependency Review [run 42266842234](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842234) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+
+### Validation follow-up — database-backup fix and Fast Validation concurrency
+
+- Fast Validation [run 42265708345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42265708345) on head `704631bf79569ba3f90064cc7d8483ae73e90904` completed successfully. Linux `validate` job 128056974463 passed typechecks/generated contracts, desktop/Expo checks, release/storage contracts, PostgreSQL media LIKE checks, conversion advisory-lock integration, finalization recovery, and targeted backend regressions. The database-backup suite passed 33/33 and the snapshot-process suite passed 85/85; the targeted backend batch passed 351 tests (349 passed, 0 failed, 2 skipped).
+- The Windows `windows-archive-and-updater-smoke` job 128057682197 also completed successfully. It passed launcher PowerShell parsing (20 scripts), single-instance startup, orphan-service handling, UTF-8 environment creation, media rename/no-overwrite, non-blocking media process checks, storage migration, NAS temp cleanup, conversion finalization rollback, official Windows 7-Zip symlink/TAR checks, updater journal writes, and developer updater preservation/rollback. Its update-preparation error messages were expected negative-path assertions; the final log states: `Windows updater smoke passed: full-version update, preservation, and rollback.`
+- Fast Validation [run 42266208602](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266208602) on head `bc455b61d076064d7e39d868faa1b3601fcf3210` also completed successfully on Linux and Windows. This run continued while newer audit commits were pushed, confirming that the `cancel-in-progress: false` change in `da327bd5fa6a29fc32a676334dbb033daf47be08` prevents a new PR commit from cancelling an already-running Windows validation. Newer pending runs were replaced by the latest pending run, as GitHub's one-pending-run concurrency rule allows.
+- These Fast Validation runs are not full CI and do not replace the dedicated installed Windows lifecycle workflow. The latest lifecycle run [42266842470](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842470) was pending at this snapshot; no installed first-start or prepared-phase recovery result is claimed.
+- **Full CI:** not run.
+
+**Next batch:** Finish Fast Validation run 42266842331 on the new capacity code and verify the Windows capacity-probe step. Then let the latest Windows installer lifecycle run start; it must get beyond installed first startup now that the module parse defect is fixed. Continue with the stable external bootstrap design and attempt-fenced conversion worker architecture; do not weaken recovery tests.
+
+
+### Capacity-preflight validation update — target tests passed on Linux and Windows
+
+Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) on code head `60e18c7cf6bad3dd067f111854db5be6522c60f7` has now completed its Linux `validate` job 128061473992 successfully. The targeted backend batch reported 355 tests, 353 passed, 0 failed, and 2 skipped. The new tests passed explicitly: per-destination known/unknown capacity probe behavior, the real default `fs.promises.statfs` probe against the runner's platform filesystem, and the organization-preflight source contract.
+
+The same run's Windows `windows-archive-and-updater-smoke` job 128062355978 has passed its new **“Verify organization capacity probes on Windows”** step (step 10), including the real Windows temporary-filesystem `statfs` probe. All preceding Windows launcher, dependency-install, media, storage, NAS cleanup, conversion finalization, and official 7-Zip/TAR steps also passed. The final developer-updater preservation/rollback step was still in progress at this update, so the Windows job and overall Fast Validation run are not yet marked complete.
+
+**Status:** capacity fix is now target-tested on Linux and Windows; full Fast Validation completion remains pending. The separate Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still installing isolated PostgreSQL 16; it had not yet reached installer build or first-start/recovery testing.
+
+
+### Final Fast Validation result — both Linux and Windows jobs passed
+
+Fast Validation run [42266842331](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42266842331) on exact code head `60e18c7cf6bad3dd067f111854db5be6522c60f7` completed successfully: Linux `validate` job 128061473992 and Windows `windows-archive-and-updater-smoke` job 128062355978 both concluded `success`.
+
+The Windows job completed its developer-updater preservation/rollback step. Its final log confirms: `Windows updater smoke passed: full-version update, preservation, and rollback.` The run also passed the new Windows organization-capacity step, official 7-Zip symlink metadata and compressed TAR preview checks, storage/NAS cleanup checks, conversion finalization no-overwrite/rollback checks, and launcher/media subprocess checks.
+
+**Status:** the organization destination-capacity fix is target-tested on Linux and Windows; the full Fast Validation workflow passed for this code head. This is not full-repository CI and does not test a real disconnected SMB/NAS mount. The latest branch head is a later documentation-only commit, so this pass is attributed to code head `60e18c7cf6bad3dd067f111854db5be6522c60f7`, not the later ledger commit.
+
+The dedicated Windows installer lifecycle run [42267164897](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267164897) was still in its installer build/compile step. It had not yet run standard-user install, installed first startup, prepared-phase recovery, diagnostics, or uninstall. No lifecycle result is claimed.
+
+
+## November 6 — Windows prepared-phase lifecycle failure reproduced; test harness now fails fast on missing launcher
+
+### Confirmed High (P1): installed recovery cannot start after the entire versioned install directory is moved
+
+**Affected workflow:** Windows installer upgrade recovery after interruption in the `prepared` phase, specifically the interval after the previous install tree has been moved to its sibling backup and before the new candidate is activated.
+
+**Evidence and root cause:** Windows installer lifecycle run [42267809733](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809733), exact tested head `e8b42bba1b31890f7cf28b9e39e3b73493cf9567`, job `128067482740`, completed the unsigned installer build, standard-user install, first start, upgrade, post-upgrade start, and simulated `swapped`-phase recovery. It then failed in **prepared-phase update recovery** at `scripts/windows/installer-lifecycle-smoke.ps1:295`, timing out while waiting for `http://127.0.0.1:8080/api/healthz`.
+
+The lifecycle fixture explicitly moves `$InstallRoot` to `$preparedBackup` before invoking the installed launcher. The recovery launcher remains at `$InstallRoot\desktop\WillardMediaCenter.ps1`, inside the directory that has just been moved. There is no stable executable bootstrap outside that tree to read the journal and restore the backup. This confirms the previously documented product recovery gap; the prepared-phase test is not to be weakened or skipped.
+
+**Status:** blocked pending the stable external bootstrap architecture. **Commit:** none for the product recovery design. **Remaining risk:** a power loss in this update window can leave the installed product unable to start its own recovery. Preserve the existing path-containment, journal validation, no-overwrite, and prior-version health-check rules in the eventual implementation.
+
+### Fixed — Medium: lifecycle test harness masked a missing launcher as a later health timeout
+
+**Affected workflow:** Windows installed-product lifecycle diagnostics, especially missing-tree recovery tests.
+
+**Evidence and root cause:** `Invoke-InstalledLauncher` constructed the launcher path and immediately spawned PowerShell. The generated child runner invoked `& $Launcher` without first verifying that the packaged launcher existed and without setting a fail-fast error preference. When the install tree was absent, the harness could proceed to its 150-second HTTP health wait and report a timeout instead of identifying the missing executable at the point of invocation.
+
+**Fix:** The parent helper now checks the exact launcher path with `Test-Path -LiteralPath ... -PathType Leaf` before spawning the child. The generated runner repeats that check and sets `$ErrorActionPreference = "Stop"`, so a path disappearing between the parent check and child launch also fails immediately with an explicit path diagnostic. This is a test-harness reliability fix only; it does **not** implement or claim to fix the missing stable product bootstrap.
+
+**Regression coverage:** `scripts/windows/installer-config.test.mjs` asserts both fail-closed guards and that each guard runs before the launcher invocation.
+
+**Commit:** `be8f472e55c82f15aae16af2ad33870960f82c33`. **Status:** fixed; targeted/Windows validation pending for this exact commit. **Remaining risk:** the actual prepared-phase recovery remains blocked as described above.
+
+### Validation snapshot before the diagnostic-harness commit
+
+- Fast Validation [run 42267810148](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267810148) on `e8b42bba1b31890f7cf28b9e39e3b73493cf9567`: Linux `validate` job `128065982436` passed; Windows `windows-archive-and-updater-smoke` job `128066736846` passed. The Linux job included typechecks/generated contracts, Expo/desktop safety, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization checks, and the targeted backend regression batch. The Windows job included launcher parsing, startup ownership, organization capacity, media rename/process responsiveness, storage migration, NAS cleanup, conversion rollback, official 7-Zip link metadata, compressed TAR preview, and updater preservation/rollback.
+- Dependency Review [run 42267809670](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809670): production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- Windows installer lifecycle [run 42267809733](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42267809733): failed at prepared-phase recovery as detailed above. It is not a lifecycle pass.
+- These runs predate the diagnostic-harness commit `be8f472e55c82f15aae16af2ad33870960f82c33`; no test result is attributed to that commit until a matching run completes.
+- **Full CI:** not run. Fast Validation, Dependency Review, and the dedicated Windows installer lifecycle remain distinct scopes.
+
+
+## November 6 — packaged Windows install root overlaps the persistent data root
+
+### Confirmed Critical (P1): default installer path makes the self-updater move its own user data and recovery journal
+
+**Affected workflows:** Default per-user Windows installation, automatic self-update, interrupted-update recovery, local configuration/backup-credential preservation, and uninstall/repair.
+
+**Source evidence:**
+
+- `installer/WillardMediaCenter.iss` sets `DefaultDirName={localappdata}\Willard Media Center` (the default `{app}` path).
+- `desktop/WillardMediaCenter.ps1` derives `$InstallRoot` from the installed launcher path, but independently sets `$DataRoot = Join-Path $env:LOCALAPPDATA "Willard Media Center"`. Under the default installer path, these resolve to the same directory.
+- The launcher stores `$UpdateJournal` under `$DataRoot\updates\swap-journal.json` and keeps the local `.env`, logs, backup-protection material, and update staging under that same data root.
+- `Invoke-PackagedVersionSwap` writes the journal, then moves the entire `$InstallRoot` to a sibling backup before moving the release candidate into `$InstallRoot`. The candidate is a versioned application payload, not a copy of the user's persistent data.
+- The installer comment says user data is outside `{app}`, but that statement is false for the current default path.
+- The lifecycle fixture does not expose this collision: `scripts/windows/installer-lifecycle-smoke.ps1` sets `$InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\\$UserName"` while `$DataRoot` remains under the disposable user's `LOCALAPPDATA\Willard Media Center`. Its external-data preservation checks therefore run with distinct paths, unlike a normal default installation.
+
+**Root cause and impact:** The packaged installer uses the same per-user directory for the replaceable application tree and persistent data. During a self-update, moving `$InstallRoot` also moves the data root and the journal that the next launcher expects at the canonical `$DataRoot` path. If the process is interrupted after that move, the next launch starts from the new candidate tree, cannot find the journal at its expected path, and has no stable launcher outside the moved tree to discover/restore the backup. The previous backup can retain the old `.env`, local backup-protection credential, logs, and update journal, but those files are no longer at the paths the new installation reads. The external PostgreSQL database and media directory are separate; this finding concerns local configuration and recovery state, not a claim that those external stores were moved.
+
+**Status:** found; blocked pending a coordinated installer/data-layout migration. No product-path change was made in this batch because a partial path edit could strand existing installations or destroy the only recovery journal.
+
+**Safe implementation plan:**
+
+1. Define and enforce two distinct canonical paths: a versioned application payload directory and a stable per-user data directory. Reuse the existing `LOCALAPPDATA\Willard Media Center` location for persistent data only; put the replaceable payload in a separate child or sibling directory. Ensure the paths remain on the same volume where atomic sibling swaps are required.
+2. Move the update journal, download/staging area, backup-protection material, `.env`, and logs outside the replaceable payload. Validate journal paths against the canonical install parent and reject reparse-point/path redirection before any move or cleanup.
+3. Install a small version-independent bootstrap under the stable data root. Point Start Menu, desktop, first-run, repair, and recovery entry points at that bootstrap. It must recover from a missing live payload using only a validated external journal and sibling backup; it must not depend on a launcher inside the tree being moved.
+4. Design an explicit one-time migration for existing users whose legacy `{app}` and data root are identical. Stop the old services using the old install path, preserve every known data item (including unknown user-created files), install the new payload location, and retain the legacy tree/backup until the new launcher and health checks prove the migration succeeded. Do not infer that a directory is disposable merely because it is under the old `{app}`.
+5. Make uninstall stop services through the stable bootstrap, remove only the versioned application payload and shortcuts, and preserve the stable user data root by default. Any user-data wipe must be a separate explicit action with a clear warning.
+6. Change the Windows lifecycle test to install at the exact default path. Assert `InstallRoot` and `DataRoot` are distinct; verify `.env`, backup-protection marker, update journal, logs, external PostgreSQL marker, and media marker survive successful upgrade, each injected crash phase, repair, and uninstall. Include a legacy-layout migration fixture and standard-user ACL checks.
+
+**Remaining risk:** High and unresolved. The current default packaged install can strand its local configuration and recovery journal during an interrupted self-update. The previously documented stable-bootstrap issue and this install/data-root collision are related but distinct: fixing only the bootstrap without separating the persistent data root would still leave the journal and user data inside the replaceable tree.
+
+### Validation snapshot for the diagnostic-harness commit
+
+- Fast Validation [run 42274282530](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282530), code/test head `be8f472e55c82f15aae16af2ad33870960f82c33`: Linux `validate` job `128086474928` completed successfully. Typechecks/generated contracts, Expo/desktop checks, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization integration checks, and targeted backend regressions completed. The targeted batch reported 355 tests, 353 passed, 0 failed, and 2 skipped. The new lifecycle missing-launcher regression passed. The Windows archive/updater job `128087265574` was still running at this report update; no Windows result is claimed yet.
+- Windows installer lifecycle [run 42274282416](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282416), same code/test head: job `128086475632` was still compiling the unsigned installer; the installed lifecycle stages had not yet run.
+- Dependency Review [run 42274282218](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282218): production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- The latest branch head at this update is documentation-only commit `f8912e741e5a0960b52c3d3e6f3905410ebadba8`; matching workflows for that head were pending. Results above are attributed only to the exact code/test head `be8f472e55c82f15aae16af2ad33870960f82c33`.
+- **Full CI:** not run. Fast Validation, Dependency Review, and installed Windows lifecycle validation are separate scopes.
+
+
+## November 6 — avoid repeating the expensive Windows lifecycle build for docs-only PR synchronizations
+
+### Fixed — Medium: PR-wide path filtering reran installer lifecycle on audit-ledger-only commits
+
+**Affected workflow:** Windows installer lifecycle CI cost and feedback time; no product runtime behavior.
+
+**Evidence and root cause:** The lifecycle workflow had both a branch-specific `push` trigger with a path filter and a `pull_request.synchronize` trigger with the same paths. GitHub evaluates a pull-request path filter against the overall PR diff, not only the newest commit. The audit PR currently contains 191 changed files including installer inputs. A documentation-only ledger commit `f8912e741e5a0960b52c3d3e6f3905410ebadba8` therefore still created a pending Windows installer lifecycle run [42274363837](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274363837), even though that commit changed only the audit report. This repeats a costly unsigned installer build for no installer-code change.
+
+**Fix:** The PR trigger now runs on `opened` and `reopened`; subsequent branch commits are handled by the existing branch-specific `push` trigger, whose path filter is evaluated for the pushed commit. The job's branch/base guard, Windows lifecycle coverage, manual dispatch, read-only permissions, and non-cancelling concurrency remain unchanged. The installer configuration regression test now asserts that `synchronize` is absent from the PR trigger and that the branch push trigger remains present.
+
+**Commit:** `bacce51da775563e3eaab04d2f079faa6b8de3d9`. **Status:** fixed; targeted validation pending for this exact workflow/test commit. **Remaining risk:** this workflow-scope change must be confirmed by the next installer-related branch push; the available commit-run listing exposes PR-triggered runs only, so no unobserved push-run result is claimed.
+
+### Validation update — diagnostic lifecycle guard
+
+- Fast Validation [run 42274282530](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282530), code/test head `be8f472e55c82f15aae16af2ad33870960f82c33), completed successfully. Linux `validate` job `128086474928` passed typechecks/generated contracts, Expo/desktop checks, release/storage contracts, PostgreSQL media-query and conversion-lock/finalization checks, and targeted regressions (355 tests: 353 passed, 0 failed, 2 skipped). The new lifecycle missing-launcher test passed.
+- The same Fast Validation run's Windows `windows-archive-and-updater-smoke` job `128087265574` passed. Logs confirm 20 PowerShell scripts parsed; launcher mutex and developer process ownership checks passed; Windows organization capacity, media rename/process shutdown, storage migration, NAS cleanup, conversion finalization, official 7-Zip 26.05, node-7z symlink metadata, compressed TAR preview, updater journal validation, and developer-updater preservation/rollback passed.
+- Dependency Review [run 42274282218](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282218) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- Windows installer lifecycle [run 42274282416](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274282416) remained in the unsigned installer build/compile step at the last inspection. It had not reached standard-user install, prepared-phase recovery, or uninstall; no installed-product result is claimed.
+- For the new workflow/test commit `bacce51da775563e3eaab04d2f079faa6b8de3d9`, Fast Validation [run 42275019531](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019531) was pending and Dependency Review [run 42275019537](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275019537) had passed the advisory gate. No matching Fast Validation result is claimed yet.
+- **Full CI:** not run. These targeted Linux/Windows validation workflows and Dependency Review are not the full repository CI.
+
+
+## November 6 — bind authenticated sessions to the credential version
+
+### Confirmed High (P1): a late session-store upsert can resurrect a session after password reset
+
+**Affected workflows:** API authorization, login/session management, password change, recovery-key reset, session inventory, and destructive organization/optimization actions protected by one-time action tokens.
+
+**Evidence and root cause:**
+
+- artifacts/api-server/src/app.ts updates sess.lastSeenAt on every authenticated API request. Express-session persists modified sessions when the response finishes.
+- artifacts/api-server/src/lib/action-tokens.ts also mutates session.actionTokens and explicitly calls req.session.save(). Current callers include organization execute/resume and optimization execute.
+- The pinned connect-pg-simple@10.0.0 store's set() uses INSERT ... ON CONFLICT (sid) DO UPDATE. A late save can therefore recreate a session row after another request has deleted it.
+- artifacts/api-server/src/routes/auth.ts correctly updates the password and deletes all session rows in one transaction, but the global authorization middleware previously checked only the authenticated flag and inactivity timestamp. It did not bind a stored session to the password credential that created it.
+
+**Confirmed race:** Request A passes authentication and begins work. Request B changes the password or consumes the recovery key and commits DELETE FROM session. Request A then persists its modified session; the session store's upsert recreates the old row. A later request can load that row with authenticated=true and a fresh activity timestamp, defeating the intended session revocation.
+
+**Fix — commits:** implementation/tests a3e25f38c633b9635a359daa49f97df80dadf186; source-assertion correction fd99adc2c3fda0cef125ab68a763fe2acdacd0dd.
+
+- New sessions now store the settings-row id and a SHA-256 fingerprint of the current bcrypt password hash. The bcrypt hash itself is not copied into the session.
+- The global API authorization middleware checks the current database password hash against the session fingerprint before any protected route runs. Missing, malformed, or stale fingerprints are rejected and the stale session is destroyed; database verification failures fail closed with HTTP 503.
+- /auth/status now reports stale sessions as unauthenticated and clears their cookie.
+- /auth/sessions lists only sessions belonging to the current credential version, so a late-resaved but invalid session is not presented as active.
+- Existing sessions created before this change have no credential fingerprint and will be invalidated once after upgrade; users will need to log in again.
+- Added focused fingerprint/current-credential tests and a source-level regression that verifies the session stamp, API guard ordering, status behavior, and session-list filter.
+
+**Status:** fixed; target-tested on code/test commit 7e185ba807503bf7975af6c58e994c75f4ac71e0 by Fast Validation run 42284916889. The later 009faac4883931ffd619fc2b0e74e9523165a66b commit changes only this audit ledger; validation for that documentation-only head was queued separately.
+
+**Remaining risk:** The credential fingerprint closes late-save resurrection after password change/recovery, but it does not protect explicit logout or targeted session revocation. Those routes still delete session rows without a durable revocation tombstone; a concurrent request can upsert the same SID with the unchanged credential fingerprint and make it valid again. This separate High (P1) finding is documented below. Already-authorized in-flight operations can also finish; cancellation needs request/job fencing.
+
+### Validation snapshot — credential-version fix
+
+- Fast Validation [run 42275249021](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275249021) passed on prior head 8ae002499d8ead4480b92e46ec74e9c6a290c142: Linux typecheck/generated-contract and targeted backend steps passed; Windows archive/updater smoke passed. This is baseline evidence only, not validation of the credential-version change.
+- Fast Validation [run 42284276873](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284276873) was started for implementation commit a3e25f38c633b9635a359daa49f97df80dadf186; its source-assertion test was corrected in the subsequent commit fd99adc2c3fda0cef125ab68a763fe2acdacd0dd. No result from the earlier run is attributed to the corrected head.
+- Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372360) is pending on corrected head fd99adc2c3fda0cef125ab68a763fe2acdacd0dd.
+- Dependency Review [run 42284372391](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372391) is in progress on the same corrected head.
+- **Full CI:** not run.
+
+## November 6 — prepared-phase Windows recovery failure confirmed by installed-product logs
+
+### High (P1): the installed product has no stable launcher when the live payload directory is moved
+
+**Affected workflow:** Windows self-update, interrupted-update recovery, and standard-user installed-product startup.
+
+**Evidence:** Windows installer lifecycle [run 42275010242](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42275010242), push commit bacce51da775563e3eaab04d2f079faa6b8de3d9, job 128090382407, failed in the installed-product exercise after the unsigned installer compiled successfully. The exact log reports:
+
+**Lifecycle failure during prepared-phase update recovery:** Installed launcher is missing before start: C:\WillardLifecycle\wl_life_da6f085f\desktop\WillardMediaCenter.ps1
+
+The PR-triggered rerun [42274780057](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42274780057), job 128092163188, failed at the same prepared-phase step with the same missing-launcher condition. The fail-fast check added to the lifecycle harness is working as intended; this is not a generic health-endpoint timeout or a false-positive test failure.
+
+**Root cause:** The test simulates the real interruption point after the previous installation directory has been moved to its backup but before the candidate is moved into the live path. The next start is still directed to the launcher inside the now-missing live directory. No stable bootstrap exists outside that replaceable directory to read the journal and restore the backup.
+
+**Status:** found; blocked pending the coordinated stable-bootstrap and install/data-root migration described in the preceding Windows path-collision finding.
+
+**Remaining risk:** The normal installed-product prepared-phase recovery remains broken. Installer compilation and Fast Validation's separate Windows archive/updater smoke do not establish installed-product lifecycle success.
+
+
+## November 6 — explicit logout and session revocation can be undone by late session-store upserts
+
+### Confirmed High (P1): deletion-only revocation has no durable tombstone
+
+**Affected workflows:** Logout, revoke one device/session, revoke all other sessions, session inventory, and any in-flight authenticated request that persists session state after revocation.
+
+**Evidence and root cause:**
+
+- The session middleware configures rolling cookies with a seven-day maximum age and the global API guard mutates lastSeenAt on every authenticated request.
+- The organization/optimization action-token helper also mutates the session and explicitly persists it during protected operations.
+- The pinned connect-pg-simple store can recreate a deleted row through its INSERT ... ON CONFLICT (sid) DO UPDATE set operation.
+- POST /auth/logout calls req.session.destroy(), while DELETE /auth/sessions/:sid and DELETE /auth/sessions delete rows directly. None records a durable revocation marker.
+- The credential-version fix above changes only when the password hash changes. Logout and individual/all-other-session revocation leave that fingerprint unchanged.
+
+**Confirmed race:** Request A loads a session and passes the global guard. Request B logs out or revokes that SID and deletes the session row. Request A then completes and saves its modified session. The store can insert the old SID again. Because its password credential fingerprint is still current, a later request can pass the new credential-version check. The same issue affects an in-flight request from a device revoked through the session-management screen.
+
+**Status:** fixed; target validation pending on code commit `347b8cdbd9c093aae216920d33c25a48f6009358`.
+
+**Fix — commit:** `347b8cdbd9c093aae216920d33c25a48f6009358`.
+
+- Added the idempotent `revoked_sessions` table to the single required-schema bootstrap used by standalone setup and API startup. The desktop launcher's schema fingerprint includes `setup-db.cjs`, so the changed schema script invalidates its prior ready marker and runs the migration before starting the API.
+- Added `auth-session-revocation.ts`. Logout and authenticated-session cleanup write a SID tombstone and delete the session row in one transaction. Targeted device revocation inserts a tombstone only for a row belonging to the current settings ID and credential generation. Revoke-all tombstones every other row in that credential generation before deleting it and deliberately does not filter by expiry, because an expired row may still be held by an in-flight request.
+- The global authorization middleware now checks the tombstone and credential version in one query before dispatching protected routes. A tombstoned SID is rejected even if connect-pg-simple later recreates its row. Database verification failures return 503 rather than authorizing.
+- `/auth/status` checks tombstones; `/auth/sessions` excludes them. Logout reports 503 if durable revocation cannot be written instead of returning a false success.
+- Session regeneration while already authenticated now tombstones the previous SID before express-session destroys it, closing the same late-save window on re-login/session rotation.
+- The physical session-row delete is cleanup only after the marker commits. If that delete fails, the tombstone still denies authorization and the cleanup failure is logged.
+- Tombstones are retained indefinitely in this batch. No age-only cleanup is safe until the application establishes and enforces a maximum in-flight request lifetime; removing a marker while an old request can still upsert would reopen the vulnerability.
+
+**Regression coverage added:**
+
+- `auth-session-revocation-postgres.test.ts` uses a real PostgreSQL service and reproduces connect-pg-simple's `INSERT ... ON CONFLICT DO UPDATE` after deletion for logout, targeted revoke, and revoke-all.
+- The integration test verifies current-session preservation, credential-scope isolation, and that expired-but-still-present session rows are tombstoned.
+- `install-auth-reliability.test.ts` verifies every revocation entry point, the global guard, and inventory filtering.
+- `schema-bootstrap.test.ts` verifies the new table is created by the idempotent required-schema bootstrap.
+- Fast Validation now runs the PostgreSQL tombstone integration test and the schema-bootstrap regression explicitly.
+
+**Remaining risk:** Already-authorized work that began before revocation is not forcibly cancelled; this change prevents a later request from using the SID after a late upsert. Cancellation/fencing of already-running destructive jobs remains a separate workstream. Tombstone rows currently accumulate until a safe bounded-lifetime cleanup design is available.
+
+## November 6 — validation failures diagnosed and audit checks stabilized
+
+### Test-harness failure 1: over-escaped source assertions
+
+Fast Validation [run 42284276873](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284276873) failed on implementation commit a3e25f38c633b9635a359daa49f97df80dadf186 because the new source-contract regression used over-escaped regular expressions and therefore did not match the intended source text. The failure was in the regression assertion, not the application code. Commit fd99adc2c3fda0cef125ab68a763fe2acdacd0dd replaced those patterns with literal includes and explicit ordering checks.
+
+### Test-harness failure 2: PostgreSQL advisory-lock disconnect test raced server teardown
+
+Fast Validation [run 42284372360](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284372360) failed at the PostgreSQL conversion advisory-lock integration test. The test called pg.PoolClient.release(true) and immediately attempted to reacquire the session lock. The logs show the assertion failed about 23 ms later because PostgreSQL had not yet observed the asynchronous socket teardown. The product lock implementation was not changed. Commit 7e185ba807503bf7975af6c58e994c75f4ac71e0 adds a bounded five-second poll at 25 ms intervals so the integration test verifies eventual release rather than assuming synchronous server-side disconnect processing.
+
+### Exact validation evidence
+
+- Fast Validation [run 42284573101](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284573101) completed successfully on documentation head 80546a9a825e51076f7f512d9987521ece8873ad, which contains the credential-version implementation and corrected source assertions. Linux validation job 128122474396 passed workspace typechecks and generated-contract checks; its targeted suite reported 358 tests, 356 passed, 0 failed, 2 skipped. The PostgreSQL advisory-lock and conversion-finalization integration steps passed. Windows archive/updater smoke job 128123281575 passed, including 20 PowerShell script parses, launcher/process ownership, Windows organization capacity, media rename, conversion rollback, official Windows 7-Zip, compressed TAR preview, updater journal, and developer updater preservation/rollback.
+- Fast Validation [run 42284916889](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284916889) completed successfully on code/test head 7e185ba807503bf7975af6c58e994c75f4ac71e0. Linux validation job 128124598990 passed workspace typechecks/generated contracts and 358 targeted tests (356 passed, 0 failed, 2 skipped), including PostgreSQL advisory-lock/finalization integration and credential-version regressions. Windows archive/updater smoke job 128125482533 passed: 20 PowerShell scripts parsed; launcher/process ownership and Windows organization capacity passed; media rename and conversion no-overwrite/rollback passed; official Windows 7-Zip hash verification and compressed TAR preview passed; updater journal and developer-updater preservation/rollback passed.
+- Documentation-only ledger commit 009faac4883931ffd619fc2b0e74e9523165a66b was the latest branch head at this inspection. Fast Validation [run 42285922698](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42285922698) and Dependency Review [run 42285922760](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42285922760) were queued on that exact head; no result is attributed to it yet.
+- Dependency Review [run 42284917015](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42284917015) passed on code/test head 7e185ba807503bf7975af6c58e994c75f4ac71e0. The production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- No dedicated full-CI workflow exists in .github/workflows at this branch head. The available workflows are dependency refresh, dependency review, Fast Validation, Windows installer lifecycle validation, and Windows release. Full CI was not run; the release workflow was not invoked.
+
+
+
+## November 6 — durable session revocation implementation and validation
+
+### High (P1): logout/device-session late-upsert resurrection
+
+- **Status:** PostgreSQL integration-tested; implementation, authorization wiring, and regression suite pass on code/test commit `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635` and latest documentation head `6df792a4b96d062127146a9529bc1ed487dc3be6`.
+- **Implementation commits:** `347b8cdbd9c093aae216920d33c25a48f6009358` (tombstone implementation) and `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635` (TypeScript and route-parameter corrections after CI diagnostics).
+- **Affected files:** `setup-db.cjs`, `artifacts/api-server/src/lib/auth-session-revocation.ts`, `artifacts/api-server/src/app.ts`, `artifacts/api-server/src/routes/auth.ts`, authentication/schema tests, and `.github/workflows/fast-validation.yml`.
+- **Typecheck failure diagnosed:** Fast Validation [run 42292732845](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292732845) and its documentation-head rerun [42292867502](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292867502) stopped at API-server typecheck. The exact compiler errors were (a) deriving the transaction client from the overloaded `pool.connect` return type selected its callback overload and inferred `void`, and (b) Express route params are typed `string | string[]`. Commit `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635` changed the transaction callback to use the already-inferred client inside the helper and normalizes/bounds the route SID before calling the revocation service.
+- **Fast Validation:** [run 42293037190](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42293037190) completed successfully on exact code/test commit `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635`. Linux job 128151123402 passed all workspace typechecks and generated-contract validation, Expo CLI configuration, desktop web-server safety, release/storage contracts, PostgreSQL media LIKE tests, conversion advisory-lock and finalization-recovery integration, the new session-tombstone late-upsert integration test (1/1 passed), and the targeted backend suite (360 tests: 358 passed, 0 failed, 2 skipped). Windows job 128151967468 passed all archive/updater smoke steps: 20 PowerShell scripts parsed; launcher/process ownership, capacity probes, media rename, conversion no-overwrite/rollback, official 7-Zip hash and extraction, symlink metadata, compressed TAR preview, updater journal, and developer-updater preservation/rollback passed.
+- **Dependency Review:** [run 42293037273](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42293037273) passed on the same exact commit; the production advisory gate passed and the separate installed dependency-graph audit was skipped.
+- **Windows installer lifecycle:** [run 42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030) completed **failed** on earlier implementation commit `347b8cdbd9c093aae216920d33c25a48f6009358`. The unsigned installer built and compiled; standard-user first install/start, in-place upgrade, post-upgrade start, and simulated `swapped` recovery completed. The prepared-phase recovery scenario then failed fast at `scripts/windows/installer-lifecycle-smoke.ps1:108` with `Installed launcher is missing before 'start': C:\\WillardLifecycle\\wl_life_109f4310\\desktop\\WillardMediaCenter.ps1`. This is the known stable-bootstrap/install-data-root recovery defect, not a health-check timeout or a passing lifecycle result.
+- **Latest-head Fast Validation:** [run 42294097100](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42294097100) completed successfully on exact branch head `6df792a4b96d062127146a9529bc1ed487dc3be6`. Linux job 128154738981 passed workspace typechecks/generated contracts, Expo configuration, desktop safety, release/storage contracts, official 7-Zip 26.05 compatibility, PostgreSQL LIKE tests (6/6), conversion advisory-lock integration (1/1), conversion finalization recovery (2/2), session tombstone late-upsert integration (1/1), and targeted backend tests (360 total: 358 passed, 0 failed, 2 skipped). Windows job 128155515316 passed every archive/updater smoke step, including PowerShell parsing, process ownership, storage migration, NAS path safety, conversion rollback, official 7-Zip 26.05, symlink metadata, compressed TAR preview, updater journal, and developer-updater preservation/rollback.
+- **Latest-head Dependency Review:** [run 42294097091](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42294097091) passed on the same exact head; the production advisory gate passed and the separate installed dependency-graph audit was skipped.
+- **Full CI:** not run. Fast Validation is broad targeted Linux/PostgreSQL plus Windows archive/updater coverage, but it is not a full-repository CI run.
+- **Residual risk:** tombstones are retained without automatic cleanup to avoid deleting a marker while a stale request could still upsert. Already-authorized in-flight operations are not cancelled by session revocation; destructive job fencing remains a separate finding.
+
+
+### Session revocation validation correction — November 6
+
+- Fast Validation initially exposed two compile-time integration issues in the first tombstone implementation: the overloaded `pool.connect` type was inferred through its callback overload, and Express 5 exposes route params as `string | string[]`. These were corrected in `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635`; the route now rejects empty/oversized IDs after normalizing the param, and the transaction helper uses the inferred client locally rather than an invalid `ReturnType` alias.
+- Exact latest code validation is Fast Validation [42293037190](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42293037190): passed on `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635`, including workspace typechecks, PostgreSQL late-upsert test, 360 targeted tests (358 passed, 2 skipped), and Windows archive/updater smoke.
+- Dependency Review [42293037273](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42293037273) passed on the same commit; installed dependency-graph audit skipped.
+- The installed Windows product lifecycle run [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030) is still separate and was running against earlier commit `347b8cdbd9c093aae216920d33c25a48f6009358`; no lifecycle pass is claimed.
+
+
+## November 6 — latest-head validation and prepared-phase lifecycle failure
+
+- **Branch head:** `6df792a4b96d062127146a9529bc1ed487dc3be6` (audit ledger update only after code/test commit `cc4c1ae25ad06ae6b2ff357a03026b0da0caf635`).
+- **PR #2:** open, draft, unmerged; branch remains `audit/full-repository-review-2026-11`, base `main`; 1,389 commits and 193 changed files at this snapshot. No merge, deploy, release, production-data operation, or credential modification.
+- **Fast Validation [42294097100](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42294097100):** passed on this exact head. Linux typechecks/generated contracts and targeted regressions passed; PostgreSQL session tombstone late-upsert integration passed 1/1; targeted backend suite passed 358/360 with 2 skipped; Windows archive/updater smoke passed all steps.
+- **Dependency Review [42294097091](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42294097091):** passed on this exact head; production advisory gate passed; installed dependency-graph audit skipped.
+- **Windows installer lifecycle [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030):** failed on earlier code commit `347b8cdbd9c093aae216920d33c25a48f6009358` in prepared-phase recovery. The fail-fast test diagnostic now exposes the missing launcher path directly. First install, first start, upgrade, post-upgrade start, and swapped-phase recovery had succeeded before the prepared-phase failure. This confirms the stable-bootstrap defect remains; no recovery workaround was applied.
+- **Full CI:** not run. The available validation workflows remain separate and do not constitute full-repository CI.
+
+
+## November 6 — manual local first-run setup and session transaction type hardening
+
+- **Branch head before this report update:** `168edf6b95ef3250c5ff152841fd92dd24f43633`.
+- **PR #2:** open, draft, unmerged; existing branch `audit/full-repository-review-2026-11`, base `main`; 1,395 commits and 195 changed files at this snapshot. No branch switch, merge, deployment, release, production-data operation, or credential modification.
+- **Architecture/repository review:** rechecked `ARCHITECTURE.md`, workspace/package boundaries, API startup/auth middleware, setup authorization, desktop/developer launchers, setup UI, root scripts, workflow definitions, current PR diff, findings ledger, and recent branch CI before changing files.
+
+### P2 — documented manual local setup could not complete first-run authorization
+
+- **Affected workflow:** direct/manual API startup on a user's own Windows, macOS, or Linux computer, followed by first administrator password creation.
+- **Evidence/root cause:** `authorizeFirstRunSetup()` intentionally permits tokenless setup only when the process has the explicit `WILLARD_LOCAL_SETUP=true` opt-in, is not running under Replit, and binds to `HOST=127.0.0.1`. The packaged and developer desktop launchers set those values. The documented manual startup in `LOCAL_SETUP.md` did not, so users following the documented direct-start commands received `token_required` or `token_misconfigured` and could not complete first-run setup without an undocumented workaround.
+- **Fix:** `LOCAL_SETUP.md` now provides PowerShell and POSIX first-run commands that set both values for the local API process, explicitly warns not to use the bypass on a hosted server or behind a reverse proxy, and directs remote/LAN setup to the operator-configured `WILLARD_SETUP_TOKEN`.
+- **Regression coverage:** `install-auth-reliability.test.ts` now asserts both shell command forms and the hosted/reverse-proxy warning. Existing `setup-authorization.test.ts` continues to verify that the bypass requires explicit opt-in and rejects non-loopback peers.
+- **Status:** fixed; target-tested on exact code/test head `168edf6b95ef3250c5ff152841fd92dd24f43633` by Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129). The manual-start regression passed in the targeted backend suite.
+
+### P3 — remove untyped transaction client from session-revocation code
+
+- **Affected workflow:** logout, per-device session revocation, revoke-other-sessions, and stale-session cleanup transactions.
+- **Evidence/root cause:** `auth-session-revocation.ts` accepted its transaction client as `any`, weakening compile-time checks around the new security-critical transaction boundary.
+- **Fix:** `lib/db/src/index.ts` now exports the existing `pg` `PoolClient` type, and the revocation transaction helper uses that type. This is type-only; it adds no runtime dependency and changes no transaction behavior.
+- **Status:** fixed; workspace/library and API typechecks passed on code commit `ec1a916295c3c9191b1ad151200d36a2bdfa6cd1`, and the latest exact-head typecheck also passed in Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129).
+
+### Validation evidence
+
+- **Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129), exact head `168edf6b95ef3250c5ff152841fd92dd24f43633`:** Linux validation job passed. Workspace typechecks/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, PostgreSQL media-query validation, conversion advisory-lock integration, conversion finalization recovery, and session-revocation tombstone integration passed. Targeted backend regressions: 361 total, 359 passed, 0 failed, 2 skipped. The new manual local setup documentation regression passed.
+- **Windows archive/updater smoke:** the matching job in run 42296111129 was still in progress at the time this ledger update was prepared; no pass is claimed for that job yet. The same Windows smoke job did pass on code commit `ec1a916295c3c9191b1ad151200d36a2bdfa6cd1` in Fast Validation [42296007239](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296007239), including PowerShell parsing, launcher ownership, Windows capacity probes, storage migration, NAS temp-path safety, conversion rollback, official 7-Zip symlink metadata, compressed TAR preview, updater journal, and developer-updater preservation/rollback.
+- **Dependency Review [42296110982](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296110982), exact head `168edf6b95ef3250c5ff152841fd92dd24f43633`:** production advisory gate passed; installed dependency-graph audit skipped.
+- **Full CI:** not run. The repository has Fast Validation, Dependency Review, Windows installer lifecycle, and Windows release workflows, but no full-repository CI workflow or all-tests script. Fast Validation is broad targeted validation, not full CI.
+
+### Remaining prioritized risks
+
+- **Critical / blocked:** default Windows installer directory overlaps persistent data directory; the stable external recovery bootstrap and legacy data migration still need a coordinated implementation and installed-product lifecycle validation.
+- **High / architecture work:** conversion workers need attempt-generation fencing and unique staging ownership; node-7z list/extract child processes still need shared process ownership and cancellation.
+- **High / open:** organization worker takeover and NAS/SMB recovery, durable replacement rollback, and cleanup/revocation retention boundaries still need further concurrency and crash testing.
+- **Lifecycle evidence:** the latest Windows installer lifecycle run remains [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030), failed on earlier commit `347b8cdbd9c093aae216920d33c25a48f6009358` in prepared-phase recovery. No installed-product recovery pass is claimed.
+
+
+## November 6 — follow-up validation status for manual setup/auth hardening
+
+- **Code/test head `168edf6b95ef3250c5ff152841fd92dd24f43633`:** Fast Validation [42296111129](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296111129) subsequently completed successfully on both jobs. Linux validation passed workspace typechecks/generated contracts, PostgreSQL integration checks, release/storage/UI contracts, and 361 targeted backend tests (359 passed, 0 failed, 2 skipped). Windows archive/updater smoke also passed, including PowerShell launcher checks, Windows capacity probes, storage migration, conversion rollback, official 7-Zip symlink metadata, compressed TAR preview, updater journal, and developer-updater preservation/rollback. This supersedes the earlier note that the Windows job was still running when the previous ledger entry was prepared.
+- **Dependency Review [42296110982](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42296110982)** passed on the same code/test head; the production advisory gate passed and the separate installed dependency-graph audit was skipped.
+- **Ledger-only head `09217122be644e2fbea6168f70f7adb3f13088ef`:** Fast Validation [42297148800](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42297148800) Linux validation job passed; the matching Windows archive/updater smoke job was still running at this follow-up. Dependency Review [42297148813](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42297148813) passed the production advisory gate; installed dependency-graph audit skipped.
+- **Installed Windows lifecycle remains separate and unresolved:** run [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030) failed on earlier commit `347b8cdbd9c093aae216920d33c25a48f6009358` during prepared-phase recovery. The archive/updater smoke pass does not validate the installed-product recovery path.
+- **Full CI:** still not run; no full-repository CI workflow exists in this repository snapshot.
+
+
+## November 6 follow-up — node-7z subprocess ownership and archive-preview cancellation
+
+### Confirmed High (P1): 7-Zip archive commands could outlive their API owner
+
+**Affected workflows:** archive preview, archive analysis/preflight, safe archive extraction, API graceful shutdown, and retry/recovery after interrupted organization jobs.
+
+**Evidence and root cause traced through the pinned dependency and every production caller:**
+
+- The repository pins `node-7z@3.0.0`. Its `Lifecycle.run` implementation starts the binary with `child_process.spawn` (detached process by default) and stores the child on the returned stream's `_childProcess` property. `Seven.listen` attaches stream parsing but does not register the child with Willard AI's shared `activeMediaProcesses` owner.
+- `artifacts/api-server/src/routes/archives.ts` called `Seven.list` in `peek7z` without registering the child, without an AbortSignal, and without observing response disconnect. A client closing an archive preview therefore did not stop the 7-Zip process. When an unsafe link or path/budget violation was discovered, the code recorded `safetyError` but continued consuming the listing until 7-Zip exited.
+- `artifacts/api-server/src/routes/organize.ts` had three additional `Seven.list` validation calls and one `Seven.extractFull` call that also bypassed the shared process owner. The extraction writes only into the job's private staging directory; it must remain a server-owned operation rather than being cancelled merely because the SSE client disconnects. On shutdown, however, the process must be stopped so it cannot continue writing after its API owner exits and a later worker attempts recovery.
+
+**Fixes:**
+
+- `artifacts/api-server/src/lib/media-tools.ts` now exports `stopMediaProcess`, which applies the existing bounded SIGTERM-to-SIGKILL policy to one owned child. `stopActiveMediaTools` reuses that helper for every registered process.
+- `artifacts/api-server/src/lib/sevenzip.ts` now provides `createTrackedSevenZipStream`. It rejects new process starts during shutdown, registers the pinned node-7z stream's spawned child with the shared shutdown owner, and optionally binds an AbortSignal to bounded termination. `stopTrackedSevenZipStream` stops a listing as soon as validation rejects its metadata.
+- All five production node-7z calls are now wrapped: the archive preview listing, three organization/preflight listings, and the organization extraction.
+- The read-only archive preview binds its child to the HTTP response lifecycle. A disconnected client aborts the listing; the route does not attempt to write an error response after the connection has closed.
+- Unsafe 7-Zip metadata now terminates listing promptly instead of parsing the rest of an invalid archive. Organization extraction remains server-owned and is not tied to the SSE client's connection; it is registered for server shutdown and writes only to the job staging area.
+- Regression coverage exercises shared shutdown ownership, AbortSignal cancellation, and all production call sites. The official 7-Zip compatibility test now wraps real node-7z list/extract operations and asserts that the pinned library exposes the child process expected by the adapter.
+
+**Implementation/test commits:** `6ae4cfbd5a256a9b078806e2281b42e686825857` (bounded per-child termination); `3296c08443cc76b88a202246d40404c8a9f54f46` (node-7z process adapter); `ae2d24af05ddc2285a3ce11d3f45a2652566bd3d` (preview disconnect and early safety stop); `12adcc6d26e0bcefe1752cdd21b48be56f7465dc` (all organization calls); `1a6207fa12295a5d3547d9c5a5d0a99d47eacd11`, `2ade1d24e3a6a05a1d2ad8e915b2ce47245a1c01`, `50a265b3af72fe9aef150f27dea6e13dc9fcb44b`, and `7f541970dbaed5a07fadd123841544217a653cec` (unit, source-contract, and real-binary integration coverage).
+
+**Status:** fixed in source. Targeted tests and official-binary integration are pending the matching Fast Validation run for exact code/test head `7f541970dbaed5a07fadd123841544217a653cec`; no pass is claimed yet. The intermediate Fast Validation run [42301729288](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301729288) on earlier helper commit `6ae4cfb` passed Linux typechecks, generated contracts, PostgreSQL integration checks, and its targeted backend batch; its Windows smoke was still running at the last inspection and that run did not yet contain the final node-7z adapter/call-site changes. Fast Validation runs for intermediate commits were queue-replaced/cancelled as newer commits arrived; those cancellations are not test failures.
+
+**Exact latest-head CI snapshot:** Fast Validation [42301992363](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301992363) was pending on `7f541970dbaed5a07fadd123841544217a653cec`. Dependency Review [42301992365](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42301992365) passed its production advisory gate on the same head; its separate installed dependency-graph audit was skipped. The latest installed Windows lifecycle result remains the earlier prepared-phase recovery failure [42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030); this archive-process batch does not resolve the stable Windows bootstrap or install/data-root collision. Full CI was not run.
+
+**Remaining risk:** There is still no explicit durable user-cancel endpoint for a server-owned organization extraction, nor an operation-specific deadline for a connected but indefinitely stalled 7-Zip listing/extraction. The current change covers server shutdown, preview-client disconnect, and early rejection of unsafe listings. A user-facing destructive-job cancellation needs a durable job-state transition and lease-aware rollback design; it must not be implemented by tying extraction to the SSE connection. The adapter intentionally relies on the pinned node-7z 3.0.0 `_childProcess` runtime property, which is not declared by the package's TypeScript typings; the real-binary compatibility test guards that dependency contract.
+
+### Remaining prioritized risks after this batch
+
+- **Critical / blocked:** default Windows installer directory still overlaps persistent data; stable external bootstrap and legacy data migration require a coordinated design and installed-product lifecycle validation.
+- **High / architecture work:** conversion workers still need attempt-generation fencing, attempt-specific staging, and ownership-checked finalization after advisory-lock loss.
+- **High / architecture work:** organization worker takeover, NAS/SMB crash recovery, and the path-anchored no-follow move primitive remain open.
+- **High / blocked:** destructive Replace still needs a durable displaced-destination journal and restore workflow; do not re-enable it through a partial workaround.
+- **High / open:** explicit durable cancellation for server-owned organization jobs and operation-specific 7-Zip deadlines remain separate design items.
+- **Windows lifecycle:** prepared-phase recovery remains failed on the prior run; Fast Validation's Windows archive/updater smoke is not installed-product lifecycle validation.
+
+
+### Validation update — exact documentation head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`
+
+This head is a documentation-only commit after code/test commit `7f541970dbaed5a07fadd123841544217a653cec`; it contains the same archive process-ownership implementation and tests.
+
+- **Fast Validation #42302252050 — Linux job 128182985506: passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`.** Typecheck and generated-contract validation passed; Expo CLI configuration, desktop web-server safety, release/storage contracts, official static 7-Zip 26.05 compatibility, PostgreSQL media filters, conversion advisory-lock integration, conversion finalization recovery, session-revocation tombstones, and the targeted backend regression batch all passed. Targeted backend batch: 364 tests, 362 passed, 0 failed, 2 skipped (both explicitly require the configured PostgreSQL test database). The new node-7z ownership, AbortSignal, call-site contract, and shutdown tests all passed. The real official-binary node-7z compatibility test passed 1/1.
+- **Fast Validation #42302252050 — Windows job 128183713964: in progress at last inspection.** PowerShell parsing, launcher serialization/orphan handling, environment-file encoding, dependency installation, Windows capacity checks, media rename/no-overwrite, media subprocess responsiveness, storage migration, NAS temp cleanup, conversion finalization/rollback, official Windows 7-Zip staging, node-7z symlink metadata, compressed TAR preview, and packaged updater-journal tests had passed. The final developer-updater preservation/rollback step was still running; therefore Windows Fast Validation is not yet marked passed.
+- **Dependency Review #42302252056 — passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`.** The production advisory gate passed; the separate installed dependency-graph audit was skipped.
+- Fast Validation #42301992363 for preceding code/test head `7f541970dbaed5a07fadd123841544217a653cec` was queue-replaced/cancelled when the documentation-only head was pushed. This is not a test failure; the newer run above is the matching validation.
+- **Full CI:** not run. Fast Validation is the Linux + Windows smoke/targeted validation workflow, not a full-repository CI claim.
+
+**Status for the node-7z batch:** source fix complete; targeted Linux tests and real-binary integration passed on exact head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`; Windows smoke is still in progress. Do not mark Windows or full validation complete until the matching Windows job finishes successfully.
+
+
+### Final validation update — Fast Validation #42302252050 completed successfully
+
+The previously running Windows job has now completed. Both jobs in Fast Validation #42302252050 passed on exact code/test head `05a8c88150b4b8de47be3b5e7d1bef22542bc3d9`:
+
+- Linux validation job `128182985506`: **success**. Typecheck/generated contracts, Expo/desktop/release/storage checks, official static 7-Zip 26.05 with node-7z, PostgreSQL media filters, conversion advisory locks, conversion finalization recovery, session-revocation tombstones, and the targeted backend suite all passed. Targeted backend suite: **364 total, 362 passed, 0 failed, 2 skipped** (the two Trash recovery cases explicitly require the configured PostgreSQL test database). The new node-7z process ownership, AbortSignal cancellation, production-call-site contract, and shutdown tests all passed. Real official-binary node-7z compatibility passed 1/1.
+- Windows archive/updater smoke job `128183713964`: **success**. All 23 steps passed, including Windows media subprocess responsiveness, storage migration/no-overwrite, NAS temp cleanup, conversion finalization rollback, official Windows 7-Zip 26.05 hash verification, node-7z symlink metadata, compressed TAR preview, packaged updater journal writes, and developer updater preservation/rollback.
+- Dependency Review #42302252056 on the same head: **success** for the production advisory gate; the separate installed dependency-graph audit was skipped.
+- The latest branch head after recording this evidence is documentation-only commit `bf305dc8e457edf042e10bced4ee3bf7d7aee4ca`. Fast Validation #42302869641 for that documentation head is queued; Dependency Review #42302869626 is in progress. Do not transfer the completed code/test results above to a claim that the newer documentation head has completed its own matching run.
+
+**Status:** node-7z source fix is target-tested and integration-tested on Linux and Windows Fast Validation. It is not a full-CI or installed-product-lifecycle validation. The Windows installer/data-root collision and stable external bootstrap remain blocked and unchanged.
+
+## November 6 — Optimize Center NAS traversal, cache I/O, and codec-probe concurrency
+
+### High (P1): large Optimize scans could block the API event loop and exhaust subprocess resources
+
+- **Affected workflows:** Optimize Center scan summary, conversion job preflight, conversion staging/capacity admission, JPEG/video analysis, scan-cache reads/writes, and API health/other requests sharing the same Node process.
+- **Status:** shared async walker and bounded codec-probe behavior target-tested; subsequent async cache/per-file/finalization I/O changes await the latest matching Fast Validation run. No full-CI status is claimed.
+- **Evidence/root cause:** the Optimize Center route walked up to 500,000 recognized files using synchronous `readdirSync` and `statSync`. The conversion execute route repeated a synchronous recursive walk, then synchronously statted every candidate to estimate staging capacity and again while processing each file. Cache reads and writes used synchronous file I/O. These operations ran inside async Express handlers but still blocked the event loop while each filesystem call completed; on a slow or disconnected SMB/NAS mount, unrelated API requests could stall.
+- **Additional resource-exhaustion root cause:** codec analysis used `Promise.allSettled(paths.map(...))` for every tracked video path. The scan stores up to 5,000 paths per container extension; four container extensions could schedule up to 20,000 ffprobe children for one request, with no process-wide concurrency cap. `runMediaToolAsync` owned and timed out those children but did not limit how many could start concurrently.
+- **Fix — asynchronous shared traversal:** `optimize-scan.ts` now provides one asynchronous directory walker used by both `walkForOptimize` and `walkForConversion`. Directory reads and file metadata inspection use `fs.promises`; nested directories are revalidated with `lstat` immediately before recursion, and file candidates are revalidated as regular non-symlink files. Hidden/internal/backup exclusions and the conservative 500,000-file limit are preserved. Read failures include the affected path and abort the scan instead of producing partial totals or a false empty-library result.
+- **Fix — bounded ffprobe:** all container codec probes are collected into one per-scan worker pool of four, while a process-wide FIFO limiter caps actual ffprobe children at four across simultaneous scan requests. Results retain input order and all-settled semantics, preserving deterministic group-level codec selection and best-effort handling of individual probe failures.
+- **Fix — remaining high-volume filesystem I/O:** conversion scan results now carry the validated source size so capacity estimation does not perform a second synchronous stat pass. The Optimize route's cache read/write, NAS directory checks, JPEG source sizing, per-file source/output verification, staged-file cleanup, and post-finalization staging cleanup now use asynchronous filesystem APIs. A fresh `lstat` before conversion rejects sources that disappeared or changed into symlinks/non-regular files. Direct synchronous `fs.*Sync` calls were removed from `routes/optimize.ts` at the source-inspection checkpoint.
+- **Regression coverage:** `optimize-scan.test.ts` covers event-loop yielding before scan completion, grouped file sizes, scan-cap behavior, symlink exclusion, missing/unreadable directory failures for both walkers, hidden/internal/backup filtering, validated conversion source sizes, bounded per-scan workers, process-wide concurrency across independent callers, invalid limits, and source contracts for async traversal/cache/file I/O. `optimize-job-claim.test.ts` now checks the shared async conversion walker rather than assuming it remains a local synchronous function. Fast Validation's Windows job now also runs `optimize-scan.test.ts`.
+- **CI harness correction:** Fast Validation on intermediate commit `30ff3f98b5fc031d85a1210f0f37dcb3944c1371` failed after 367 tests passed because `optimize-job-claim.test.ts` still searched `routes/optimize.ts` for the old local `function walkForConversion`. The walker was intentionally moved into the shared helper; this was a stale source-contract assertion, not a product-test failure. Commit `61685f383021eee87e3c2bd66bed7cd13611a38d` updated the test to inspect the helper and verify the route awaits it. The additional unreadable-conversion-directory regression was added in `cc08aefb7cbc4c3212b9717e943a62e02840ea5f`.
+- **Implementation/test commits:** `fda6c2366d2e16bc10ec21e1c7f55c0630a27b1d` (async walkers and concurrency helpers); `75052fa17d5bfeec242ba0d1899692b40f5ee881` (route wiring and bounded ffprobe); `30ff3f98b5fc031d85a1210f0f37dcb3944c1371` (initial scan regressions); `97601b7da68fb685d4c34f0ce637b08f94d961b1` and `5599f07b756ac2f41e840ce48d9ba47ef5ede61a` (symlink wording and event-loop test correction); `61685f383021eee87e3c2bd66bed7cd13611a38d` (shared-walker source contract); `cc08aefb7cbc4c3212b9717e943a62e02840ea5f` (unreadable conversion directory runtime regression); `5de51b1fab39549989ac97c67561f0ccca89eda6` (carry source size); `e915d8bd5636050d15e80dd33a563c8d7edfb3fc` and `f12ebb098a03368275cf6905fb2e59049ce0b0b5` (async cache, source/output inspection, cleanup, and awaited call sites); `edbeaff57588941768cc89c6e8f1599a2f6d18fa` and `c7fb11ad65464cf4222f2494940515d4ddb70ef4` (size and async-I/O regression assertions); `86ee0fbe52b38d189862339956186858680a1ce2` (Windows Fast Validation coverage); `e75d73d143e03f74ae8cae1de10b31c64aabe1f5` (conversion verifier parameter-order correction).
+- **Validation on predecessor code/test commit `cc08aefb7cbc4c3212b9717e943a62e02840ea5f`:** Fast Validation [run 42308407574](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42308407574) completed successfully. Linux validation job `128203806391` passed typechecks/generated contracts, PostgreSQL media/conversion/finalization/session integration, official 7-Zip compatibility, and the targeted backend suite: 371 total, 369 passed, 0 failed, 2 skipped. Windows archive/updater smoke job `128204382877` also completed successfully. This predecessor commit contains the asynchronous walkers, per-scan/process-wide codec limits, and the corrected shared-walker tests, but it predates the later async cache/per-file/finalization I/O changes and the added Windows Optimize scan test step.
+- **Latest code/test head at the time of this entry:** `e75d73d143e03f74ae8cae1de10b31c64aabe1f5`. Fast Validation [run 42308887662](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42308887662) is queued/in progress; Linux job `128205437090` was in progress at the last inspection. No result is attributed to this latest head until that run completes. Dependency Review [run 42308887561](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42308887561) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- **Full CI:** not run. Fast Validation is targeted Linux/PostgreSQL plus Windows smoke coverage, not a full-repository CI claim.
+
+**Remaining risk:** `ensureDirectoryWithinRoot` remains the existing synchronous NAS path-creation/containment helper called while staging conversion outputs; it still deserves a separate careful async/no-follow review for slow SMB paths. Read-only scan cancellation on client disconnect is also not implemented, so a disconnected Optimize scan can continue its bounded filesystem/probe work. Conversion attempt-generation fencing, advisory-lock-loss process cancellation, and unique per-attempt staging remain separate high-priority architecture findings. The Windows stable-bootstrap/install-data-root collision and prepared-phase recovery failure are unchanged; latest known installed-product lifecycle failure remains [run 42292725030](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42292725030). Full CI was not run.
+
+## November 6 — Optimize scan active-library guard and latest typecheck repair
+
+### Medium (P2): latest Fast Validation was blocked by unsafe nullable path flow in Optimize scan
+
+- **Affected workflow:** `GET /optimize/scan`, Optimize Center initial scan, cache lookup, NAS traversal, and generated Fast Validation typecheck.
+- **Status:** fixed in source; focused regression added; validation pending on the new code/test head.
+- **Evidence/root cause:** Fast Validation [run 42309059481](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42309059481) on branch head `2124a59d5c419182e1eaffcc098d7ebf796cfe0b` failed at **Typecheck and validate generated contracts**. The actual TypeScript diagnostics were `TS2345` at `routes/optimize.ts:903, 913, 1107` because `nasPath` remained `string | undefined`, and `TS18047` at line 905 because `library` remained possibly null. The source contract `getActiveLibraryContext()` returns `ActiveLibraryContext | null`; deriving `nasPath` with optional chaining and then checking a separate `nasDirectoryAvailable` boolean did not narrow either value for later cache response and scan calls.
+- **Fix:** the route now explicitly returns HTTP 400 when the active library is absent or its configured path is blank, then assigns `const nasPath = library.nasPath` before asynchronous filesystem access. The existing inaccessible-directory response remains unchanged. This makes the route's fail-closed precondition explicit and resolves the type-narrowing problem without a cast or weakened type.
+- **Regression coverage:** `optimize-scan.test.ts` now verifies that the missing-library guard appears before cache lookup and NAS traversal and that the route uses the narrowed `library.nasPath`.
+- **Commits:** route fix `56aa6e5cfca9eeb213b8b4895856b2d257a6e8b3`; regression `9bed19f4a0d54b2ea6e68c94e52993ec18228f3f`.
+- **Validation evidence:** the failing typecheck was diagnosed from the actual job log for run 42309059481; dependency review [run 42309059482](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42309059482) passed its production advisory gate, with the installed dependency-graph audit skipped. No Fast Validation result was yet returned for the new code/test commit when this entry was written. No successful result is inferred from the fix.
+- **Full CI:** not run.
+
+**Remaining risk:** the existing `ensureDirectoryWithinRoot` helper remains synchronous and is called during Optimize staging. It performs security-sensitive root/path checks and directory creation, so converting it to async requires a caller-wide migration and equivalent no-follow/race protections; do not replace it with a weaker `mkdir({ recursive: true })` workaround. Optimize read-only scan cancellation on client disconnect, conversion attempt-generation fencing, lock-loss process cancellation, and unique per-attempt staging remain open. Windows install/data separation and the stable external recovery bootstrap remain blocked.
+
+## November 6 — Optimize scan cache path-integrity finding
+
+### High (P1): Optimize scan cache reads and writes bypass NAS symlink protection
+
+- **Affected workflow:** Optimize Center cache lookup and scan persistence; any API process using the configured NAS library.
+- **Status:** found; safe implementation planned; no partial path-only workaround applied yet.
+- **Evidence/root cause:** `getWillardAIDir(nasPath)` only joins the configured NAS path with `WillardAI`. In `routes/optimize.ts`, `readScanCache` reads `getCachePath(nasPath)` directly with `fs.promises.readFile`; `writeScanCache` uses recursive `fs.promises.mkdir` and direct `fs.promises.writeFile`. Neither validates the `WillardAI/cache` directory or the final `optimize-scan.json` entry before following it. A symlinked cache directory can redirect both operations outside the library, and a symlinked cache file can cause the write to truncate its target. This is inconsistent with the existing `ensureDirectoryWithinRoot` policy.
+- **Cross-check:** `nas-storage-paths.test.ts` already proves that `ensureDirectoryWithinRoot` rejects a symlinked operational cache directory, and `library-engine/job-engine.ts` uses that helper for its startup cache. The Optimize Center cache call sites do not. The shared helper and its tests are already in the current PR diff; no new dependency or alternative storage system is needed.
+- **Safe implementation plan:** validate/create the cache directory through the existing root-checked helper; read only a regular non-symlink cache file through an opened handle with identity revalidation (and no-follow flags where supported); write to an exclusive private temporary file and atomically rename it into place so an existing symlink is replaced rather than followed; treat any unsafe path as a cache miss/write failure and continue scanning without exposing external file contents. Add regressions for a symlinked cache directory, a symlinked cache file, a replaced cache entry, malformed timestamps, and stale/future cache entries. Preserve best-effort cache semantics.
+- **Remaining risk:** until this is implemented, an attacker able to modify the NAS operational directory can redirect the Optimize cache read/write path. The final file is named `optimize-scan.json`, but a symlink can point it at another writable file. This finding is separate from the completed startup-history cache path hardening.

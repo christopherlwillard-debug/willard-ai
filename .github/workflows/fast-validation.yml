@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: fast-validation-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve long-running Linux/Windows validation when a newer audit commit is pushed.
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -87,6 +88,7 @@ jobs:
           pnpm run test:database-backup
           pnpm run test:release-contracts
           pnpm run test:ui-contracts
+          node --experimental-strip-types --test artifacts/willard-ai/src/lib/__tests__/library-job-recovery.test.ts
           pnpm run test:storage-conformance
 
       - name: Verify official Windows 7-Zip download retry policy
@@ -130,18 +132,30 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalization-recovery-postgres.test.ts
 
+      - name: Verify session revocation tombstones survive late PostgreSQL upserts
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/auth-session-revocation-postgres.test.ts
+
       - name: Run targeted backend regressions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7zzs
         run: |
           node --experimental-strip-types --test \
             artifacts/api-server/src/__tests__/capacity-service.test.ts \
+            artifacts/api-server/src/__tests__/organize-preflight-capacity.test.ts \
             artifacts/api-server/src/__tests__/request-validation.test.ts \
             artifacts/api-server/src/__tests__/media-query-validation.test.ts \
             artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
             artifacts/api-server/src/__tests__/cleanup-retention.test.ts \
             artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts \
+            artifacts/api-server/src/__tests__/windows-recycle-bin.test.ts \
             artifacts/api-server/src/__tests__/organize-helpers.test.ts \
             artifacts/api-server/src/__tests__/sevenzip-path.test.ts \
             artifacts/api-server/src/__tests__/archive-safety.test.ts \
+            artifacts/api-server/src/__tests__/archive-tar-input.test.ts \
+            artifacts/api-server/src/__tests__/archive-classification.test.ts \
             artifacts/api-server/src/__tests__/storage-policy.test.ts \
             artifacts/api-server/src/__tests__/nas-storage-paths.test.ts \
             artifacts/api-server/src/__tests__/storage-migration.test.ts \
@@ -151,6 +165,7 @@ jobs:
             artifacts/api-server/src/__tests__/auth-session-guard.test.ts \
             artifacts/api-server/src/__tests__/setup-authorization.test.ts \
             artifacts/api-server/src/__tests__/install-auth-reliability.test.ts \
+            artifacts/api-server/src/__tests__/schema-bootstrap.test.ts \
             artifacts/api-server/src/__tests__/empty-folder-scan.test.ts \
             artifacts/api-server/src/__tests__/ai-library-context.test.ts \
             artifacts/api-server/src/__tests__/media-health-scan.test.ts \
@@ -159,8 +174,13 @@ jobs:
             artifacts/api-server/src/__tests__/canonical-active-library.test.ts \
             artifacts/api-server/src/__tests__/background-active-library.test.ts \
             artifacts/api-server/src/__tests__/ai-media-scope.test.ts \
+            artifacts/api-server/src/__tests__/ai-search.test.ts \
             artifacts/api-server/src/__tests__/optimize-job-claim.test.ts \
+            artifacts/api-server/src/__tests__/media-tools-async.test.ts \
             artifacts/api-server/src/__tests__/optimize-scan.test.ts \
+            artifacts/api-server/src/__tests__/backup-timeout-process-tree.test.ts \
+            artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts \
+            artifacts/api-server/src/__tests__/library-job-failure-persistence.test.ts \
             artifacts/api-server/src/__tests__/conversion-job-lock.test.ts \
             artifacts/api-server/src/__tests__/png-safety.test.ts \
             artifacts/api-server/src/__tests__/conversion-finalize.test.ts
@@ -206,6 +226,14 @@ jobs:
         shell: pwsh
         run: .\scripts\windows\launcher-instance-lock-smoke.ps1
 
+      - name: Verify signed release checks in the packaged Windows Node runtime
+        shell: pwsh
+        run: .\scripts\windows\packaged-release-contract-smoke.ps1
+
+      - name: Verify developer launcher fails closed on orphaned services
+        shell: pwsh
+        run: .\scripts\windows\developer-process-ownership-smoke.ps1
+
       - name: Verify fresh launcher environment file is UTF-8 and Node-readable
         shell: pwsh
         run: |
@@ -232,6 +260,18 @@ jobs:
 
       - name: Install API server test dependency graph
         run: pnpm install --filter @workspace/api-server... --frozen-lockfile --ignore-scripts --no-optional
+
+      - name: Verify organization capacity probes on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/capacity-service.test.ts artifacts/api-server/src/__tests__/organize-preflight-capacity.test.ts
+
+      - name: Verify media rename no-overwrite and portable filename behavior on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-rename.test.ts
+
+      - name: Verify media conversion subprocesses do not block the event loop on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-tools-async.test.ts
+
+      - name: Verify Optimize Center scans yield and bound codec probes on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/optimize-scan.test.ts
 
       - name: Run storage migration concurrency and no-overwrite regressions on Windows
         run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-migration.test.ts
@@ -304,6 +344,11 @@ jobs:
           WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7z.exe
           WILLARD_7ZIP_LINK_ARCHIVE: ${{ runner.temp }}/sevenzip-link-fixture/sevenzip-link-fixture.7z
         run: pnpm --filter @workspace/api-server exec tsx --test src/__tests__/archive-link-conformance.test.mjs
+
+      - name: Verify compressed TAR preview with official Windows 7-Zip
+        env:
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7z.exe
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/archive-tar-input.test.ts
 
       - name: Verify packaged updater journal writes
         shell: pwsh

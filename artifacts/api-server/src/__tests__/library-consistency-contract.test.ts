@@ -22,6 +22,44 @@ test("scan and Cleanup use the same confirmed-duplicate summary", () => {
   assert.match(source("routes/cleanup.ts"), /duplicateCandidates:\s+duplicateSummary\.unconfirmedCandidates/);
 });
 
+test("duplicate storage estimates exclude only one largest retained copy", () => {
+  const summary = source("lib/duplicate-summary.ts");
+  const cleanup = source("routes/cleanup.ts");
+
+  assert.match(summary, /SUM\(size_bytes\)\s*-\s*MAX\(size_bytes\) AS wasted/);
+  assert.match(summary, /SUM\(m\.size_bytes\)\s*-\s*MAX\(m\.size_bytes\) AS wasted/);
+  assert.doesNotMatch(summary, /COUNT\(\*\)\s*-\s*1\)\s*\*\s*MAX/);
+  assert.equal((cleanup.match(/largestFileSize:\s*Number\(r\.largest_file_size\)/g) ?? []).length, 2);
+  assert.match(cleanup, /totalSize - a\.largestFileSize/);
+  assert.match(cleanup, /raw\.totalSize - raw\.largestFileSize/);
+});
+
+test("organization execution, resume, and rollback are fenced by unique lease tokens", () => {
+  const schema = source("../../../lib/db/src/schema/organization_jobs.ts");
+  const routes = source("routes/organize.ts");
+  const helpers = source("lib/organize-helpers.ts");
+
+  assert.match(schema, /leaseToken:\s*text\("lease_token"\)/);
+  assert.match(routes, /let executionLeaseToken = ""/);
+  assert.match(routes, /executionLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /let resumeLeaseToken = ""/);
+  assert.match(routes, /resumeLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /let rollbackLeaseToken = ""/);
+  assert.match(routes, /rollbackLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /eq\(organizationJobsTable\.leaseToken, executionLeaseToken\)/);
+  assert.match(routes, /eq\(organizationJobsTable\.leaseToken, resumeLeaseToken\)/);
+  assert.match(routes, /eq\(organizationJobsTable\.leaseToken, rollbackLeaseToken\)/);
+  assert.match(routes, /beforeMove: async \(\) => \{\s*await assertOrganizationLease/);
+  assert.match(routes, /beforeRestore: async \(\) => \{\s*await assertOrganizationLease/);
+  assert.match(routes, /if \(!updatedRollback\)/);
+  assert.match(routes, /function publicOrganizationJob[\s\S]*leaseToken: _leaseToken/);
+  assert.match(routes, /jobs\.map\(publicOrganizationJob\)/);
+  assert.match(routes, /interrupted: jobs\.map\(publicOrganizationJob\)/);
+  assert.match(routes, /res\.json\(publicOrganizationJob\(updated\)\)/);
+  assert.match(helpers, /await beforeEachMove\?\.\(mv\);\s*try/);
+  assert.match(helpers, /await opts\?\.beforeMove\?\.\(\);/);
+});
+
 test("catalog reconciliation remains metadata-only", () => {
   const engine = source("lib/library-engine/job-engine.ts");
   const reconciliation = engine.slice(

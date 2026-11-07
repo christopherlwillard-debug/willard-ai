@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pool } from "@workspace/db";
 import { isVectorAvailable } from "./vector-capability.ts";
-import { getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
+import { canonicalizePath, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 
 type QueryResult<T = Record<string, unknown>> = {
   rows: T[];
@@ -55,13 +55,34 @@ function createContext(): CleanupContext {
 }
 
 function cropRoot(nasPath: string): string {
-  return path.join(getWillardAIDir(nasPath), "cache", "faces");
+  const aiRoot = canonicalizePath(getWillardAIDir(nasPath));
+  let current = aiRoot;
+  for (const component of ["cache", "faces"]) {
+    current = path.join(current, component);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("Face crop directory contains a symlink or non-directory component");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // Keep the intended lexical root when it has not been created yet.
+        continue;
+      }
+      throw error;
+    }
+  }
+  return current;
+}
+
+function resolveFaceCropPath(nasPath: string, cropPath: string): string {
+  return resolveWithinRoot(cropPath, cropRoot(nasPath));
 }
 
 function collectCrop(context: CleanupContext, nasPath: string, cropPath: unknown): void {
   if (typeof cropPath !== "string" || !cropPath) return;
   try {
-    context.cropPaths.add(resolveWithinRoot(cropPath, getWillardAIDir(nasPath)));
+    context.cropPaths.add(resolveFaceCropPath(nasPath, cropPath));
   } catch {
     // A poisoned path is never removed. The row is still safe to delete.
   }
@@ -210,7 +231,7 @@ async function removeCollectedCrops(nasPath: string, context: CleanupContext): P
   const errors: string[] = [];
   for (const cropPath of context.cropPaths) {
     try {
-      const safePath = resolveWithinRoot(cropPath, getWillardAIDir(nasPath));
+      const safePath = resolveFaceCropPath(nasPath, cropPath);
       if (!fs.existsSync(safePath)) continue;
       fs.unlinkSync(safePath);
       removed++;
@@ -314,7 +335,7 @@ export async function purgeOrphanedDerivedData(nasPath: string): Promise<Derived
     );
     const referencedCrops = new Set<string>();
     for (const row of referenced.rows) {
-      try { if (row.crop_path) referencedCrops.add(resolveWithinRoot(row.crop_path, getWillardAIDir(nasPath))); } catch {}
+      try { if (row.crop_path) referencedCrops.add(resolveFaceCropPath(nasPath, row.crop_path)); } catch {}
     }
     await client.query("COMMIT");
 
@@ -322,7 +343,7 @@ export async function purgeOrphanedDerivedData(nasPath: string): Promise<Derived
     try {
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
         if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== ".webp") continue;
-        const candidate = resolveWithinRoot(path.join(root, entry.name), getWillardAIDir(nasPath));
+        const candidate = resolveFaceCropPath(nasPath, path.join(root, entry.name));
         if (referencedCrops.has(candidate)) continue;
         try { fs.unlinkSync(candidate); report.staleCropsRemoved++; } catch (error) {
           report.cropErrors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);

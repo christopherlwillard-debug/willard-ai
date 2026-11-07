@@ -37,6 +37,54 @@ function camLabel(make: string | null, model: string | null) {
   return model.toLowerCase().startsWith(make.toLowerCase()) ? model : `${make} ${model}`;
 }
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+function useDialogFocusTrap<T extends HTMLElement>(
+  dialogRef: React.RefObject<T | null>,
+  options: {
+    initialFocusRef?: React.RefObject<HTMLElement | null>;
+    suspendRef?: { current: boolean };
+    focusContainer?: boolean;
+  } = {},
+) {
+  const { initialFocusRef, suspendRef, focusContainer = false } = options;
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const getFocusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+    )).filter((element) =>
+      !element.closest("[inert]") &&
+      !element.closest('[aria-hidden="true"]') &&
+      element.getClientRects().length > 0
+    );
+    const initialTarget = focusContainer ? dialog : initialFocusRef?.current ?? getFocusable()[0] ?? dialog;
+    initialTarget.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (suspendRef?.current || event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKeyDown);
+    return () => {
+      dialog.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [dialogRef, focusContainer, initialFocusRef, suspendRef]);
+}
+
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
@@ -55,13 +103,13 @@ async function softDelete(id: number) {
   if (!r.ok) throw new Error("Delete failed");
   return readJsonOrEmpty(r);
 }
-async function rename(id: number, name: string) {
+async function rename(id: number, name: string): Promise<{ id: number; name: string; relativePath: string }> {
   const r = await fetch(`${API}/media/files/${id}/rename`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e as any)?.error ?? "Rename failed"); }
-  return readJsonOrEmpty(r);
+  return await r.json() as { id: number; name: string; relativePath: string };
 }
 async function updateTags(id: number, tags: string[]) {
   const r = await fetch(`${API}/media/files/${id}/tags`, {
@@ -289,17 +337,17 @@ function PhotoView({
           className="absolute bottom-3 right-3 flex items-center gap-1 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button onClick={() => applyZoom(1 / 1.3)} className="p-1 text-white/80 hover:text-white" title="Zoom out (-)">
+          <button onClick={() => applyZoom(1 / 1.3)} className="p-1 text-white/80 hover:text-white" title="Zoom out (-)" aria-label="Zoom out">
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
           <span className="text-[10px] font-mono text-white/60 w-10 text-center">{Math.round(ps.zoom * 100)}%</span>
-          <button onClick={() => applyZoom(1.3)} className="p-1 text-white/80 hover:text-white" title="Zoom in (+)">
+          <button onClick={() => applyZoom(1.3)} className="p-1 text-white/80 hover:text-white" title="Zoom in (+)" aria-label="Zoom in">
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => setPs((p) => ({ ...p, rot: (p.rot + 90) % 360 }))}
             className="p-1 text-white/80 hover:text-white ml-1"
-            title="Rotate"
+            title="Rotate" aria-label="Rotate photo clockwise"
           >
             <RotateCw className="w-3.5 h-3.5" />
           </button>
@@ -307,7 +355,7 @@ function PhotoView({
             <button
               onClick={() => setPs({ ...FIT, zoom: fitZoom })}
               className="p-1 text-white/80 hover:text-white ml-1"
-              title="Reset"
+              title="Reset" aria-label="Reset photo view"
             >
               <Minimize2 className="w-3.5 h-3.5" />
             </button>
@@ -340,6 +388,8 @@ function VideoView({ file, videoRef }: { file: MediaFile; videoRef: React.RefObj
         <button
           onClick={() => setShowSpeed((v) => !v)}
           className="text-xs font-mono px-2 py-1 bg-black/60 text-white rounded hover:bg-black/80"
+          aria-label={"Playback speed: " + (videoRef.current?.playbackRate ?? 1) + "x"}
+          aria-expanded={showSpeed}
         >
           {videoRef.current?.playbackRate ?? 1}×
         </button>
@@ -353,6 +403,7 @@ function VideoView({ file, videoRef }: { file: MediaFile; videoRef: React.RefObj
                   setShowSpeed(false);
                 }}
                 className="text-xs font-mono px-3 py-1 text-white hover:bg-white/10 rounded text-left"
+                aria-label={"Set playback speed to " + s + "x"}
               >
                 {s}×
               </button>
@@ -663,23 +714,27 @@ function Filmstrip({ files, currentIndex, onSelect }: {
 
 function RenameDialog({ file, onDone, onCancel }: {
   file: MediaFile;
-  onDone: (newName: string) => void;
+  onDone: (updated: { id: number; name: string; relativePath: string }) => void;
   onCancel: () => void;
 }) {
   const [val, setVal] = useState(file.name);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const inp = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
-  useLayoutEffect(() => { inp.current?.select(); }, []);
+  useLayoutEffect(() => {
+    inp.current?.focus();
+    inp.current?.select();
+  }, []);
 
   const submit = async () => {
     const name = val.trim();
     if (!name) { setErr("Name cannot be empty"); return; }
     setBusy(true);
     try {
-      await rename(file.id, name);
-      onDone(name);
+      const updated = await rename(file.id, name);
+      onDone(updated);
     } catch (e: any) {
       setErr(e.message ?? "Rename failed");
     } finally {
@@ -689,17 +744,47 @@ function RenameDialog({ file, onDone, onCancel }: {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className="bg-card border border-border rounded-lg shadow-xl p-5 w-80 space-y-3" onClick={(e) => e.stopPropagation()}>
-        <p className="text-sm font-semibold">Rename file</p>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="media-rename-title"
+        className="bg-card border border-border rounded-lg shadow-xl p-5 w-80 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('input:not([disabled]), button:not([disabled])');
+          if (!focusable?.length) return;
+          const first = focusable[0]!;
+          const last = focusable[focusable.length - 1]!;
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
+      >
+        <h2 id="media-rename-title" className="text-sm font-semibold">Rename file</h2>
+        <label htmlFor="media-rename-input" className="sr-only">New file name</label>
         <input
+          id="media-rename-input"
           ref={inp}
           value={val}
+          aria-invalid={Boolean(err)}
+          aria-describedby={err ? "media-rename-error" : undefined}
           onChange={(e) => { setVal(e.target.value); setErr(""); }}
-          onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           className="w-full rounded border border-border bg-background px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
-        {err && <p className="text-xs text-destructive">{err}</p>}
+        {err && <p id="media-rename-error" role="alert" aria-live="assertive" className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={onCancel} className="px-3 py-1.5 rounded text-sm text-muted-foreground hover:bg-muted" disabled={busy}>Cancel</button>
           <button onClick={submit} disabled={busy || !val.trim()} className="px-3 py-1.5 rounded text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1">
@@ -717,6 +802,8 @@ function DeleteConfirm({ file, onConfirm, onCancel }: {
   file: MediaFile; onConfirm: () => void; onCancel: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(dialogRef);
   const confirm = async () => {
     setBusy(true);
     try { await softDelete(file.id); onConfirm(); }
@@ -724,12 +811,12 @@ function DeleteConfirm({ file, onConfirm, onCancel }: {
   };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className="bg-card border border-border rounded-lg shadow-xl p-5 w-72 space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-labelledby="media-delete-title" aria-describedby="media-delete-description" tabIndex={-1} className="bg-card border border-border rounded-lg shadow-xl p-5 w-72 space-y-3" onClick={(e) => e.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancel(); } }}>
         <div className="flex items-center gap-2 text-destructive">
           <AlertTriangle className="w-5 h-5 shrink-0" />
-          <p className="text-sm font-semibold">Remove from library?</p>
+          <p id="media-delete-title" className="text-sm font-semibold">Remove from library?</p>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p id="media-delete-description" className="text-xs text-muted-foreground">
           <span className="font-mono">{file.name}</span> will be hidden from Willard. The file on your NAS is not deleted.
         </p>
         <div className="flex justify-end gap-2">
@@ -752,12 +839,16 @@ export interface MediaViewerProps {
   onFavoriteChange?: (id: number, fav: boolean) => void;
   onDelete?: (id: number) => void;
   onTagsChange?: (id: number, tags: string[]) => void;
+  onRenameChange?: (id: number, name: string, relativePath: string) => void;
 }
 
 function TagEditor({ file, onDone, onCancel }: {
   file: MediaFile; onDone: (tags: string[]) => void; onCancel: () => void;
 }) {
   const [tags, setTags] = useState<string[]>(file.tags ?? []);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useDialogFocusTrap(dialogRef, { initialFocusRef: inputRef });
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -774,17 +865,17 @@ function TagEditor({ file, onDone, onCancel }: {
   };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className="w-80 space-y-4 rounded-lg border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2"><Tag className="h-4 w-4 text-primary" /><p className="text-sm font-semibold">Tag file</p></div>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="media-tags-title" tabIndex={-1} className="w-80 space-y-4 rounded-lg border border-border bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancel(); } }}>
+        <div className="flex items-center gap-2"><Tag className="h-4 w-4 text-primary" /><p id="media-tags-title" className="text-sm font-semibold">Tag file</p></div>
         <div className="flex flex-wrap gap-1.5 min-h-6">
-          {tags.map((tag) => <button key={tag} onClick={() => setTags((current) => current.filter((item) => item !== tag))} className="rounded bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-destructive/10 hover:text-destructive" title="Remove tag">{tag} ×</button>)}
+          {tags.map((tag) => <button key={tag} onClick={() => setTags((current) => current.filter((item) => item !== tag))} className="rounded bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-destructive/10 hover:text-destructive" title="Remove tag" aria-label={"Remove tag " + tag}>{tag} ×</button>)}
           {tags.length === 0 && <span className="text-xs text-muted-foreground">No tags yet</span>}
         </div>
         <div className="flex gap-2">
-          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder="Add a tag…" className="min-w-0 flex-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" maxLength={64} />
+          <input id="media-tags-input" ref={inputRef} aria-label="New tag" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder="Add a tag…" className="min-w-0 flex-1 rounded border border-border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" maxLength={64} />
           <button onClick={add} disabled={!value.trim()} className="rounded bg-secondary px-3 text-xs font-medium disabled:opacity-50">Add</button>
         </div>
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && <p role="alert" aria-live="assertive" className="text-xs text-destructive">{error}</p>}
         <div className="flex justify-end gap-2">
           <button onClick={onCancel} disabled={busy} className="rounded px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted">Cancel</button>
           <button onClick={save} disabled={busy} className="flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">{busy && <Loader2 className="h-3 w-3 animate-spin" />}Save</button>
@@ -794,7 +885,7 @@ function TagEditor({ file, onDone, onCancel }: {
   );
 }
 
-export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete, onTagsChange }: MediaViewerProps) {
+export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, onDelete, onTagsChange, onRenameChange }: MediaViewerProps) {
   const [idx,          setIdx]          = useState(() => clamp(initialIndex, 0, files.length - 1));
   const [showInfo,     setShowInfo]     = useState(false);
   const [showFilm,     setShowFilm]     = useState(files.length > 1);
@@ -811,6 +902,10 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
   const hideTimer     = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const containerRef  = useRef<HTMLDivElement>(null);
   const mapRef        = useRef<HTMLDivElement>(null);
+  const renameTriggerRef = useRef<HTMLButtonElement>(null);
+  const nestedDialogOpenRef = useRef(false);
+  nestedDialogOpenRef.current = showRename || showDelete || showTags;
+  useDialogFocusTrap(containerRef, { focusContainer: true, suspendRef: nestedDialogOpenRef });
 
   const file    = files[idx];
   const hasPrev = idx > 0;
@@ -826,7 +921,14 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
     setControlsVis(true);
     clearTimeout(hideTimer.current);
     if (isPhoto) {
-      hideTimer.current = setTimeout(() => setControlsVis(false), 3000);
+      hideTimer.current = setTimeout(() => {
+        const active = document.activeElement;
+        const focusedControl = active instanceof HTMLElement &&
+          active !== containerRef.current &&
+          containerRef.current?.contains(active) &&
+          active.matches('a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])');
+        if (!focusedControl) setControlsVis(false);
+      }, 3000);
     }
   }, [isPhoto]);
 
@@ -862,7 +964,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
       ) {
         return;
       }
-      if (showRename || showDelete) return;
+      if (showRename || showDelete || showTags) return;
       showControls();
       switch (e.key) {
         case "Escape":     e.preventDefault(); onClose(); break;
@@ -886,7 +988,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [goPrev, goNext, onClose, files.length, showControls, showRename, showDelete]);
+  }, [goPrev, goNext, onClose, files.length, showControls, showRename, showDelete, showTags]);
 
   // Fullscreen change
   useEffect(() => {
@@ -923,9 +1025,19 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
     if (hasNext) goNext(); else goPrev();
   };
 
-  const handleRenameDone = (newName: string) => {
+  const closeRename = () => {
     setShowRename(false);
-    (file as any).name = newName;
+    requestAnimationFrame(() => renameTriggerRef.current?.focus());
+  };
+
+  const handleRenameDone = (updated: { id: number; name: string; relativePath: string }) => {
+    closeRename();
+    if (onRenameChange) {
+      onRenameChange(updated.id, updated.name, updated.relativePath);
+    } else {
+      (file as any).name = updated.name;
+      (file as any).relativePath = updated.relativePath;
+    }
   };
 
   if (!file) return null;
@@ -944,8 +1056,12 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
           entered ? "opacity-100" : "opacity-0",
         )}
         role="dialog"
-        aria-modal
+        aria-modal="true"
         aria-label={`Viewing ${file.name}`}
+        aria-hidden={nestedDialogOpenRef.current}
+        tabIndex={-1}
+        onFocusCapture={showControls}
+        onBlurCapture={(event) => { if (!containerRef.current?.contains(event.relatedTarget as Node | null)) showControls(); }}
         onMouseMove={showControls}
         onPointerDown={showControls}
         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -965,7 +1081,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             {/* Favorite */}
             <button
               onClick={() => setShowTags(true)}
-              title="Edit tags"
+              title="Edit tags" aria-label={"Edit tags for " + file.name}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
             >
               <Tag className="w-4 h-4" />
@@ -974,16 +1090,14 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             <button
               onClick={handleFavorite}
               disabled={favPending}
-              title={file.favorite ? "Remove favorite" : "Add favorite"}
+              title={file.favorite ? "Remove favorite" : "Add favorite"} aria-label={file.favorite ? "Remove " + file.name + " from favorites" : "Add " + file.name + " to favorites"}
               className="p-2 rounded transition-colors hover:bg-white/10"
             >
               <Heart className={cn("w-4 h-4 transition-colors", file.favorite ? "text-red-400 fill-red-400" : "text-white/60 hover:text-white")} />
             </button>
             {/* Detail page */}
-            <Link href={`/media/${file.id}`} onClick={onClose}>
-              <button title="Open detail page" className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors">
-                <Maximize2 className="w-4 h-4" />
-              </button>
+            <Link href={`/media/${file.id}`} onClick={onClose} aria-label={"Open details for " + file.name} className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors">
+              <Maximize2 className="w-4 h-4" />
             </Link>
             {/* Map */}
             {file.gpsLatitude != null && (
@@ -992,7 +1106,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
                   setShowInfo(true);
                   setFocusMapRequested(true);
                 }}
-                title="Show on map"
+                title="Show on map" aria-label={"Show " + file.name + " on map"}
                 className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
               >
                 <MapPin className="w-4 h-4" />
@@ -1003,14 +1117,17 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
               href={`${API}/media/file/${file.id}/stream`}
               download={file.name}
               title="Download"
+              aria-label={"Download " + file.name}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
             >
               <Download className="w-4 h-4" />
             </a>
             {/* Rename */}
             <button
+              ref={renameTriggerRef}
               onClick={() => setShowRename(true)}
               title="Rename"
+              aria-label={"Rename " + file.name}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"
             >
               <PencilLine className="w-4 h-4" />
@@ -1019,6 +1136,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             <button
               onClick={() => setShowDelete(true)}
               title="Remove from library"
+              aria-label={"Remove " + file.name + " from library"}
               className="p-2 rounded text-white/60 hover:text-red-400 hover:bg-white/10 transition-colors"
             >
               <Trash2 className="w-4 h-4" />
@@ -1028,6 +1146,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
               href={`${API}/media/file/${file.id}/stream`}
               target="_blank" rel="noopener noreferrer"
               title="Open original"
+              aria-label={"Open original " + file.name + " in new tab"}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors hidden sm:flex"
             >
               <ExternalLink className="w-4 h-4" />
@@ -1039,6 +1158,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
                 else document.exitFullscreen();
               }}
               title={isFullscreen ? "Exit fullscreen (F)" : "Fullscreen (F)"}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
               className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors hidden sm:flex"
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -1047,12 +1167,14 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             <button
               onClick={() => setShowInfo((v) => !v)}
               title="Info (I)"
+              aria-label={showInfo ? "Hide media information" : "Show media information"}
+              aria-pressed={showInfo}
               className={cn("p-2 rounded transition-colors", showInfo ? "bg-primary/20 text-primary" : "text-white/60 hover:text-white hover:bg-white/10")}
             >
               <Info className="w-4 h-4" />
             </button>
             {/* Close */}
-            <button onClick={onClose} title="Close (Esc)" className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors ml-1">
+            <button onClick={onClose} title="Close (Esc)" aria-label={"Close viewer for " + file.name} className="p-2 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors ml-1">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -1103,7 +1225,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
             <div className="w-72 shrink-0 border-l border-border bg-card/95 backdrop-blur-sm overflow-hidden flex flex-col">
               <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
                 <span className="text-[10px] font-mono font-semibold text-muted-foreground uppercase tracking-widest">Info</span>
-                <button onClick={() => setShowInfo(false)} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => setShowInfo(false)} aria-label="Close media information" className="text-muted-foreground hover:text-foreground">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -1134,6 +1256,8 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
               <button
                 onClick={() => setShowFilm((v) => !v)}
                 className="flex items-center gap-1 text-[10px] text-white/40 hover:text-white/60 font-mono transition-colors shrink-0"
+                aria-label={showFilm ? "Hide filmstrip" : "Show filmstrip"}
+                aria-expanded={showFilm}
               >
                 <FolderOpen className="w-3 h-3" />
                 {showFilm ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
@@ -1152,7 +1276,7 @@ export function MediaViewer({ files, initialIndex, onClose, onFavoriteChange, on
       </div>
 
       {/* Rename/Delete overlays */}
-      {showRename && <RenameDialog file={file} onDone={handleRenameDone} onCancel={() => setShowRename(false)} />}
+      {showRename && <RenameDialog file={file} onDone={handleRenameDone} onCancel={closeRename} />}
       {showDelete && <DeleteConfirm file={file} onConfirm={handleDeleteDone} onCancel={() => setShowDelete(false)} />}
       {showTags && <TagEditor file={file} onDone={(tags) => { (file as any).tags = tags; onTagsChange?.(file.id, tags); setShowTags(false); }} onCancel={() => setShowTags(false)} />}
     </>,

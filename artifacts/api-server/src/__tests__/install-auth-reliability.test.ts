@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const setupSource = fs.readFileSync(path.join(repoRoot, "setup-db.cjs"), "utf8");
+const localSetupSource = fs.readFileSync(path.join(repoRoot, "LOCAL_SETUP.md"), "utf8");
 const authSource = fs.readFileSync(
   path.join(repoRoot, "artifacts/api-server/src/routes/auth.ts"),
   "utf8",
@@ -124,6 +125,15 @@ test("developer desktop launcher and local Vite servers bind only to loopback", 
   assert.equal((viteConfigSource.match(/host: serverHost/g) ?? []).length, 2, "dev and preview servers must share the environment-specific host");
 });
 
+test("manual local API startup documents the explicit loopback-only first-run opt-in", () => {
+  const manualSetup = localSetupSource.slice(localSetupSource.indexOf("## The manual way"));
+  assert.ok(manualSetup.includes('$env:HOST = "127.0.0.1"'));
+  assert.ok(manualSetup.includes('$env:WILLARD_LOCAL_SETUP = "true"'));
+  assert.ok(manualSetup.includes("HOST=127.0.0.1 WILLARD_LOCAL_SETUP=true pnpm"));
+  assert.ok(manualSetup.includes("do not use this bypass on a hosted server or behind a reverse"));
+  assert.ok(manualSetup.includes("WILLARD_SETUP_TOKEN"));
+});
+
 test("remote first-run setup requires an operator secret and rate-limits attempts", () => {
   assert.match(authSource, /authorizeFirstRunSetup/);
   assert.match(authSource, /configuredToken: process\.env\["WILLARD_SETUP_TOKEN"\]/);
@@ -142,3 +152,18 @@ test("remote first-run setup requires an operator secret and rate-limits attempt
   assert.match(authSource, /const setupRateLimiter = rateLimit\(/);
 });
 
+
+test("late session-store saves after password reset cannot restore authorization", () => {
+  assert.ok(authSource.includes("sess.credentialSettingsId = settingsId"));
+  assert.ok(authSource.includes("sess.credentialVersion = credentialVersion(expectedPasswordHash)"));
+  assert.ok(appSource.includes("FROM app_settings WHERE id = $1"));
+  assert.ok(appSource.includes("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)"));
+  const credentialCheck = appSource.indexOf("isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)");
+  assert.ok(
+    credentialCheck >= 0 && appSource.indexOf("next();", credentialCheck) > credentialCheck,
+    "credential version must be checked before protected routes execute",
+  );
+  assert.ok(authSource.includes("sess->>'credentialSettingsId' = $1"));
+  assert.ok(authSource.includes("sess->>'credentialVersion' = $2"));
+  assert.ok(authSource.includes("isSessionCredentialCurrent(sess.credentialVersion, settings.passwordHash)"));
+});

@@ -5,6 +5,14 @@ Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
+# Setup changes dependencies and database state; never run it over an
+# unjournaled API or web service, and stop any fully tracked running copy.
+$entryTracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $entryTracked
+if ($entryTracked) {
+    Stop-TrackedProcesses | Out-Null
+}
+
 Write-Banner "Willard AI Setup"
 Write-Host "  This runs once to get Willard AI ready on your computer." -ForegroundColor Gray
 Write-Host "  Grab a coffee -- it takes 2-5 minutes." -ForegroundColor Gray

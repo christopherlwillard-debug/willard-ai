@@ -352,3 +352,247 @@ test("directory-valued job references move as prefixes and destination orphans a
   assert.equal(update?.values[0], path.join(paths.destination, "WillardAI/ConversionBackups/job-7"));
   assert.equal(fs.existsSync(backup), true);
 });
+
+test("copy pauses and preserves originals when a database reference changed after preview", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/stale-reference.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect,
+  });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 44,
+      value: source,
+    }],
+  });
+
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Database reference changed or disappeared during migration/,
+  );
+
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/stale-reference.webp");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes", "the original must never be removed");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes", "the verified copy remains recoverable");
+  assert.equal(database.updates.some((entry) => entry.text === "ROLLBACK"), true);
+  assert.equal((await service.get(manifest.id)).state, "PAUSED");
+  await assert.rejects(() => service.confirmCleanup(manifest.id), /only after the migration/);
+});
+
+
+test("copy accepts an already-updated database reference on a safe retry", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/already-updated.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/already-updated.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        if (text.includes("SELECT thumbnail_path AS value FROM media_files")) {
+          return { rows: [{ value: destination }], rowCount: 1 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 45,
+      value: source,
+    }],
+  });
+
+  const copied = await service.copy(manifest.id);
+  assert.equal(copied.state, "VERIFIED");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes");
+});
+
+
+test("preview rejects nested or overlapping source and destination roots", async () => {
+  const paths = fixture();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: path.join(paths.source, "WillardAI", "nested-destination"),
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: paths.root,
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+});
+
+test("cleanup enforces protected namespaces from the namespace catalog, not manifest flags", async () => {
+  const paths = fixture();
+  const backup = path.join(paths.source, "WillardAI/ConversionBackups/original.jpg");
+  fs.writeFileSync(backup, "protected original");
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: fakeDatabase().connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+
+  const manifestFile = path.join(paths.manifests, `${manifest.id}.json`);
+  const tampered = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  const backupEntry = tampered.entries.find((entry: { namespace: string }) => entry.namespace === "conversion-backups");
+  assert.ok(backupEntry);
+  backupEntry.protected = false;
+  fs.writeFileSync(manifestFile, JSON.stringify(tampered));
+
+  await service.cleanup(manifest.id);
+  assert.equal(fs.readFileSync(backup, "utf8"), "protected original");
+});
+
+
+test("preview refuses a symlinked source namespace without scanning its target", async (context) => {
+  const paths = fixture();
+  const namespace = path.join(paths.source, "WillardAI/cache/thumbnails");
+  const outside = path.join(paths.root, "outside-source");
+  fs.rmSync(namespace, { recursive: true, force: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "private.jpg"), "outside source");
+  try {
+    fs.symlinkSync(outside, namespace, process.platform === "win32" ? "junction" : "dir");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("directory symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.equal(manifest.entries.some((entry) => entry.sourcePath === path.join(outside, "private.jpg")), false);
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+});
+
+test("preview marks a destination symlink unsafe instead of treating its target as a verified copy", async (context) => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/symlinked.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/symlinked.webp");
+  const other = path.join(paths.destination, "WillardAI/reports/other.webp");
+  fs.writeFileSync(source, "same bytes");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  fs.writeFileSync(other, "same bytes");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  try {
+    fs.symlinkSync(other, destination, "file");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("file symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.notEqual(manifest.entries.find((entry) => entry.sourcePath === source)?.state, "verified");
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+  assert.equal(fs.readFileSync(other, "utf8"), "same bytes");
+});
+
+
+test("preview rejects selected source and destination roots that are symlinks", async (context) => {
+  const paths = fixture();
+  const sourceAlias = path.join(paths.root, "source-alias");
+  const destinationAlias = path.join(paths.root, "destination-alias");
+  try {
+    try {
+      fs.symlinkSync(paths.source, sourceAlias, "dir");
+      fs.symlinkSync(paths.destination, destinationAlias, "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        context.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+
+    const service = createStorageMigrationService({ manifestDir: paths.manifests });
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: sourceAlias,
+        destinationRoot: path.join(paths.root, "new-destination"),
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: paths.source,
+        destinationRoot: destinationAlias,
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+  } finally {
+    fs.rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+
+test("storage migration hashing shares the no-follow file reader", () => {
+  const source = fs.readFileSync(new URL("../lib/storage-migration.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ moveFileNoReplace, sha256File \} from "\.\/organize-helpers\.ts"/);
+  assert.match(source, /async function defaultHashFile\(filePath: string\): Promise<string>\s*\{[\s\S]*?return sha256File\(filePath\)/);
+  assert.match(source, /copyFileFromNoFollowDescriptor\(safeSourcePath, partialHandle\)/);
+  assert.match(source, /O_NOFOLLOW/);
+  assert.match(source, /fs\.createReadStream\(sourcePath, \{ fd: sourceFd, autoClose: false \}\)/);
+});

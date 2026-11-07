@@ -154,6 +154,7 @@ test("expired local trash permanently removes its canonical row and derived data
     originalPath,
     trashPath,
     sizeBytes: 3,
+    contentHash: crypto.createHash("sha256").update("old").digest("hex"),
     expiresAt: "2020-01-01T00:00:00.000Z",
   });
 

@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$/;
+const WINDOWS_VERSION_PATTERN = /^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$/;
 export const RELEASE_SCHEMA = 2;
 export const RELEASE_PRODUCT = "Willard Media Center";
 export const RELEASE_REPOSITORY = "christopherlwillard-debug/willard-ai";
@@ -107,6 +108,26 @@ export function compareVersions(left, right) {
   return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
+export function parseWindowsVersion(value) {
+  if (typeof value !== "string" || !WINDOWS_VERSION_PATTERN.test(value)) return null;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) return null;
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+export function compareWindowsVersions(left, right) {
+  const a = parseWindowsVersion(left);
+  const b = parseWindowsVersion(right);
+  if (!a || !b) {
+    throw new Error("Windows versions must use MAJOR[.MINOR[.BUILD]] numeric format.");
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
+}
+
 export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_KEY, allowUnsigned = false } = {}) {
   if (!manifest || typeof manifest !== "object") throw new Error("The release description is not valid JSON.");
   if (manifest.schema !== RELEASE_SCHEMA) throw new Error("The release description has an unsupported schema.");
@@ -127,7 +148,11 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
   }
   assertSha256(manifest.sha256, "artifact");
   assertSha256(manifest.sourceSha256, "source artifact");
-  if (manifest.minimumWindowsVersion && typeof manifest.minimumWindowsVersion !== "string") {
+  const minimumWindowsVersion = manifest.minimumWindowsVersion ?? "";
+  if (
+    typeof minimumWindowsVersion !== "string" ||
+    (minimumWindowsVersion !== "" && !parseWindowsVersion(minimumWindowsVersion))
+  ) {
     throw new Error("The release description has an invalid Windows requirement.");
   }
   if (typeof manifest.notes !== "string") throw new Error("The release description has invalid notes.");
@@ -159,7 +184,7 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
     sourceSha256: manifest.sourceSha256.toLowerCase(),
     signature: manifest.signature || "",
     notes: manifest.notes,
-    minimumWindowsVersion: manifest.minimumWindowsVersion ?? "",
+    minimumWindowsVersion,
   };
 }
 
@@ -187,24 +212,42 @@ export function getUpdateDecision(currentVersion, manifest, options) {
   };
 }
 
+function getCliPublicKeyPath(args) {
+  const optionIndex = args.indexOf("--public-key");
+  if (optionIndex < 0) return null;
+  if (optionIndex !== args.length - 2 || !args[optionIndex + 1]) {
+    throw new Error("--public-key must be followed by a PEM file path at the end of the command.");
+  }
+  return args[optionIndex + 1];
+}
+
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&
-    ["--verify", "--verify-artifact", "--compare", "--update-decision"].includes(process.argv[2])) {
+    ["--verify", "--verify-artifact", "--compare", "--compare-windows", "--update-decision"].includes(process.argv[2])) {
   try {
-    if (process.argv[2] === "--compare") {
-      console.log(compareVersions(process.argv[3], process.argv[4]));
+    const command = process.argv[2];
+    if (command === "--compare") {
+      if (process.argv.includes("--public-key")) throw new Error("--public-key is only supported for manifest checks.");
+      process.stdout.write(`${compareVersions(process.argv[3], process.argv[4])}\n`);
+    } else if (command === "--compare-windows") {
+      if (process.argv.includes("--public-key")) throw new Error("--public-key is only supported for manifest checks.");
+      process.stdout.write(`${compareWindowsVersions(process.argv[3], process.argv[4])}\n`);
     } else {
-      const manifestPath = process.argv[2] === "--update-decision"
+      const publicKeyPath = getCliPublicKeyPath(process.argv.slice(3));
+      const options = publicKeyPath
+        ? { publicKey: await readFile(publicKeyPath, "utf8") }
+        : undefined;
+      const manifestPath = command === "--update-decision"
         ? process.argv[4]
         : process.argv[3];
       const manifest = JSON.parse((await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, ""));
-      if (process.argv[2] === "--verify-artifact") {
-        await verifyReleaseArtifact(manifest, process.argv[4]);
+      if (command === "--verify-artifact") {
+        await verifyReleaseArtifact(manifest, process.argv[4], options);
         console.log("Release signature, binding, and artifact checksum verified.");
-      } else if (process.argv[2] === "--update-decision") {
-        const decision = getUpdateDecision(process.argv[3], manifest);
+      } else if (command === "--update-decision") {
+        const decision = getUpdateDecision(process.argv[3], manifest, options);
         console.log(JSON.stringify({ available: decision.available, version: decision.version }));
       } else {
-        validateReleaseManifest(manifest);
+        validateReleaseManifest(manifest, options);
         console.log("Release signature and binding verified.");
       }
     }

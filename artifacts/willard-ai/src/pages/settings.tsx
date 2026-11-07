@@ -1185,7 +1185,7 @@ function ScannerSettingsSection() {
               {settings.ignoredFolders.map(f => (
                 <Badge key={f} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
                   {f}
-                  <button onClick={() => removeFolder(f)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                  <button onClick={() => removeFolder(f)} aria-label={"Remove ignored folder " + f} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
                     <XIcon className="w-3 h-3" />
                   </button>
                 </Badge>
@@ -1220,7 +1220,7 @@ function ScannerSettingsSection() {
               {settings.ignoredExtensions.map(e => (
                 <Badge key={e} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
                   .{e}
-                  <button onClick={() => removeExt(e)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                  <button onClick={() => removeExt(e)} aria-label={"Remove ignored extension " + e} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
                     <XIcon className="w-3 h-3" />
                   </button>
                 </Badge>

@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, pool } from "@workspace/db";
 import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
-  buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, type SearchIntent,
+  buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, localSearchClearFilters, type SearchIntent, type SearchIntentClear,
 } from "../lib/ai-search.ts";
 import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
@@ -47,8 +47,16 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
 function localSearchIntent(query: string, previous: SearchIntent | null): SearchIntent {
   const words = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2).slice(0, 7);
   const keywords = [query.toLowerCase(), ...words];
-  const fallback: SearchIntent = { ...emptyIntent(), semanticQuery: query, keywords };
-  return previous ? mergeRefinedIntent(previous, fallback) : fallback;
+  const clear: SearchIntentClear = previous ? localSearchClearFilters(query) : {};
+  const hasClearAction = Object.values(clear).some((value) => value === true || (Array.isArray(value) && value.length > 0));
+  const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
+  const objectName = objectMatch?.[1]?.trim().toLowerCase();
+  const fallback: SearchIntent = hasClearAction
+    ? objectName
+      ? { ...emptyIntent(), semanticQuery: objectName, keywords: [objectName], objects: [objectName] }
+      : emptyIntent()
+    : { ...emptyIntent(), semanticQuery: query, keywords };
+  return previous ? mergeRefinedIntent(previous, fallback, clear) : fallback;
 }
 
 async function findNamedPeople(nasPath: string, query: string): Promise<string[]> {
@@ -97,10 +105,10 @@ router.post("/search/ai", async (req, res) => {
     // filters override whatever the language parse inferred.
     const f = req.body?.filters;
     if (f && typeof f === "object") {
-      if (Array.isArray(f.mediaTypes) && f.mediaTypes.length) {
+      if (Array.isArray(f.mediaTypes)) {
         intent.mediaTypes = f.mediaTypes.map(String).slice(0, 6);
       }
-      if (f.favoriteOnly === true) intent.favoriteOnly = true;
+      if (typeof f.favoriteOnly === "boolean") intent.favoriteOnly = f.favoriteOnly;
       if (f.dateFrom !== undefined || f.dateTo !== undefined) {
         try {
           const dates = parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined);

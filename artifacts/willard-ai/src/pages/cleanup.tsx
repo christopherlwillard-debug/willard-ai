@@ -19,6 +19,7 @@ import {
 } from "@/hooks/use-library-scan";
 import type { DuplicateFileInfo, DuplicateGroup } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
+import { apiUrl } from "@/lib/api";
 import { readQueue, writeQueue, type CleanupQueueEntry } from "@workspace/cleanup-queue";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -164,7 +165,7 @@ function DuplicateTypeBadge({
 
 function FileThumbnail({ file, ring }: { file: DuplicateFileInfo; ring: "keep" | "delete" | "neutral" }) {
   const [imgError, setImgError] = useState(false);
-  const thumbUrl = file.mediaId ? `/api/media/thumbnail/${file.mediaId}` : null;
+  const thumbUrl = file.mediaId ? apiUrl(`/media/thumbnail/${file.mediaId}`) : null;
   const ringClass = ring === "keep"
     ? "ring-2 ring-green-500"
     : ring === "delete"
@@ -307,11 +308,19 @@ function DuplicateGroupCard({
             const isDelete = decision.deleteIds.includes(file.id);
             const ring = isKeep ? "keep" : isDelete ? "delete" : "neutral";
             return (
-              <div key={file.id} className="space-y-1.5 cursor-pointer" onClick={() => setManualKeepId(file.id)}>
+              <button
+                type="button"
+                key={file.id}
+                aria-label={"Choose " + file.filename + " as the copy to keep"}
+                aria-pressed={isKeep}
+                data-testid={"button-keep-duplicate-" + file.id}
+                className="group block w-full space-y-1.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                onClick={() => setManualKeepId(file.id)}
+              >
                 <FileThumbnail file={file} ring={ring} />
                 <div className={`text-[10px] font-mono space-y-0.5 ${isKeep ? "text-green-400" : isDelete ? "text-destructive/70 line-through" : "text-muted-foreground"}`}>
                   <div className="truncate font-medium" title={file.filename}>{file.filename}</div>
-                  <div className="truncate text-muted-foreground" title={file.folder}>{file.folder.split(/[/\\]/).slice(-2).join("/")}</div>
+                  <div className="truncate text-muted-foreground" title={file.folder}>{file.folder.split(/[/\\\\]/).slice(-2).join("/")}</div>
                   <div>{formatBytes(file.sizeBytes)}</div>
                   {(file.width && file.height) && <div>{file.width} × {file.height}</div>}
                   {(file.dateTaken ?? file.modifiedAt) && (
@@ -322,7 +331,7 @@ function DuplicateGroupCard({
                 <div className={`text-[10px] font-mono text-center py-0.5 rounded ${isKeep ? "bg-green-500/10 text-green-500" : isDelete ? "bg-destructive/10 text-destructive" : "bg-secondary/30 text-muted-foreground"}`}>
                   {isKeep ? "✓ KEEP" : isDelete ? "✕ DELETE" : "click to keep"}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

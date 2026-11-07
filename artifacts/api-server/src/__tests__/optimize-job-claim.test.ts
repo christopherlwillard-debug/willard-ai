@@ -43,20 +43,24 @@ test("conversion retry refuses awaiting-action jobs without deleting staged outp
   assert.match(retryRoute, /changed before retry could be claimed/);
 });
 
-const walkerStart = source.indexOf("function walkForConversion(");
-const walkerEnd = source.indexOf("\n}", walkerStart);
-const walker = source.slice(walkerStart, walkerEnd < 0 ? source.length : walkerEnd);
+const scanHelperPath = fileURLToPath(new URL("../lib/optimize-scan.ts", import.meta.url));
+const scanHelperSource = readFileSync(scanHelperPath, "utf8");
+const walkerStart = scanHelperSource.indexOf("export async function walkForConversion(");
+const walkerEnd = scanHelperSource.indexOf("\n}", walkerStart);
+const walker = scanHelperSource.slice(walkerStart, walkerEnd < 0 ? scanHelperSource.length : walkerEnd);
 
 test("conversion scans fail closed when a directory cannot be read", () => {
-  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart, "conversion walker should be present");
-  assert.match(walker, /catch \(error\)/);
-  assert.match(walker, /Unable to scan conversion directory/);
+  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart, "shared asynchronous conversion walker should be present");
+  assert.match(walker, /walkMediaDirectories\(/);
+  assert.match(walker, /fs\.promises\.lstat/);
+  assert.ok(scanHelperSource.includes("Unable to scan ${operation} directory"));
+  assert.match(walker, /}, "conversion"\)/);
   assert.doesNotMatch(walker, /catch \{\s*return;\s*\}/);
 
   const executeStart = source.indexOf('router.get("/optimize/jobs/:id/execute"');
   const executeEnd = source.indexOf("\nrouter.", executeStart + 1);
   const executeRoute = source.slice(executeStart, executeEnd < 0 ? source.length : executeEnd);
-  const scan = executeRoute.indexOf("walkForConversion(path.resolve(nasPath)");
+  const scan = executeRoute.indexOf("await walkForConversion(path.resolve(nasPath)");
   const emptyResult = executeRoute.indexOf("if (totalFiles === 0)");
   assert.ok(scan >= 0 && emptyResult > scan, "directory scanning must finish before the empty-library result");
   assert.match(executeRoute, /status: "failed"/);
@@ -207,4 +211,27 @@ test("conversion finalization checkpoints pre-move intents and reconciles them b
   assert.match(recoverySource, /eq\(conversionJobsTable\.status, "awaiting_action"\)/);
   assert.match(recoverySource, /recoverConversionFinalizationMoves\(/);
   assert.match(recoverySource, /finalizationRecoveryMoves: recovery\.unresolvedMoves/);
+});
+
+
+const cancelStart = source.indexOf('router.post("/optimize/jobs/:id/cancel"');
+const cancelEnd = source.indexOf("\n});", cancelStart) + 4;
+const cancelRoute = source.slice(cancelStart, cancelEnd);
+
+test("conversion cancellation conditionally updates only the same still-running library job", () => {
+  assert.ok(cancelStart >= 0 && cancelEnd > cancelStart, "cancel route should be present");
+  const updateStart = cancelRoute.indexOf("const [updated] = await db.update(conversionJobsTable)");
+  const whereStart = cancelRoute.indexOf(".where(", updateStart);
+  const returningEnd = cancelRoute.indexOf(".returning()", whereStart);
+  assert.ok(updateStart >= 0 && whereStart > updateStart && returningEnd > whereStart);
+  const predicate = cancelRoute.slice(whereStart, returningEnd);
+  assert.ok(predicate.includes("and("));
+  assert.ok(predicate.includes("eq(conversionJobsTable.id, id)"));
+  assert.ok(predicate.includes("eq(conversionJobsTable.nasPath, job.nasPath)"));
+  assert.ok(predicate.includes('eq(conversionJobsTable.status, "running")'));
+  assert.ok(cancelRoute.includes("if (!updated)"));
+  assert.ok(cancelRoute.includes("res.status(409)"));
+  assert.ok(cancelRoute.includes("changed before cancellation could be recorded"));
+  assert.ok(cancelRoute.includes("status: updated.status"));
+  assert.equal(cancelRoute.includes(".where(eq(conversionJobsTable.id, id))"), false);
 });

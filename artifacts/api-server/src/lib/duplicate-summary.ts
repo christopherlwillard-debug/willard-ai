@@ -13,7 +13,7 @@ export async function getDuplicateSummary(nasPath: string): Promise<DuplicateSum
   const [confirmedResult, candidateResult] = await Promise.all([
     db.execute(sql`
       SELECT COUNT(*) AS groups, COALESCE(SUM(t.wasted), 0) AS wasted FROM (
-        SELECT (COUNT(*) - 1) * MAX(size_bytes) AS wasted
+        SELECT SUM(size_bytes) - MAX(size_bytes) AS wasted
         FROM ${mediaFilesTable}
         WHERE nas_path = ${nasPath}
           AND content_hash IS NOT NULL
@@ -24,7 +24,7 @@ export async function getDuplicateSummary(nasPath: string): Promise<DuplicateSum
     `),
     db.execute(sql`
       SELECT COUNT(*) AS groups, COALESCE(SUM(t.wasted), 0) AS wasted FROM (
-        SELECT (COUNT(*) - 1) * MAX(m.size_bytes) AS wasted
+        SELECT SUM(m.size_bytes) - MAX(m.size_bytes) AS wasted
         FROM ${mediaFilesTable} m
         WHERE m.nas_path = ${nasPath}
           AND m.quick_fingerprint IS NOT NULL

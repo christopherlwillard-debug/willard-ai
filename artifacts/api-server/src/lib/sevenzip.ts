@@ -1,7 +1,57 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { ChildProcess } from "node:child_process";
+import {
+  assertMediaProcessStartAllowed,
+  runMediaToolAsync,
+  stopMediaProcess,
+  trackActiveMediaProcess,
+} from "./media-tools.ts";
+
+
+type SevenZipProcessStream = {
+  _childProcess?: ChildProcess;
+  destroy?: (error?: Error) => unknown;
+};
+
+/**
+ * node-7z 3.x exposes the spawned ChildProcess on its returned stream. Register
+ * that process with the same owner used by FFmpeg so shutdown and request
+ * cancellation cannot leave archive work running after its caller is gone.
+ */
+export function createTrackedSevenZipStream<T>(
+  create: () => T,
+  signal?: AbortSignal,
+): T {
+  assertMediaProcessStartAllowed();
+  if (signal?.aborted) throw new Error("7-Zip operation was cancelled before it started.");
+
+  const stream = create();
+  const child = (stream as T & SevenZipProcessStream)._childProcess;
+  if (!child) {
+    const error = new Error("node-7z did not expose its spawned child process.");
+    (stream as T & SevenZipProcessStream).destroy?.(error);
+    throw error;
+  }
+
+  trackActiveMediaProcess(child);
+  if (signal) {
+    const stop = () => { void stopMediaProcess(child).catch(() => {}); };
+    const detach = () => signal.removeEventListener("abort", stop);
+    child.once("close", detach);
+    child.once("error", detach);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+  }
+  return stream;
+}
+
+/** Stop a 7-Zip stream after archive validation rejects its metadata. */
+export function stopTrackedSevenZipStream(stream: unknown): Promise<void> {
+  const child = (stream as SevenZipProcessStream | null | undefined)?._childProcess;
+  return child ? stopMediaProcess(child) : Promise.resolve();
+}
 
 export interface SevenZipResolutionOptions {
   platform?: NodeJS.Platform;
@@ -9,21 +59,23 @@ export interface SevenZipResolutionOptions {
   configuredPath?: string;
   packagedPath?: string;
   exists?: (candidate: string) => boolean;
-  getVersion?: (candidate: string) => string | undefined;
+  getVersion?: (candidate: string) => string | undefined | Promise<string | undefined>;
   moduleUrl?: string;
 }
 
 const MINIMUM_SUPPORTED_VERSION = { major: 26, minor: 1 };
 
-function readSevenZipVersion(candidate: string): string | undefined {
-  const result = spawnSync(candidate, ["i"], {
-    encoding: "utf8",
-    timeout: 10_000,
-    windowsHide: true,
-  });
-  if (result.error || result.status !== 0) return undefined;
-  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  return output.match(/7-Zip(?: \(z\))? (\d+\.\d+)/)?.[1];
+async function readSevenZipVersion(candidate: string): Promise<string | undefined> {
+  try {
+    const { stdout, stderr } = await runMediaToolAsync(candidate, ["i"], {
+      timeoutMs: 10_000,
+      maxBufferBytes: 64 * 1024,
+    });
+    const output = `${stdout}\n${stderr}`;
+    return output.match(/7-Zip(?: \(z\))? (\d+\.\d+)/)?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 function isSupportedOfficialVersion(version: string | undefined): boolean {
@@ -36,12 +88,9 @@ function isSupportedOfficialVersion(version: string | undefined): boolean {
     (major === MINIMUM_SUPPORTED_VERSION.major && minor >= MINIMUM_SUPPORTED_VERSION.minor);
 }
 
-/**
- * Resolve only a verified official 7-Zip binary. The old 7zip-bin fallback
- * shipped p7zip 16.02 on Linux and must never silently parse untrusted archives.
- * Missing or outdated binaries disable archive operations, not API startup.
- */
-export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): string | undefined {
+async function resolveSevenZipPathUncached(
+  options: SevenZipResolutionOptions = {},
+): Promise<string | undefined> {
   const platform = options.platform ?? process.platform;
   const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
   const configuredPath = options.configuredPath ?? process.env.WILLARD_7ZIP_PATH;
@@ -69,13 +118,57 @@ export function resolveSevenZipPath(options: SevenZipResolutionOptions = {}): st
     if (checked.has(candidate)) continue;
     checked.add(candidate);
     if (!exists(candidate)) continue;
-    if (isSupportedOfficialVersion(getVersion(candidate))) return candidate;
+    let version: string | undefined;
+    try {
+      version = await getVersion(candidate);
+    } catch {
+      // A broken or incompatible candidate must not prevent checking the next
+      // configured/packaged/PATH candidate.
+      version = undefined;
+    }
+    if (isSupportedOfficialVersion(version)) return candidate;
   }
   return undefined;
 }
 
-export function getSevenZipPath(options: SevenZipResolutionOptions = {}): string {
-  const resolved = resolveSevenZipPath(options);
+/**
+ * Build a resolver that coalesces concurrent version probes and retains a
+ * verified binary for this process lifetime. Negative results are not cached:
+ * installing 7-Zip while the app is running can restore archive functionality.
+ */
+export function createSevenZipPathResolver(
+  options: SevenZipResolutionOptions = {},
+): () => Promise<string | undefined> {
+  let cachedPath: string | undefined;
+  let pending: Promise<string | undefined> | null = null;
+
+  return async () => {
+    if (cachedPath) return cachedPath;
+    if (!pending) {
+      pending = resolveSevenZipPathUncached(options)
+        .then((resolved) => {
+          if (resolved) cachedPath = resolved;
+          return resolved;
+        })
+        .finally(() => { pending = null; });
+    }
+    return pending;
+  };
+}
+
+const defaultSevenZipPathResolver = createSevenZipPathResolver();
+
+/** Resolve an official supported binary without blocking the API event loop. */
+export function resolveSevenZipPath(
+  options?: SevenZipResolutionOptions,
+): Promise<string | undefined> {
+  return options
+    ? resolveSevenZipPathUncached(options)
+    : defaultSevenZipPathResolver();
+}
+
+export async function getSevenZipPath(options?: SevenZipResolutionOptions): Promise<string> {
+  const resolved = await resolveSevenZipPath(options);
   if (resolved) return resolved;
   throw new Error(
     "Archive operations require official 7-Zip 26.01 or newer. Install it on PATH or set WILLARD_7ZIP_PATH; the bundled legacy p7zip fallback is intentionally disabled.",

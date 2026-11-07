@@ -5,6 +5,10 @@ Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
+# Detect an orphaned API or web listener before update recovery or startup work.
+$entryTracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $entryTracked
+
 Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
@@ -234,6 +238,7 @@ function Start-WillardServices {
     $env:WILLARD_LOCAL_SETUP = "true"
     $envFile = Join-Path $Root ".env"
     $apiProc = $null
+    $webProc = $null
     try {
         $apiProc = Start-Process -FilePath $nodeCommand `
             -ArgumentList @("--enable-source-maps", "--env-file=`"$envFile`"", "`"$apiDist`"") `
@@ -259,8 +264,13 @@ function Start-WillardServices {
         }
         return @{ api = $apiProc; web = $webProc }
     } catch {
-        Stop-TrackedProcesses | Out-Null
-        throw
+        $startError = $_
+        try { Stop-TrackedProcesses | Out-Null } catch {
+            Write-Warn ("Tracked Willard services could not be stopped safely: " + $_.Exception.Message)
+        }
+        Stop-LauncherStartedProcessHandle $webProc
+        Stop-LauncherStartedProcessHandle $apiProc
+        throw $startError
     }
 }
 

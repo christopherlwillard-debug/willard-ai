@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { Transform } from "node:stream";
 import { assertWithinRoot } from "./nas-storage.ts";
+import { moveFileNoReplace } from "./organize-helpers.ts";
 
 /**
  * These limits are deliberately finite even though the NAS may be large.
@@ -433,7 +434,9 @@ export function writeArchiveFileAtomically(
     fs.closeSync(fd);
     fd = undefined;
     assertSafeOutputFile(root, outputPath);
-    fs.renameSync(temporaryPath, outputPath);
+    // The final publication must be exclusive too: a file can appear after
+    // the preflight check, and POSIX rename would silently replace it.
+    moveFileNoReplace(temporaryPath, outputPath);
     assertSafeOutputFile(root, outputPath);
   } finally {
     if (fd !== undefined) {
