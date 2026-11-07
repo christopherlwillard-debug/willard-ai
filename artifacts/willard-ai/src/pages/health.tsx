@@ -74,7 +74,7 @@ export default function Health() {
       const decoder = new TextDecoder();
       let buffer = "";
       let completed = false;
-      let completion: Extract<HealthCleanupEvent, { type: "done" }> | null = null;
+      const completions: Extract<HealthCleanupEvent, { type: "done" }>[] = [];
       const handleEvent = (block: string) => {
         const event = parseHealthCleanupEvent(block);
         if (!event) return;
@@ -85,7 +85,7 @@ export default function Health() {
         if (event.type === "error") throw new Error(event.message);
         if (!event.ok && !event.partial) throw new Error(event.message ?? "Cleanup did not complete successfully.");
         completed = true;
-        completion = event;
+        completions.push(event);
         setProgress({
           processed: event.processed ?? 0,
           total: event.total ?? 1,
@@ -106,6 +106,7 @@ export default function Health() {
       }
       buffer += decoder.decode();
       if (buffer.trim()) handleEvent(buffer);
+      const completion = completions[0] ?? null;
       if (!completed || !completion) throw new Error("Cleanup ended before the server confirmed completion.");
       if (completion.ok) {
         setSelected([]);
