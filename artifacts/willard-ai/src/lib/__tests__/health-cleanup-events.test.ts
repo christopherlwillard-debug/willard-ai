@@ -31,7 +31,7 @@ test("Health Center cleanup parser preserves named errors and rejects malformed 
 
 test("Health Center cleanup parser preserves partial failures and metadata worker handoff", () => {
   assert.deepEqual(
-    parseHealthCleanupEvent('event: done\\ndata: {"ok":false,"partial":true,"failedItems":2,"metadataJobId":42,"message":"Two thumbnails failed; metadata job #42 is running."}'),
+    parseHealthCleanupEvent('event: done\ndata: {"ok":false,"partial":true,"failedItems":2,"metadataJobId":42,"message":"Two thumbnails failed; metadata job #42 is running."}'),
     {
       type: "done",
       ok: false,
@@ -42,7 +42,7 @@ test("Health Center cleanup parser preserves partial failures and metadata worke
     },
   );
   assert.throws(
-    () => parseHealthCleanupEvent('event: done\\ndata: {"ok":false,"partial":true,"failedItems":0}'),
+    () => parseHealthCleanupEvent('event: done\ndata: {"ok":false,"partial":true,"failedItems":0}'),
     /at least one failed item/,
   );
 });
