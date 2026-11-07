@@ -5,10 +5,10 @@ import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/
 import { and, eq, sql } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
-import { isMissingRegularMediaFile } from "../lib/media-health-scan.ts";
+import { isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
-import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
+import { purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 import { startJob } from "../lib/library-engine";
 
 const router = Router();
@@ -200,9 +200,27 @@ router.post("/media/cleanup", async (req, res) => {
 
     if (actions.includes("orphanedRecords")) {
       for (const row of inspected.missing) {
-        await purgeDerivedDataForMedia(nasPath, [row.id]);
-        await db.delete(mediaFilesTable).where(and(eq(mediaFilesTable.id, row.id), eq(mediaFilesTable.nasPath, nasPath)));
-        done++; progress("Removing orphaned index records…");
+        const source = resolveLibraryPath(nasPath, row.relativePath);
+        const result = await softDeleteMissingMediaRecord(source, async () => {
+          const [updated] = await db.update(mediaFilesTable)
+            .set({ lastScanAction: "DELETED", lastScannedAt: new Date() })
+            .where(and(
+              eq(mediaFilesTable.id, row.id),
+              eq(mediaFilesTable.nasPath, nasPath),
+              eq(mediaFilesTable.relativePath, row.relativePath),
+              ACTIVE,
+            ))
+            .returning({ id: mediaFilesTable.id });
+          return Boolean(updated);
+        });
+        done++;
+        if (result === "marked_deleted") {
+          progress("Marked a confirmed-missing file as removed from the library…");
+        } else if (result === "reappeared") {
+          progress("Skipped a file that reappeared during cleanup…");
+        } else {
+          progress("Skipped a media record that changed during cleanup…");
+        }
       }
     }
     if (actions.includes("orphanedDerivedData")) {
