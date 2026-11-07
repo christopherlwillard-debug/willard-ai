@@ -3969,3 +3969,16 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 - **Commit:** `6c35eccd185614a4c636a7d28576ef7ef305a6c7`.
 - **Validation:** Fast Validation and Dependency Review are pending for this code/test commit. No test or CI success is claimed yet.
 - **Remaining risk:** this corrects the metadata action only. Health Center's full-library inspection and cleanup still use synchronous NAS filesystem operations inside request handlers; the temporary `HEALTH_CLEANUP` row is not a restart-aware worker. The stale missing-file observation race and durable Health Center inspection/cleanup architecture remain open. No production database or NAS media was changed.
+
+
+## November 7 — Dependency Review no longer cancels an in-progress PR audit
+
+### Medium (P2): Dependency Review cancelled the previous head when the next PR commit arrived
+
+- **Affected workflow:** PR dependency advisory review and audit commit validation.
+- **Status:** **workflow corrected; validation pending** on the workflow/report commit.
+- **Evidence/root cause:** Dependency Review run [#42348768299](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42348768299), associated with code/test commit `6c35eccd185614a4c636a7d28576ef7ef305a6c7`, was cancelled when the following report-only commit `6976605017ad083bb724b824480820c61424bbbc` synchronized PR #2. The workflow's concurrency group had `cancel-in-progress: true`. Its pull-request path filter is evaluated against the PR diff, which already contains dependency manifest/lockfile changes, so later docs-only commits still trigger another dependency review and cancel the in-progress run.
+- **Fix:** changed Dependency Review concurrency to `cancel-in-progress: false`. A newer run may wait behind the active run instead of cancelling it. The latest head still receives its own review.
+- **Commit:** pending.
+- **Validation:** a new Dependency Review run on the latest head is expected; no success is claimed until the high/critical production advisory gate completes.
+- **Remaining risk:** GitHub concurrency allows only one pending run per group, so rapid successive updates may replace an older pending run. The latest PR head remains the required validation target. Fast Validation already uses `cancel-in-progress: false` and preserves its in-progress Windows smoke job.

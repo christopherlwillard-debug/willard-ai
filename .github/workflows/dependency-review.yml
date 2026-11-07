@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: dependency-review-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve an in-progress audit; a newer PR synchronization may wait for it.
+  cancel-in-progress: false
 
 jobs:
   dependency-review:
