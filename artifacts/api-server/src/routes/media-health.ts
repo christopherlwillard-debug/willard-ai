@@ -189,6 +189,9 @@ router.post("/media/cleanup", async (req, res) => {
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   let jobId: number | null = null;
   let metadataJobId: number | null = null;
+  let failedItems = 0;
+  let thumbnailFailures = 0;
+  let faceCropFailures = 0;
   try {
     const [job] = await db.insert(libraryJobsTable).values({
       jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
@@ -227,6 +230,8 @@ router.post("/media/cleanup", async (req, res) => {
     }
     if (actions.includes("orphanedDerivedData")) {
       const cleaned = await purgeOrphanedDerivedData(nasPath);
+      faceCropFailures = cleaned.cropErrors.length;
+      failedItems += faceCropFailures;
       done += cleaned.orphanRows + cleaned.staleCropsRemoved;
       derivedCleanup = {
         orphanRows: cleaned.orphanRows,
@@ -234,7 +239,7 @@ router.post("/media/cleanup", async (req, res) => {
         peopleRows: cleaned.peopleRows,
         cropErrors: cleaned.cropErrors.length,
       };
-      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops…`);
+      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops${faceCropFailures > 0 ? `; ${faceCropFailures} face crop(s) could not be removed` : ""}…`);
     }
     if (actions.includes("orphanedThumbnails")) {
       for (const file of inspected.orphanThumbs) {
@@ -287,7 +292,10 @@ router.post("/media/cleanup", async (req, res) => {
             },
           );
           if (result.error) throw new Error(result.error);
-        } catch { /* reported by the next health scan */ }
+        } catch {
+          failedItems++;
+          thumbnailFailures++;
+        }
         done++; progress("Regenerating thumbnails…");
       }
     }
@@ -329,19 +337,36 @@ router.post("/media/cleanup", async (req, res) => {
       metadataJobId = metadataJob.jobId;
       progress("Metadata refresh job #" + metadataJobId + " is running.");
     }
+    const partial = failedItems > 0;
+    const failureDetails = [
+      thumbnailFailures > 0 ? `${thumbnailFailures} thumbnail(s) could not be regenerated` : null,
+      faceCropFailures > 0 ? `${faceCropFailures} face crop(s) could not be removed` : null,
+    ].filter((detail): detail is string => Boolean(detail));
+    const completionMessage = partial
+      ? `Cleanup finished with ${failedItems} item(s) needing attention${failureDetails.length > 0 ? `: ${failureDetails.join("; ")}` : ""}.${metadataJobId !== null ? ` Metadata job #${metadataJobId} is running.` : ""}`
+      : metadataJobId !== null
+        ? `Cleanup completed. Metadata job #${metadataJobId} is running.`
+        : "Cleanup completed.";
     await db.update(libraryJobsTable).set({
-      status: "DONE",
+      status: partial ? "FAILED" : "DONE",
       processedFiles: done,
       totalFiles: total,
       finishedAt: new Date(),
+      error: partial ? completionMessage : null,
       summary: {
         actions,
+        failedItems,
+        thumbnailFailures,
+        faceCropFailures,
         ...(derivedCleanup ? { derivedCleanup } : {}),
         ...(metadataJobId !== null ? { metadataJobId } : {}),
       },
     }).where(eq(libraryJobsTable.id, job.id));
     send("done", {
-      ok: true,
+      ok: !partial,
+      partial,
+      failedItems,
+      message: completionMessage,
       processed: done,
       total,
       ...(metadataJobId !== null ? { metadataJobId } : {}),

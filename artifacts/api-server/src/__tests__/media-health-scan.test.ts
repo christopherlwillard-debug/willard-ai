@@ -118,6 +118,22 @@ test("missing-media cleanup marks only a still-missing active record and preserv
   assert.equal(changed, "record_changed");
 });
 
+test("Health Center reports thumbnail and face-crop failures as partial cleanup instead of success", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+
+  assert.match(cleanupRoute, /let failedItems = 0/);
+  assert.match(cleanupRoute, /faceCropFailures = cleaned\.cropErrors\.length/);
+  assert.match(cleanupRoute, /failedItems \+= faceCropFailures/);
+  assert.match(cleanupRoute, /thumbnailFailures\+\+/);
+  assert.match(cleanupRoute, /status: partial \? "FAILED" : "DONE"/);
+  assert.match(cleanupRoute, /ok: !partial/);
+  assert.match(cleanupRoute, /partial,/);
+  assert.match(cleanupRoute, /failedItems,/);
+  assert.match(cleanupRoute, /metadataJobId !== null \? \{ metadataJobId \} : \{\}/);
+});
+
 test("Health Center orphan cleanup uses reversible conditional soft-delete and preserves derived data", () => {
   const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
   const enginePath = fileURLToPath(new URL("../lib/library-engine/job-engine.ts", import.meta.url));

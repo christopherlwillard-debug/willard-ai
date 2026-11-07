@@ -1,6 +1,6 @@
 export type HealthCleanupEvent =
   | { type: "progress"; processed: number; total: number; message: string }
-  | { type: "done"; ok: boolean; processed?: number; total?: number }
+  | { type: "done"; ok: boolean; processed?: number; total?: number; partial?: boolean; failedItems?: number; metadataJobId?: number; message?: string }
   | { type: "error"; message: string };
 
 function readCount(value: unknown, fallback: number, allowZero = true): number {
@@ -68,11 +68,37 @@ export function parseHealthCleanupEvent(block: string): HealthCleanupEvent | nul
     const total = Number.isSafeInteger(record.total) && Number(record.total) > 0
       ? Number(record.total)
       : undefined;
+    if (record.partial !== undefined && typeof record.partial !== "boolean") {
+      throw new Error("Cleanup completion event had an invalid partial status.");
+    }
+    const partial = record.partial === true;
+    const failedItems = record.failedItems === undefined
+      ? undefined
+      : readCount(record.failedItems, -1, false);
+    if (record.failedItems !== undefined && failedItems === -1) {
+      throw new Error("Cleanup completion event had an invalid failure count.");
+    }
+    const metadataJobId = record.metadataJobId === undefined
+      ? undefined
+      : readCount(record.metadataJobId, -1, false);
+    if (record.metadataJobId !== undefined && metadataJobId === -1) {
+      throw new Error("Cleanup completion event had an invalid metadata job ID.");
+    }
+    if (partial && (record.ok !== false || failedItems === undefined || failedItems < 1)) {
+      throw new Error("Partial cleanup completion must report at least one failed item.");
+    }
+    if (record.message !== undefined && (typeof record.message !== "string" || record.message.length === 0)) {
+      throw new Error("Cleanup completion event had an invalid message.");
+    }
     return {
       type: "done",
       ok: record.ok,
       ...(processed === undefined ? {} : { processed }),
       ...(total === undefined ? {} : { total }),
+      ...(partial ? { partial: true } : {}),
+      ...(failedItems === undefined ? {} : { failedItems }),
+      ...(metadataJobId === undefined ? {} : { metadataJobId }),
+      ...(typeof record.message === "string" ? { message: record.message } : {}),
     };
   }
 

@@ -29,6 +29,24 @@ test("Health Center cleanup parser preserves named errors and rejects malformed 
   );
 });
 
+test("Health Center cleanup parser preserves partial failures and metadata worker handoff", () => {
+  assert.deepEqual(
+    parseHealthCleanupEvent('event: done\\ndata: {"ok":false,"partial":true,"failedItems":2,"metadataJobId":42,"message":"Two thumbnails failed; metadata job #42 is running."}'),
+    {
+      type: "done",
+      ok: false,
+      partial: true,
+      failedItems: 2,
+      metadataJobId: 42,
+      message: "Two thumbnails failed; metadata job #42 is running.",
+    },
+  );
+  assert.throws(
+    () => parseHealthCleanupEvent('event: done\\ndata: {"ok":false,"partial":true,"failedItems":0}'),
+    /at least one failed item/,
+  );
+});
+
 test("Health Center cleanup parser ignores comments and unknown event names", () => {
   assert.equal(parseHealthCleanupEvent(": keep-alive\n\n"), null);
   assert.equal(parseHealthCleanupEvent('event: future-event\ndata: {"value":1}'), null);
@@ -42,7 +60,11 @@ test("Health Center only clears selected actions after a successful completion e
   const page = readFileSync(new URL("../../pages/health.tsx", import.meta.url), "utf8");
   assert.match(page, /parseHealthCleanupEvent/);
   assert.match(page, /if \(!completed\) throw/);
-  assert.ok(page.indexOf("if (!completed) throw") < page.indexOf("setSelected([])"));
+  assert.ok(page.indexOf("if (!completed || !completion) throw") < page.indexOf("setSelected([])"));
+  assert.match(page, /if \(completion\.ok\) \{/);
+  assert.match(page, /else if \(completion\.partial\)/);
+  assert.match(page, /completion\.metadataJobId/);
+  assert.match(page, /role="status"/);
 });
 
 

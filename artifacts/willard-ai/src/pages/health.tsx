@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
-import { parseHealthCleanupEvent } from "@/lib/health-cleanup-events";
+import { parseHealthCleanupEvent, type HealthCleanupEvent } from "@/lib/health-cleanup-events";
 
 type Report = {
   checkedAt: string;
@@ -44,6 +44,7 @@ export default function Health() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number; message: string } | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,7 +64,7 @@ export default function Health() {
   const statusColor = report?.status === "healthy" ? "text-emerald-400" : report?.status === "action_required" ? "text-red-400" : "text-amber-400";
 
   const runCleanup = async () => {
-    setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError("");
+    setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError(""); setNotice("");
     try {
       const response = await fetch(apiUrl("/media/cleanup"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected }),
@@ -73,6 +74,7 @@ export default function Health() {
       const decoder = new TextDecoder();
       let buffer = "";
       let completed = false;
+      let completion: Extract<HealthCleanupEvent, { type: "done" }> | null = null;
       const handleEvent = (block: string) => {
         const event = parseHealthCleanupEvent(block);
         if (!event) return;
@@ -81,12 +83,17 @@ export default function Health() {
           return;
         }
         if (event.type === "error") throw new Error(event.message);
-        if (!event.ok) throw new Error("Cleanup did not complete successfully.");
+        if (!event.ok && !event.partial) throw new Error(event.message ?? "Cleanup did not complete successfully.");
         completed = true;
+        completion = event;
         setProgress({
           processed: event.processed ?? 0,
           total: event.total ?? 1,
-          message: "Cleanup completed.",
+          message: event.message ?? (event.metadataJobId !== undefined
+            ? `Cleanup completed. Metadata job #${event.metadataJobId} is running.`
+            : event.partial
+              ? `Cleanup finished with ${event.failedItems ?? "some"} item(s) needing attention.`
+              : "Cleanup completed."),
         });
       };
       while (true) {
@@ -99,8 +106,15 @@ export default function Health() {
       }
       buffer += decoder.decode();
       if (buffer.trim()) handleEvent(buffer);
-      if (!completed) throw new Error("Cleanup ended before the server confirmed completion.");
-      setSelected([]);
+      if (!completed || !completion) throw new Error("Cleanup ended before the server confirmed completion.");
+      if (completion.ok) {
+        setSelected([]);
+        if (completion.metadataJobId !== undefined) {
+          setNotice(completion.message ?? `Cleanup completed. Metadata job #${completion.metadataJobId} is running.`);
+        }
+      } else if (completion.partial) {
+        setNotice(completion.message ?? `Cleanup finished with ${completion.failedItems ?? "some"} item(s) needing attention. Review and retry the selected actions.`);
+      }
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Cleanup failed"); }
     finally { setRunning(false); }
@@ -134,7 +148,8 @@ export default function Health() {
         </CardContent>
       </Card>
 
-      {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {notice && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {checks.map(([key, label, description]) => (
