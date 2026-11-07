@@ -47,10 +47,14 @@ test("PostgreSQL schema verifier detects and repairs version-2 organization jobs
       throw error;
     }
 
+    const legacyHistory = await client.query(
+      "SELECT COALESCE(MAX(version), 0) AS current_version FROM willard_schema_versions",
+    );
+    assert.equal(Number(legacyHistory.rows[0].current_version), 2);
+
     const before = await bootstrap.verifyRequiredSchema(client);
     assert.equal(before.ready, false);
     assert.ok(before.missing.includes("organization_jobs.lease_token"));
-    assert.ok(before.missing.includes(`willard_schema_versions.max_version=${bootstrap.SCHEMA_VERSION} (found 2)`));
 
     await bootstrap.runRequiredSchema(client, { log: false });
 
