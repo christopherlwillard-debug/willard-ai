@@ -11,6 +11,7 @@ const bootstrap = createRequire(import.meta.url)(
   path.join(repoRoot, "setup-db.cjs"),
 ) as {
   SCHEMA_VERSION: number;
+  SETUP_SQL: string[];
   runRequiredSchema(client: { query(sql: string): Promise<unknown> }, options?: { log?: boolean }): Promise<void>;
   verifyRequiredSchema(client: { query(sql: string): Promise<unknown> }): Promise<{ ready: boolean; missing: string[] }>;
 };
@@ -27,35 +28,23 @@ test("PostgreSQL schema verifier detects and repairs version-2 organization jobs
     await client.query(`CREATE SCHEMA "${schema}"`);
     schemaCreated = true;
     await client.query(`SET search_path TO "${schema}"`);
-    await client.query(`
-      CREATE TABLE willard_schema_versions (
-        version integer PRIMARY KEY,
-        applied_at timestamp NOT NULL DEFAULT now()
-      )
-    `);
-    await client.query("INSERT INTO willard_schema_versions (version) VALUES (2)");
-    await client.query(`
-      CREATE TABLE organization_jobs (
-        id serial PRIMARY KEY,
-        status text NOT NULL DEFAULT 'pending',
-        source_type text NOT NULL,
-        source_path text NOT NULL,
-        nas_path text,
-        archive_id integer,
-        archive_disposition text NOT NULL DEFAULT 'keep',
-        conflict_policy text NOT NULL DEFAULT 'keep_existing',
-        plan_json jsonb,
-        preflight_json jsonb,
-        file_moves jsonb,
-        report_json jsonb,
-        report_path text,
-        error text,
-        last_stage text,
-        stage_updated_at timestamp,
-        created_at timestamp NOT NULL DEFAULT now(),
-        completed_at timestamp
-      )
-    `);
+
+    // Recreate the full required schema at version 2, omitting only the v3
+    // organization worker fencing-column migration.
+    await client.query("BEGIN");
+    try {
+      for (const sql of bootstrap.SETUP_SQL) {
+        if (/ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS lease_token text/i.test(sql)) continue;
+        const legacySql = sql.includes("INSERT INTO willard_schema_versions")
+          ? sql.replace(`VALUES (${bootstrap.SCHEMA_VERSION})`, "VALUES (2)")
+          : sql;
+        await client.query(legacySql);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    }
 
     const before = await bootstrap.verifyRequiredSchema(client);
     assert.equal(before.ready, false);
