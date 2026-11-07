@@ -12,6 +12,7 @@ import {
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
   clearThumbnailCache,
+  removeOrphanedThumbnail,
   ensureThumbnailDir,
   findValidThumbnailPath,
   findReusableThumbnailPaths,
@@ -355,6 +356,49 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(reused.reused, true);
     assert.equal(await clearing, 1);
     assert.equal(fs.existsSync(first.destPath), false);
+  });
+
+
+  test("orphan cleanup waits for a publisher and rechecks active catalog membership", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const generation = generateThumbnail(903, source, "jpg", root, undefined, async ({ destPath }) => {
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    let checkedCatalog = false;
+    const cleanup = removeOrphanedThumbnail(root, path.join(getThumbnailDir(root), "903.webp"), async () => {
+      checkedCatalog = true;
+      return false;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(checkedCatalog, false, "orphan status must be rechecked only after the publisher lock is released");
+    releaseReady();
+    assert.equal((await generation).error, null);
+    assert.equal(await cleanup, false);
+    assert.equal(checkedCatalog, true);
+    assert.equal(fs.existsSync(path.join(getThumbnailDir(root), "903.webp")), true);
+  });
+
+  test("orphan cleanup removes only a regular canonical thumbnail still confirmed orphaned", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const generated = await generateThumbnail(904, source, "jpg", root);
+    assert.equal(generated.error, null);
+
+    assert.equal(await removeOrphanedThumbnail(root, generated.destPath, async () => true), true);
+    assert.equal(fs.existsSync(generated.destPath), false);
+    assert.equal(await removeOrphanedThumbnail(root, path.join(getThumbnailDir(root), "../904.webp"), async () => true), false);
   });
 
 });

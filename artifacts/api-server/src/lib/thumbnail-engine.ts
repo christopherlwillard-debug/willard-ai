@@ -682,3 +682,61 @@ export async function clearThumbnailCache(
   }
   return deleted;
 }
+
+/**
+ * Remove a canonical id-based thumbnail only while it is still orphaned.
+ * The per-file lock is shared with publishers, and the catalog predicate is
+ * rechecked after acquiring it so a concurrent publisher/scan cannot be
+ * invalidated by a stale Health Center inventory.
+ */
+export async function removeOrphanedThumbnail(
+  nasPath: string,
+  thumbnailPath: string,
+  isStillOrphaned: () => Promise<boolean>,
+): Promise<boolean> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return false;
+
+  const filePath = path.resolve(thumbnailPath);
+  if (path.dirname(filePath) !== path.resolve(dir)) return false;
+  const filename = path.basename(filePath);
+  const mediaFileId = Number(path.basename(filename, path.extname(filename)));
+  if (!Number.isSafeInteger(mediaFileId) || mediaFileId <= 0 || filename !== thumbnailFilename(mediaFileId)) {
+    return false;
+  }
+
+  const releaseLock = await acquireThumbnailLock(filePath);
+  try {
+    const currentDir = getExistingThumbnailDir(nasPath);
+    if (!currentDir || path.resolve(currentDir) !== path.resolve(dir)) return false;
+
+    let before: fs.Stats;
+    try {
+      before = await fs.promises.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!before.isFile() || before.isSymbolicLink()) return false;
+    if (!(await isStillOrphaned())) return false;
+
+    let after: fs.Stats;
+    try {
+      after = await fs.promises.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!after.isFile() || after.isSymbolicLink() ||
+        before.dev !== after.dev || before.ino !== after.ino ||
+        before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+      return false;
+    }
+
+    await fs.promises.unlink(filePath);
+    return true;
+  } finally {
+    releaseLock();
+  }
+}
+

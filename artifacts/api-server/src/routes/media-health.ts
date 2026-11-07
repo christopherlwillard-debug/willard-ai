@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
 import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
@@ -236,8 +236,28 @@ router.post("/media/cleanup", async (req, res) => {
     }
     if (actions.includes("orphanedThumbnails")) {
       for (const file of inspected.orphanThumbs) {
-        try { fs.unlinkSync(resolveWithinRoot(file, getWillardAIDir(nasPath))); } catch { /* stale or already gone */ }
-        done++; progress("Removing orphaned thumbnails…");
+        let removed = false;
+        const filename = path.basename(file);
+        const mediaFileId = Number(path.basename(filename, path.extname(filename)));
+        if (path.extname(filename).toLowerCase() === ".webp" &&
+            Number.isSafeInteger(mediaFileId) && mediaFileId > 0 &&
+            filename === thumbnailFilename(mediaFileId)) {
+          try {
+            removed = await removeOrphanedThumbnail(nasPath, file, async () => {
+              const [activeRow] = await db.select({ id: mediaFilesTable.id })
+                .from(mediaFilesTable)
+                .where(and(
+                  eq(mediaFilesTable.id, mediaFileId),
+                  eq(mediaFilesTable.nasPath, nasPath),
+                  ACTIVE,
+                ))
+                .limit(1);
+              return !activeRow;
+            });
+          } catch { /* changed or became unsafe since inspection */ }
+        }
+        done++;
+        progress(removed ? "Removed an orphaned thumbnail…" : "Skipped a thumbnail that changed or is no longer orphaned…");
       }
     }
     if (actions.includes("missingThumbnails") || actions.includes("fullThumbnailRebuild")) {
