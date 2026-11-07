@@ -40,9 +40,12 @@ test("organization execution, resume, and rollback are fenced by unique lease to
   const helpers = source("lib/organize-helpers.ts");
 
   assert.match(schema, /leaseToken:\s*text\("lease_token"\)/);
-  assert.match(routes, /const executionLeaseToken = crypto\.randomUUID\(\)/);
-  assert.match(routes, /const resumeLeaseToken = crypto\.randomUUID\(\)/);
-  assert.match(routes, /const rollbackLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /let executionLeaseToken = ""/);
+  assert.match(routes, /executionLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /let resumeLeaseToken = ""/);
+  assert.match(routes, /resumeLeaseToken = crypto\.randomUUID\(\)/);
+  assert.match(routes, /let rollbackLeaseToken = ""/);
+  assert.match(routes, /rollbackLeaseToken = crypto\.randomUUID\(\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, executionLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, resumeLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, rollbackLeaseToken\)/);
