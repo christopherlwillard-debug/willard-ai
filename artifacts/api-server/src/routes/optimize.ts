@@ -8,7 +8,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { assertWithinRoot, ensureDirectoryWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "../lib/media-tools";
 import { classifyPngForJpegConversion, type PngSafetyDecision } from "../lib/png-safety.ts";
-import { createConcurrencyLimiter, mapSettledWithConcurrency, walkForConversion, walkForOptimize, type OptimizeConversionFile, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
+import { createConcurrencyLimiter, mapSettledWithConcurrency, readOptimizeScanCache, walkForConversion, walkForOptimize, writeOptimizeScanCache, type OptimizeConversionFile, type OptimizeExtGroup as ExtGroup } from "../lib/optimize-scan.ts";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { consumeActionToken, issueActionToken } from "../lib/action-tokens";
 import { aiProviderBlockedReason, canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy";
@@ -341,33 +341,16 @@ async function readScanCache(
   profile?: string,
   rawConversionEnabled?: boolean,
 ): Promise<(Record<string, unknown> & { scannedAt: string }) | null> {
-  try {
-    const raw = await fs.promises.readFile(getCachePath(nasPath), "utf-8");
-    const data = JSON.parse(raw) as Record<string, unknown> & { scannedAt: string; cacheVersion?: number };
-    if (!data.scannedAt) return null;
-    if ((data.cacheVersion ?? 0) < CACHE_VERSION) return null;
-    if (profile !== undefined && data.profile !== profile) return null;
-    if (rawConversionEnabled !== undefined && data.rawConversionEnabled !== rawConversionEnabled) return null;
-    const age = Date.now() - new Date(data.scannedAt).getTime();
-    if (age > CACHE_TTL_MS) return null;
-    return data;
-  } catch {
-    return null;
-  }
+  return readOptimizeScanCache(getCachePath(nasPath), nasPath, {
+    expectedVersion: CACHE_VERSION,
+    ttlMs: CACHE_TTL_MS,
+    profile,
+    rawConversionEnabled,
+  });
 }
 
 async function writeScanCache(nasPath: string, data: Record<string, unknown>): Promise<void> {
-  try {
-    const cacheDir = path.join(getWillardAIDir(nasPath), "cache");
-    await fs.promises.mkdir(cacheDir, { recursive: true });
-    await fs.promises.writeFile(
-      getCachePath(nasPath),
-      JSON.stringify({ ...data, cacheVersion: CACHE_VERSION }),
-      "utf-8",
-    );
-  } catch {
-    // Non-fatal — cache write is best-effort
-  }
+  await writeOptimizeScanCache(getCachePath(nasPath), nasPath, data, CACHE_VERSION);
 }
 
 // ── NAS directory walker ───────────────────────────────────────────────────────
