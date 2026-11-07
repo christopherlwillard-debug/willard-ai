@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import { db, appSettingsTable } from "@workspace/db";
+import { getActiveAppSettings } from "./active-library.ts";
 import { checkNasReachableAsync } from "./nas-storage.ts";
 import { getActiveJobId, getActiveJobProfile, invalidateDirMtimeCache, startJob, waitForUiConnected } from "./library-engine/index.ts";
 import { recordActivity } from "./library-activity.ts";
@@ -315,11 +315,7 @@ export async function runWatcherHeartbeat(): Promise<void> {
     let indexingPaused = false;
     let watcherPollIntervalSeconds = DEFAULT_SWEEP_INTERVAL_S;
     try {
-      const [row] = await db.select({
-        nasPath: appSettingsTable.nasPath,
-        indexingPaused: appSettingsTable.indexingPaused,
-        watcherPollIntervalSeconds: appSettingsTable.watcherPollIntervalSeconds,
-      }).from(appSettingsTable).limit(1);
+      const row = await getActiveAppSettings();
       nasPath = row?.nasPath ?? null;
       indexingPaused = row?.indexingPaused ?? false;
       watcherPollIntervalSeconds = Math.max(

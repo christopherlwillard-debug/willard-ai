@@ -1,17 +1,16 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { mediaFilesTable, appSettingsTable } from "@workspace/db";
+import { mediaFilesTable } from "@workspace/db";
 import { eq, ilike, and, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
+  return getActiveNasPath();
 }
 
 router.get("/documents", async (req, res) => {

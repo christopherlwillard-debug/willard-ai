@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, lstatSync } from "node:fs";
 import { access, lstat, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -13,12 +13,23 @@ function normalizeRelativePath(value) {
 export function assertCanonicalReleaseDirectory(releaseDir, root) {
   const resolved = path.resolve(releaseDir);
   const canonical = path.resolve(root, CANONICAL_RELEASE_DIR_NAME);
-  const buildRoot = path.resolve(root, "build");
-  if (resolved === canonical) return;
-  if (resolved === buildRoot || resolved.startsWith(`${buildRoot}${path.sep}`)) {
+  if (resolved !== canonical) {
     throw new Error(
       `Windows releases must use the canonical staging directory ${CANONICAL_RELEASE_DIR_NAME}; refusing ${normalizeRelativePath(path.relative(root, resolved))}.`,
     );
+  }
+
+  // The build script recursively replaces this directory. Refuse a symlinked
+  // parent or target so a redirected build path cannot delete data elsewhere.
+  for (const candidate of [path.resolve(root, "build"), resolved]) {
+    try {
+      const info = lstatSync(candidate);
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new Error(`Windows release staging path must be a real directory, not a symlink or file: ${candidate}`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
 }
 

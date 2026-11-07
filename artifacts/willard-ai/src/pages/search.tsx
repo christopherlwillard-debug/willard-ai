@@ -141,56 +141,68 @@ function ResultCard({ item, onOpen, onSimilar }: {
   const showThumb = isVisualMediaType(item.mediaType) && !thumbError;
   return (
     <div
-      className="group rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors cursor-pointer"
-      onClick={() => onOpen(item)}
-      data-testid={`card-result-${item.id}`}
+      className="group rounded-lg border bg-card overflow-hidden hover:border-primary/50 transition-colors"
+      data-testid={"card-result-" + item.id}
     >
-      <div className="relative aspect-video bg-secondary/40 flex items-center justify-center">
-        {showThumb ? (
-          <img
-            src={`${API}/media/thumbnail/${item.id}`}
-            alt={item.name}
-            loading="lazy"
-            className="h-full w-full object-cover"
-            onError={() => setThumbError(true)}
-          />
-        ) : (
-          <div className="scale-[2]">{mediaIcon(item.mediaType)}</div>
-        )}
-        <Badge variant="outline" className={`absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur ${conf.className}`}>
-          {conf.label}
-        </Badge>
-        {item.favorite && <Star className="absolute top-2 right-2 h-4 w-4 fill-yellow-400 text-yellow-400" />}
+      <button
+        type="button"
+        className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+        aria-label={"Open " + item.name + " details"}
+        onClick={() => onOpen(item)}
+        data-testid={"button-open-result-" + item.id}
+      >
+        <div className="relative aspect-video bg-secondary/40 flex items-center justify-center">
+          {showThumb ? (
+            <img
+              src={API + "/media/thumbnail/" + item.id}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              className="h-full w-full object-cover"
+              onError={() => setThumbError(true)}
+            />
+          ) : (
+            <div className="scale-[2]" aria-hidden="true">{mediaIcon(item.mediaType)}</div>
+          )}
+          <Badge variant="outline" className={"absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur " + conf.className}>
+            {conf.label}
+          </Badge>
+          {item.favorite && <Star aria-hidden="true" className="absolute top-2 right-2 h-4 w-4 fill-yellow-400 text-yellow-400" />}
+        </div>
+        <div className="p-3 space-y-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {mediaIcon(item.mediaType)}
+            <p className="text-sm font-medium truncate">{item.name}</p>
+          </div>
+          {item.reasons.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {item.reasons.slice(0, 3).map((r) => (
+                <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{r}</span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {formatBytes(item.sizeBytes)}{item.dateTaken ? " · " + formatDate(item.dateTaken) : ""}
+          </p>
+        </div>
+      </button>
+      <div className="flex justify-end px-3 pb-2">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              type="button"
               size="sm"
               variant="secondary"
-              className="absolute bottom-2 right-2 h-7 px-2 opacity-0 group-hover:opacity-100 transition-opacity"
-              onClick={(e) => { e.stopPropagation(); onSimilar(item); }}
-              data-testid={`button-similar-${item.id}`}
+              className="h-7 px-2 text-xs sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity"
+              aria-label={"Find similar files to " + item.name}
+              onClick={() => onSimilar(item)}
+              data-testid={"button-similar-" + item.id}
             >
               <ScanSearch className="h-3.5 w-3.5 mr-1" /> Similar
             </Button>
           </TooltipTrigger>
           <TooltipContent>Find visually / semantically similar files</TooltipContent>
         </Tooltip>
-      </div>
-      <div className="p-3 space-y-1.5">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {mediaIcon(item.mediaType)}
-          <p className="text-sm font-medium truncate">{item.name}</p>
-        </div>
-        {item.reasons.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {item.reasons.slice(0, 3).map((r) => (
-              <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{r}</span>
-            ))}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground">
-          {formatBytes(item.sizeBytes)}{item.dateTaken ? ` · ${formatDate(item.dateTaken)}` : ""}
-        </p>
       </div>
     </div>
   );
@@ -273,6 +285,8 @@ export default function SearchPage() {
   const [selected, setSelected] = useState<ResultItem | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [mediaTypeOverride, setMediaTypeOverride] = useState<string[] | null>(null);
+  const [favoriteOnlyOverride, setFavoriteOnlyOverride] = useState<boolean | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -296,14 +310,19 @@ export default function SearchPage() {
 
   const buildFilters = useCallback(() => {
     const f: Record<string, unknown> = {};
-    if (typeFilter !== "all") f.mediaTypes = [typeFilter];
-    if (favoriteOnly) f.favoriteOnly = true;
+    if (mediaTypeOverride !== null) f.mediaTypes = mediaTypeOverride;
+    if (favoriteOnlyOverride !== null) f.favoriteOnly = favoriteOnlyOverride;
     return Object.keys(f).length ? f : undefined;
-  }, [typeFilter, favoriteOnly]);
+  }, [mediaTypeOverride, favoriteOnlyOverride]);
 
   const search = useMutation({
-    mutationFn: async ({ query, refine, previousIntent }: { query: string; refine: boolean; previousIntent: SearchIntent | null }) => {
-      const body: Record<string, unknown> = { query, filters: buildFilters() };
+    mutationFn: async ({ query, refine, previousIntent, filters }: {
+      query: string;
+      refine: boolean;
+      previousIntent: SearchIntent | null;
+      filters?: Record<string, unknown>;
+    }) => {
+      const body: Record<string, unknown> = { query, filters };
       if (refine && previousIntent) {
         body.refine = true;
         body.previousIntent = previousIntent;
@@ -371,6 +390,11 @@ export default function SearchPage() {
     onSuccess: (data: SearchResponse) => {
       setResponse(data);
       setSimilarOf(null);
+      const savedMediaTypes = data.intent?.mediaTypes ?? [];
+      setTypeFilter(savedMediaTypes.length === 1 ? savedMediaTypes[0] : "all");
+      setFavoriteOnly(data.intent?.favoriteOnly === true);
+      setMediaTypeOverride(null);
+      setFavoriteOnlyOverride(null);
       setTrail([{ query: data.query, refined: false, resultCount: data.results.length }]);
       qc.invalidateQueries({ queryKey: ["saved-searches"] });
     },
@@ -400,18 +424,42 @@ export default function SearchPage() {
 
   const hasSession = response !== null && !similarOf;
 
-  const submit = useCallback((raw?: string, forceNew = false) => {
+  const submit = useCallback((raw?: string, forceNew = false, filters?: Record<string, unknown>) => {
     const q = (raw ?? input).trim();
     if (!q || search.isPending) return;
     const refine = hasSession && !forceNew;
-    search.mutate({ query: q, refine, previousIntent: refine ? response?.intent ?? null : null });
-  }, [input, search, hasSession, response]);
+    search.mutate({
+      query: q,
+      refine,
+      previousIntent: refine ? response?.intent ?? null : null,
+      filters: filters ?? buildFilters(),
+    });
+  }, [input, search, hasSession, response, buildFilters]);
+
+  const submitSuggestion = useCallback((suggestion: string) => {
+    const filters = { ...(buildFilters() ?? {}) };
+    if (suggestion.startsWith("Search all media")) {
+      setTypeFilter("all");
+      setMediaTypeOverride([]);
+      filters.mediaTypes = [];
+    }
+    if (suggestion.startsWith("Include non-favorites")) {
+      setFavoriteOnly(false);
+      setFavoriteOnlyOverride(false);
+      filters.favoriteOnly = false;
+    }
+    submit(suggestion, false, Object.keys(filters).length ? filters : undefined);
+  }, [buildFilters, submit]);
 
   const startOver = () => {
     setResponse(null);
     setTrail([]);
     setSimilarOf(null);
     setInput("");
+    setTypeFilter("all");
+    setFavoriteOnly(false);
+    setMediaTypeOverride(null);
+    setFavoriteOnlyOverride(null);
     inputRef.current?.focus();
   };
 
@@ -455,12 +503,16 @@ export default function SearchPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={hasSession ? 'Refine — e.g. "only the ones with waterfalls"' : 'e.g. "photos of my truck from last summer"'}
+            aria-label={hasSession ? "Refine library search" : "Search your library"}
             className="pl-9"
             data-testid="input-search"
           />
         </div>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-36" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
+        <Select value={typeFilter} onValueChange={(value) => {
+          setTypeFilter(value);
+          setMediaTypeOverride(value === "all" ? [] : [value]);
+        }}>
+          <SelectTrigger aria-label="Filter by media type" className="w-36" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
           <SelectContent>
             {MEDIA_TYPE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
           </SelectContent>
@@ -469,13 +521,24 @@ export default function SearchPage() {
           type="button"
           variant={favoriteOnly ? "default" : "outline"}
           size="icon"
-          onClick={() => setFavoriteOnly((v) => !v)}
+          onClick={() => {
+            const next = !favoriteOnly;
+            setFavoriteOnly(next);
+            setFavoriteOnlyOverride(next);
+          }}
+          aria-label="Filter favorites only"
+          aria-pressed={favoriteOnly}
           title="Favorites only"
           data-testid="button-favorite-filter"
         >
           <Star className={`h-4 w-4 ${favoriteOnly ? "fill-current" : ""}`} />
         </Button>
-        <Button type="submit" disabled={search.isPending || !input.trim()} data-testid="button-search">
+        <Button
+          type="submit"
+          aria-label={search.isPending ? "Searching" : hasSession ? "Refine search" : "Search"}
+          disabled={search.isPending || !input.trim()}
+          data-testid="button-search"
+        >
           {search.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : hasSession ? "Refine" : "Search"}
         </Button>
         {(hasSession || similarOf) && (
@@ -486,7 +549,7 @@ export default function SearchPage() {
       </form>
 
       {search.isError && (
-        <p className="text-sm text-destructive" data-testid="text-search-error">{(search.error as Error).message}</p>
+        <p role="alert" aria-live="assertive" className="text-sm text-destructive" data-testid="text-search-error">{(search.error as Error).message}</p>
       )}
 
       {/* Refinement trail */}
@@ -549,7 +612,7 @@ export default function SearchPage() {
                 <p className="text-sm text-muted-foreground">Try instead:</p>
                 <div className="flex justify-center gap-2 flex-wrap">
                   {response.suggestions.map((s) => (
-                    <Button key={s} variant="outline" size="sm" onClick={() => submit(s, true)} data-testid="button-suggestion">
+                    <Button key={s} variant="outline" size="sm" onClick={() => submitSuggestion(s)} data-testid="button-suggestion">
                       {s}
                     </Button>
                   ))}
@@ -592,6 +655,7 @@ export default function SearchPage() {
                     <button
                       className="px-2 py-1.5 text-muted-foreground hover:text-destructive transition-colors"
                       onClick={() => deleteSaved.mutate(s.id)}
+                      aria-label={`Delete saved search ${s.name}`}
                       data-testid={`button-delete-saved-${s.id}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -631,6 +695,7 @@ export default function SearchPage() {
           <Input
             value={saveName}
             onChange={(e) => setSaveName(e.target.value)}
+            aria-label="Saved search name"
             placeholder="e.g. Summer truck photos"
             onKeyDown={(e) => e.key === "Enter" && saveName.trim() && saveSearch.mutate()}
             data-testid="input-save-name"

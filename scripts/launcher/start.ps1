@@ -5,6 +5,10 @@ Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
+# Detect an orphaned API or web listener before update recovery or startup work.
+$entryTracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $entryTracked
+
 Write-Banner "Preparing your media library..."
 
 function Stop-And-Exit($friendly, $technical, $code = 1) {
@@ -47,6 +51,11 @@ if ($tracked) {
     Write-Info "Recovering from an interrupted launch..."
     Stop-TrackedProcesses | Out-Null
     Start-Sleep -Seconds 1
+}
+if ($pendingDeveloperUpdate -and $pendingDeveloperUpdate.phase -eq "swapped") {
+    # Persist that this startup is now validating the new version. If this
+    # process crashes before health checks finish, the next launch rolls back.
+    Write-DeveloperUpdateJournal "starting" $pendingDeveloperUpdate.candidate $pendingDeveloperUpdate.backup
 }
 
 # -- Required helpers -----------------------------------------------------------
@@ -185,7 +194,7 @@ if ($schemaFingerprint -and (Test-Path $schemaMarkerPath)) {
     } catch { $schemaReady = $false }
 }
 if ($schemaReady) {
-    Write-Ok "Database schema already ready"
+    Write-Ok "Previous schema setup found; the API will verify the connected database"
 } else {
     $migrationCode = Invoke-LoggedCommand "Applying safe database updates..." $dbMigrateLog {
         & node (Join-Path $Root "setup-db.cjs")
@@ -200,8 +209,7 @@ if ($schemaReady) {
         completedAt = (Get-Date).ToString("o")
     } | ConvertTo-Json | Set-Content $schemaMarkerPath
 }
-Write-Ok "Database ready"
-$env:WILLARD_SCHEMA_READY = "1"
+Write-Ok "Database connection ready; the API will verify schema readiness before listening"
 try {
     Initialize-WillardBackupProtection $true -OfferCredentialReset | Out-Null
 } catch {
@@ -223,8 +231,13 @@ foreach ($port in 8080, 5000) {
 function Start-WillardServices {
     Write-Info "Opening the library service and Media Center..."
     $env:PORT = "8080"
+    # This launcher is for a local Windows desktop; do not expose the API to the LAN.
+    $env:HOST = "127.0.0.1"
+    # This local-only launcher explicitly authorizes token-free first-run setup.
+    $env:WILLARD_LOCAL_SETUP = "true"
     $envFile = Join-Path $Root ".env"
     $apiProc = $null
+    $webProc = $null
     try {
         $apiProc = Start-Process -FilePath $nodeCommand `
             -ArgumentList @("--enable-source-maps", "--env-file=`"$envFile`"", "`"$apiDist`"") `
@@ -250,8 +263,13 @@ function Start-WillardServices {
         }
         return @{ api = $apiProc; web = $webProc }
     } catch {
-        Stop-TrackedProcesses | Out-Null
-        throw
+        $startError = $_
+        try { Stop-TrackedProcesses | Out-Null } catch {
+            Write-Warn ("Tracked Willard services could not be stopped safely: " + $_.Exception.Message)
+        }
+        Stop-LauncherStartedProcessHandle $webProc
+        Stop-LauncherStartedProcessHandle $apiProc
+        throw $startError
     }
 }
 

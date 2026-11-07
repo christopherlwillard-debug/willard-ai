@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { createHash, randomUUID } from "node:crypto";
 import { Writable } from "stream";
 import { Worker } from "worker_threads";
 import { redactOperationalData } from "./log-redaction.ts";
@@ -126,6 +127,96 @@ export function resolveWithinRoot(targetPath: string, root: string): string {
 
 export function assertWithinRoot(targetPath: string, root: string): void {
   resolveWithinRoot(targetPath, root);
+}
+
+/**
+ * Create a directory tree only after resolving every existing symlink against
+ * the configured root. Unlike recursive mkdir, each component is checked
+ * before the next one is created, and the returned path is canonical.
+ */
+export function ensureDataDirectoryWithinRoot(
+  targetPath: string,
+  root: string,
+  mode = 0o755,
+): string {
+  const canonicalRoot = canonicalizePath(root);
+  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("Directory path escapes the configured library root.");
+  }
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Configured library root is a symlink or is not a directory.");
+  }
+
+  let current = canonicalRoot;
+  for (const component of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    try {
+      fs.mkdirSync(current, { mode });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error("Directory path contains a symlink or non-directory component.");
+    }
+    const resolved = canonicalizePath(current);
+    const resolvedRelative = path.relative(canonicalRoot, resolved);
+    if (resolvedRelative === ".." || resolvedRelative.startsWith(`..${path.sep}`) || path.isAbsolute(resolvedRelative)) {
+      throw new Error("Directory path resolves outside the configured library root.");
+    }
+  }
+  return current;
+}
+
+export function ensureDirectoryWithinRoot(
+  targetPath: string,
+  root: string,
+  mode = PRIVATE_DIR_MODE,
+): string {
+  const canonicalRoot = canonicalizePath(root);
+  // Keep the target's lexical suffix rather than realpath-canonicalizing it:
+  // doing so lets us lstat each descendant and reject even an in-root symlink
+  // that could redirect cleanup into another job's staging directory.
+  const relative = path.relative(path.resolve(root), path.resolve(targetPath));
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    throw new Error("Path traversal rejected: directory is outside the allowed root");
+  }
+
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Storage root is not a regular directory");
+  }
+
+  let current = canonicalRoot;
+  for (const component of relative.split(path.sep)) {
+    if (!component || component === ".") continue;
+    current = path.join(current, component);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Storage directory contains a symlink and cannot be used for staging: "${current}"`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Storage path component is not a directory: "${current}"`);
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      try {
+        fs.mkdirSync(current, { mode });
+      } catch (mkdirError: any) {
+        if (mkdirError?.code !== "EEXIST") throw mkdirError;
+      }
+      const createdStat = fs.lstatSync(current);
+      if (createdStat.isSymbolicLink() || !createdStat.isDirectory()) {
+        throw new Error(`Storage directory changed during creation: "${current}"`);
+      }
+    }
+  }
+
+  try { fs.chmodSync(current, mode); } catch { /* Windows ACLs may be managed by the host */ }
+  return current;
 }
 
 /**
@@ -456,11 +547,24 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
       "NAS storage is required for temporary media work; no library location is configured.",
     );
   }
-  const suffix = (jobId ?? "default").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
-  const tempDir = path.join(getWillardAIDir(nasPath), "temp", suffix);
+  const rawJobId = jobId ?? "default";
+  const sanitizedJobId = rawJobId.replace(/[^A-Za-z0-9._-]/g, "_");
+  const requestedSuffix = sanitizedJobId.slice(0, 120);
+  const suffix = requestedSuffix && requestedSuffix !== "." && requestedSuffix !== ".."
+    ? sanitizedJobId === rawJobId && rawJobId.length <= 120
+      ? requestedSuffix
+      : `${requestedSuffix.slice(0, 107)}-${createHash("sha256").update(rawJobId).digest("hex").slice(0, 12)}`
+    : `job-${randomUUID()}`;
+  const willardRoot = getWillardAIDir(nasPath);
+  const tempRoot = path.join(willardRoot, "temp");
+  const tempDir = path.join(tempRoot, suffix);
   try {
-    fs.mkdirSync(tempDir, { recursive: true });
-    return tempDir;
+    // Protect the whole app-managed parent chain before creating child paths;
+    // otherwise a shared WillardAI directory could let another NAS user swap
+    // the private temp directory itself.
+    ensureDirectoryWithinRoot(willardRoot, nasPath, PRIVATE_DIR_MODE);
+    ensureDirectoryWithinRoot(tempRoot, nasPath, PRIVATE_DIR_MODE);
+    return ensureDirectoryWithinRoot(tempDir, nasPath, PRIVATE_DIR_MODE);
   } catch (err) {
     throw new StoragePolicyError(
       `NAS storage is required for temporary media work; the NAS temp directory could not be created: ${
@@ -470,10 +574,35 @@ export function getTempDir(nasPath: string | null | undefined, jobId?: string): 
   }
 }
 
-export function cleanTempDir(tempDir: string): void {
+/**
+ * Remove only a direct per-job child of the configured private NAS temp root.
+ * Re-check every path component immediately before recursive deletion so a
+ * replaced temp parent or job directory symlink cannot redirect cleanup.
+ */
+export function cleanTempDir(tempDir: string, nasPath: string | null | undefined): void {
+  if (!nasPath || !nasPath.trim()) return;
   try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch { /* non-fatal */ }
+    const canonicalNasRoot = canonicalizePath(normalizeNasPath(nasPath));
+    const expectedRoot = path.join(canonicalNasRoot, "WillardAI");
+    const expectedTempRoot = path.join(expectedRoot, "temp");
+    const target = path.resolve(tempDir);
+    if (path.dirname(target) !== expectedTempRoot || path.basename(target) === "." || path.basename(target) === "..") {
+      throw new Error("Refusing to clean a path outside the NAS job temp directory");
+    }
+
+    for (const directory of [canonicalNasRoot, expectedRoot, expectedTempRoot, target]) {
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink()) throw new Error(`Refusing to clean through a symlink: "${directory}"`);
+      if (directory !== target && !stat.isDirectory()) throw new Error(`Temp cleanup parent is not a directory: "${directory}"`);
+      if (directory === target && !stat.isDirectory()) throw new Error("Temp cleanup target is not a directory");
+    }
+    fs.rmSync(target, { recursive: true, force: false });
+  } catch (error) {
+    // Cleanup is best-effort, but unsafe paths are deliberately left untouched.
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      // No path or file contents are logged here; callers may log their own job context.
+    }
+  }
 }
 
 export function writeScanHistory(
@@ -506,7 +635,9 @@ export class LazyNasLogStream extends Writable {
   async setNasPath(nasPath: string): Promise<void> {
     try {
       const logDir = path.join(getWillardAIDir(nasPath), "logs");
-      if (!fs.existsSync(logDir)) return;
+      if (!fs.existsSync(logDir)) {
+        throw new Error("NAS operational log directory is unavailable");
+      }
       ensurePrivateDir(logDir);
       const { createStream } = await import("rotating-file-stream");
       const newStream = createStream("willard-ai.log", {
@@ -521,8 +652,14 @@ export class LazyNasLogStream extends Writable {
         (old as any).destroy();
       }
     } catch {
-      // NAS not accessible — continue with stdout, but make the degraded
-      // logging state visible to the operator.
+      // Never keep writing to the previous library after a switch fails:
+      // that would leak the new library's operational activity into the old
+      // NAS. Fall back to process logs until the correct destination is ready.
+      const old = this.rfsStream;
+      this.rfsStream = null;
+      if (old && "destroy" in old && typeof (old as any).destroy === "function") {
+        try { (old as any).destroy(); } catch { /* best-effort stream teardown */ }
+      }
       process.emitWarning("NAS operational log stream unavailable; using process logs only", {
         code: "WILLARD_NAS_LOG_STREAM_UNAVAILABLE",
       });

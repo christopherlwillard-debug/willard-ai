@@ -30,6 +30,29 @@ export function parseBoundedInteger(value: unknown, options: IntegerOptions): nu
   return parsed;
 }
 
+/** Parse a canonical positive safe-integer path parameter without accepting parseInt/Number coercions. */
+export function parsePositiveIntegerParam(value: unknown): number | null {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** Parse a positive safe-integer identifier supplied as a JSON number or canonical decimal string. */
+export function parsePositiveIntegerValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? value : null;
+  return parsePositiveIntegerParam(value);
+}
+
+/** Parse an exact string from an allowed set; absent/null values use the supplied default. */
+export function parseAllowedString(
+  value: unknown,
+  allowedValues: readonly string[],
+  defaultValue?: string,
+): string | null {
+  const candidate = value === undefined || value === null ? defaultValue : value;
+  return typeof candidate === "string" && allowedValues.includes(candidate) ? candidate : null;
+}
+
 export function parseOptionalDate(value: unknown, name: string): Date | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);
@@ -39,4 +62,59 @@ export function parseOptionalDate(value: unknown, name: string): Date | undefine
     throw new RequestValidationError(`Invalid ${name}`);
   }
   return parsed;
+}
+
+/** Parse an optional scalar query string; repeated query parameters are rejected. */
+export function parseOptionalQueryString(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string") throw new RequestValidationError(`Invalid ${name}`);
+  return value;
+}
+
+/** Parse a strict YYYY-MM-DD calendar date at UTC midnight. */
+export function parseOptionalDateOnly(value: unknown, name: string): Date | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new RequestValidationError(`Invalid ${name}`);
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new RequestValidationError(`Invalid ${name}`);
+  }
+  return parsed;
+}
+
+/** Convert an inclusive date-only range to a half-open UTC range for timestamp comparisons. */
+export function parseOptionalDateOnlyRange(
+  fromValue: unknown,
+  toValue: unknown,
+): { from?: Date; toExclusive?: Date } {
+  const from = parseOptionalDateOnly(fromValue, "dateFrom");
+  const to = parseOptionalDateOnly(toValue, "dateTo");
+  if (from && to && from.getTime() > to.getTime()) {
+    throw new RequestValidationError("Invalid date range: dateFrom must be on or before dateTo");
+  }
+  return {
+    from,
+    toExclusive: to ? new Date(to.getTime() + 24 * 60 * 60 * 1000) : undefined,
+  };
+}
+
+
+/** Normalize untrusted search-intent date bounds; discard invalid or contradictory ranges. */
+export function normalizeOptionalDateOnlyRange(
+  fromValue: unknown,
+  toValue: unknown,
+): { dateFrom: string | null; dateTo: string | null } {
+  const from = fromValue === null ? undefined : fromValue;
+  const to = toValue === null ? undefined : toValue;
+  try {
+    const range = parseOptionalDateOnlyRange(from, to);
+    return {
+      dateFrom: range.from ? from as string : null,
+      dateTo: range.toExclusive ? to as string : null,
+    };
+  } catch {
+    return { dateFrom: null, dateTo: null };
+  }
 }

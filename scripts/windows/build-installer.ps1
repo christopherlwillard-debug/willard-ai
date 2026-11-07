@@ -35,10 +35,18 @@ if (-not (Test-Path (Join-Path $Runtime "node.exe")) -or
   Set-Content $RuntimeMarker $NodeZipSha256 -Encoding ASCII
 }
 
+function Invoke-NodeBuildStep($scriptName, $description) {
+  & node (Join-Path $PSScriptRoot $scriptName)
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    throw "$description failed with exit code $exitCode."
+  }
+}
+
 $env:WILLARD_VERSION = $Version
 $env:WILLARD_NODE_RUNTIME = $Runtime
-node (Join-Path $PSScriptRoot "build-release.mjs")
-node (Join-Path $PSScriptRoot "validate-release.mjs")
+Invoke-NodeBuildStep "build-release.mjs" "Windows release staging"
+Invoke-NodeBuildStep "validate-release.mjs" "Windows release validation"
 
 & (Join-Path $PSScriptRoot "compile-installer.ps1")
 Write-Host "This local build is not published for automatic updates until a release manifest and ZIP are hosted publicly."

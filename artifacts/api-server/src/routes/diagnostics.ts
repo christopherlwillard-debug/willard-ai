@@ -1,17 +1,17 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
-import { libraryJobsTable, appSettingsTable } from "@workspace/db";
+import { libraryJobsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { redactOperationalData } from "../lib/log-redaction.ts";
 import { getStoragePolicyStatus } from "../lib/storage-policy.ts";
 import { checkNasReachableAsync } from "../lib/nas-storage.ts";
 import { getCapacityStatus } from "../lib/capacity-service.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  return row?.nasPath ?? null;
+  return getActiveNasPath();
 }
 
 // ── GET /api/diagnostics/scans — last 20 completed scan records with metrics ──
@@ -51,11 +51,7 @@ router.get("/diagnostics/scans", async (_req: Request, res: Response) => {
 // receiving the configured library path or other sensitive filenames.
 router.get("/diagnostics/storage-policy", async (_req: Request, res: Response) => {
   try {
-    const [settings] = await db
-      .select({ nasPath: appSettingsTable.nasPath })
-      .from(appSettingsTable)
-      .limit(1);
-    const nasPath = settings?.nasPath?.trim() || null;
+    const nasPath = await getActiveNasPath();
     const reach = await checkNasReachableAsync(nasPath);
     const policy = await getStoragePolicyStatus(nasPath, reach);
     res.json(policy);

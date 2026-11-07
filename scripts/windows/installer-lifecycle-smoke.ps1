@@ -26,6 +26,7 @@ $script:UserAppData = Join-Path $script:UserProfile "AppData\Roaming"
 $script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
+$script:LifecycleStage = "initialization"
 $LifecycleProcessTimeoutSeconds = 180
 $script:ParentEnvironment = @{}
 foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP")) {
@@ -34,6 +35,11 @@ foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP"
 
 function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
+}
+
+function Write-LifecycleStage($stage) {
+  $script:LifecycleStage = [string]$stage
+  Write-Host "Lifecycle: $stage"
 }
 
 function Read-Text($path) {
@@ -51,6 +57,32 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
     Start-Sleep -Seconds 2
   }
   throw "Timed out waiting for $url"
+}
+
+function Wait-PortClosed($port, $timeoutSeconds = 30) {
+  $until = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $until) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $connected = $false
+    $probeCompleted = $false
+    $pending = $null
+    try {
+      $pending = $client.BeginConnect("127.0.0.1", $port, $null, $null)
+      if ($pending.AsyncWaitHandle.WaitOne(500)) {
+        $probeCompleted = $true
+        try {
+          $client.EndConnect($pending)
+          $connected = $client.Connected
+        } catch {}
+      }
+    } catch {} finally {
+      if ($pending -and $pending.AsyncWaitHandle) { $pending.AsyncWaitHandle.Close() }
+      $client.Close()
+    }
+    if ($probeCompleted -and -not $connected) { return }
+    Start-Sleep -Seconds 1
+  }
+  throw "Willard still accepts connections on port $port after uninstall."
 }
 
 function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
@@ -72,6 +104,9 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
 
 function Invoke-InstalledLauncher($mode, $label) {
   $launcher = Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"
+  if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+    throw "Installed launcher is missing before '$mode': $launcher"
+  }
   $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -Mode $mode"
   return Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") $argumentLine $label
 }
@@ -124,7 +159,7 @@ try {
 "USERPROFILE=$env:USERPROFILE"
 "LOCALAPPDATA=$([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))"
 '@ -Encoding ASCII
-  Write-Host "Lifecycle: profile probe"
+  Write-LifecycleStage "profile probe"
   $profileResult = Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
     "-NoProfile -ExecutionPolicy Bypass -File `"$profileProbe`"" "profile-probe"
   Assert-True ($profileResult.exitCode -eq 0) ("Could not initialize the standard-user profile:`n" + $profileResult.output)
@@ -147,7 +182,12 @@ param(
   [Parameter(Mandatory = $true)][string]$Launcher,
   [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure")][string]$Mode
 )
+$ErrorActionPreference = "Stop"
+if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
+  throw "Installed launcher is missing: $Launcher"
+}
 $env:WILLARD_SKIP_UPDATE = "1"
+$env:WILLARD_NO_PAUSE = "1"
 $env:WILLARD_RECOVERY_EXPORT_PATH = '__RECOVERY_EXPORT_PATH__'
 $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = 'installer-lifecycle-recovery-passphrase'
 if ($Mode -eq "failure") { $env:WILLARD_SUPPRESS_STARTUP_DIALOG = "1" }
@@ -156,7 +196,7 @@ exit $LASTEXITCODE
 '@
   $runnerContents.Replace("__RECOVERY_EXPORT_PATH__", $recoveryExportLiteral) | Set-Content $Runner -Encoding ASCII
 
-  Write-Host "Lifecycle: first install"
+  Write-LifecycleStage "first install"
   $firstInstallLog = Join-Path $TempRoot "first-install-setup.log"
   $firstInstallerForUser = Join-Path $TempRoot "first-install-Setup.exe"
   Copy-Item $FirstInstaller $firstInstallerForUser -Force
@@ -169,7 +209,7 @@ exit $LASTEXITCODE
   Assert-True (@(Get-ChildItem $startMenuRoot -Filter "Willard Media Center.lnk" -Recurse -ErrorAction SilentlyContinue).Count -eq 1) `
     "First install did not create the standard-user Start Menu shortcut."
 
-  Write-Host "Lifecycle: first start"
+  Write-LifecycleStage "first start"
   $startResult = Invoke-InstalledLauncher "start" "first-start"
   Assert-True ($startResult.exitCode -eq 0) ("Installed launcher failed after first install:`n" + $startResult.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
@@ -181,7 +221,7 @@ exit $LASTEXITCODE
 
   # Upgrade through a newer Setup.exe version while retaining the same external
   # database, app-data settings, and media root.
-  Write-Host "Lifecycle: upgrade compile and install"
+  Write-LifecycleStage "upgrade compile and install"
   $upgradeVersion = "0.1.$([int]$env:GITHUB_RUN_NUMBER + 1)"
   $env:WILLARD_VERSION = $upgradeVersion
   & (Join-Path $Root "scripts\windows\compile-installer.ps1")
@@ -189,21 +229,32 @@ exit $LASTEXITCODE
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
   $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
   $upgradeInstallerForUser = Join-Path $TempRoot "upgrade-install-Setup.exe"
+  $obsoletePayloadFile = Join-Path $InstallRoot "desktop\obsolete-release-file.txt"
+  Set-Content $obsoletePayloadFile "must not survive an in-place installer upgrade" -Encoding UTF8
   Copy-Item $upgradeInstaller $upgradeInstallerForUser -Force
   $upgradeResult = Invoke-AsLifecycleUser $upgradeInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$upgradeInstallLog`" /DIR=`"$InstallRoot`"" "upgrade-install"
   Assert-True ($upgradeResult.exitCode -eq 0) ("Setup.exe upgrade failed with exit code $($upgradeResult.exitCode):`n" + $upgradeResult.output + "`n" + (Read-Text $upgradeInstallLog))
+  Assert-True (-not (Test-Path $obsoletePayloadFile)) "An obsolete packaged file survived the in-place installer upgrade."
+  $upgradeStartMenuShortcuts = @()
+  if (Test-Path -LiteralPath $startMenuRoot) {
+    $upgradeStartMenuShortcuts = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter "Willard Media Center.lnk" -File -Recurse -ErrorAction SilentlyContinue)
+  }
+  Assert-True ($upgradeStartMenuShortcuts.Count -eq 1) "Upgrade removed or duplicated the Start Menu shortcut."
   Assert-ExternalState
 
-  Write-Host "Lifecycle: interrupted update recovery"
+  Write-LifecycleStage "post-upgrade start"
   $upgradeStart = Invoke-InstalledLauncher "start" "upgrade-start"
   Assert-True ($upgradeStart.exitCode -eq 0) ("Installed launcher failed after upgrade:`n" + $upgradeStart.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Stop-InstalledWillard
 
+  Write-LifecycleStage "simulate swapped-phase recovery"
   # Simulate a power loss after a packaged version swap. The next installed
   # launcher must restore its sibling backup before starting services.
-  $backup = $InstallRoot + ".lifecycle-backup"
-  $candidate = $InstallRoot + ".lifecycle-candidate"
+  $installParent = Split-Path -Parent $InstallRoot
+  $installLeaf = Split-Path -Leaf $InstallRoot
+  $backup = Join-Path $installParent ("." + $installLeaf + ".previous-lifecycle-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $candidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
   Copy-Item $InstallRoot $candidate -Recurse -Force
   Set-Content (Join-Path $candidate "candidate-only.marker") "discard candidate" -Encoding UTF8
   Set-Content (Join-Path $InstallRoot "backup-only.marker") "restore backup" -Encoding UTF8
@@ -229,9 +280,35 @@ exit $LASTEXITCODE
   Assert-ExternalState
   Stop-InstalledWillard
 
+  # Simulate power loss in the narrow window after the old install was moved
+  # but before the updater could advance the journal beyond "prepared".
+  Write-LifecycleStage "prepared-phase update recovery"
+  $preparedBackup = Join-Path $installParent ("." + $installLeaf + ".previous-prepared-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $preparedCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
+  Copy-Item $InstallRoot $preparedCandidate -Recurse -Force
+  Set-Content (Join-Path $InstallRoot "prepared-backup-only.marker") "restore prepared backup" -Encoding UTF8
+  Move-Item -LiteralPath $InstallRoot -Destination $preparedBackup -ErrorAction Stop
+  @{
+    version = 1
+    phase = "prepared"
+    installRoot = $InstallRoot
+    candidate = $preparedCandidate
+    backup = $preparedBackup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+
+  $preparedRecovery = Invoke-InstalledLauncher "start" "prepared-phase-update-recovery"
+  Assert-True ($preparedRecovery.exitCode -eq 0) ("Installed launcher did not recover a prepared-phase interruption:`n" + $preparedRecovery.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
+  Assert-True (Test-Path (Join-Path $InstallRoot "prepared-backup-only.marker")) "The prior installation was not restored from the prepared journal."
+  Assert-True (-not (Test-Path $preparedCandidate)) "The interrupted prepared candidate was not removed."
+  Assert-True (-not (Test-Path $journalPath)) "Prepared-phase update journal was not cleared."
+  Assert-ExternalState
+  Stop-InstalledWillard
+
   # A database failure must persist diagnostics and return control without a
   # modal dialog in this noninteractive test run.
-  Write-Host "Lifecycle: database failure diagnostics"
+  Write-LifecycleStage "database failure diagnostics"
   $envFile = Join-Path $script:DataRoot ".env"
   Copy-Item $envFile ($envFile + ".good") -Force
   @(
@@ -246,16 +323,36 @@ exit $LASTEXITCODE
   Move-Item ($envFile + ".good") $envFile -Force
   Assert-ExternalState
 
-  Write-Host "Lifecycle: uninstall"
+  Write-LifecycleStage "uninstall stops active services"
+  $uninstallStart = Invoke-InstalledLauncher "start" "uninstall-running-start"
+  Assert-True ($uninstallStart.exitCode -eq 0) ("Could not start Willard before uninstall:`n" + $uninstallStart.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($body) $body -match '"status"\s*:\s*"ok"' }
+  Wait-Http "http://127.0.0.1:5000/" { param($body) $body -match "<html|<!doctype html" }
+
+  Write-LifecycleStage "uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
   Assert-True (Test-Path $uninstaller) "Installed copy did not contain Inno Setup uninstaller."
   $uninstallResult = Invoke-AsLifecycleUser $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" "uninstall"
   Assert-True ($uninstallResult.exitCode -eq 0) ("Setup.exe uninstall failed:`n" + $uninstallResult.output)
+  Wait-PortClosed 8080
+  Wait-PortClosed 5000
+  Assert-True (-not (Test-Path (Join-Path $script:DataRoot "services.json"))) "Uninstall did not clear the stopped services state."
   Assert-True (-not (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"))) "Uninstall left packaged launcher files behind."
   Assert-True (-not (Test-Path $desktopShortcut)) "Uninstall left the desktop shortcut behind."
+  $remainingStartMenuShortcuts = @()
+  if (Test-Path -LiteralPath $startMenuRoot) {
+    $remainingStartMenuShortcuts = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter "Willard Media Center.lnk" -File -Recurse -ErrorAction SilentlyContinue)
+  }
+  Assert-True ($remainingStartMenuShortcuts.Count -eq 0) "Uninstall left the Start Menu shortcut behind."
   Assert-ExternalState
   $script:LifecyclePassed = $true
   Write-Host "Installed lifecycle smoke passed: standard user, install, start, upgrade, rollback, diagnostics, and uninstall."
+} catch {
+  Write-Host "Lifecycle failure during '$script:LifecycleStage': $($_.Exception.Message)" -ForegroundColor Red
+  if ($_.ScriptStackTrace) {
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+  }
+  throw
 } finally {
   try { Stop-InstalledWillard } catch {}
   if (Test-Path $Dropdb) {
@@ -263,8 +360,6 @@ exit $LASTEXITCODE
   }
   try { Remove-LocalUser -Name $UserName -ErrorAction SilentlyContinue } catch {}
   Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item ($InstallRoot + ".lifecycle-backup") -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item ($InstallRoot + ".lifecycle-candidate") -Recurse -Force -ErrorAction SilentlyContinue
   if ($script:LifecyclePassed) {
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
   } else {
@@ -278,12 +373,12 @@ exit $LASTEXITCODE
           }
         }
     }
+  }
   foreach ($entry in $script:ParentEnvironment.GetEnumerator()) {
     if ($null -eq $entry.Value) {
       Remove-Item "Env:$($entry.Key)" -ErrorAction SilentlyContinue
     } else {
       Set-Item "Env:$($entry.Key)" $entry.Value
     }
-  }
   }
 }

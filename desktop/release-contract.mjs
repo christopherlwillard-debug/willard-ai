@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/;
+const WINDOWS_VERSION_PATTERN = /^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$/;
 export const RELEASE_SCHEMA = 2;
 export const RELEASE_PRODUCT = "Willard Media Center";
 export const RELEASE_REPOSITORY = "christopherlwillard-debug/willard-ai";
@@ -61,10 +62,52 @@ function hashFile(filePath) {
 }
 
 export function parseVersion(value) {
-  if (typeof value !== "string" || !VERSION_PATTERN.test(value.trim())) return null;
-  const [core, prerelease = ""] = value.trim().split("-", 2);
-  const parts = core.split(".").map(Number);
+  if (typeof value !== "string") return null;
+  const match = VERSION_PATTERN.exec(value.trim());
+  if (!match) return null;
+
+  const prerelease = match[4] ?? "";
+  if (prerelease) {
+    const identifiers = prerelease.split(".");
+    if (identifiers.some((identifier) =>
+      !identifier ||
+      !/^[0-9A-Za-z-]+$/.test(identifier) ||
+      (/^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0"))
+    )) return null;
+  }
+
+  const parts = match.slice(1, 4).map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) return null;
   return { parts, prerelease };
+}
+
+function compareNumericIdentifiers(left, right) {
+  if (left.length !== right.length) return left.length > right.length ? 1 : -1;
+  if (left === right) return 0;
+  return left > right ? 1 : -1;
+}
+
+function comparePrereleaseIdentifiers(left, right) {
+  const a = left.split(".");
+  const b = right.split(".");
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const leftIdentifier = a[index];
+    const rightIdentifier = b[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      const comparison = compareNumericIdentifiers(leftIdentifier, rightIdentifier);
+      if (comparison !== 0) return comparison;
+    } else if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    } else if (leftIdentifier !== rightIdentifier) {
+      return leftIdentifier > rightIdentifier ? 1 : -1;
+    }
+  }
+  return 0;
 }
 
 export function compareVersions(left, right) {
@@ -76,7 +119,28 @@ export function compareVersions(left, right) {
   }
   if (!a.prerelease && b.prerelease) return 1;
   if (a.prerelease && !b.prerelease) return -1;
-  return a.prerelease.localeCompare(b.prerelease);
+  if (!a.prerelease) return 0;
+  return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
+}
+
+export function parseWindowsVersion(value) {
+  if (typeof value !== "string" || !WINDOWS_VERSION_PATTERN.test(value)) return null;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) return null;
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+export function compareWindowsVersions(left, right) {
+  const a = parseWindowsVersion(left);
+  const b = parseWindowsVersion(right);
+  if (!a || !b) {
+    throw new Error("Windows versions must use MAJOR[.MINOR[.BUILD]] numeric format.");
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
 }
 
 export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_KEY, allowUnsigned = false } = {}) {
@@ -99,7 +163,11 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
   }
   assertSha256(manifest.sha256, "artifact");
   assertSha256(manifest.sourceSha256, "source artifact");
-  if (manifest.minimumWindowsVersion && typeof manifest.minimumWindowsVersion !== "string") {
+  const minimumWindowsVersion = manifest.minimumWindowsVersion ?? "";
+  if (
+    typeof minimumWindowsVersion !== "string" ||
+    (minimumWindowsVersion !== "" && !parseWindowsVersion(minimumWindowsVersion))
+  ) {
     throw new Error("The release description has an invalid Windows requirement.");
   }
   if (typeof manifest.notes !== "string") throw new Error("The release description has invalid notes.");
@@ -131,7 +199,7 @@ export function validateReleaseManifest(manifest, { publicKey = RELEASE_PUBLIC_K
     sourceSha256: manifest.sourceSha256.toLowerCase(),
     signature: manifest.signature || "",
     notes: manifest.notes,
-    minimumWindowsVersion: manifest.minimumWindowsVersion ?? "",
+    minimumWindowsVersion,
   };
 }
 
@@ -160,15 +228,21 @@ export function getUpdateDecision(currentVersion, manifest, options) {
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&
-    ["--verify", "--verify-artifact"].includes(process.argv[2])) {
+    ["--verify", "--verify-artifact", "--compare", "--compare-windows"].includes(process.argv[2])) {
   try {
-    const manifest = JSON.parse((await readFile(process.argv[3], "utf8")).replace(/^\uFEFF/, ""));
-    if (process.argv[2] === "--verify-artifact") {
-      await verifyReleaseArtifact(manifest, process.argv[4]);
-      console.log("Release signature, binding, and artifact checksum verified.");
+    if (process.argv[2] === "--compare") {
+      console.log(compareVersions(process.argv[3], process.argv[4]));
+    } else if (process.argv[2] === "--compare-windows") {
+      console.log(compareWindowsVersions(process.argv[3], process.argv[4]));
     } else {
-      validateReleaseManifest(manifest);
-      console.log("Release signature and binding verified.");
+      const manifest = JSON.parse((await readFile(process.argv[3], "utf8")).replace(/^\uFEFF/, ""));
+      if (process.argv[2] === "--verify-artifact") {
+        await verifyReleaseArtifact(manifest, process.argv[4]);
+        console.log("Release signature, binding, and artifact checksum verified.");
+      } else {
+        validateReleaseManifest(manifest);
+        console.log("Release signature and binding verified.");
+      }
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

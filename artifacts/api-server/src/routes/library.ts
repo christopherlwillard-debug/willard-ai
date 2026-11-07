@@ -9,7 +9,6 @@ import {
 } from "../lib/library-engine";
 import {
   getThumbnailCacheStats,
-  clearThumbnailCache,
   THUMBNAIL_CACHE_MAX_BYTES,
 } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
@@ -18,8 +17,9 @@ import { getRecentActivity, recordActivity, type ActivityKind } from "../lib/lib
 import { SCANNER_VERSION } from "../lib/library-engine/types";
 import { resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
-import { getActiveNasPath } from "../lib/active-library.ts";
+import { getActiveNasPath, getActiveAppSettings } from "../lib/active-library.ts";
 import { CapacityAdmissionError } from "../lib/capacity-service.ts";
+import { parseBoundedInteger, parsePositiveIntegerParam } from "../lib/request-validation.ts";
 
 const router = Router();
 const jobStreamId = randomUUID();
@@ -27,6 +27,44 @@ let jobStreamSequence = 0;
 
 async function getNasPath(): Promise<string | null> {
   return getActiveNasPath();
+}
+
+type LibraryJobStartResult = Awaited<ReturnType<typeof startJob>>;
+
+/** Translate durable worker admission failures into HTTP failures consistently. */
+function respondToLibraryJobStartFailure(
+  res: Response,
+  result: LibraryJobStartResult,
+  nasPath: string,
+): boolean {
+  if (result.errorCode === "NAS_OFFLINE") {
+    res.status(503).json({
+      code: "NAS_OFFLINE",
+      error: "NAS Not Available",
+      message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  if (result.errorCode === "NAS_READ_ONLY") {
+    res.status(503).json({
+      code: "NAS_READ_ONLY",
+      error: "NAS is read-only",
+      message: result.errorMessage ?? `Cannot write to ${nasPath}. Check the NAS permissions and mount state.`,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  return false;
 }
 
 async function getScopedJob(id: number, nasPath: string) {
@@ -66,11 +104,10 @@ router.get("/library/health", async (_req: Request, res: Response) => {
   const activeId = getActiveJobId(nasPath ?? undefined);
   const activeJob = activeId !== null ? getJobProgress(activeId) : null;
   const lastCompleted = activeId === null ? getLastCompletedProgress() : null;
-  const [row] = await db.select({ lastScanAt: appSettingsTable.lastScanAt })
-    .from(appSettingsTable).limit(1);
+  const settings = await getActiveAppSettings();
   res.json({
     ...health,
-    lastScanAt: row?.lastScanAt?.toISOString() ?? null,
+    lastScanAt: settings?.lastScanAt?.toISOString() ?? null,
     activeJob,
     lastCompleted,
     watcher: getWatcherSnapshot(),
@@ -82,7 +119,7 @@ router.get("/library/health", async (_req: Request, res: Response) => {
 router.get("/library/activity", async (req: Request, res: Response) => {
   const nasPath = await getNasPath();
   if (!nasPath) { res.json({ entries: [] }); return; }
-  const limit = Math.min(100, parseInt(req.query["limit"] as string) || 20);
+  const limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 100, defaultValue: 20 });
   const filter = req.query["kind"];
   const kinds = filter === "watcher"
     ? (["watcher_mode", "watcher_restart"] satisfies ActivityKind[])
@@ -108,7 +145,11 @@ router.post("/library/reconnect-ack", (_req: Request, res: Response) => {
 // ── POST /api/library/indexing/pause | resume — user-facing indexing switch ──
 
 router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
-  await db.update(appSettingsTable).set({ indexingPaused: true });
+  const settings = await getActiveAppSettings();
+  if (settings) {
+    await db.update(appSettingsTable).set({ indexingPaused: true })
+      .where(eq(appSettingsTable.id, settings.id));
+  }
   const nasPath = await getNasPath();
   const activeId = getActiveJobId(nasPath ?? undefined);
   if (activeId !== null) requestPause(activeId);
@@ -117,7 +158,11 @@ router.post("/library/indexing/pause", async (_req: Request, res: Response) => {
 });
 
 router.post("/library/indexing/resume", async (_req: Request, res: Response) => {
-  await db.update(appSettingsTable).set({ indexingPaused: false });
+  const settings = await getActiveAppSettings();
+  if (settings) {
+    await db.update(appSettingsTable).set({ indexingPaused: false })
+      .where(eq(appSettingsTable.id, settings.id));
+  }
   // Resume the most recent genuinely-PAUSED job (not INTERRUPTED_BY_RESTART).
   // INTERRUPTED_BY_RESTART jobs must be explicitly resumed by the user via
   // POST /api/library/jobs/:id/resume, not auto-resumed on indexing enable.
@@ -156,17 +201,7 @@ router.post("/library/scan/dry-run", async (_req: Request, res: Response) => {
 
   try {
     // Load current scanner settings
-    const [settingsRow] = await db.select({
-      ignoredFolders:    appSettingsTable.ignoredFolders,
-      ignoredExtensions: appSettingsTable.ignoredExtensions,
-      ignoreHiddenFiles:  appSettingsTable.ignoreHiddenFiles,
-      ignoreSystemFiles:  appSettingsTable.ignoreSystemFiles,
-      ignoreTempFiles:    appSettingsTable.ignoreTempFiles,
-      ignoreSidecarFiles: appSettingsTable.ignoreSidecarFiles,
-      ignoreEmptyFolders: appSettingsTable.ignoreEmptyFolders,
-      followSymlinks:     appSettingsTable.followSymlinks,
-      indexOtherFiles:    appSettingsTable.indexOtherFiles,
-    }).from(appSettingsTable).limit(1);
+    const settingsRow = await getActiveAppSettings();
 
     const { walkNas } = await import("../lib/library-engine/indexer");
     const { getWillardAIDir } = await import("../lib/nas-storage");
@@ -259,24 +294,7 @@ router.post("/library/scan", async (req: Request, res: Response) => {
     rootPath,
   });
 
-  if (result.errorCode === "NAS_OFFLINE") {
-    res.status(503).json({
-      code: "NAS_OFFLINE",
-      error: "NAS Not Available",
-      message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
-      jobId: result.jobId,
-    });
-    return;
-  }
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
 
   res.json(result);
 });
@@ -405,7 +423,7 @@ router.get("/library/jobs", async (req: Request, res: Response) => {
   const configuredNasPath = await getNasPath();
   const nasPath = configuredNasPath;
   const type    = req.query["type"] as string | undefined;
-  const limit   = Math.min(100, parseInt(req.query["limit"] as string) || 20);
+  const limit   = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 100, defaultValue: 20 });
 
   const status = req.query["status"] as string | undefined;
 
@@ -425,8 +443,8 @@ router.get("/library/jobs", async (req: Request, res: Response) => {
 // ── GET /api/library/jobs/:id — single job ────────────────────────────────────
 
 router.get("/library/jobs/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
@@ -443,8 +461,8 @@ router.get("/library/jobs/:id", async (req: Request, res: Response) => {
 // ── POST /api/library/jobs/:id/pause ─────────────────────────────────────────
 
 router.post("/library/jobs/:id/pause", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
   const nasPath = await getNasPath();
   if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   const ok = requestPause(id);
@@ -454,8 +472,8 @@ router.post("/library/jobs/:id/pause", async (req: Request, res: Response) => {
 // ── POST /api/library/jobs/:id/resume ────────────────────────────────────────
 
 router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
   const nasPath = await getNasPath();
   if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   let ok: boolean;
@@ -479,8 +497,8 @@ router.post("/library/jobs/:id/resume", async (req: Request, res: Response) => {
 // ── POST /api/library/jobs/:id/cancel ────────────────────────────────────────
 
 router.post("/library/jobs/:id/cancel", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
   const nasPath = await getNasPath();
   if (!nasPath || !await getScopedJob(id, nasPath)) { res.status(404).json({ error: "Job not found" }); return; }
   const reason = req.body?.reason ?? "USER_CANCELLED";
@@ -517,15 +535,7 @@ router.post("/library/thumbnails", async (req: Request, res: Response) => {
     nasPath,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
   res.json(result);
 });
 
@@ -655,15 +665,24 @@ router.delete("/library/thumbnails/cache", async (_req: Request, res: Response) 
     return;
   }
 
-  const deleted = clearThumbnailCache(nasPath);
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "HEALTH_SCAN",
+    nasPath,
+    clearThumbnailsOnly: true,
+  });
 
-  // Reset thumbnailPath in DB so the backfill job can regenerate them
-  await db.update(mediaFilesTable).set({
-    thumbnailPath: null,
-    thumbnailGeneratedAt: null,
-  }).where(eq(mediaFilesTable.nasPath, nasPath));
-
-  res.json({ deleted });
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
+  if (result.alreadyRunning) {
+    res.status(409).json({
+      code: "LIBRARY_JOB_ALREADY_RUNNING",
+      error: "Library job already running",
+      message: "Wait for or cancel the active library job before clearing the thumbnail cache.",
+      jobId: result.jobId,
+    });
+    return;
+  }
+  res.status(202).json({ ...result, operation: "CACHE_CLEAR" });
 });
 
 // ── POST /api/library/thumbnails/rebuild — wipe cache then start fresh job ────
@@ -675,24 +694,19 @@ router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) 
     return;
   }
 
-  clearThumbnailCache(nasPath);
-
-  await db.update(mediaFilesTable).set({
-    thumbnailPath: null,
-    thumbnailGeneratedAt: null,
-  }).where(eq(mediaFilesTable.nasPath, nasPath));
-
   const result = await startJob({
     jobType: "THUMBNAILS",
     profile: "FULL",
     nasPath,
+    rebuildThumbnails: true,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
+  if (result.alreadyRunning) {
+    res.status(409).json({
+      code: "LIBRARY_JOB_ALREADY_RUNNING",
+      error: "Library job already running",
+      message: "Wait for or cancel the active library job before rebuilding all thumbnails.",
       jobId: result.jobId,
     });
     return;
@@ -705,8 +719,8 @@ router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) 
 // clickable: each count maps to the exact files behind it.
 
 router.get("/library/jobs/:id/files", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const action = (req.query["action"] as string | undefined)?.toUpperCase();
   const allowed = new Set(["NEW", "MODIFIED", "MOVED", "DELETED", "UNCHANGED"]);
@@ -714,7 +728,7 @@ router.get("/library/jobs/:id/files", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Query param 'action' must be one of NEW, MODIFIED, MOVED, DELETED, UNCHANGED" });
     return;
   }
-  const limit = Math.min(500, parseInt(req.query["limit"] as string) || 100);
+  const limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 500, defaultValue: 100 });
 
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
@@ -800,7 +814,7 @@ router.patch("/library/thumbnails/quality", async (req: Request, res: Response) 
     return;
   }
 
-  const [existing] = await db.select({ id: appSettingsTable.id }).from(appSettingsTable).limit(1);
+  const existing = await getActiveAppSettings();
   if (!existing) {
     res.status(400).json({ error: "Settings not found" });
     return;
@@ -1023,15 +1037,7 @@ router.post("/library/reprocess", async (_req: Request, res: Response) => {
     nasPath,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
   res.json(result);
 });
 

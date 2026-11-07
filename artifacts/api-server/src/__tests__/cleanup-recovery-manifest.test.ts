@@ -3,18 +3,43 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 process.env.DATABASE_URL ??= "postgres://cleanup-recovery-test.invalid/willard";
 
 const {
   appendTrashManifestEntry,
+  assertTrashFileIntegrity,
+  openValidatedTrashManifest,
   manifestPath,
   readTrashManifest,
   removeTrashManifestEntry,
+  resolveLibraryTrashPath,
   reconcileCleanupOperations,
 } = await import("../lib/cleanup-recovery.ts");
 const { pool } = await import("@workspace/db");
+const { isTrashEntryExpired } = await import("../lib/cleanup-retention.ts");
+
+test("manual restore and startup recovery use no-replace moves", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  assert.match(cleanupRoute, /moveFileNoReplace\(resolvedTrashPath, resolvedOriginalPath\)/);
+  assert.match(cleanupRoute, /moveFileNoReplace\(resolvedOriginalPath, resolvedTrashPath\)/);
+  assert.match(cleanupRoute, /resolveLibraryTrashPath\(trashPath, nasPath\)/);
+  assert.match(cleanupRoute, /resolveLibraryTrashPath\(e\.trashPath, nasPath\)/);
+  assert.match(recoverySource, /moveFileNoReplace\(sourceTrash, destination\)/);
+});
+
+test("trash retention fails closed when expiration metadata is missing or malformed", () => {
+  const now = Date.parse("2026-11-04T12:00:00.000Z");
+  assert.equal(isTrashEntryExpired(undefined, now), false);
+  assert.equal(isTrashEntryExpired("", now), false);
+  assert.equal(isTrashEntryExpired("not-a-date", now), false);
+  assert.equal(isTrashEntryExpired("2026-11-04T13:00:00.000Z", now), false);
+  assert.equal(isTrashEntryExpired("2026-11-04T11:59:59.000Z", now), true);
+});
 
 test("trash manifest preserves library identity and integrity metadata", () => {
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
@@ -38,6 +63,149 @@ test("trash manifest preserves library identity and integrity metadata", () => {
     assert.equal(entries[0]?.mediaFileId, 7);
     assert.equal(entries[0]?.contentHash, "a".repeat(64));
     assert.equal(entries[0]?.sizeBytes, 1234);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest refuses a symlinked logs directory outside the library", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  try {
+    fs.mkdirSync(path.join(nasPath, "WillardAI"));
+    fs.symlinkSync(outside, path.join(nasPath, "WillardAI", "logs"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => manifestPath(nasPath), /symlink/);
+    assert.equal(fs.existsSync(path.join(outside, "trash-manifest.jsonl")), false);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest refuses a symlinked manifest file outside the library", (context) => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  try {
+    const filePath = manifestPath(nasPath);
+    const outsideFile = path.join(outside, "external.jsonl");
+    fs.writeFileSync(outsideFile, "preserve external data\n");
+    try {
+      fs.symlinkSync(outsideFile, filePath, "file");
+    } catch (error: any) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    assert.throws(() => manifestPath(nasPath), /private, unlinked regular file inside the configured library/);
+    assert.throws(() => appendTrashManifestEntry(nasPath, {
+      nasPath,
+      originalPath: path.join(nasPath, "original.jpg"),
+      trashPath: path.join(nasPath, "WillardAI", ".Trash", "external.jpg"),
+      sizeBytes: 1,
+    }), /private, unlinked regular file inside the configured library/);
+    assert.equal(fs.readFileSync(outsideFile, "utf8"), "preserve external data\n");
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("trash root refuses a symlink outside the configured library during manifest removal", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-root-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  try {
+    appendTrashManifestEntry(nasPath, {
+      nasPath,
+      originalPath: path.join(nasPath, "original.jpg"),
+      trashPath: path.join(nasPath, "WillardAI", ".Trash", "session", "original.jpg"),
+      sizeBytes: 1,
+    });
+    fs.writeFileSync(path.join(outside, "preserve.txt"), "preserve");
+    fs.rmSync(path.join(nasPath, "WillardAI", ".Trash"), { recursive: true, force: true });
+    fs.symlinkSync(outside, path.join(nasPath, "WillardAI", ".Trash"), process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => removeTrashManifestEntry(nasPath, path.join(outside, "preserve.txt"), "restore-outside"),
+      /symlink/,
+    );
+    assert.equal(fs.readFileSync(path.join(outside, "preserve.txt"), "utf8"), "preserve");
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("trash tombstones match entries through a configured NAS mount alias", (context) => {
+  const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-real-root-"));
+  const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-alias-parent-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-outside-"));
+  const aliasRoot = path.join(aliasParent, "library");
+  const trashPath = path.join(aliasRoot, "WillardAI", ".Trash", "session", "photo.jpg");
+  try {
+    try {
+      fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (process.platform === "win32") {
+        context.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    appendTrashManifestEntry(aliasRoot, {
+      nasPath: aliasRoot,
+      originalPath: path.join(aliasRoot, "photo.jpg"),
+      trashPath,
+      sizeBytes: 1,
+    });
+    assert.equal(readTrashManifest(aliasRoot).entries.length, 1);
+    const canonicalTrashPath = resolveLibraryTrashPath(trashPath, aliasRoot);
+    assert.equal(removeTrashManifestEntry(aliasRoot, canonicalTrashPath, "restore-alias"), true);
+    assert.equal(readTrashManifest(aliasRoot).entries.length, 0);
+
+    const externalAlias = path.join(outside, "outside-link.jpg");
+    try {
+      fs.symlinkSync(trashPath, externalAlias, "file");
+      assert.throws(
+        () => resolveLibraryTrashPath(externalAlias, aliasRoot),
+        /outside the configured trash root/,
+      );
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+      context.skip("file symlink creation is not permitted on this runner");
+    }
+  } finally {
+    fs.rmSync(aliasParent, { recursive: true, force: true });
+    fs.rmSync(realRoot, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest removal refuses symlinked entries inside the trash root", (context) => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
+  const trashRoot = path.join(nasPath, "WillardAI", ".Trash", "session");
+  const target = path.join(trashRoot, "keep.jpg");
+  const link = path.join(trashRoot, "expired.jpg");
+  try {
+    fs.mkdirSync(trashRoot, { recursive: true });
+    fs.writeFileSync(target, "preserve target");
+    try {
+      fs.symlinkSync(target, link, "file");
+    } catch (error) {
+      if (process.platform === "win32") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    fs.appendFileSync(manifestPath(nasPath), JSON.stringify({
+      originalPath: path.join(nasPath, "original.jpg"),
+      trashPath: link,
+      sizeBytes: 15,
+    }) + "\n");
+    assert.throws(() => removeTrashManifestEntry(nasPath, link, "remove-symlink"), /symlink/);
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   } finally {
     fs.rmSync(nasPath, { recursive: true, force: true });
   }
@@ -69,7 +237,11 @@ test("removing one manifest entry is idempotent and preserves unknown lines", ()
     const raw = fs.readFileSync(manifestPath(nasPath), "utf8");
     assert.match(raw, /2_second\.jpg/);
     assert.match(raw, /\{not-json\}/);
-    assert.doesNotMatch(raw, /1_first\.jpg/);
+    assert.match(raw, /"recordType":"REMOVE"/);
+    assert.match(raw, /1_first\.jpg/, "append-only journal retains original record for crash recovery");
+    const active = readTrashManifest(nasPath).entries;
+    assert.equal(active.some((entry) => entry.trashPath === firstTrashPath), false);
+    assert.equal(active.some((entry) => entry.trashPath === secondTrashPath), true);
   } finally {
     fs.rmSync(nasPath, { recursive: true, force: true });
   }
@@ -79,15 +251,48 @@ test("manifest removal cannot target a path outside the active trash root", () =
   const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-manifest-"));
   const outsidePath = path.join(nasPath, "outside.txt");
   try {
-    appendTrashManifestEntry(nasPath, {
+    fs.writeFileSync(manifestPath(nasPath), JSON.stringify({
       nasPath,
       originalPath: path.join(nasPath, "photo.jpg"),
       trashPath: outsidePath,
       sizeBytes: 1,
-    });
+    }) + "\n");
 
     assert.equal(removeTrashManifestEntry(nasPath, outsidePath, "restore-outside"), false);
     assert.match(fs.readFileSync(manifestPath(nasPath), "utf8"), /outside\.txt/);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("a tombstone cannot hide a trash file that still exists", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-live-entry-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "photo.jpg");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(trashPath, "recoverable photo");
+    appendTrashManifestEntry(nasPath, {
+      nasPath,
+      originalPath: path.join(nasPath, "photo.jpg"),
+      trashPath,
+      sizeBytes: Buffer.byteLength("recoverable photo"),
+    });
+    fs.appendFileSync(manifestPath(nasPath), JSON.stringify({
+      recordType: "REMOVE",
+      operationId: "forged-removal",
+      trashPath,
+    }) + "\n");
+
+    assert.equal(readTrashManifest(nasPath).entries.length, 1);
+    assert.throws(
+      () => removeTrashManifestEntry(nasPath, trashPath, "restore-live-file"),
+      /still exists/,
+    );
+    assert.equal(readTrashManifest(nasPath).entries.length, 1);
+    assert.equal(fs.readFileSync(trashPath, "utf8"), "recoverable photo");
+
+    fs.rmSync(trashPath);
+    assert.equal(readTrashManifest(nasPath).entries.length, 0);
   } finally {
     fs.rmSync(nasPath, { recursive: true, force: true });
   }
@@ -217,4 +422,186 @@ test("recovery quarantines a restore manifest with no canonical row", async (t) 
     fs.rmSync(path.join(activeRoot, "WillardAI", ".Trash", "stale-session"), { recursive: true, force: true });
     fs.rmSync(path.join(activeRoot, "__stale-restore-test__"), { recursive: true, force: true });
   }
+});
+test("Trash GET route does not invoke permanent-retention cleanup", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const routeStart = cleanupRoute.indexOf('router.get("/cleanup/trash"');
+  const routeEnd = cleanupRoute.indexOf('router.post("/cleanup/restore"', routeStart);
+  assert.notEqual(routeStart, -1, "Trash GET route exists");
+  assert.notEqual(routeEnd, -1, "Restore POST route follows Trash GET route");
+  const routeBody = cleanupRoute.slice(routeStart, routeEnd);
+  assert.doesNotMatch(routeBody, /purgeExpiredTrashEntries/);
+  assert.match(routeBody, /readTrashManifest/);
+});
+
+test("expired Trash integrity verification preserves changed and unverifiable files", async () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-integrity-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "photo.jpg");
+  const original = Buffer.from("original media bytes");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(trashPath, original);
+    const validEntry = {
+      originalPath: path.join(nasPath, "photo.jpg"),
+      trashPath,
+      sizeBytes: original.length,
+      contentHash: crypto.createHash("sha256").update(original).digest("hex"),
+    };
+    await assertTrashFileIntegrity(validEntry, trashPath);
+
+    fs.writeFileSync(trashPath, "tampered media bytes");
+    await assert.rejects(assertTrashFileIntegrity(validEntry, trashPath), /size does not match|hash does not match/);
+    assert.equal(fs.readFileSync(trashPath, "utf8"), "tampered media bytes");
+
+    await assert.rejects(
+      assertTrashFileIntegrity({ ...validEntry, contentHash: undefined }, trashPath),
+      /no valid SHA-256/,
+    );
+    assert.equal(fs.existsSync(trashPath), true);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("expired Trash integrity verification rejects symlinks and non-regular objects", async (context) => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-integrity-"));
+  const trashPath = path.join(nasPath, "WillardAI", ".Trash", "session", "link.jpg");
+  const target = path.join(nasPath, "target.jpg");
+  try {
+    fs.mkdirSync(path.dirname(trashPath), { recursive: true });
+    fs.writeFileSync(target, "preserve target");
+    try {
+      fs.symlinkSync(target, trashPath, "file");
+    } catch (error: any) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(
+      assertTrashFileIntegrity({ originalPath: target, trashPath, sizeBytes: 15, contentHash: "a".repeat(64) }, trashPath),
+      /not a regular file/,
+    );
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+
+test("trash retention requires a present file and matching recycled canonical row before unlink", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const recoverySource = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  const start = recoverySource.indexOf("export async function purgeExpiredTrashEntries");
+  const end = recoverySource.indexOf("\nasync function reconcileRestoreOperation", start);
+  assert.ok(start >= 0 && end > start, "retention function should remain discoverable");
+  const retention = recoverySource.slice(start, end);
+  const missingGuard = retention.indexOf("expired trash file is missing without a durable deletion record");
+  const canonicalLookup = retention.indexOf("SELECT id", missingGuard);
+  const canonicalGuard = retention.indexOf("canonical recycled media row does not match this trash entry", canonicalLookup);
+  const integrityCheck = retention.indexOf("await assertTrashFileIntegrity(entry, trashPath)", canonicalGuard);
+  const unlink = retention.indexOf("fs.unlinkSync(trashPath)", integrityCheck);
+  assert.ok(missingGuard >= 0, "missing files must be preserved for manual review");
+  assert.ok(canonicalLookup > missingGuard, "canonical state must be checked before file deletion");
+  assert.ok(canonicalGuard > canonicalLookup, "a stale or restored row must block retention");
+  assert.ok(integrityCheck > canonicalGuard, "file integrity must be checked after canonical identity");
+  assert.ok(unlink > integrityCheck, "the only recoverable file must not be unlinked before all guards pass");
+  assert.match(retention, /entry\.mediaFileId == null/);
+  assert.match(retention, /affectedRows\(deleted\) !== 1/);
+});
+
+
+test("cleanup execute and startup recovery fence recycled media by canonical file identity", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const recovery = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+
+  const executeStart = cleanupRoute.indexOf('router.post("/cleanup/execute"');
+  const executeEnd = cleanupRoute.indexOf('router.get("/cleanup/trash"', executeStart);
+  assert.ok(executeStart >= 0 && executeEnd > executeStart);
+  const execute = cleanupRoute.slice(executeStart, executeEnd);
+  assert.match(execute, /fs\.lstatSync\(currentPath\)/);
+  assert.match(execute, /info\.isSymbolicLink\(\)/);
+  assert.match(execute, /await sha256File\(filePath\)/);
+  assert.match(execute, /relative_path = \$\{file\.relativePath\}/);
+  assert.match(execute, /content_hash IS NOT DISTINCT FROM \$\{file\.contentHash\}/);
+  assert.match(execute, /last_scan_action IS DISTINCT FROM 'DELETED'/);
+
+  const reconcileStart = recovery.indexOf("async function reconcileCleanupOperation");
+  const reconcileEnd = recovery.indexOf("\nexport type ExpiredTrashResult", reconcileStart);
+  assert.ok(reconcileStart >= 0 && reconcileEnd > reconcileStart);
+  const reconcile = recovery.slice(reconcileStart, reconcileEnd);
+  assert.match(reconcile, /resolveLibraryPath\(op\.nasPath, canonical\.relativePath\)/);
+  assert.match(reconcile, /Canonical media path changed during cleanup/);
+  assert.match(reconcile, /await sha256File\(trash\)/);
+  assert.match(reconcile, /relative_path = \$\{canonical\.relativePath\}/);
+  assert.match(reconcile, /content_hash IS NOT DISTINCT FROM \$\{canonical\.contentHash\}/);
+});
+
+
+test("manual restore validates destination parents without following symlinks", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const cleanupRoute = fs.readFileSync(path.join(sourceDir, "routes", "cleanup.ts"), "utf8");
+  const routeStart = cleanupRoute.indexOf('router.post("/cleanup/restore"');
+  const routeEnd = cleanupRoute.indexOf('router.get("/cleanup/history"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart);
+  const routeBody = cleanupRoute.slice(routeStart, routeEnd);
+  assert.match(routeBody, /canonicalizePath\(nasPath\)/);
+  assert.match(routeBody, /ensureDirectoryWithinRoot\(path\.dirname\(resolvedOriginalPath\), canonicalNasRoot\)/);
+  assert.doesNotMatch(routeBody, /fs\.mkdirSync\(destinationDir,\s*\{\s*recursive:\s*true\s*\}\)/);
+});
+
+
+test("trash manifest descriptors reject final-component symlinks before I/O", (context) => {
+  const nasRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-open-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-open-outside-"));
+  const external = path.join(outsideRoot, "external.jsonl");
+  const link = path.join(nasRoot, "manifest-link.jsonl");
+  fs.writeFileSync(external, "preserve external data\\n");
+  try {
+    try {
+      fs.symlinkSync(external, link, "file");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        context.skip("file symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+
+    assert.throws(() => openValidatedTrashManifest(link, "read"));
+    assert.throws(() => openValidatedTrashManifest(link, "append"));
+    assert.equal(fs.readFileSync(external, "utf8"), "preserve external data\\n");
+  } finally {
+    fs.rmSync(nasRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest descriptors reject hard-linked files before append", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-trash-hardlink-"));
+  const external = path.join(root, "external.jsonl");
+  const manifest = path.join(root, "manifest.jsonl");
+  fs.writeFileSync(external, "preserve external data\\n");
+  try {
+    fs.linkSync(external, manifest);
+    assert.throws(() => openValidatedTrashManifest(manifest, "append"), /private, unlinked regular file/);
+    assert.equal(fs.readFileSync(external, "utf8"), "preserve external data\\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("trash manifest reads and writes use validated file descriptors", () => {
+  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const recovery = fs.readFileSync(path.join(sourceDir, "lib", "cleanup-recovery.ts"), "utf8");
+  assert.match(recovery, /O_NOFOLLOW/);
+  assert.match(recovery, /fs\.fstatSync\(fd\)/);
+  assert.match(recovery, /fs\.readFileSync\(fd, "utf8"\)/);
+  assert.match(recovery, /openValidatedTrashManifest\(filePath, "append-existing"\)/);
+  assert.doesNotMatch(recovery, /fs\.openSync\(filePath, "a"/);
+  assert.doesNotMatch(recovery, /fs\.readFileSync\(filePath, "utf8"/);
 });

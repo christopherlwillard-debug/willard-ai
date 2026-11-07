@@ -3,13 +3,21 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import {
   ARCHIVE_LIMITS,
   ArchiveSafetyError,
   assertArchiveFileUnchanged,
   createArchiveBudget,
+  createArchiveExpansionLimiter,
   inspectExtractedTree,
+  isZipSymlinkEntry,
+  isTarLinkEntry,
+  getSevenZipEntryInfo,
+  isSevenZipDirectoryEntry,
+  isSevenZipLinkEntry,
   snapshotArchiveFile,
   validateArchiveEntry,
   writeArchiveFileAtomically,
@@ -57,11 +65,21 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
     "nested/../../outside.txt",
     "/absolute.txt",
     "C:\\outside.txt",
+    "C:relative.txt",
+    "file.txt:secret-stream",
+    "CON.txt",
+    "CON .txt",
+    "CONIN$",
+    "COM¹.txt",
+    "control\u0001char.txt",
+    "nested/AUX",
+    "trailing-dot./file.txt",
+    "trailing-space /file.txt",
     "\\\\server\\share\\outside.txt",
   ]) {
     assertSafetyFailure(
       () => validateArchiveEntry({ path: entryPath, sizeBytes: 1 }, createArchiveBudget()),
-      /traversal rejected|absolute path/,
+      /traversal rejected|absolute path|Windows-incompatible path component/,
     );
   }
 
@@ -73,6 +91,71 @@ test("rejects traversal, absolute, Windows drive, UNC, deep, and overlong archiv
   assertSafetyFailure(
     () => validateArchiveEntry({ path: "x".repeat(ARCHIVE_LIMITS.maxPathLength + 1), sizeBytes: 1 }, createArchiveBudget()),
     /character limit/,
+  );
+});
+
+test("rejects file entries without a usable archive path", () => {
+  for (const entryPath of ["", ".", "./"]) {
+    assertSafetyFailure(
+      () => validateArchiveEntry({ path: entryPath, sizeBytes: 1 }, createArchiveBudget()),
+      /invalid entry path|no usable path/,
+    );
+  }
+  assert.equal(
+    validateArchiveEntry(
+      { path: "./", sizeBytes: 0, isDirectory: true },
+      createArchiveBudget(),
+    ).isDirectory,
+    true,
+  );
+});
+
+test("normalizes harmless current-directory archive prefixes", () => {
+  const result = validateArchiveEntry(
+    { path: "./folder/file.txt", sizeBytes: 1 },
+    createArchiveBudget(),
+  );
+  assert.equal(result.normalizedPath, "folder/file.txt");
+});
+
+test("rejects file-directory prefix collisions in either archive entry order", () => {
+  const conflictingOrders = [
+    [
+      { path: "documents", sizeBytes: 1 },
+      { path: "documents/report.pdf", sizeBytes: 1 },
+    ],
+    [
+      { path: "documents/report.pdf", sizeBytes: 1 },
+      { path: "documents", sizeBytes: 1 },
+    ],
+  ] as const;
+
+  for (const [first, second] of conflictingOrders) {
+    const budget = createArchiveBudget();
+    validateArchiveEntry(first, budget);
+    assertSafetyFailure(
+      () => validateArchiveEntry(second, budget),
+      /conflicts with an existing file|conflicts with an existing directory/,
+    );
+  }
+});
+
+test("allows an explicit directory entry after its child file", () => {
+  const budget = createArchiveBudget();
+  validateArchiveEntry({ path: "documents/report.pdf", sizeBytes: 1 }, budget);
+  const directory = validateArchiveEntry(
+    { path: "documents", sizeBytes: 0, isDirectory: true },
+    budget,
+  );
+  assert.equal(directory.isDirectory, true);
+});
+
+test("rejects file-directory prefix collisions across case-insensitive paths", () => {
+  const budget = createArchiveBudget();
+  validateArchiveEntry({ path: "Documents", sizeBytes: 1 }, budget);
+  assertSafetyFailure(
+    () => validateArchiveEntry({ path: "documents/report.pdf", sizeBytes: 1 }, budget),
+    /existing file used as a parent directory/,
   );
 });
 
@@ -111,8 +194,24 @@ test("bounds entry count, per-file expansion, total expansion, and duplicate pat
   assertSafetyFailure(
     () => {
       const budget = createArchiveBudget();
-      validateArchiveEntry({ path: "./nested//same.txt", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "./nested/same.txt", sizeBytes: 1 }, budget);
       validateArchiveEntry({ path: "nested/same.txt", sizeBytes: 1 }, budget);
+    },
+    /duplicate entry path/,
+  );
+  assertSafetyFailure(
+    () => {
+      const budget = createArchiveBudget();
+      validateArchiveEntry({ path: "Photos/Cat.jpg", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "photos/cat.JPG", sizeBytes: 1 }, budget);
+    },
+    /duplicate entry path/,
+  );
+  assertSafetyFailure(
+    () => {
+      const budget = createArchiveBudget();
+      validateArchiveEntry({ path: "café.jpg", sizeBytes: 1 }, budget);
+      validateArchiveEntry({ path: "cafe\u0301.jpg", sizeBytes: 1 }, budget);
     },
     /duplicate entry path/,
   );
@@ -166,4 +265,153 @@ test("source replacement between archive phases is detected", () => {
     () => assertArchiveFileUnchanged(archive, snapshot),
     /changed while it was being inspected/,
   );
+});
+
+test("detects Unix ZIP symlinks and Windows reparse points", () => {
+  assert.equal(isZipSymlinkEntry(0xA1FF0000), true);
+  assert.equal(isZipSymlinkEntry(0xA0000000), true);
+  assert.equal(isZipSymlinkEntry(0x81A40000), false);
+  assert.equal(isZipSymlinkEntry(0x00000400), true);
+  assert.equal(isZipSymlinkEntry(0x00001410), true);
+  assert.equal(isZipSymlinkEntry(0x00000020), false);
+  assert.equal(isZipSymlinkEntry(undefined), false);
+});
+
+test("detects TAR symbolic and hard link entry types", () => {
+  assert.equal(isTarLinkEntry("SymbolicLink"), true);
+  assert.equal(isTarLinkEntry("Link"), true);
+  assert.equal(isTarLinkEntry("HardLink"), true);
+  assert.equal(isTarLinkEntry("File"), false);
+  assert.equal(isTarLinkEntry("Directory"), false);
+  assert.equal(isTarLinkEntry(undefined), false);
+});
+
+test("archive preview and validation reject ZIP and TAR link entries before extraction", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  assert.match(routeSource, /isZipSymlinkEntry\(\(e as any\)\.attr\)/);
+  assert.match(routeSource, /isZipSymlinkEntry\(\(entry as any\)\.attr\)/);
+  assert.match(routeSource, /isTarLinkEntry\(e\.type\)/);
+  assert.match(routeSource, /isTarLinkEntry\(entry\.type\)/);
+});
+
+
+test("detects 7-Zip links in both ordinary and technical attribute fields", () => {
+  assert.equal(isSevenZipLinkEntry("L"), true);
+  assert.equal(isSevenZipLinkEntry(undefined, "A_ lrwxrwxrwx"), true);
+  assert.equal(isSevenZipLinkEntry("....A", "A_ lrwxrwxrwx"), true);
+  assert.equal(isSevenZipLinkEntry("D", "D_ drwxr-xr-x"), false);
+  assert.equal(isSevenZipLinkEntry("....A", "A_ -rw-r--r--"), false);
+  assert.equal(isSevenZipLinkEntry(undefined), false);
+});
+
+test("reads POSIX symlink metadata from the node-7z techInfo Map", () => {
+  const info = getSevenZipEntryInfo({
+    attributes: "....A",
+    techInfo: new Map([
+      ["Attributes", "A_ lrwxrwxrwx"],
+      ["Folder", "-"],
+      ["Size", "12"],
+    ]),
+  });
+  assert.equal(info.isLink, true);
+  assert.equal(info.isDirectory, false);
+  assert.equal(info.sizeBytes, "12");
+});
+
+test("reads 7-Zip directory, size, and CRC metadata from techInfo", () => {
+  const info = getSevenZipEntryInfo({
+    techInfo: new Map([
+      ["Attributes", "D_ drwxr-xr-x"],
+      ["Folder", "+"],
+      ["Size", "0"],
+      ["CRC", "ABCD1234"],
+    ]),
+  });
+  assert.equal(info.isLink, false);
+  assert.equal(info.isDirectory, true);
+  assert.equal(info.sizeBytes, "0");
+  assert.equal(info.crc, "ABCD1234");
+  assert.equal(isSevenZipDirectoryEntry("A_ drwxr-xr-x"), true);
+  assert.equal(isSevenZipDirectoryEntry("....A", "-"), false);
+});
+
+test("stops decompression when the expanded TAR byte budget is exceeded", async () => {
+  let received = 0;
+  const sink = new Writable({
+    write(chunk, _encoding, callback) { received += chunk.length; callback(); },
+  });
+  await assert.rejects(
+    pipeline(Readable.from([Buffer.alloc(4), Buffer.alloc(4)]), createArchiveExpansionLimiter(7), sink),
+    /Decompressed archive exceeds/,
+  );
+  assert.equal(received, 4);
+});
+
+
+test("7-Zip organize extraction explicitly disables symbolic-link materialization", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const extractionStart = routeSource.indexOf("Seven.extractFull(archivePath, stagingDir");
+  assert.notEqual(extractionStart, -1, "7-Zip extraction call exists");
+  const extractionOptions = routeSource.slice(extractionStart, extractionStart + 700);
+  assert.match(extractionOptions, /\$raw:\s*\["-snl-"\]/);
+  assert.match(extractionOptions, /on\("error"/);
+});
+
+test("archive publication never replaces a regular destination created before publication", () => {
+  const outputRoot = path.join(root, "staging");
+  const output = path.join(outputRoot, "existing.txt");
+  fs.mkdirSync(outputRoot, { recursive: true });
+  fs.writeFileSync(output, "user file");
+
+  assert.throws(
+    () => writeArchiveFileAtomically(outputRoot, output, Buffer.from("archive replacement")),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as NodeJS.ErrnoException).code, "EEXIST");
+      return true;
+    },
+  );
+  assert.equal(fs.readFileSync(output, "utf8"), "user file");
+  assert.deepEqual(fs.readdirSync(outputRoot), ["existing.txt"]);
+});
+
+
+test("archive peek does not mislabel corrupt archives as password protected", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+  assert.match(routeSource, /if \(\/password\|wrong password\|encrypted\|cannot open encrypted\/i\.test\(message\)\)/);
+  assert.match(routeSource, /reject\(err instanceof Error \? err : new Error\(String\(err\)\)\)/);
+  assert.match(routeSource, /shouldTreatAsStandaloneCompressedFile\(archive\.filename, entries\.length, failureKind\)/);
+  assert.match(routeSource, /Never persist a partial listing as a successful archive preview/);
+  assert.match(routeSource, /throw new Error\(`Archive preview failed: \$\{error\}`\)/);
+  assert.match(routeSource, /if \(error instanceof ArchiveSafetyError\) throw error;/);
+});
+
+
+test("password-protected ZIP and 7-Zip previews verify the original archive snapshot", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/archives.ts", import.meta.url), "utf8");
+
+  const sevenZipErrorStart = routeSource.indexOf('stream.on("error", (err: Error) => {');
+  assert.notEqual(sevenZipErrorStart, -1, "7-Zip preview error handler should exist");
+  const sevenZipErrorEnd = routeSource.indexOf("\n    });", sevenZipErrorStart);
+  assert.ok(sevenZipErrorEnd > sevenZipErrorStart, "7-Zip preview error handler should close");
+  const sevenZipErrorHandler = routeSource.slice(sevenZipErrorStart, sevenZipErrorEnd);
+  const sevenZipPasswordStart = sevenZipErrorHandler.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg))");
+  assert.notEqual(sevenZipPasswordStart, -1, "7-Zip password-error branch should exist");
+  const sevenZipPasswordBranch = sevenZipErrorHandler.slice(sevenZipPasswordStart);
+  const sevenZipSnapshotCheck = sevenZipPasswordBranch.indexOf("assertArchiveFileUnchanged(filePath, archiveSnapshot)");
+  const sevenZipAccept = sevenZipPasswordBranch.indexOf("resolve({ entries, isPasswordProtected, format, error: msg })");
+  assert.ok(sevenZipSnapshotCheck >= 0 && sevenZipAccept > sevenZipSnapshotCheck,
+    "7-Zip must verify the original archive before accepting a password-protected result");
+
+  const zipStart = routeSource.indexOf("if (ZIP_EXTS.has(ext))");
+  const zipEnd = routeSource.indexOf("const category = computeCategoryFromContent(entries, isPasswordProtected);", zipStart);
+  assert.ok(zipStart >= 0 && zipEnd > zipStart, "ZIP preview branch should exist");
+  const zipPreview = routeSource.slice(zipStart, zipEnd);
+  const zipPasswordStart = zipPreview.indexOf("if (/password|wrong password|encrypted|cannot open encrypted/i.test(message))");
+  assert.notEqual(zipPasswordStart, -1, "ZIP password-error branch should exist");
+  const zipPasswordBranch = zipPreview.slice(zipPasswordStart);
+  const zipSnapshotCheck = zipPasswordBranch.indexOf("assertArchiveFileUnchanged(archivePath, archiveSnapshot)");
+  const zipAccept = zipPasswordBranch.indexOf("isPasswordProtected = true");
+  assert.ok(zipSnapshotCheck >= 0 && zipAccept > zipSnapshotCheck,
+    "ZIP must verify the original archive before accepting a password-protected result");
 });

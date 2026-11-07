@@ -1,12 +1,13 @@
 import { Router, type IRouter } from "express";
 import { sql, and, eq } from "drizzle-orm";
-import { db, appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { db, mediaFilesTable } from "@workspace/db";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { checkNasReachableAsync } from "../lib/nas-storage";
 import { getStoragePolicyStatus } from "../lib/storage-policy.ts";
 import { getMediaToolsHealth } from "../lib/media-tools.ts";
 import { getStartupHealth } from "../lib/startup-health.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -32,8 +33,7 @@ router.get("/health/status", async (_req, res) => {
 
   let nasPath = "";
   try {
-    const rows = await db.select().from(appSettingsTable).limit(1);
-    nasPath = rows[0]?.nasPath ?? "";
+    nasPath = (await getActiveNasPath()) ?? "";
   } catch { /* fall through with empty path → offline */ }
 
   // Async NAS check — never blocks the event loop even on slow/hung network drives.

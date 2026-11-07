@@ -204,43 +204,46 @@ function PersonDetail({ personId }: { personId: number }) {
         {items.map((it) => (
           <div
             key={it.id}
-            onClick={() => navigate(`/media/${it.id}`)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") navigate(`/media/${it.id}`);
-            }}
-            role="button"
-            tabIndex={0}
-            className="group relative aspect-square overflow-hidden rounded-md border bg-muted transition hover:ring-2 hover:ring-primary"
+            className="group relative aspect-square overflow-hidden rounded-md border bg-muted"
             title={it.name}
             data-testid={`person-item-${it.id}`}
           >
-            {isVisual(it.mediaType) ? (
-              <img src={apiUrl(`/media/thumbnail/${it.id}`)} alt={it.name} loading="lazy" className="h-full w-full object-cover" />
-            ) : (
-              <span className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-muted-foreground">
-                <FileText className="h-6 w-6" />
-                <span className="w-full truncate text-center text-[10px]">{it.name}</span>
-              </span>
-            )}
-            <span className="absolute inset-x-0 top-1 flex justify-end px-1 opacity-0 transition group-hover:opacity-100">
+            <button
+              type="button"
+              aria-label={"Open " + it.name + " in media viewer"}
+              onClick={() => navigate(`/media/${it.id}`)}
+              className="absolute inset-0 h-full w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+            >
+              {isVisual(it.mediaType) ? (
+                <img src={apiUrl(`/media/thumbnail/${it.id}`)} alt="" aria-hidden="true" loading="lazy" className="h-full w-full object-cover" />
+              ) : (
+                <span aria-hidden="true" className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-muted-foreground">
+                  <FileText className="h-6 w-6" />
+                  <span className="w-full truncate text-center text-[10px]">{it.name}</span>
+                </span>
+              )}
+              {it.dateTaken && (
+                <span aria-hidden="true" className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100">
+                  {formatDate(it.dateTaken)}
+                </span>
+              )}
+            </button>
+            <span className="absolute inset-x-0 top-1 z-10 flex justify-end px-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
               <Button
                 type="button"
                 size="sm"
                 variant="secondary"
-                className="h-7 px-2 text-[10px]"
-                onClick={(event) => { event.stopPropagation(); setReassignFaceId(it.faceId); }}
+                className="h-7 px-2 text-[10px] focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label={"Move face from " + it.name}
+                onClick={() => setReassignFaceId(it.faceId)}
                 data-testid={`button-reassign-face-${it.faceId}`}
               >
                 Move face
               </Button>
             </span>
-            {it.dateTaken && (
-              <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100">
-                {formatDate(it.dateTaken)}
-              </span>
-            )}
           </div>
         ))}
+
       </div>
       {items.length === 0 && (
         <p className="text-sm text-muted-foreground">No items for this person yet.</p>

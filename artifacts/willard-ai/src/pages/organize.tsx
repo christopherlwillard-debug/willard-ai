@@ -43,19 +43,25 @@ const FILE_CATEGORIES = [
   { key: "other",    label: "Other Files",      icon: <File className="w-3.5 h-3.5 text-muted-foreground" />, summaryKey: "other" },
 ] as const;
 
-function statusBadge(status: string) {
+function getStatusBadgeInfo(status: string): { label: string; cls: string } {
   const map: Record<string, { label: string; cls: string }> = {
     pending:     { label: "Pending",     cls: "bg-secondary text-muted-foreground" },
     analyzing:   { label: "Analyzing",   cls: "bg-blue-500/20 text-blue-400" },
     planned:     { label: "Planned",     cls: "bg-blue-500/20 text-blue-400" },
+    preflight:   { label: "Preflight",   cls: "bg-blue-500/20 text-blue-400" },
     verified:    { label: "Verified",    cls: "bg-amber-500/20 text-amber-400" },
     executing:   { label: "Executing",   cls: "bg-primary/20 text-primary animate-pulse" },
     completed:   { label: "Completed",   cls: "bg-green-500/20 text-green-400" },
     failed:      { label: "Failed",      cls: "bg-destructive/20 text-destructive" },
+    rolling_back: { label: "Rolling Back", cls: "bg-orange-500/20 text-orange-400 animate-pulse" },
     rolled_back: { label: "Rolled Back", cls: "bg-orange-500/20 text-orange-400" },
   };
-  const m = map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
-  return <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${m.cls}`}>{m.label}</span>;
+  return map[status] ?? { label: status, cls: "bg-secondary text-muted-foreground" };
+}
+
+function statusBadge(status: string) {
+  const info = getStatusBadgeInfo(status);
+  return <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${info.cls}`}>{info.label}</span>;
 }
 
 function StepIndicator({ current }: { current: Step }) {
@@ -161,21 +167,18 @@ function SetupStep({ onCreated, initialPath = "" }: { onCreated: (id: number) =>
           <SelectTrigger className="font-mono text-sm"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="keep_existing">Keep existing — skip source file (safe default)</SelectItem>
-            <SelectItem value="replace">Replace — overwrite destination with source</SelectItem>
+            <SelectItem value="replace" disabled>Replace — temporarily unavailable (safe recovery not supported)</SelectItem>
             <SelectItem value="rename">Rename — add suffix to source (file_1.jpg, file_2.jpg…)</SelectItem>
             <SelectItem value="skip">Skip — same as keep existing</SelectItem>
           </SelectContent>
         </Select>
-        {form.conflictPolicy === "replace" && (
-          <p className="text-xs text-amber-400/80 font-mono">⚠ Existing destination files will be permanently overwritten.</p>
-        )}
       </div>
 
       <Button
         className="w-full font-mono font-bold"
         onClick={() => {
           if (!form.sourcePath.trim()) { toast({ title: "Source path is required", variant: "destructive" }); return; }
-          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.archiveId ? parseInt(form.archiveId) : null, archiveDisposition: form.archiveDisposition as any, conflictPolicy: form.conflictPolicy as any } });
+          createMutation.mutate({ data: { sourceType: form.sourceType as "archive"|"folder", sourcePath: form.sourcePath.trim(), archiveId: form.sourceType === "archive" && form.archiveId ? Number(form.archiveId) : null, archiveDisposition: form.sourceType === "archive" ? form.archiveDisposition as any : "keep", conflictPolicy: form.conflictPolicy as any } });
         }}
         disabled={createMutation.isPending || !form.sourcePath.trim()}
       >
@@ -896,16 +899,19 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [dispositionDone, setDispositionDone]   = useState(false);
+  const [dispositionDoneLocal, setDispositionDoneLocal] = useState(false);
+  const [dispositionResultLocal, setDispositionResultLocal] = useState<string | null>(null);
 
   const applyDispositionMutation = useApplyOrganizeJobDisposition({
     mutation: {
       onSuccess: (result) => {
         setConfirmingDelete(false);
-        setDispositionDone(true);
+        setDispositionDoneLocal(true);
+        setDispositionResultLocal(result.dispositionResult);
         queryClient.invalidateQueries({ queryKey: getGetOrganizeJobQueryKey(job.id) });
         queryClient.invalidateQueries({ queryKey: getListOrganizeJobsQueryKey() });
-        toast({ title: `Archive ${result.dispositionResult === "deleted" ? "deleted" : "disposed"}` });
+        const label = result.dispositionResult === "deleted" ? "deleted" : result.dispositionResult === "already_gone" ? "is no longer present" : result.dispositionResult.startsWith("moved_to:") ? "moved to processed" : "updated";
+        toast({ title: `Archive ${label}` });
       },
       onError: (err: any) => {
         toast({ title: "Disposition failed", description: err?.message, variant: "destructive" });
@@ -916,9 +922,23 @@ function DoneStep({ job }: { job: OrganizationJob }) {
   const plan      = job.planJson as any;
   const report    = (job as any).reportJson as any ?? null;
   const isRolledBack = job.status === "rolled_back";
+  const persistedDispositionResult = typeof report?.dispositionApplied === "string" ? report.dispositionApplied : null;
+  const persistedDispositionDone = report?.dispositionPending === false && (
+    persistedDispositionResult === "deleted" ||
+    persistedDispositionResult === "already_gone" ||
+    persistedDispositionResult?.startsWith("moved_to:")
+  );
+  const dispositionDone = dispositionDoneLocal || persistedDispositionDone;
+  const effectiveDispositionResult = dispositionResultLocal ?? persistedDispositionResult;
   const needsDeleteConfirm = !isRolledBack
     && job.archiveDisposition === "delete"
     && job.sourceType === "archive"
+    && !dispositionDone
+    && report?.dispositionPending !== false;
+  const needsMoveRetry = !isRolledBack
+    && job.archiveDisposition === "move_to_processed"
+    && job.sourceType === "archive"
+    && report?.dispositionPending === true
     && !dispositionDone;
 
   // Per-type counts from report (populated after execute) or derived from plan routes
@@ -1124,10 +1144,31 @@ function DoneStep({ job }: { job: OrganizationJob }) {
         </div>
       )}
 
+      {needsMoveRetry && (
+        <div className="space-y-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+          <p className="text-xs font-mono text-amber-300">The files were organized, but the archive could not be moved to the processed folder.</p>
+          {report?.dispositionError && <p className="text-xs text-muted-foreground">{report.dispositionError}</p>}
+          <Button
+            size="sm"
+            className="w-full font-mono"
+            disabled={applyDispositionMutation.isPending}
+            onClick={() => applyDispositionMutation.mutate({ id: job.id, data: { confirm: true } })}
+          >
+            {applyDispositionMutation.isPending ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Moving…</> : "Retry move to processed"}
+          </Button>
+        </div>
+      )}
+
       {dispositionDone && (
         <div className="flex items-center gap-2 p-2.5 text-xs font-mono text-green-400 border border-green-500/30 bg-green-500/5 rounded-lg">
           <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-          Archive deleted successfully.
+          {effectiveDispositionResult === "deleted"
+            ? "Archive deleted successfully."
+            : effectiveDispositionResult === "already_gone"
+              ? "Archive is no longer present. No further deletion was performed."
+              : effectiveDispositionResult?.startsWith("moved_to:")
+                ? "Archive moved to the processed folder."
+                : "Archive disposition completed."}
         </div>
       )}
     </div>
@@ -1299,6 +1340,8 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
             const movesCount = Array.isArray(job.fileMoves) ? job.fileMoves.length : 0;
             const hasResumableData = !!job.planJson && !!job.preflightJson;
             const isPending = actionPending === job.id;
+            const statusInfo = getStatusBadgeInfo(job.status);
+            const isRollingBack = job.status === "rolling_back";
 
             return (
               <div key={job.id} className="border rounded-lg p-4 space-y-3 bg-amber-500/5 border-amber-500/20">
@@ -1336,8 +1379,8 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                       </p>
                     )}
                   </div>
-                  <span className="shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                    {job.status}
+                  <span className={`shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-full border ${statusInfo.cls}`}>
+                    {statusInfo.label}
                   </span>
                 </div>
 
@@ -1361,7 +1404,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                 {/* Action buttons */}
                 {!isRunning && !rs?.done && (
                   <div className="flex gap-2">
-                    {movesCount > 0 ? (
+                    {movesCount > 0 || isRollingBack ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1385,7 +1428,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                         Reset to Verified
                       </Button>
                     )}
-                    {hasResumableData && movesCount > 0 && (
+                    {hasResumableData && movesCount > 0 && !isRollingBack && (
                       <Button
                         size="sm"
                         className="flex-1 font-mono text-xs"
@@ -1395,7 +1438,7 @@ function RecoveryCenterSheet({ open, onClose, onJobRecovered }: {
                         <Play className="w-3.5 h-3.5 mr-1.5" /> Resume
                       </Button>
                     )}
-                    {hasResumableData && movesCount === 0 && (
+                    {hasResumableData && movesCount === 0 && !isRollingBack && (
                       <Button
                         size="sm"
                         className="flex-1 font-mono text-xs"
@@ -1504,13 +1547,32 @@ function OrganizeJobRow({
   const plan = currentJob.planJson as any;
   const isExecuting = currentJob.status === "executing";
   const moved = Array.isArray(currentJob.fileMoves) ? currentJob.fileMoves.length : 0;
+  const terminalJob = currentJob.status === "completed" || currentJob.status === "rolled_back";
+  const hasUnresolvedJournal = !terminalJob && currentJob.fileMoves != null &&
+    (!Array.isArray(currentJob.fileMoves) || currentJob.fileMoves.length > 0);
+  const deleteBlocked = ["analyzing", "executing", "rolling_back"].includes(currentJob.status) || hasUnresolvedJournal;
   const total = typeof plan?.totalFiles === "number" ? plan.totalFiles : 0;
   const progress = total > 0 ? Math.min(100, (moved / total) * 100) : 0;
+  const sourceName = currentJob.sourcePath.replaceAll("\\", "/").split("/").pop() || currentJob.sourcePath;
 
   return (
-    <TableRow className="cursor-pointer hover:bg-secondary/30" onClick={onOpen}>
+    <TableRow
+      className="cursor-pointer hover:bg-secondary/30"
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        onOpen();
+      }}
+    >
       <TableCell className="font-mono text-xs max-w-[180px] truncate" title={currentJob.sourcePath}>
-        <span className="font-medium">{currentJob.sourcePath.split("/").pop()}</span>
+        <button
+          type="button"
+          className="max-w-full truncate text-left font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label={"Open organization job " + sourceName}
+          onClick={onOpen}
+          data-testid={"button-open-organize-job-" + currentJob.id}
+        >
+          {sourceName}
+        </button>
       </TableCell>
       <TableCell>
         <span className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
@@ -1534,23 +1596,34 @@ function OrganizeJobRow({
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{formatDate(currentJob.createdAt)}</TableCell>
       <TableCell>
-        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex gap-1">
           {currentJob.status === "completed" || currentJob.status === "rolled_back" ? (
             <Button
+              type="button"
               variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono text-primary/80 hover:text-primary"
               onClick={onOpen}
+              aria-label={"View report for organization job " + sourceName}
               title="View Report"
             >
               <FileText className="w-3.5 h-3.5 mr-1" /> Report
             </Button>
           ) : (
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpen}>
+            <Button
+              type="button"
+              variant="ghost" size="sm" className="h-7 w-7 p-0"
+              onClick={onOpen}
+              aria-label={"Open organization job " + sourceName}
+              title="Open job"
+            >
               <Eye className="w-3.5 h-3.5" />
             </Button>
           )}
           <Button
+            type="button"
             variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-            disabled={currentJob.status === "executing" || deletePending}
+            disabled={deleteBlocked || deletePending}
+            aria-label={"Delete organization job " + sourceName}
+            title={hasUnresolvedJournal ? "Resume this job or complete rollback before deleting its recovery journal" : "Delete job"}
             onClick={onDelete}
           >
             <Trash2 className="w-3.5 h-3.5" />

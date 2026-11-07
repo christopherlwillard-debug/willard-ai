@@ -11,12 +11,15 @@ import * as assert from "node:assert/strict";
 import { db, pool, appSettingsTable, conversionJobsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "../lib/conversion-recovery.ts";
+import { CONVERSION_JOB_LOCK_NAMESPACE } from "../lib/conversion-job-lock.ts";
 
 const API_BASE = process.env["WILLARD_API_URL"]
   ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "http://localhost:8080");
 const PASSWORD = "willard123";
 let cookie = "";
 let jobId = 0;
+let activeJobId = 0;
+let configuredNasPath = "";
 
 async function post(route: string, body: unknown): Promise<Response> {
   const response = await fetch(`${API_BASE}/api${route}`, {
@@ -52,6 +55,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     const settings = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
     const nasPath = settings[0]?.nasPath;
     assert.ok(nasPath, "A configured test library is required");
+    configuredNasPath = nasPath;
     const auth = await post("/auth/login", { password: PASSWORD });
     assert.equal(auth.status, 200, `Login failed: ${await auth.text()}`);
 
@@ -69,6 +73,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
 
   after(async () => {
     if (jobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
+    if (activeJobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, activeJobId));
   });
 
   test("marks interrupted job failed with retryable error", async () => {
@@ -112,4 +117,46 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     assert.equal(replay.status, 403);
     await replay.text();
   });
+
+test("startup recovery skips a conversion job while its live worker holds the advisory lock", async () => {
+  const [inserted] = await db.insert(conversionJobsTable).values({
+    status: "running",
+    approvedExts: ["__active_lock_test__"],
+    backupDir: `${configuredNasPath}/WillardAI/backups/active-lock-test`,
+    nasPath: configuredNasPath,
+    totalFiles: 1,
+  }).returning({ id: conversionJobsTable.id });
+  activeJobId = inserted!.id;
+
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query(
+      "SELECT pg_advisory_lock($1::integer, $2::integer)",
+      [CONVERSION_JOB_LOCK_NAMESPACE, activeJobId],
+    );
+    const recoveredWhileLocked = await recoverInterruptedConversionJobs();
+    assert.equal(recoveredWhileLocked, 0);
+    const [stillRunning] = await db.select().from(conversionJobsTable)
+      .where(eq(conversionJobsTable.id, activeJobId));
+    assert.equal(stillRunning?.status, "running");
+  } finally {
+    try {
+      await lockClient.query(
+        "SELECT pg_advisory_unlock($1::integer, $2::integer)",
+        [CONVERSION_JOB_LOCK_NAMESPACE, activeJobId],
+      );
+    } finally {
+      lockClient.release();
+    }
+  }
+
+  const recoveredAfterUnlock = await recoverInterruptedConversionJobs();
+  assert.equal(recoveredAfterUnlock, 1);
+  const [recovered] = await db.select().from(conversionJobsTable)
+    .where(eq(conversionJobsTable.id, activeJobId));
+  assert.equal(recovered?.status, "failed");
+  assert.equal(recovered?.error, INTERRUPTED_CONVERSION_ERROR);
+});
+
+
 });

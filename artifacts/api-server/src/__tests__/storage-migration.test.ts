@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,14 +23,31 @@ function fixture() {
 
 function fakeDatabase() {
   const updates: Array<{ text: string; values: unknown[] }> = [];
-  const client = {
-    async query(text: string, values: unknown[] = []) {
-      updates.push({ text, values });
-      return { rows: [], rowCount: 1 };
-    },
-    release() {},
+  const locks = new Set<string>();
+  return {
+    updates,
+    connect: async () => ({
+      async query(text: string, values: unknown[] = []) {
+        const key = String(values[0] ?? "");
+        if (text.includes("pg_try_advisory_lock")) {
+          const locked = !locks.has(key);
+          if (locked) locks.add(key);
+          return { rows: [{ locked }], rowCount: 1 };
+        }
+        if (text.includes("pg_advisory_unlock")) {
+          const unlocked = locks.delete(key);
+          return { rows: [{ unlocked }], rowCount: 1 };
+        }
+        updates.push({ text, values });
+        return { rows: [], rowCount: 1 };
+      },
+      release(_error?: Error) {},
+    }),
   };
-  return { updates, connect: async () => client };
+}
+
+function hashFile(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 test("preview inventories derivative namespaces and counts database references", async () => {
@@ -136,8 +154,10 @@ test("corrupt copies remove the partial destination and pause the manifest", asy
   const source = path.join(paths.source, "WillardAI/cache/thumbnails/corrupt.webp");
   fs.writeFileSync(source, "good");
   let hashCalls = 0;
+  const database = fakeDatabase();
   const service = createStorageMigrationService({
     manifestDir: paths.manifests,
+    connect: database.connect,
     hashFile: async (filePath) => {
       hashCalls++;
       if (hashCalls === 2) return "corrupted-destination";
@@ -155,13 +175,48 @@ test("corrupt copies remove the partial destination and pause the manifest", asy
   assert.equal((await service.get(manifest.id)).state, "PAUSED");
 });
 
+test("copy revalidates an already-matching destination before redirecting database references", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/already-present.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/already-present.webp");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(source, "preview bytes");
+  fs.writeFileSync(destination, "preview bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 91,
+      value: source,
+    }],
+  });
+  assert.equal(manifest.entries[0]?.state, "verified", "matching destination is pre-verified during preview");
+
+  // Simulate the source being updated after preview while the old destination
+  // remains intact. The migration must not redirect the DB reference to stale bytes.
+  fs.writeFileSync(source, "newer user data");
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Source changed after migration preview; database references were not updated/,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "newer user data");
+  assert.equal(fs.readFileSync(destination, "utf8"), "preview bytes");
+  assert.equal(database.updates.some((update) => update.text.startsWith("UPDATE media_files SET thumbnail_path")), false);
+  assert.equal((await service.get(manifest.id)).state, "PAUSED");
+});
+
 test("cleanup requires a separate confirmation and never removes protected conversion backups", async () => {
   const paths = fixture();
   const thumbnail = path.join(paths.source, "WillardAI/cache/thumbnails/keep.webp");
   const backup = path.join(paths.source, "WillardAI/ConversionBackups/original.jpg");
   fs.writeFileSync(thumbnail, "thumbnail");
   fs.writeFileSync(backup, "original");
-  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
   const manifest = await service.preview({
     sourceRoot: paths.source,
     destinationRoot: paths.destination,
@@ -176,12 +231,125 @@ test("cleanup requires a separate confirmation and never removes protected conve
   assert.equal(fs.existsSync(backup), true);
 });
 
+test("cleanup preserves an original that changed after the migration copy", async () => {
+  const paths = fixture();
+  const original = path.join(paths.source, "WillardAI/cache/thumbnails/changed-after-copy.webp");
+  fs.writeFileSync(original, "original bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
+  const manifest = await service.preview({ sourceRoot: paths.source, destinationRoot: paths.destination, referenceRows: [] });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+  fs.writeFileSync(original, "new user data written after copy");
+  await assert.rejects(() => service.cleanup(manifest.id), /Source changed after migration preview; original preserved/);
+  assert.equal(fs.readFileSync(original, "utf8"), "new user data written after copy");
+  assert.equal(fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/changed-after-copy.webp"), "utf8"), "original bytes");
+});
+test("cleanup can resume after a previous attempt removed an original before interruption", async () => {
+  const paths = fixture();
+  const alreadyRemoved = path.join(paths.source, "WillardAI/cache/thumbnails/first.webp");
+  const stillPresent = path.join(paths.source, "WillardAI/cache/thumbnails/second.webp");
+  fs.writeFileSync(alreadyRemoved, "first bytes");
+  fs.writeFileSync(stillPresent, "second bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
+  const manifest = await service.preview({ sourceRoot: paths.source, destinationRoot: paths.destination, referenceRows: [] });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+  fs.rmSync(alreadyRemoved);
+  const cleaned = await service.cleanup(manifest.id);
+  assert.equal(cleaned.state, "CLEANED");
+  assert.equal(fs.existsSync(stillPresent), false);
+  assert.equal(fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/first.webp"), "utf8"), "first bytes");
+});
+test("concurrent copy requests share a database advisory lock across service instances", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/concurrent.webp");
+  fs.writeFileSync(source, "one copy at a time");
+  const database = fakeDatabase();
+  let releaseHash!: () => void;
+  let signalHashStarted!: () => void;
+  const hashGate = new Promise<void>((resolve) => { releaseHash = resolve; });
+  const hashStarted = new Promise<void>((resolve) => { signalHashStarted = resolve; });
+  const firstService = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+    hashFile: async (filePath) => {
+      if (filePath.endsWith(".partial")) {
+        signalHashStarted();
+        await hashGate;
+      }
+      return hashFile(filePath);
+    },
+  });
+  const secondService = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+  });
+  const manifest = await firstService.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+
+  const firstCopy = firstService.copy(manifest.id);
+  await hashStarted;
+  await assert.rejects(
+    () => secondService.copy(manifest.id),
+    /Another operation is already running/,
+  );
+  releaseHash();
+
+  assert.equal((await firstCopy).state, "VERIFIED");
+  assert.equal(
+    fs.readFileSync(path.join(paths.destination, "WillardAI/cache/thumbnails/concurrent.webp"), "utf8"),
+    "one copy at a time",
+  );
+  assert.equal((await secondService.copy(manifest.id)).state, "VERIFIED", "the advisory lock is released after completion");
+});
+
+test("copy never replaces a destination created after the preview conflict check", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/raced.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/raced.webp");
+  fs.writeFileSync(source, "approved source bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect: database.connect,
+    freeBytesAt: async () => 1024 * 1024 * 1024,
+    hashFile: async (filePath) => {
+      if (filePath.endsWith(".partial") && !fs.existsSync(destination)) {
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, "independent concurrent file");
+      }
+      return hashFile(filePath);
+    },
+  });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Destination appeared during migration and contains different data/,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "approved source bytes");
+  assert.equal(fs.readFileSync(destination, "utf8"), "independent concurrent file");
+  const leftovers = fs.readdirSync(path.dirname(destination)).filter((name) => name.endsWith(".partial"));
+  assert.deepEqual(leftovers, [], "the failed operation removes only its own temporary copy");
+});
+
 test("preview records missing database-referenced artifacts and refuses insufficient destinations", async () => {
   const paths = fixture();
   const missing = path.join(paths.source, "WillardAI/cache/thumbnails/no-longer-present.webp");
   fs.writeFileSync(path.join(paths.source, "WillardAI/cache/thumbnails/needs-space.webp"), "needs space");
+  const database = fakeDatabase();
   const service = createStorageMigrationService({
     manifestDir: paths.manifests,
+    connect: database.connect,
     freeBytesAt: async () => 0,
   });
   const manifest = await service.preview({
@@ -217,4 +385,248 @@ test("directory-valued job references move as prefixes and destination orphans a
   const update = database.updates.find((item) => item.text.includes("UPDATE conversion_jobs SET backup_dir"));
   assert.equal(update?.values[0], path.join(paths.destination, "WillardAI/ConversionBackups/job-7"));
   assert.equal(fs.existsSync(backup), true);
+});
+
+test("copy pauses and preserves originals when a database reference changed after preview", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/stale-reference.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({
+    manifestDir: paths.manifests,
+    connect,
+  });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 44,
+      value: source,
+    }],
+  });
+
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Database reference changed or disappeared during migration/,
+  );
+
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/stale-reference.webp");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes", "the original must never be removed");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes", "the verified copy remains recoverable");
+  assert.equal(database.updates.some((entry) => entry.text === "ROLLBACK"), true);
+  assert.equal((await service.get(manifest.id)).state, "PAUSED");
+  await assert.rejects(() => service.confirmCleanup(manifest.id), /only after the migration/);
+});
+
+
+test("copy accepts an already-updated database reference on a safe retry", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/already-updated.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/already-updated.webp");
+  fs.writeFileSync(source, "source bytes");
+  const database = fakeDatabase();
+  const connect = async () => {
+    const client = await database.connect();
+    return {
+      release: client.release,
+      async query(text: string, values: unknown[] = []) {
+        if (text.includes("UPDATE media_files SET thumbnail_path")) {
+          database.updates.push({ text, values });
+          return { rows: [], rowCount: 0 };
+        }
+        if (text.includes("SELECT thumbnail_path AS value FROM media_files")) {
+          return { rows: [{ value: destination }], rowCount: 1 };
+        }
+        return client.query(text, values);
+      },
+    };
+  };
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 45,
+      value: source,
+    }],
+  });
+
+  const copied = await service.copy(manifest.id);
+  assert.equal(copied.state, "VERIFIED");
+  assert.equal(fs.readFileSync(destination, "utf8"), "source bytes");
+  assert.equal(fs.readFileSync(source, "utf8"), "source bytes");
+});
+
+
+test("preview rejects nested or overlapping source and destination roots", async () => {
+  const paths = fixture();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: path.join(paths.source, "WillardAI", "nested-destination"),
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+  await assert.rejects(
+    () => service.preview({
+      sourceRoot: paths.source,
+      destinationRoot: paths.root,
+      referenceRows: [],
+    }),
+    /separate, non-overlapping directories/,
+  );
+});
+
+test("cleanup enforces protected namespaces from the namespace catalog, not manifest flags", async () => {
+  const paths = fixture();
+  const backup = path.join(paths.source, "WillardAI/ConversionBackups/original.jpg");
+  fs.writeFileSync(backup, "protected original");
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: fakeDatabase().connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  await service.copy(manifest.id);
+  await service.confirmCleanup(manifest.id);
+
+  const manifestFile = path.join(paths.manifests, `${manifest.id}.json`);
+  const tampered = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  const backupEntry = tampered.entries.find((entry: { namespace: string }) => entry.namespace === "conversion-backups");
+  assert.ok(backupEntry);
+  backupEntry.protected = false;
+  fs.writeFileSync(manifestFile, JSON.stringify(tampered));
+
+  await service.cleanup(manifest.id);
+  assert.equal(fs.readFileSync(backup, "utf8"), "protected original");
+});
+
+
+test("preview refuses a symlinked source namespace without scanning its target", async (context) => {
+  const paths = fixture();
+  const namespace = path.join(paths.source, "WillardAI/cache/thumbnails");
+  const outside = path.join(paths.root, "outside-source");
+  fs.rmSync(namespace, { recursive: true, force: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "private.jpg"), "outside source");
+  try {
+    fs.symlinkSync(outside, namespace, process.platform === "win32" ? "junction" : "dir");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("directory symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.equal(manifest.entries.some((entry) => entry.sourcePath === path.join(outside, "private.jpg")), false);
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+});
+
+test("preview marks a destination symlink unsafe instead of treating its target as a verified copy", async (context) => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/symlinked.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/symlinked.webp");
+  const other = path.join(paths.destination, "WillardAI/reports/other.webp");
+  fs.writeFileSync(source, "same bytes");
+  fs.mkdirSync(path.dirname(other), { recursive: true });
+  fs.writeFileSync(other, "same bytes");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  try {
+    fs.symlinkSync(other, destination, "file");
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      context.skip("file symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const service = createStorageMigrationService({ manifestDir: paths.manifests });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [],
+  });
+  assert.equal(manifest.unsafeFiles, 1);
+  assert.notEqual(manifest.entries.find((entry) => entry.sourcePath === source)?.state, "verified");
+  await assert.rejects(() => service.copy(manifest.id), /Resolve conflicts/);
+  assert.equal(fs.readFileSync(other, "utf8"), "same bytes");
+});
+
+
+test("preview rejects selected source and destination roots that are symlinks", async (context) => {
+  const paths = fixture();
+  const sourceAlias = path.join(paths.root, "source-alias");
+  const destinationAlias = path.join(paths.root, "destination-alias");
+  try {
+    try {
+      fs.symlinkSync(paths.source, sourceAlias, "dir");
+      fs.symlinkSync(paths.destination, destinationAlias, "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        context.skip("directory symlink creation is not permitted on this runner");
+        return;
+      }
+      throw error;
+    }
+
+    const service = createStorageMigrationService({ manifestDir: paths.manifests });
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: sourceAlias,
+        destinationRoot: path.join(paths.root, "new-destination"),
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+    await assert.rejects(
+      () => service.preview({
+        sourceRoot: paths.source,
+        destinationRoot: destinationAlias,
+        referenceRows: [],
+      }),
+      /regular, non-symlink directory/,
+    );
+  } finally {
+    fs.rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+
+test("storage migration hashing shares the no-follow file reader", () => {
+  const source = fs.readFileSync(new URL("../lib/storage-migration.ts", import.meta.url), "utf8");
+  assert.match(source, /import \{ moveFileNoReplace, sha256File \} from "\.\/organize-helpers\.ts"/);
+  assert.match(source, /async function defaultHashFile\(filePath: string\): Promise<string>\s*\{[\s\S]*?return sha256File\(filePath\)/);
+  assert.match(source, /copyFileFromNoFollowDescriptor\(safeSourcePath, partialHandle\)/);
+  assert.match(source, /O_NOFOLLOW/);
+  assert.match(source, /fs\.createReadStream\(sourcePath, \{ fd: sourceFd, autoClose: false \}\)/);
 });

@@ -22,7 +22,10 @@ export function shouldAcceptJobSnapshot(
   current: JobStreamCursor | null,
   incoming: JobStreamCursor | null,
 ): boolean {
-  if (!incoming) return true;
+  // Legacy or malformed events may initialize an unversioned stream, but
+  // once a cursor exists they must not roll progress back.
+  if (!incoming) return current === null;
+  if (!incoming.streamId || !Number.isSafeInteger(incoming.sequence) || incoming.sequence < 0) return false;
   if (!current || current.streamId !== incoming.streamId) return true;
   return incoming.sequence > current.sequence;
 }

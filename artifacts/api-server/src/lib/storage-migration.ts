@@ -2,8 +2,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { createReadStream, createWriteStream } from "node:fs";
-import { pool } from "@workspace/db";
+import { canonicalizePath, ensureDataDirectoryWithinRoot, resolveWithinRoot } from "./nas-storage.ts";
+import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
 
 export const STORAGE_MIGRATION_VERSION = 1;
 export const STORAGE_MIGRATION_NAMESPACES = [
@@ -90,7 +90,7 @@ export interface MigrationServiceOptions {
   query?: (text: string, values?: unknown[]) => Promise<{ rows: any[] }>;
   connect?: () => Promise<{
     query: (text: string, values?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
-    release: () => void;
+    release: (error?: Error) => void;
   }>;
   hashFile?: (filePath: string) => Promise<string>;
   freeBytesAt?: (target: string) => Promise<number | null>;
@@ -116,6 +116,41 @@ function relativeFor(sourceRoot: string, filePath: string): string {
   return path.relative(safeRoot(sourceRoot), safeRoot(filePath)).split(path.sep).join("/");
 }
 
+function inspectRegularFileWithoutSymlinks(filePath: string, root: string): "missing" | "regular" {
+  const canonicalRoot = canonicalizePath(root);
+  const target = path.resolve(filePath);
+  const relative = path.relative(canonicalRoot, target);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("Migration file path is not a child of its configured root.");
+  }
+  const components = relative.split(path.sep).filter(Boolean);
+  let current = canonicalRoot;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]!);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw new Error("Migration file path contains a symbolic link.");
+    if (index < components.length - 1 && !stat.isDirectory()) {
+      throw new Error("Migration file path contains a non-directory parent.");
+    }
+    if (index === components.length - 1 && !stat.isFile()) {
+      throw new Error("Migration source or destination is not a regular file.");
+    }
+  }
+  return "regular";
+}
+
+function assertRegularFileWithoutSymlinks(filePath: string, root: string): string {
+  if (inspectRegularFileWithoutSymlinks(filePath, root) !== "regular") {
+    throw new Error("Migration source or destination file is missing.");
+  }
+  return path.resolve(filePath);
+}
 function destinationFor(destinationRoot: string, relativePath: string): string {
   const result = safeRoot(path.join(destinationRoot, relativePath));
   if (!isWithin(destinationRoot, result)) throw new Error(`Destination path escapes migration root: ${relativePath}`);
@@ -123,19 +158,59 @@ function destinationFor(destinationRoot: string, relativePath: string): string {
 }
 
 async function defaultHashFile(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(hash.digest("hex")));
-  });
+  // Share the no-follow descriptor implementation used by file moves and
+  // cleanup so a symlink swap cannot redirect migration hashing.
+  return sha256File(filePath);
+}
+
+async function copyFileFromNoFollowDescriptor(sourcePath: string, destinationHandle: Awaited<ReturnType<typeof fs.promises.open>>): Promise<void> {
+  const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const sourceFd = fs.openSync(sourcePath, fs.constants.O_RDONLY | noFollow);
+  try {
+    const opened = fs.fstatSync(sourceFd);
+    const current = fs.lstatSync(sourcePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      throw new Error("Migration source changed or became a symlink while opening.");
+    }
+    await pipeline(
+      fs.createReadStream(sourcePath, { fd: sourceFd, autoClose: false }),
+      destinationHandle.createWriteStream(),
+    );
+  } finally {
+    fs.closeSync(sourceFd);
+  }
 }
 
 async function walkFiles(root: string, onUnsafe: (filePath: string, reason: string) => void): Promise<string[]> {
   const files: string[] = [];
   if (!fs.existsSync(root)) return files;
+  try {
+    const rootStat = await fs.promises.lstat(root);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      onUnsafe(root, "Migration namespace root is a symlink or is not a regular directory.");
+      return files;
+    }
+  } catch (error) {
+    onUnsafe(root, error instanceof Error ? error.message : String(error));
+    return files;
+  }
   const visit = async (directory: string): Promise<void> => {
+    try {
+      const directoryStat = await fs.promises.lstat(directory);
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+        onUnsafe(directory, "Migration directory changed to a symlink or non-directory during scan.");
+        return;
+      }
+    } catch (error) {
+      onUnsafe(directory, error instanceof Error ? error.message : String(error));
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(directory, { withFileTypes: true });
@@ -183,7 +258,7 @@ function manifestPath(manifestDir: string, id: string): string {
 async function saveManifest(manifestDir: string, manifest: StorageMigrationManifest): Promise<void> {
   await fs.promises.mkdir(manifestDir, { recursive: true });
   const target = manifestPath(manifestDir, manifest.id);
-  const temporary = `${target}.${process.pid}.partial`;
+  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.partial`;
   await fs.promises.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.promises.rename(temporary, target);
 }
@@ -197,12 +272,42 @@ async function readManifest(manifestDir: string, id: string): Promise<StorageMig
   if (typeof parsed.sourceRoot !== "string" || typeof parsed.destinationRoot !== "string" || samePath(parsed.sourceRoot, parsed.destinationRoot)) {
     throw new Error("Migration manifest has invalid roots.");
   }
+  if (
+    isWithin(parsed.sourceRoot, parsed.destinationRoot) ||
+    isWithin(parsed.destinationRoot, parsed.sourceRoot)
+  ) {
+    throw new Error("Migration manifest source and destination roots overlap.");
+  }
   for (const entry of parsed.entries) {
-    if (!isWithin(parsed.sourceRoot, entry.sourcePath) || !isWithin(parsed.destinationRoot, entry.destinationPath)) {
+    if (
+      !isWithin(parsed.sourceRoot, entry.sourcePath) ||
+      samePath(parsed.sourceRoot, entry.sourcePath) ||
+      !isWithin(parsed.destinationRoot, entry.destinationPath) ||
+      samePath(parsed.destinationRoot, entry.destinationPath)
+    ) {
       throw new Error("Migration manifest contains a path outside its source or destination root.");
     }
+    const relativePath = relativeFor(parsed.sourceRoot, entry.sourcePath);
+    if (entry.relativePath !== relativePath || !samePath(entry.destinationPath, destinationFor(parsed.destinationRoot, relativePath))) {
+      throw new Error("Migration manifest contains inconsistent source and destination paths.");
+    }
+    const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
+    if (namespace) {
+      const namespaceRoot = path.join(parsed.sourceRoot, namespace.relativeRoot);
+      if (!isWithin(namespaceRoot, entry.sourcePath) || samePath(namespaceRoot, entry.sourcePath)) {
+        throw new Error("Migration manifest entry does not belong to its declared namespace.");
+      }
+      entry.protected = namespace.protected;
+    } else if (entry.namespace === "unsafe" || entry.namespace === "database-reference") {
+      entry.protected = true;
+    } else {
+      throw new Error("Migration manifest contains an unknown namespace.");
+    }
+    if (!Array.isArray(entry.references) || !Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0) {
+      throw new Error("Migration manifest contains invalid entry metadata.");
+    }
     for (const reference of entry.references) {
-      if (!allowedReferences.has(`${reference.table}:${reference.column}`)) {
+      if (!allowedReferences.has(`${reference.table}:${reference.column}`) || !Number.isSafeInteger(reference.rowId) || reference.rowId <= 0) {
         throw new Error("Migration manifest contains an unsupported database reference.");
       }
     }
@@ -269,13 +374,92 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   const hashFile = options.hashFile ?? defaultHashFile;
   const getFreeBytes = options.freeBytesAt ?? freeBytesAt;
   const query = options.query;
-  const connect = options.connect ?? (() => pool.connect() as any);
+  const connect = options.connect ?? (async () => {
+    const { pool } = await import("@workspace/db");
+    return pool.connect() as any;
+  });
+
+  /**
+   * Serialize copy/confirmation/cleanup across API processes. A PostgreSQL
+   * session advisory lock is released automatically if the owning process or
+   * connection dies, so a crash cannot leave a permanent filesystem lockfile.
+   */
+  async function withMigrationLock<T>(
+    id: string,
+    operation: (client: Awaited<ReturnType<typeof connect>>) => Promise<T>,
+  ): Promise<T> {
+    const client = await connect();
+    const lockKey = `willard-storage-migration:${id}`;
+    let acquired = false;
+    let operationError: unknown;
+    let result: T | undefined;
+    try {
+      const lock = await client.query(
+        "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+        [lockKey],
+      );
+      if (lock.rows?.[0]?.locked !== true) {
+        throw new Error("Another operation is already running for this storage migration.");
+      }
+      acquired = true;
+      result = await operation(client);
+    } catch (error) {
+      operationError = error;
+    }
+
+    let unlockError: unknown;
+    if (acquired) {
+      try {
+        const unlocked = await client.query(
+          "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked",
+          [lockKey],
+        );
+        if (unlocked.rows?.[0]?.unlocked !== true) {
+          throw new Error("The storage migration lock could not be released.");
+        }
+      } catch (error) {
+        unlockError = error;
+      }
+    }
+    try {
+      client.release(unlockError instanceof Error ? unlockError : undefined);
+    } catch (error) {
+      unlockError = unlockError ?? error;
+    }
+
+    if (operationError && unlockError) {
+      throw new AggregateError([operationError, unlockError], "Storage migration operation failed and its database lock could not be released.");
+    }
+    if (operationError) throw operationError;
+    if (unlockError) throw unlockError;
+    return result as T;
+  }
 
   async function preview(input: Omit<MigrationPreviewOptions, "manifestDir">): Promise<StorageMigrationManifest> {
-    const sourceRoot = safeRoot(input.sourceRoot);
-    const destinationRoot = safeRoot(input.destinationRoot);
-    if (samePath(sourceRoot, destinationRoot)) throw new Error("Migration source and destination must be different.");
-    if (!fs.existsSync(sourceRoot)) throw new Error("Migration source is not reachable.");
+    // Inspect the caller-supplied final components BEFORE canonicalization;
+    // canonicalizePath intentionally dereferences symlinks and would otherwise
+    // hide a symlink used as the selected source or destination root.
+    const requestedSourceRoot = path.resolve(input.sourceRoot);
+    if (!fs.existsSync(requestedSourceRoot)) throw new Error("Migration source is not reachable.");
+    const requestedSourceStat = fs.lstatSync(requestedSourceRoot);
+    if (requestedSourceStat.isSymbolicLink() || !requestedSourceStat.isDirectory()) {
+      throw new Error("Migration source must be a regular, non-symlink directory.");
+    }
+    const requestedDestinationRoot = path.resolve(input.destinationRoot);
+    try {
+      const requestedDestinationStat = fs.lstatSync(requestedDestinationRoot);
+      if (requestedDestinationStat.isSymbolicLink() || !requestedDestinationStat.isDirectory()) {
+        throw new Error("Migration destination must be a regular, non-symlink directory when it already exists.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+
+    const sourceRoot = canonicalizePath(requestedSourceRoot);
+    const destinationRoot = canonicalizePath(requestedDestinationRoot);
+    if (samePath(sourceRoot, destinationRoot) || isWithin(sourceRoot, destinationRoot) || isWithin(destinationRoot, sourceRoot)) {
+      throw new Error("Migration source and destination must be separate, non-overlapping directories.");
+    }
 
     const references = input.referenceRows ?? await databaseReferences(query);
     const unsafe: Array<{ path: string; reason: string }> = [];
@@ -293,12 +477,13 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         destinationCandidates.add(safeRoot(destinationPath));
         let stat: fs.Stats;
         try {
-          stat = await fs.promises.stat(sourcePath);
+          stat = await fs.promises.lstat(sourcePath);
+          if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Source is not a regular file.");
         } catch (error) {
           entries.push({
             id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
             sizeBytes: 0, sourceHash: null, destinationHash: null, referenceCount: 0, references: [],
-            protected: namespace.protected, state: "missing", error: error instanceof Error ? error.message : String(error),
+            protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
           });
           continue;
         }
@@ -316,10 +501,17 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         let destinationHash: string | null = null;
         let destinationExists = false;
         try {
-          const destinationStat = await fs.promises.stat(destinationPath);
-          destinationExists = destinationStat.isFile();
+          const destinationState = inspectRegularFileWithoutSymlinks(destinationPath, destinationRoot);
+          destinationExists = destinationState === "regular";
           if (destinationExists) destinationHash = await hashFile(destinationPath);
-        } catch { /* destination is absent */ }
+        } catch (error) {
+          entries.push({
+            id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
+            sizeBytes: stat.size, sourceHash, destinationHash: null, referenceCount: 0, references: [],
+            protected: namespace.protected, state: "unsafe", error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
         const fileReferences = referencesForPath(references, sourceRoot, sourcePath);
         entries.push({
           id: crypto.randomUUID(), namespace: namespace.id, sourcePath, destinationPath, relativePath,
@@ -395,6 +587,15 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
   }
 
   async function copy(id: string): Promise<StorageMigrationManifest> {
+    const initialManifest = await get(id);
+    if (initialManifest.cleanupConfirmed || initialManifest.state === "CLEANED") {
+      throw new Error("This migration is in cleanup state and cannot be copied.");
+    }
+    if (initialManifest.conflicts || initialManifest.unsafeFiles || initialManifest.missingFiles) {
+      throw new Error("Resolve conflicts, unsafe files, and missing sources before copying.");
+    }
+
+    return withMigrationLock(id, async (client) => {
     const manifest = await get(id);
     if (manifest.cleanupConfirmed || manifest.state === "CLEANED") throw new Error("This migration is in cleanup state and cannot be copied.");
     if (manifest.conflicts || manifest.unsafeFiles || manifest.missingFiles) throw new Error("Resolve conflicts, unsafe files, and missing sources before copying.");
@@ -426,14 +627,29 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     try {
       for (const entry of manifest.entries) {
         if (entry.state === "verified") continue;
-        if (!fs.existsSync(entry.sourcePath)) {
+        let safeSourcePath: string;
+        try {
+          // Check the lexical path before any filesystem read; canonicalizing
+          // first would hide an in-root symlink target.
+          safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+        } catch (error) {
           entry.state = "missing";
-          entry.error = "Source is no longer available.";
+          entry.error = error instanceof Error ? error.message : "Source is no longer a regular file.";
           throw new Error(entry.error);
         }
-        if (fs.existsSync(entry.destinationPath)) {
+        resolveWithinRoot(entry.destinationPath, manifest.destinationRoot);
+        const safeDestinationPath = path.resolve(entry.destinationPath);
+        let destinationState: "missing" | "regular";
+        try {
+          destinationState = inspectRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        } catch (error) {
+          entry.state = "conflict";
+          entry.error = error instanceof Error ? error.message : "Destination is not a regular file.";
+          throw new Error(entry.error);
+        }
+        if (destinationState === "regular") {
           try {
-            const existingHash = await hashFile(entry.destinationPath);
+            const existingHash = await hashFile(safeDestinationPath);
             if (existingHash === entry.sourceHash) {
               entry.destinationHash = existingHash;
               entry.state = "verified";
@@ -446,21 +662,55 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
           entry.error = "Destination changed after the dry run.";
           throw new Error(entry.error);
         }
-        const partialPath = `${entry.destinationPath}.${manifest.id}.partial`;
-        await fs.promises.mkdir(path.dirname(entry.destinationPath), { recursive: true });
+        const partialPath = `${safeDestinationPath}.${manifest.id}.${crypto.randomUUID()}.partial`;
+        ensureDataDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
+        resolveWithinRoot(partialPath, manifest.destinationRoot);
+        resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
+        let partialCreated = false;
+        let publishing = false;
         try {
-          await pipeline(createReadStream(entry.sourcePath), createWriteStream(partialPath, { flags: "w" }));
+          // Open exclusively so this operation owns the temporary file. A
+          // failed open must never clean up another worker's partial file.
+          const partialHandle = await fs.promises.open(partialPath, "wx", 0o600);
+          partialCreated = true;
+          await copyFileFromNoFollowDescriptor(safeSourcePath, partialHandle);
           const copiedHash = await hashFile(partialPath);
           if (copiedHash !== entry.sourceHash) {
-            await fs.promises.rm(partialPath, { force: true });
             entry.state = "error";
             entry.error = "SHA-256 verification failed; partial destination removed.";
             throw new Error(entry.error);
           }
-          await fs.promises.rename(partialPath, entry.destinationPath);
-          entry.destinationHash = copiedHash;
+          resolveWithinRoot(partialPath, manifest.destinationRoot);
+          resolveWithinRoot(safeDestinationPath, manifest.destinationRoot);
+          try {
+            // Publish without POSIX rename-overwrite semantics. A destination
+            // created after the earlier conflict check is never replaced.
+            ensureDataDirectoryWithinRoot(path.dirname(safeDestinationPath), manifest.destinationRoot);
+            publishing = true;
+            moveFileNoReplace(partialPath, safeDestinationPath);
+            partialCreated = false;
+            entry.destinationHash = copiedHash;
+          } catch (publishError) {
+            if ((publishError as NodeJS.ErrnoException).code === "EEXIST") {
+              const concurrentHash = await hashFile(safeDestinationPath).catch(() => null);
+              await fs.promises.rm(partialPath, { force: true });
+              partialCreated = false;
+              if (concurrentHash === copiedHash) {
+                entry.destinationHash = concurrentHash;
+              } else {
+                throw new Error(`Destination appeared during migration and contains different data: ${entry.relativePath}`, { cause: publishError });
+              }
+            } else {
+              // An ambiguous publication failure may have created a destination
+              // before failing to remove the temporary name. Preserve the
+              // verified partial until the destination can be inspected.
+              throw publishError;
+            }
+          }
         } catch (error) {
-          await fs.promises.rm(partialPath, { force: true });
+          if (partialCreated && !publishing) {
+            await fs.promises.rm(partialPath, { force: true });
+          }
           throw error;
         }
         entry.state = "verified";
@@ -468,9 +718,30 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         Object.assign(manifest, counts, { updatedAt: new Date().toISOString() });
         await saveManifest(options.manifestDir, manifest);
       }
+      // A destination can already match the preview hash, causing an entry to
+      // be marked verified without copying. Revalidate BOTH sides for every
+      // verified entry immediately before redirecting database references:
+      // the source may have changed since preview (or during a long copy batch).
+      for (const entry of manifest.entries) {
+        if (entry.state !== "verified") continue;
+        if (!entry.sourceHash || !entry.destinationHash) {
+          throw new Error(`Verified migration entry is missing a content hash: ${entry.relativePath}`);
+        }
+        const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+        const safeDestinationPath = assertRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        const [currentSourceHash, currentDestinationHash] = await Promise.all([
+          hashFile(safeSourcePath),
+          hashFile(safeDestinationPath),
+        ]);
+        if (currentSourceHash !== entry.sourceHash) {
+          throw new Error(`Source changed after migration preview; database references were not updated: ${entry.relativePath}`);
+        }
+        if (currentDestinationHash !== entry.sourceHash) {
+          throw new Error(`Destination changed after migration verification; database references were not updated: ${entry.relativePath}`);
+        }
+      }
       const allReferences = manifest.entries.flatMap((entry) => entry.references);
       if (allReferences.length > 0) {
-        const client = await connect();
         try {
           await client.query("BEGIN");
           const updated = new Set<string>();
@@ -485,17 +756,34 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
             const destinationValue = exactEntry
               ? exactEntry.destinationPath
               : destinationFor(manifest.destinationRoot, relativeFor(manifest.sourceRoot, reference.value));
-            await client.query(
+            const updatedReference = await client.query(
               `UPDATE ${reference.table} SET ${reference.column} = $1 WHERE id = $2 AND ${reference.column} = $3`,
               [destinationValue, reference.rowId, reference.value],
             );
+            if (updatedReference.rowCount === 0) {
+              // A prior attempt may have committed the reference transaction
+              // and then failed while saving the manifest. Accept only the
+              // exact destination value as an idempotent retry; never accept
+              // an unrelated concurrent edit or a deleted row.
+              const currentReference = await client.query(
+                `SELECT ${reference.column} AS value FROM ${reference.table} WHERE id = $1`,
+                [reference.rowId],
+              );
+              if (currentReference.rows?.length !== 1 || currentReference.rows[0]?.value !== destinationValue) {
+                throw new Error(
+                  `Database reference changed or disappeared during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved; review the migration before retrying.`,
+                );
+              }
+            } else if (updatedReference.rowCount !== 1) {
+              throw new Error(
+                `Unexpected number of database references updated during migration (${reference.table} row ${reference.rowId}, ${reference.column}). The original files were preserved.`,
+              );
+            }
           }
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => {});
           throw error;
-        } finally {
-          client.release();
         }
       }
       Object.assign(manifest, blankCounts(manifest.entries), { state: "VERIFIED", updatedAt: new Date().toISOString() });
@@ -508,9 +796,12 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
       await saveManifest(options.manifestDir, manifest);
       throw error;
     }
+    });
   }
 
   async function confirmCleanup(id: string): Promise<StorageMigrationManifest> {
+    return withMigrationLock(id, async (_client) => {
+
     const manifest = await get(id);
     if (manifest.state !== "VERIFIED") throw new Error("Cleanup is available only after the migration and database references are verified.");
     if (manifest.entries.some((entry) => entry.state !== "verified")) throw new Error("Every selected artifact must be verified before cleanup.");
@@ -519,23 +810,49 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
     manifest.updatedAt = new Date().toISOString();
     await saveManifest(options.manifestDir, manifest);
     return manifest;
+    });
   }
 
   async function cleanup(id: string): Promise<StorageMigrationManifest> {
+    return withMigrationLock(id, async (_client) => {
+
     const manifest = await get(id);
     if (!manifest.cleanupConfirmed) throw new Error("Cleanup requires a separate explicit confirmation.");
     for (const entry of manifest.entries) {
-      if (entry.protected || entry.state !== "verified") continue;
+      const namespace = STORAGE_MIGRATION_NAMESPACES.find((candidate) => candidate.id === entry.namespace);
+      if (!namespace || namespace.protected || entry.protected || entry.state !== "verified") continue;
       if (!isWithin(manifest.sourceRoot, entry.sourcePath)) throw new Error("Refusing to delete a path outside the original source root.");
-      const destinationHash = await hashFile(entry.destinationPath);
+      const sourceState = inspectRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+      const safeSourcePath = path.resolve(entry.sourcePath);
+      const safeDestinationPath = assertRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+      // A previous cleanup attempt may have removed the source and crashed
+      // before persisting its final manifest. The verified destination is the
+      // recovery copy; accept that already-completed deletion idempotently.
+      if (sourceState === "missing") {
+        const destinationHash = await hashFile(safeDestinationPath);
+        if (destinationHash !== entry.sourceHash) {
+          throw new Error("Original is missing and destination is not verified: " + entry.relativePath);
+        }
+        continue;
+      }
+      // Cleanup is destructive: verify BOTH copies still match the preview hash.
+      const [currentSourceHash, destinationHash] = await Promise.all([
+        hashFile(safeSourcePath),
+        hashFile(safeDestinationPath),
+      ]);
+      if (currentSourceHash !== entry.sourceHash) {
+        throw new Error("Source changed after migration preview; original preserved: " + entry.relativePath);
+      }
       if (destinationHash !== entry.sourceHash) throw new Error(`Destination changed after verification: ${entry.relativePath}`);
-      await fs.promises.rm(entry.sourcePath, { force: false });
+      resolveWithinRoot(safeSourcePath, manifest.sourceRoot);
+      await fs.promises.rm(safeSourcePath, { force: false });
     }
     manifest.state = "CLEANED";
     manifest.cleanupCompletedAt = new Date().toISOString();
     manifest.updatedAt = new Date().toISOString();
     await saveManifest(options.manifestDir, manifest);
     return manifest;
+    });
   }
 
   return { preview, get, list, copy, confirmCleanup, cleanup };
@@ -547,5 +864,8 @@ export const storageMigrationService = createStorageMigrationService({
       || (process.env.LOCALAPPDATA?.trim() ? path.join(process.env.LOCALAPPDATA.trim(), "Willard Media Center") : process.cwd()),
     "migrations",
   ),
-  query: async (text, values) => pool.query(text, values),
+  query: async (text, values) => {
+    const { pool } = await import("@workspace/db");
+    return pool.query(text, values);
+  },
 });

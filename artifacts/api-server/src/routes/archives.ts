@@ -1,30 +1,39 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { archivesTable } from "@workspace/db";
-import { eq, gte, lte, and, desc, count } from "drizzle-orm";
+import { eq, gte, lte, lt, and, desc, count } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import AdmZip from "adm-zip";
 import * as tar from "tar";
 import * as path from "path";
 import * as fs from "fs";
+import { randomUUID } from "node:crypto";
 import Seven from "node-7z";
-import { path7za } from "7zip-bin";
+import { createTrackedSevenZipStream, getSevenZipPath, stopTrackedSevenZipStream } from "../lib/sevenzip.ts";
+import { getFileTypeFromName, computeCategoryFromContent } from "../lib/archive-classification.ts";
 import {
   archiveByIdScope,
   archiveScope,
-  getActiveNasPath,
   resolveActiveArchivePath,
 } from "../lib/archive-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
+import { cleanTempDir, getTempDir } from "../lib/nas-storage.ts";
 import {
   ArchiveSafetyError,
   assertArchiveFileUnchanged,
   assertBufferedZipFile,
   createArchiveBudget,
+  isZipSymlinkEntry,
+  getSevenZipEntryInfo,
   snapshotArchiveFile,
   validateArchiveEntry,
 } from "../lib/archive-safety.ts";
+import {
+  shouldTreatAsStandaloneCompressedFile,
+  withTarInput,
+} from "../lib/archive-tar-input.ts";
 import { logger } from "../lib/logger.ts";
-import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalDateOnlyRange, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
   ARCHIVE_ENTRY_PAGE_LIMIT,
   ARCHIVE_LIST_LIMIT,
@@ -39,115 +48,127 @@ const ZIP_EXTS = new Set(["zip"]);
 const TAR_EXTS = new Set(["tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "tar.gz", "tar.bz2", "tar.xz"]);
 const BINARY_ONLY_EXTS = new Set(["rar", "7z", "cab", "iso"]);
 
-function getFileTypeFromName(filename: string): string {
-  const ext = path.extname(filename).replace(".", "").toLowerCase();
-  if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "raw"].includes(ext)) return "image";
-  if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "m4v", "webm", "mpg"].includes(ext)) return "video";
-  if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt"].includes(ext)) return "document";
-  if (["zip", "rar", "7z", "tar", "gz", "bz2"].includes(ext)) return "archive";
-  if (["exe", "msi", "dmg", "pkg", "deb", "rpm", "sh", "bat", "app"].includes(ext)) return "software";
-  return "other";
-}
-
-function computeCategoryFromContent(entries: any[], isPasswordProtected: boolean): string {
-  if (isPasswordProtected) return "Password Protected";
-  const files = entries.filter(e => !e.isDirectory);
-  if (files.length === 0) return "Unknown";
-
-  const counts: Record<string, number> = { image: 0, video: 0, document: 0, archive: 0, software: 0, other: 0 };
-  for (const e of files) {
-    const t = e.fileType ?? "other";
-    counts[t] = (counts[t] || 0) + 1;
-  }
-
-  const total = files.length;
-  const hasNested = counts.archive > 0;
-
-  if (hasNested && counts.archive / total > 0.25) return "Nested Archives";
-  if (counts.image / total > 0.55) return "Photo Archive";
-  if (counts.video / total > 0.45) return "Video Archive";
-  if (counts.document / total > 0.45) return "Document Backup";
-  if (counts.software / total > 0.35) return "Software";
-
-  const topType = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  if (counts[topType] / total < 0.4) return "Mixed";
-  return "General";
-}
-
-async function peekTar(filePath: string, ext: string): Promise<{ entries: any[]; error: string | null }> {
+async function peekTar(
+  filePath: string,
+  filename: string,
+  scratchDir: string,
+): Promise<{
+  entries: any[];
+  error: string | null;
+  failureKind: "input" | "tar-parse" | null;
+}> {
   const entries: any[] = [];
-  const isGzipped = ["gz", "tgz", "bz2", "tbz2", "xz", "txz"].includes(ext);
   const budget = createArchiveBudget();
   const archiveSnapshot = snapshotArchiveFile(filePath);
+  let parseError: Error | undefined;
+
   try {
-    let validationError: Error | undefined;
-    await tar.list({
-      file: filePath,
-      ...(isGzipped ? { gzip: ext === "gz" || ext === "tgz" } : {}),
-      preservePaths: true,
-      strict: true,
-      filter: (_path: string, entry: any) => {
-        if (validationError) return false;
-        try {
-          const isDirectory = entry.type === "Directory";
-          if (entry.type === "SymbolicLink" || entry.type === "Link" || entry.type === "HardLink") {
-            throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" in TAR`);
-          }
-          validateArchiveEntry({ path: entry.path, sizeBytes: entry.size, isDirectory }, budget);
-          return true;
-        } catch (error) {
-          validationError = error instanceof Error ? error : new Error(String(error));
-          return false;
-        }
-      },
-      onentry: (entry: any) => {
-        const fileType = getFileTypeFromName(entry.path);
-        entries.push({
-          name: path.basename(entry.path),
-          path: entry.path,
-          sizeBytes: typeof entry.size === "number" ? entry.size : 0,
-          isDirectory: entry.type === "Directory",
-          fileType,
+    await withTarInput(filePath, filename, scratchDir, async (tarPath, tarOptions) => {
+      let validationError: Error | undefined;
+      try {
+        await tar.list({
+          file: tarPath,
+          ...tarOptions,
+          preservePaths: true,
+          strict: true,
+          filter: (_path: string, entry: any) => {
+            if (validationError) return false;
+            try {
+              const isDirectory = entry.type === "Directory";
+              if (entry.type === "SymbolicLink" || entry.type === "Link" || entry.type === "HardLink") {
+                throw new ArchiveSafetyError(`Archive traversal rejected: link entry "${entry.path}" in TAR`);
+              }
+              validateArchiveEntry({ path: entry.path, sizeBytes: entry.size, isDirectory }, budget);
+              return true;
+            } catch (error) {
+              validationError = error instanceof Error ? error : new Error(String(error));
+              return false;
+            }
+          },
+          onentry: (entry: any) => {
+            const fileType = getFileTypeFromName(entry.path);
+            entries.push({
+              name: path.basename(entry.path),
+              path: entry.path,
+              sizeBytes: typeof entry.size === "number" ? entry.size : 0,
+              isDirectory: entry.type === "Directory",
+              fileType,
+            });
+          },
         });
+      } catch (error) {
+        if (validationError) throw validationError;
+        if (error instanceof ArchiveSafetyError) throw error;
+        parseError = error instanceof Error ? error : new Error(String(error));
       }
+      if (validationError) throw validationError;
     });
-    if (validationError) throw validationError;
+
     assertArchiveFileUnchanged(filePath, archiveSnapshot);
-    return { entries, error: null };
-  } catch (e: any) {
-    if (e instanceof ArchiveSafetyError) throw e;
-    // Plain .gz (not a tar wrapper) will fail here — that's expected
-    return { entries, error: e?.message ?? "Could not parse as TAR archive" };
+    return {
+      entries,
+      error: parseError?.message ?? null,
+      failureKind: parseError ? "tar-parse" : null,
+    };
+  } catch (error) {
+    if (error instanceof ArchiveSafetyError) throw error;
+    return {
+      entries,
+      error: error instanceof Error ? error.message : String(error),
+      failureKind: "input",
+    };
   }
 }
 
-async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
+async function peekTarWithPrivateScratch(
+  filePath: string,
+  filename: string,
+  nasPath: string,
+): Promise<{
+  entries: any[];
+  error: string | null;
+  failureKind: "input" | "tar-parse" | null;
+}> {
+  const scratchDir = getTempDir(nasPath, `archive-preview-${randomUUID()}`);
+  try {
+    return await peekTar(filePath, filename, scratchDir);
+  } finally {
+    cleanTempDir(scratchDir, nasPath);
+  }
+}
+async function peek7z(filePath: string, signal?: AbortSignal): Promise<{ entries: any[]; isPasswordProtected: boolean; format: string; error: string | null }> {
   const entries: any[] = [];
   let isPasswordProtected = false;
   let format = "7z";
   const budget = createArchiveBudget();
   const archiveSnapshot = snapshotArchiveFile(filePath);
+  const sevenZipPath = await getSevenZipPath();
 
   return new Promise((resolve, reject) => {
-    const stream = Seven.list(filePath, {
-      $bin: path7za,
+    const stream = createTrackedSevenZipStream(() => Seven.list(filePath, {
+      $bin: sevenZipPath,
       $progress: false,
-    } as any);
+      techInfo: true,
+    } as any), signal);
     let safetyError: Error | undefined;
+    const rejectUnsafeEntry = (error: Error) => {
+      if (safetyError) return;
+      safetyError = error;
+      void stopTrackedSevenZipStream(stream);
+    };
 
     stream.on("data", (data: any) => {
       if (data.file !== undefined && !safetyError) {
-        const isDir = typeof data.attributes === "string" && data.attributes[0] === "D";
-        const isLink = typeof data.attributes === "string" &&
-          (data.attributes.includes("L") || data.attributes.includes("l"));
-        if (isLink) {
-          safetyError = new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`);
+        const info = getSevenZipEntryInfo(data);
+        const isDir = info.isDirectory;
+        if (info.isLink) {
+          rejectUnsafeEntry(new ArchiveSafetyError(`Archive traversal rejected: link entry "${data.file}" in 7z`));
           return;
         }
         try {
           const checked = validateArchiveEntry({
             path: data.file,
-            sizeBytes: data.size,
+            sizeBytes: info.sizeBytes,
             isDirectory: isDir,
           }, budget);
           const fileType = isDir ? "directory" : getFileTypeFromName(data.file);
@@ -159,7 +180,7 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
             fileType,
           });
         } catch (error) {
-          safetyError = error instanceof Error ? error : new Error(String(error));
+          rejectUnsafeEntry(error instanceof Error ? error : new Error(String(error)));
         }
       }
     });
@@ -171,6 +192,10 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
         reject(safetyError);
         return;
       }
+      if (signal?.aborted) {
+        reject(new Error("Archive preview was cancelled because the client disconnected."));
+        return;
+      }
       try {
         assertArchiveFileUnchanged(filePath, archiveSnapshot);
         resolve({ entries, isPasswordProtected, format, error: null });
@@ -180,11 +205,30 @@ async function peek7z(filePath: string): Promise<{ entries: any[]; isPasswordPro
     });
 
     stream.on("error", (err: Error) => {
+      if (safetyError) {
+        reject(safetyError);
+        return;
+      }
+      if (signal?.aborted) {
+        reject(new Error("Archive preview was cancelled because the client disconnected."));
+        return;
+      }
       const msg = err?.message ?? "";
       if (/password|wrong password|encrypted|cannot open encrypted/i.test(msg)) {
+        // A password error is still a successful classification result. Verify
+        // that the archive inspected is the same file that was snapshotted
+        // before accepting that result, just as the normal "end" path does.
+        try {
+          assertArchiveFileUnchanged(filePath, archiveSnapshot);
+        } catch (snapshotError) {
+          reject(snapshotError instanceof Error ? snapshotError : new Error(String(snapshotError)));
+          return;
+        }
         isPasswordProtected = true;
+        resolve({ entries, isPasswordProtected, format, error: msg });
+        return;
       }
-      resolve({ entries, isPasswordProtected, format, error: msg });
+      reject(err instanceof Error ? err : new Error(String(err)));
     });
   });
 }
@@ -193,7 +237,21 @@ router.get("/archives", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const { category, minSize, maxSize, status, dateFrom, dateTo } = req.query as Record<string, string>;
+    const category = parseOptionalQueryString(req.query.category, "category");
+    const status = parseOptionalQueryString(req.query.status, "status");
+    const minSizeBytes = req.query.minSize === undefined ? undefined : parseBoundedInteger(req.query.minSize, {
+      name: "minSize", min: 0, max: Number.MAX_SAFE_INTEGER,
+    });
+    const maxSizeBytes = req.query.maxSize === undefined ? undefined : parseBoundedInteger(req.query.maxSize, {
+      name: "maxSize", min: 0, max: Number.MAX_SAFE_INTEGER,
+    });
+    const { from: dateFrom, toExclusive: dateToExclusive } = parseOptionalDateOnlyRange(
+      req.query.dateFrom,
+      req.query.dateTo,
+    );
+    if (minSizeBytes !== undefined && maxSizeBytes !== undefined && minSizeBytes > maxSizeBytes) {
+      throw new RequestValidationError("minSize must be less than or equal to maxSize");
+    }
     const limit = parseBoundedInteger(req.query.limit, {
       name: "limit", defaultValue: 50, min: 1, max: ARCHIVE_LIST_LIMIT,
     });
@@ -202,11 +260,11 @@ router.get("/archives", async (req, res) => {
     });
     const conditions: SQL[] = [archiveScope(nasPath)];
     if (category) conditions.push(eq(archivesTable.category, category));
-    if (minSize) conditions.push(gte(archivesTable.sizeBytes, parseInt(minSize)));
-    if (maxSize) conditions.push(lte(archivesTable.sizeBytes, parseInt(maxSize)));
+    if (minSizeBytes !== undefined) conditions.push(gte(archivesTable.sizeBytes, minSizeBytes));
+    if (maxSizeBytes !== undefined) conditions.push(lte(archivesTable.sizeBytes, maxSizeBytes));
     if (status) conditions.push(eq(archivesTable.peekStatus, status));
-    if (dateFrom) conditions.push(gte(archivesTable.modifiedAt, new Date(dateFrom)));
-    if (dateTo) conditions.push(lte(archivesTable.modifiedAt, new Date(dateTo)));
+    if (dateFrom) conditions.push(gte(archivesTable.modifiedAt, dateFrom));
+    if (dateToExclusive) conditions.push(lt(archivesTable.modifiedAt, dateToExclusive));
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [{ total }] = await db.select({ total: count() }).from(archivesTable).where(where);
     // Do not pull peek_entries into the collection response. A single archive
@@ -248,7 +306,8 @@ router.get("/archives/:id", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
     const entryLimit = parseBoundedInteger(req.query.entryLimit, {
@@ -283,7 +342,8 @@ router.post("/archives/:id/peek", async (req, res) => {
   try {
     const nasPath = await getActiveNasPath();
     if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const [archive] = await db.select().from(archivesTable).where(archiveByIdScope(id, nasPath)).limit(1);
     if (!archive) { res.status(404).json({ error: "Archive not found" }); return; }
 
@@ -322,7 +382,7 @@ router.post("/archives/:id/peek", async (req, res) => {
         const zipEntries = zip.getEntries();
         const budget = createArchiveBudget();
         for (const entry of zipEntries) {
-          if ((entry as any).attr && (((entry as any).attr >>> 16) & 0xF000) === 0xA000) {
+          if (isZipSymlinkEntry((entry as any).attr)) {
             throw new ArchiveSafetyError(`Archive traversal rejected: symlink entry "${entry.entryName}" in ZIP`);
           }
           const fileType = getFileTypeFromName(entry.entryName);
@@ -349,7 +409,15 @@ router.post("/archives/:id/peek", async (req, res) => {
         assertArchiveFileUnchanged(archivePath, archiveSnapshot);
       } catch (error) {
         if (error instanceof ArchiveSafetyError) throw error;
-        isPasswordProtected = true;
+        const message = error instanceof Error ? error.message : String(error);
+        if (/password|wrong password|encrypted|cannot open encrypted/i.test(message)) {
+          // Do not persist a password-protected result for a file that changed
+          // while AdmZip was attempting to inspect it.
+          assertArchiveFileUnchanged(archivePath, archiveSnapshot);
+          isPasswordProtected = true;
+        } else {
+          throw error;
+        }
       }
 
       const category = computeCategoryFromContent(entries, isPasswordProtected);
@@ -377,10 +445,10 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     // ── TAR / GZ / BZ2 / XZ ─────────────────────────────────────────────────
     if (TAR_EXTS.has(ext)) {
-      const { entries, error } = await peekTar(archivePath, rawExt);
+      const { entries, error, failureKind } = await peekTarWithPrivateScratch(archivePath, archive.filename, nasPath);
 
-      if (error && entries.length === 0) {
-        // Plain .gz (not a TAR) — provide basic metadata from file size
+      if (error && shouldTreatAsStandaloneCompressedFile(archive.filename, entries.length, failureKind)) {
+        // A bare .gz/.bz2/.xz file is a compressed payload, not a TAR wrapper.
         await db.update(archivesTable).set({
           peekStatus: "peeked",
           containedFileCount: 0,
@@ -394,10 +462,14 @@ router.post("/archives/:id/peek", async (req, res) => {
         res.json({
           archiveId: id, filename: archive.filename, entries: [], totalEntries: 0,
           isPasswordProtected: false, hasNestedArchives: false, estimatedExtractionSizeBytes: 0,
-          category: archive.category ?? "General", format: "gz",
-          notes: "Plain compressed file (not a TAR) — contents not listable without extraction",
+          category: archive.category ?? "General", format: rawExt,
+          notes: "Standalone compressed file (not a TAR) — contents not listable without extraction",
         });
         return;
+      }
+      if (error) {
+        // Never persist a partial listing as a successful archive preview.
+        throw new Error(`Archive preview failed: ${error}`);
       }
 
       const hasNestedArchives = entries.some(e =>
@@ -434,9 +506,20 @@ router.post("/archives/:id/peek", async (req, res) => {
       return;
     }
 
-    // ── RAR / 7Z / ISO / CAB — full listing via node-7z + 7zip-bin ──────────
+    // ── RAR / 7Z / ISO / CAB — full listing via node-7z + official 7-Zip binary ──────────
     if (BINARY_ONLY_EXTS.has(ext)) {
-      const { entries, isPasswordProtected, format, error } = await peek7z(archivePath);
+      const previewAbort = new AbortController();
+      const abortPreviewIfDisconnected = () => {
+        if (!res.writableEnded) previewAbort.abort();
+      };
+      res.once("close", abortPreviewIfDisconnected);
+      let preview: Awaited<ReturnType<typeof peek7z>>;
+      try {
+        preview = await peek7z(archivePath, previewAbort.signal);
+      } finally {
+        res.off("close", abortPreviewIfDisconnected);
+      }
+      const { entries, isPasswordProtected, format, error } = preview;
 
       const hasNestedArchives = entries.some(e => {
         const nestedExt = path.extname(e.path).replace(".", "").toLowerCase();
@@ -473,6 +556,7 @@ router.post("/archives/:id/peek", async (req, res) => {
 
     res.status(422).json({ error: `Unrecognized archive format: .${ext}` });
   } catch (err) {
+    if (res.destroyed || res.writableEnded) return;
     if (err instanceof ArchiveSafetyError) {
       res.status(422).json({ error: err.message });
       return;

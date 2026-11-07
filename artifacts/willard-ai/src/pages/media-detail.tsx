@@ -232,7 +232,7 @@ export default function MediaDetail() {
 
   const { file, ai, notes, collections, timeline } = detailQ.data;
   const rel = relatedQ.data;
-  const streamUrl = `/api/media/file/${file.id}/stream`;
+  const streamUrl = apiUrl(`/media/file/${file.id}/stream`);
   const mediaIcon = file.mediaType === "video" ? Video : file.mediaType === "audio" ? Music : isVisual(file.mediaType) ? ImageIcon : FileText;
   const MediaIcon = mediaIcon;
   const event = collections.find((c) => c.kind === "auto" && c.autoKey?.startsWith("event:"));

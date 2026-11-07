@@ -8520,7 +8520,7 @@ export const getDeleteLibraryThumbnailsCacheUrl = () => {
 }
 
 /**
- * @summary Runtime JSON mutation endpoint
+ * @summary Queue thumbnail cache clearing
  */
 export const deleteLibraryThumbnailsCache = async (runtimeJsonInput?: RuntimeJsonInput, options?: RequestInit): Promise<RuntimeJsonResult> => {
 
@@ -8568,7 +8568,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type DeleteLibraryThumbnailsCacheMutationError = ErrorType<ErrorResult>
 
     /**
- * @summary Runtime JSON mutation endpoint
+ * @summary Queue thumbnail cache clearing
  */
 export const useDeleteLibraryThumbnailsCache = <TError = ErrorType<ErrorResult>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteLibraryThumbnailsCache>>, TError,{data?: BodyType<RuntimeJsonInput>}, TContext>, request?: SecondParameter<typeof customFetch>}

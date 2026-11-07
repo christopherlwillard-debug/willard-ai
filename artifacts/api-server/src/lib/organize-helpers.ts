@@ -23,11 +23,55 @@ import * as crypto from "crypto";
  */
 export async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hash   = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data",  chunk => hash.update(chunk));
-    stream.on("end",   () => resolve(hash.digest("hex")));
-    stream.on("error", reject);
+    const initial = fs.lstatSync(filePath);
+    if (initial.isSymbolicLink() || !initial.isFile()) {
+      reject(new Error("SHA-256 source must be a regular, non-symlink file"));
+      return;
+    }
+
+    const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+    let stream: fs.ReadStream;
+    try {
+      // A supplied descriptor does not emit an "open" event, so validate the
+      // opened inode synchronously before handing it to the read stream.
+      const opened = fs.fstatSync(fd);
+      const current = fs.lstatSync(filePath);
+      if (
+        !opened.isFile() ||
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+        (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+      ) {
+        throw new Error("SHA-256 source changed or became a symlink while opening");
+      }
+      stream = fs.createReadStream(filePath, { fd, autoClose: true });
+    } catch (error) {
+      fs.closeSync(fd);
+      reject(error);
+      return;
+    }
+    const hash = crypto.createHash("sha256");
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy();
+      reject(error);
+    };
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", () => {
+      if (settled) return;
+      settled = true;
+      resolve(hash.digest("hex"));
+    });
+    stream.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -60,6 +104,105 @@ export function moveFile(from: string, to: string): void {
   }
 }
 
+/**
+ * Move without ever replacing an existing destination. Prefer an atomic
+ * same-volume hard link; filesystems that do not support links fall back to an
+ * exclusive copy. If source removal fails, remove only the destination we
+ * created; if that cleanup also fails, preserve both errors and both files.
+ */
+export function moveFileNoReplace(from: string, to: string): void {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  let destinationCreated = false;
+  try {
+    try {
+      fs.linkSync(from, to);
+      destinationCreated = true;
+    } catch (error: any) {
+      if (error?.code === "EEXIST") throw error;
+      if (!["EPERM", "EACCES", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes(error?.code)) {
+        throw error;
+      }
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      destinationCreated = true;
+    }
+    fs.unlinkSync(from);
+  } catch (error) {
+    if (destinationCreated) {
+      try {
+        fs.unlinkSync(to);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "No-replace move failed and its newly-created destination could not be rolled back",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * Enumerate regular files in a source directory without silently skipping
+ * unreadable entries. A partial walk can make an organize plan appear complete
+ * while leaving files behind, so any read/stat failure aborts the scan.
+ * Symlinks and special filesystem entries are rejected rather than omitted.
+ */
+export function walkDirectoryFiles(
+  directoryPath: string,
+): Array<{ fullPath: string; relativePath: string; sizeBytes: number }> {
+  const root = path.resolve(directoryPath);
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.lstatSync(root);
+  } catch (error) {
+    const detail = error as NodeJS.ErrnoException;
+    throw new Error(`Unable to inspect source directory "${root}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`Source path is not a regular directory: "${root}"`);
+  }
+
+  const results: Array<{ fullPath: string; relativePath: string; sizeBytes: number }> = [];
+  const walk = (directory: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      const detail = error as NodeJS.ErrnoException;
+      throw new Error(`Unable to read source directory "${directory}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(fullPath);
+      } catch (error) {
+        const detail = error as NodeJS.ErrnoException;
+        throw new Error(`Unable to inspect source entry "${fullPath}": ${detail.code ?? detail.message ?? String(error)}`, { cause: error });
+      }
+
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Symbolic links are not supported in organize source folders: "${fullPath}"`);
+      }
+      if (stat.isDirectory()) {
+        walk(fullPath);
+      } else if (stat.isFile()) {
+        results.push({
+          fullPath,
+          relativePath: path.relative(root, fullPath),
+          sizeBytes: stat.size,
+        });
+      } else {
+        throw new Error(`Unsupported filesystem entry in organize source folder: "${fullPath}"`);
+      }
+    }
+  };
+
+  walk(root);
+  return results;
+}
+
 // ── Verified move ─────────────────────────────────────────────────────────────
 
 /**
@@ -78,52 +221,102 @@ export interface FileMoveRecord {
 }
 
 /**
- * Move a file and verify its SHA-256 integrity at the destination.
- *
- * Steps:
- *   1. Compute SHA-256 of the source.
- *   2. Move the file.
- *   3. Compute SHA-256 of the destination.
- *   4. If hashes differ, or if either hash is empty (I/O failure), throw.
- *
- * Any thrown error propagates to the caller so the outer try/catch can
- * trigger rollback immediately.
- *
- * @param from          Absolute source path (must exist).
- * @param to            Absolute destination path (parents created automatically).
- * @param afterMoveHook Optional callback invoked between step 2 and step 3 —
- *                      used ONLY in tests to inject corruption or latency.
- * @param sourceRelPath Optional relative path of the source (stored in record for
- *                      resume idempotency — rename-safe alternative to dest-path matching).
- * @returns             FileMoveRecord with source/dest hashes and verified=true.
+ * A job may be deleted only when no active worker or unresolved file-move
+ * journal depends on it. Completed and fully rolled-back jobs retain history
+ * only; failed jobs with moves must remain available for recovery.
  */
+export function canDeleteOrganizationJob(status: string, fileMoves: unknown): boolean {
+  if (fileMoves !== null && fileMoves !== undefined && !Array.isArray(fileMoves)) return false;
+  if (status === "completed" || status === "rolled_back") return true;
+  if (!["pending", "planned", "verified", "failed"].includes(status)) return false;
+  return fileMoves == null || fileMoves.length === 0;
+}
+
+/**
+ * Move a file without replacing an existing destination, then verify its
+ * SHA-256 integrity. If verification fails after the move, restore the file
+ * to its source path with a no-replace operation before propagating the error.
+ * This keeps an unverified partial result out of the final destination and
+ * prevents a retry from silently treating it as a completed move.
+ */
+function assertRegularFileWithoutSymlink(filePath: string, label: string): void {
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Organization ${label} must be a regular file, not a symlink or special filesystem entry.`);
+  }
+}
+
+function assertDestinationIsNotSymlink(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("Organization destination is a symlink or non-regular filesystem entry.");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export async function verifiedMove(
   from: string,
   to:   string,
-  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; sourceRelPath?: string },
+  opts?: { afterMoveHook?: (to: string) => void | Promise<void>; beforeMove?: () => Promise<void>; beforeRestore?: () => Promise<void>; sourceRelPath?: string; expectedSourceHash?: string },
 ): Promise<FileMoveRecord> {
-  // Step 1: hash source (throws on I/O error)
+  // Reject final-component symlinks before hashing; hashing a symlink would
+  // otherwise follow it and could read a different file than the journaled path.
+  assertRegularFileWithoutSymlink(from, "source");
   const sourceHash = await sha256File(from);
-
-  // Step 2: move file
-  moveFile(from, to);
-
-  // Optional hook (test-only) — e.g. corrupt destination before re-hashing
-  if (opts?.afterMoveHook) await opts.afterMoveHook(to);
-
-  // Step 3: hash destination (throws on I/O error)
-  const destHash = await sha256File(to);
-
-  // Step 4: compare — throw on mismatch so the caller can roll back
-  if (sourceHash !== destHash) {
-    throw new Error(
-      `SHA-256 mismatch after moving ${path.basename(from)}: ` +
-      `source=${sourceHash} dest=${destHash}. ` +
-      `File may be corrupted — rolling back.`
-    );
+  if (opts?.expectedSourceHash && sourceHash !== opts.expectedSourceHash) {
+    throw new Error(`Source changed after its recovery intent was recorded: ${path.basename(from)}`);
   }
+  let destinationCreated = false;
 
-  return { from, to, sourceHash, destHash, verified: true, sourceRelPath: opts?.sourceRelPath };
+  try {
+    // Re-check the fencing token after hashing, immediately before the
+    // irreversible filesystem mutation.
+    await opts?.beforeMove?.();
+    assertRegularFileWithoutSymlink(from, "source");
+    assertDestinationIsNotSymlink(to);
+    // A concurrent job may have created the destination after its conflict
+    // check. Never let rename semantics overwrite that independent file.
+    moveFileNoReplace(from, to);
+    assertRegularFileWithoutSymlink(to, "destination");
+    destinationCreated = true;
+
+    // Optional hook (test-only) — e.g. corrupt destination before re-hashing.
+    if (opts?.afterMoveHook) await opts.afterMoveHook(to);
+
+    const destHash = await sha256File(to);
+    if (sourceHash !== destHash) {
+      throw new Error(
+        `SHA-256 mismatch after moving ${path.basename(from)}: ` +
+        `source=${sourceHash} dest=${destHash}. File may be corrupted.`,
+      );
+    }
+
+    return { from, to, sourceHash, destHash, verified: true, sourceRelPath: opts?.sourceRelPath };
+  } catch (error) {
+    // verifiedMove has not yet returned a FileMoveRecord, so the caller cannot
+    // include this file in its normal batch rollback. Restore it here. The
+    // no-replace helper refuses to overwrite a source path recreated by
+    // another actor; if restoration fails, preserve both errors and the
+    // destination rather than deleting the only remaining copy.
+    if (destinationCreated && !fs.existsSync(from) && fs.existsSync(to)) {
+      try {
+        await opts?.beforeRestore?.();
+        assertRegularFileWithoutSymlink(to, "recovery destination");
+        assertDestinationIsNotSymlink(from);
+        moveFileNoReplace(to, from);
+        assertRegularFileWithoutSymlink(from, "restored source");
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          `Verified move failed and the file could not be restored to its source path; it remains at ${to}`,
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 // ── Rollback ─────────────────────────────────────────────────────────────────
@@ -141,32 +334,148 @@ export async function verifiedMove(
 export async function rollbackMoves(
   moves:  FileMoveRecord[],
   logFn?: (msg: string) => void,
+  beforeEachMove?: (move: FileMoveRecord) => Promise<void>,
 ): Promise<number> {
   const log = logFn ?? (() => {});
   let rolledBack = 0;
 
   for (const mv of [...moves].reverse()) {
+    // Lease checks must escape the per-file recovery catch. A stale worker
+    // must stop immediately rather than treating lost ownership as a file error.
+    await beforeEachMove?.(mv);
     try {
-      if (!fs.existsSync(mv.to)) {
-        log(`ROLLBACK_SKIP: ${mv.to} not found (already removed?)`);
+      // A malformed or stale journal must never be allowed to unlink a file
+      // when both sides resolve to the same path. On Windows, compare paths
+      // case-insensitively because differently-cased paths can name one file.
+      const resolvedFrom = path.resolve(mv.from);
+      const resolvedTo = path.resolve(mv.to);
+      const normalizedFrom = process.platform === "win32" ? resolvedFrom.toLowerCase() : resolvedFrom;
+      const normalizedTo = process.platform === "win32" ? resolvedTo.toLowerCase() : resolvedTo;
+      if (normalizedFrom === normalizedTo) {
+        log(`ROLLBACK_SKIP: source and destination resolve to the same path; refusing destructive rollback: ${resolvedFrom}`);
         continue;
       }
-      moveFile(mv.to, mv.from);
-      rolledBack++;
-
-      // Verify the restored file matches the original source hash
-      try {
-        const restoredHash = await sha256File(mv.from);
-        const ok = restoredHash === mv.sourceHash;
-        log(
-          ok
-            ? `ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`
-            : `ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}`,
-        );
-      } catch (he: any) {
-        log(`ROLLBACK_HASH_ERR: ${mv.from} — ${he.message}`);
+      if (!fs.existsSync(mv.to)) {
+        // A previous rollback attempt may already have restored this file.
+        // Count it only when the source is a regular file with the expected
+        // original hash; a new or altered file is never treated as recovered.
+        if (fs.existsSync(mv.from)) {
+          try {
+            const sourceStat = fs.lstatSync(mv.from);
+            if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
+              const restoredHash = await sha256File(mv.from);
+              if (restoredHash === mv.sourceHash) {
+                rolledBack++;
+                log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
+                continue;
+              }
+            }
+          } catch { /* report the missing destination below */ }
+        }
+        log(`ROLLBACK_SKIP: ${mv.to} not found and original path is not verified`);
+        continue;
       }
+
+      // A crash can occur after the no-replace hard-link step but before the
+      // original destination link is removed. If both names are the same
+      // regular-file inode and the content is correct, finish that move.
+      if (fs.existsSync(mv.from)) {
+        try {
+          const sourceStat = fs.lstatSync(mv.from);
+          const destinationStat = fs.lstatSync(mv.to);
+          if (
+            sourceStat.isFile() && destinationStat.isFile() &&
+            !sourceStat.isSymbolicLink() && !destinationStat.isSymbolicLink() &&
+            sourceStat.dev === destinationStat.dev && sourceStat.ino === destinationStat.ino
+          ) {
+            const restoredHash = await sha256File(mv.from);
+            if (restoredHash === mv.sourceHash) {
+              await beforeEachMove?.(mv);
+              fs.unlinkSync(mv.to);
+              rolledBack++;
+              log(`ROLLBACK_ALREADY_RESTORED: ${path.basename(mv.from)} hard-link finalized`);
+              continue;
+            }
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("lease")) throw error;
+          /* normal no-replace move below will preserve any conflict */
+        }
+      }
+
+      // Never hash or move a symlink/FIFO/device as though it were the
+      // original regular file. In particular, hashing a symlink follows its
+      // target and could falsely report that an external file was restored.
+      const destinationStat = fs.lstatSync(mv.to);
+      if (!destinationStat.isFile() || destinationStat.isSymbolicLink()) {
+        log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.to)} is not a regular file; destination preserved`);
+        continue;
+      }
+
+      // A durable pre-move intent can survive a crash before the source
+      // leaves staging. If the original source is still intact, the move never
+      // completed (or a previous rollback already restored it); preserve any
+      // destination that appeared independently and close this journal entry.
+      if (fs.existsSync(mv.from)) {
+        try {
+          const sourceStat = fs.lstatSync(mv.from);
+          if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
+            const sourceHash = await sha256File(mv.from);
+            if (sourceHash === mv.sourceHash) {
+              rolledBack++;
+              log(`ROLLBACK_SOURCE_INTACT: ${path.basename(mv.from)} remains at source; destination preserved`);
+              continue;
+            }
+          }
+        } catch { /* a later no-replace restore will preserve any source conflict */ }
+      }
+
+      // Verify the destination still contains the exact original bytes before
+      // restoring it. A file changed after the forward move must not be counted
+      // as successfully rolled back or silently replace the original source.
+      const destinationHash = await sha256File(mv.to);
+      if (destinationHash !== mv.sourceHash) {
+        log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.to)} expected=${mv.sourceHash} got=${destinationHash}; destination preserved`);
+        continue;
+      }
+
+      await beforeEachMove?.(mv);
+      moveFileNoReplace(mv.to, mv.from);
+
+      // Re-check the restored path without following links. This closes the
+      // ordinary symlink replacement window between destination inspection
+      // and the no-replace move; an unverified entry is returned when possible.
+      const restoredStat = fs.lstatSync(mv.from);
+      if (!restoredStat.isFile() || restoredStat.isSymbolicLink()) {
+        try {
+          await beforeEachMove?.(mv);
+          moveFileNoReplace(mv.from, mv.to);
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; entry returned to destination`);
+        } catch (preserveError: any) {
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} is not a regular file; could not return it to destination: ${preserveError.message}`);
+        }
+        continue;
+      }
+
+      // Count only checksum-verified restores. If bytes change between the
+      // preflight hash and the move, put the unverified file back at its
+      // destination when possible and leave this move incomplete for recovery.
+      const restoredHash = await sha256File(mv.from);
+      if (restoredHash !== mv.sourceHash) {
+        try {
+          await beforeEachMove?.(mv);
+          moveFileNoReplace(mv.from, mv.to);
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; unverified file returned to destination`);
+        } catch (preserveError: any) {
+          log(`ROLLBACK_VERIFY_FAIL: ${path.basename(mv.from)} expected=${mv.sourceHash} got=${restoredHash}; could not return unverified file to destination: ${preserveError.message}`);
+        }
+        continue;
+      }
+
+      rolledBack++;
+      log(`ROLLBACK_VERIFY_OK: ${path.basename(mv.from)} hash=${restoredHash.slice(0, 16)}…`);
     } catch (re: any) {
+      if (re instanceof Error && re.message.includes("lease")) throw re;
       log(`ROLLBACK_FAIL: ${mv.to} — ${re.message}`);
     }
   }

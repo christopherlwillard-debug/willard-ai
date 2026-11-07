@@ -3,16 +3,20 @@ import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
-import { eq, and, like, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
 import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { canonicalizePath, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
-import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
+import { parseBoundedInteger, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
+import { escapeLikePattern } from "../lib/sql-like.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
+import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
+import { findPortableNameCollision, isPortableMediaFileName, MediaRenameConflictError, renameFileWithPersistence } from "../lib/media-rename.ts";
+import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 
 const router = Router();
 
@@ -24,6 +28,8 @@ let _nasPathCached: string | null | undefined = undefined;
 let _nasPathCachedAt = 0;
 const NAS_PATH_TTL_MS = 60_000;
 const ACTIVE_MEDIA = activeMediaCondition;
+const MEDIA_TYPES = new Set(["photo", "video", "audio", "document", "other"]);
+const MEDIA_SORTS = new Set(["indexed_desc", "name_asc", "name_desc", "size_asc", "size_desc", "modified_asc", "modified_desc"]);
 
 async function getNasPath(): Promise<string | null> {
   const now = Date.now();
@@ -117,9 +123,26 @@ export async function warmThumbnailCache(): Promise<void> {
 router.get("/media/files", async (req: Request, res: Response) => {
   let page: number;
   let limit: number;
+  let mediaType: string | undefined;
+  let favorites: string | undefined;
+  let folder: string | undefined;
+  let search: string | undefined;
+  let sort: string;
   try {
     page = parseBoundedInteger(req.query["page"], { name: "page", min: 1, max: 10_000_000, defaultValue: 1 });
     limit = parseBoundedInteger(req.query["limit"], { name: "limit", min: 1, max: 200, defaultValue: 60 });
+    mediaType = parseOptionalQueryString(req.query["mediaType"], "mediaType");
+    favorites = parseOptionalQueryString(req.query["favorites"], "favorites");
+    folder = parseOptionalQueryString(req.query["folder"], "folder");
+    search = parseOptionalQueryString(req.query["search"], "search");
+    sort = parseOptionalQueryString(req.query["sort"], "sort") ?? "indexed_desc";
+    if (mediaType !== undefined && mediaType !== "all" && !MEDIA_TYPES.has(mediaType)) {
+      throw new RequestValidationError("Invalid mediaType");
+    }
+    if (favorites !== undefined && favorites !== "true" && favorites !== "false") {
+      throw new RequestValidationError("Invalid favorites");
+    }
+    if (!MEDIA_SORTS.has(sort)) throw new RequestValidationError("Invalid sort");
   } catch (error) {
     if (error instanceof RequestValidationError) {
       res.status(error.statusCode).json({ error: error.message });
@@ -134,13 +157,8 @@ router.get("/media/files", async (req: Request, res: Response) => {
     return;
   }
 
-  const mediaType = req.query["mediaType"] as string | undefined;
-  const favorites = req.query["favorites"] as string | undefined;
-  const folder    = req.query["folder"]    as string | undefined;
-  const search    = req.query["search"]    as string | undefined;
   const tags = normalizeTags(typeof req.query["tags"] === "string" ? (req.query["tags"] as string).split(",") : req.query["tags"]);
-  const sort      = (req.query["sort"]     as string) || "indexed_desc";
-  const offset    = (page - 1) * limit;
+  const offset = (page - 1) * limit;
 
   const conditions = [eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA];
   if (mediaType && mediaType !== "all") {
@@ -148,12 +166,14 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
   if (folder) {
     const prefix = folder.endsWith("/") ? folder : folder + "/";
+    const prefixPattern = `${escapeLikePattern(prefix)}%`;
     conditions.push(
-      sql`(${mediaFilesTable.relativePath} = ${folder} OR ${mediaFilesTable.relativePath} LIKE ${prefix + "%"})`
+      sql`(${mediaFilesTable.relativePath} = ${folder} OR ${mediaFilesTable.relativePath} LIKE ${prefixPattern} ESCAPE E'\\\\')`
     );
   }
   if (search) {
-    conditions.push(like(mediaFilesTable.name, `%${search}%`));
+    const searchPattern = `%${escapeLikePattern(search)}%`;
+    conditions.push(sql`${mediaFilesTable.name} LIKE ${searchPattern} ESCAPE E'\\\\'`);
   }
   if (favorites === "true") {
     conditions.push(eq(mediaFilesTable.favorite, true));
@@ -200,8 +220,9 @@ router.get("/media/files", async (req: Request, res: Response) => {
 
 // ── PUT /api/media/files/:id/tags — replace a file's user tags ────────────────
 router.put("/media/files/:id/tags", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
   const [file] = await db.select({ id: mediaFilesTable.id })
@@ -287,11 +308,9 @@ router.get("/media/folders", async (_req: Request, res: Response) => {
 // ── POST /api/media/files/:id/favorite — toggle favorite flag ────────────────
 
 router.post("/media/files/:id/favorite", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const favorite = req.body?.favorite === true;
 
   const [updated] = await db
@@ -310,8 +329,9 @@ router.post("/media/files/:id/favorite", async (req: Request, res: Response) => 
 // ── DELETE /api/media/files/:id — soft-delete from library ──────────────────
 
 router.delete("/media/files/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
   const nasPath = await getNasPath();
   if (!nasPath) { res.status(409).json({ error: "No library configured" }); return; }
 
@@ -329,11 +349,13 @@ router.delete("/media/files/:id", async (req: Request, res: Response) => {
 // ── PATCH /api/media/files/:id/rename — rename file on disk + DB ─────────────
 
 router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
-  const newName: string = (req.body?.name ?? "").trim();
-  if (!newName || newName.length > 255 || /[/\\<>:"|?*]/.test(newName)) {
+  const requestedName = req.body?.name;
+  const newName = typeof requestedName === "string" ? requestedName.trim() : "";
+  if (!isPortableMediaFileName(newName)) {
     res.status(400).json({ error: "Invalid file name" }); return;
   }
 
@@ -364,17 +386,98 @@ router.patch("/media/files/:id/rename", async (req: Request, res: Response) => {
     return;
   }
 
+  // Resolve the stored relative path component-by-component without
+  // following descendant symlinks. resolveLibraryPath intentionally returns
+  // a canonical path, so checking only oldAbs would hide a symlinked catalog
+  // path and rename its target instead of the catalog entry.
+  try {
+    const lexicalRoot = path.resolve(nasPath);
+    const normalizedRelative = file.relativePath.replace(/[\\/]/g, path.sep);
+    const lexicalSource = path.resolve(lexicalRoot, normalizedRelative);
+    const relativeSource = path.relative(lexicalRoot, lexicalSource);
+    if (!relativeSource || relativeSource === ".." || relativeSource.startsWith(".." + path.sep) || path.isAbsolute(relativeSource)) {
+      throw new Error("Stored media path is not a regular child of the configured library");
+    }
+    let currentPath = canonicalizePath(nasPath);
+    const components = relativeSource.split(path.sep).filter(Boolean);
+    for (let index = 0; index < components.length; index += 1) {
+      currentPath = path.join(currentPath, components[index]!);
+      const stat = fs.lstatSync(currentPath);
+      if (stat.isSymbolicLink()) throw new Error("Stored media path contains a symbolic link");
+      if (index < components.length - 1 && !stat.isDirectory()) throw new Error("Stored media path has a non-directory parent");
+      if (index === components.length - 1 && !stat.isFile()) throw new Error("Stored media path is not a regular file");
+    }
+    if (path.resolve(currentPath) !== path.resolve(oldAbs)) {
+      throw new Error("Stored media path changed canonical location");
+    }
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : "Source file is not a regular library file" });
+    return;
+  }
   if (!fs.existsSync(oldAbs)) { res.status(409).json({ error: "Source file not found on disk" }); return; }
+  try {
+    const sourceStat = fs.lstatSync(oldAbs);
+    if (sourceStat.isSymbolicLink() || !sourceStat.isFile() || sourceStat.size !== Number(file.sizeBytes ?? 0)) {
+      res.status(409).json({ error: "Source file no longer matches the indexed media record. Refresh the library and try again." });
+      return;
+    }
+    if (typeof file.contentHash === "string" && /^[a-f0-9]{64}$/i.test(file.contentHash)) {
+      const sourceHash = await sha256File(oldAbs);
+      if (sourceHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+        res.status(409).json({ error: "Source file contents changed since indexing. Refresh the library and try again." });
+        return;
+      }
+    }
+  } catch {
+    res.status(409).json({ error: "Source file could not be verified. Refresh the library and try again." });
+    return;
+  }
+  const siblingCollision = findPortableNameCollision(
+    fs.readdirSync(path.dirname(oldAbs)),
+    newName,
+    path.basename(oldAbs),
+  );
+  if (siblingCollision) {
+    res.status(409).json({ error: `A file named "${siblingCollision}" already exists on a case-insensitive filesystem.` });
+    return;
+  }
+  if (newRelPath === file.relativePath) {
+    res.json({ id: file.id, name: file.name, relativePath: file.relativePath });
+    return;
+  }
   if (fs.existsSync(newAbs))  { res.status(409).json({ error: "A file with that name already exists" }); return; }
 
-  fs.renameSync(oldAbs, newAbs);
-  const [updated] = await db
-    .update(mediaFilesTable)
-    .set({ name: newName, relativePath: newRelPath })
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-    .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
-
-  res.json(updated);
+  try {
+    const updated = await renameFileWithPersistence(
+      oldAbs,
+      newAbs,
+      async () => {
+        const [row] = await db
+          .update(mediaFilesTable)
+          .set({ name: newName, relativePath: newRelPath })
+          .where(and(
+            eq(mediaFilesTable.id, id),
+            eq(mediaFilesTable.nasPath, nasPath),
+            eq(mediaFilesTable.relativePath, file.relativePath),
+            ACTIVE_MEDIA,
+          ))
+          .returning({ id: mediaFilesTable.id, name: mediaFilesTable.name, relativePath: mediaFilesTable.relativePath });
+        return row;
+      },
+      (from, to) => moveFileNoReplace(from, to),
+    );
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof MediaRenameConflictError) {
+      res.status(409).json({ error: "Media record changed during rename. Refresh the library and try again." });
+      return;
+    }
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+      res.status(409).json({ error: "A file with that name already exists" });
+      return;
+    }
+    throw error;
+  }
 });
 
 // ── GET /api/media/timeline — year/month buckets ─────────────────────────────
@@ -485,22 +588,20 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
 
 function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
   res.setHeader("Content-Type", "image/webp");
-  res.setHeader("Cache-Control", "public, max-age=86400");
+  setPrivateMediaResponseHeaders(res);
   const stream = fs.createReadStream(thumbPath);
-  stream.on("error", () => {
+  stream.on("error", (streamError) => {
     _thumbCache.delete(id);
-    if (!res.headersSent) res.status(404).json({ error: "Thumbnail not found" });
-    else res.end();
+    logger.warn({ err: streamError, mediaId: id }, "thumbnail stream failed");
+    handlePrivateMediaStreamError(res, streamError, "Thumbnail not found");
   });
   stream.pipe(res);
 }
 
 router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
   // Confirm the file is still discoverable before using the thumbnail cache.
   // Recycled files must not remain reachable through an old thumbnail URL.
@@ -584,9 +685,16 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  let safeResultPath = "";
   let result;
   try {
-    result = await generateThumbnail(id, sourcePath, file.extension, nasPath);
+    result = await generateThumbnail(id, sourcePath, file.extension, nasPath, undefined, async ({ destPath }) => {
+      safeResultPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+      await db.update(mediaFilesTable)
+        .set({ thumbnailPath: safeResultPath, thumbnailGeneratedAt: new Date() })
+        .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+        .catch(() => {});
+    });
   } catch (error) {
     if (error instanceof StoragePolicyError) {
       res.status(503).json({ error: "NAS storage is unavailable for thumbnail generation" });
@@ -594,29 +702,21 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     }
     throw error;
   }
-  if (result.error || !result.destPath || !fs.existsSync(result.destPath)) {
+  if (result.error || !result.destPath || !safeResultPath || !fs.existsSync(result.destPath)) {
     res.status(500).json({ error: result.error ?? "Thumbnail generation failed" });
     return;
   }
 
-  const safeResultPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
   _thumbCache.set(id, { nasPath, path: safeResultPath });
-  db.update(mediaFilesTable)
-    .set({ thumbnailPath: safeResultPath, thumbnailGeneratedAt: new Date() })
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-    .catch(() => {});
-
   serveCachedThumb(res, safeResultPath, id);
 });
 
 // ── GET /api/media/file/:id/stream — stream original file ────────────────────
 
 router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
-  const id = parseInt(req.params["id"] as string);
-  if (isNaN(id)) {
-    res.status(400).json({ error: "Invalid id" });
-    return;
-  }
+  const id = parsePositiveIntegerParam(req.params["id"] as string);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  
 
   const nasPath = await getNasPath();
   if (!nasPath) {
@@ -665,7 +765,8 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
   }
 
   res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  setPrivateMediaResponseHeaders(res);
+  setMediaStreamContentHeaders(res, file.mimeType);
   if (range) {
     const chunkSize = range.end - range.start + 1;
     res.status(206);

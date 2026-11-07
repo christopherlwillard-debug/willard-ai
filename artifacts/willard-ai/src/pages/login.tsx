@@ -89,6 +89,7 @@ export default function LoginPage() {
   const { invalidate, setup } = useAuth();
   const [mode, setMode] = useState<Mode>(setup ? "setup" : "login");
   const [password, setPassword] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -161,7 +162,7 @@ export default function LoginPage() {
       toast({ title: "Password too short", description: "Must be at least 6 characters.", variant: "destructive" });
       return;
     }
-    setupMutation.mutate({ data: { password } });
+    setupMutation.mutate({ data: { password, ...(setupToken ? { setupToken } : {}) } });
   };
 
   const handleRecover = (e: React.FormEvent) => {
@@ -287,6 +288,20 @@ export default function LoginPage() {
             <p className="text-sm text-muted-foreground font-mono">
               This is your first time running Willard AI. Create a password to secure access.
             </p>
+            <div className="space-y-2">
+              <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Remote setup token (hosted installs only)</Label>
+              <Input
+                type="password"
+                value={setupToken}
+                onChange={e => setSetupToken(e.target.value)}
+                className="cyan-focus h-11 rounded-lg border-border/80 bg-background/45 font-mono"
+                placeholder="Leave blank when setting up on this computer"
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground font-mono">
+                If this server is reachable over your network or the internet, enter the WILLARD_SETUP_TOKEN configured by the server operator. Local desktop setup does not need one.
+              </p>
+            </div>
             <div className="space-y-2">
               <Label className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Create password</Label>
               <div className="relative">

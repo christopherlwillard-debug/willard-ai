@@ -8,6 +8,11 @@ Assert-LocalWindows
 Set-Location $Root
 Ensure-LogDir
 
+# An update swaps the runnable folder. If the process journal is missing or
+# partial, refuse to prepare it while either service port is still listening.
+$entryTracked = Read-TrackedPids
+Assert-NoUntrackedDeveloperServices $entryTracked
+
 Write-Banner "Updating Willard AI..."
 
 $updateLog = Join-Path $LogDir "update.log"

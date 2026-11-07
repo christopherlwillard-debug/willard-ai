@@ -1,13 +1,15 @@
 import { Router } from "express";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { db, appSettingsTable, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
+import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
-import { getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
+import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
-import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
+import { purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
+import { startJob } from "../lib/library-engine";
 
 const router = Router();
 const ACTIVE = activeMediaCondition;
@@ -17,6 +19,7 @@ type HealthRow = {
   relativePath: string;
   thumbnailPath: string | null;
   mediaType: string;
+  extension: string;
   sizeBytes: number;
   lastScanAction: string | null;
 };
@@ -41,8 +44,7 @@ function walkDirectories(root: string, skip: string): { empty: string[]; files: 
   const empty: string[] = [];
   const files: string[] = [];
   const visit = (dir: string) => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    const entries: fs.Dirent[] = fs.readdirSync(dir, { withFileTypes: true });
     const visible = entries.filter(e => e.name !== ".DS_Store");
     if (visible.length === 0) empty.push(dir);
     for (const entry of visible) {
@@ -80,11 +82,17 @@ function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]
 }
 
 async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; rows: HealthRow[]; missing: HealthRow[]; missingThumbs: HealthRow[]; orphanThumbs: string[]; emptyFolders: string[] }> {
+  const reachability = checkNasReachable(nasPath);
+  if (!reachability.online) {
+    throw new Error(`Library is not safely readable: ${reachability.message}`);
+  }
+
   const rows = await db.select({
     id: mediaFilesTable.id,
     relativePath: mediaFilesTable.relativePath,
     thumbnailPath: mediaFilesTable.thumbnailPath,
     mediaType: mediaFilesTable.mediaType,
+    extension: mediaFilesTable.extension,
     sizeBytes: mediaFilesTable.sizeBytes,
     lastScanAction: mediaFilesTable.lastScanAction,
   }).from(mediaFilesTable).where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE));
@@ -94,13 +102,9 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
   const validIds = new Set<number>();
   for (const row of rows) {
     validIds.add(row.id);
-    try {
-      const source = resolveLibraryPath(nasPath, row.relativePath);
-      if (!fs.existsSync(source)) missing.push(row);
-    } catch {
-      missing.push(row);
-    }
-    const needsThumb = row.mediaType === "photo" || row.mediaType === "video";
+    const source = resolveLibraryPath(nasPath, row.relativePath);
+    if (isMissingRegularMediaFile(source)) missing.push(row);
+    const needsThumb = row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
     if (needsThumb) {
       try {
         const thumb = row.thumbnailPath
@@ -175,78 +179,233 @@ router.get("/media/health", async (_req, res) => {
 });
 
 router.post("/media/cleanup", async (req, res) => {
-  const requested = Array.isArray(req.body?.actions) ? req.body.actions : [];
+  const requested: unknown = req.body?.actions;
   const allowed = new Set(["orphanedRecords", "orphanedDerivedData", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
-  const actions = requested.filter((action: unknown): action is string => typeof action === "string" && allowed.has(action));
+  if (
+    !Array.isArray(requested) ||
+    requested.length === 0 ||
+    requested.some((action: unknown) => typeof action !== "string" || !allowed.has(action))
+  ) {
+    return res.status(400).json({ error: "actions must be a non-empty array containing only supported cleanup actions" });
+  }
+  const actions = [...new Set(requested as string[])];
   const nasPath = (await getActiveLibraryContext())?.nasPath ?? null;
   if (!nasPath) return res.status(409).json({ error: "No library is configured" });
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  const [job] = await db.insert(libraryJobsTable).values({
-    jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
-  }).returning({ id: libraryJobsTable.id });
+  let jobId: number | null = null;
+  let metadataJobId: number | null = null;
+  let failedItems = 0;
+  let thumbnailFailures = 0;
+  let faceCropFailures = 0;
   try {
+    const [job] = await db.insert(libraryJobsTable).values({
+      jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
+    }).returning({ id: libraryJobsTable.id });
+    jobId = job.id;
     const inspected = await inspectLibrary(nasPath);
     let done = 0;
-    const total = Math.max(1, inspected.missing.length + inspected.orphanThumbs.length + inspected.missingThumbs.length + inspected.emptyFolders.length);
+    const isThumbnailEligible = (row: HealthRow) => row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
+    const thumbnailTargets = actions.includes("fullThumbnailRebuild")
+      ? inspected.rows.filter(isThumbnailEligible)
+      : actions.includes("missingThumbnails")
+        ? inspected.missingThumbs.filter(isThumbnailEligible)
+        : [];
+    const emptyFolderTargets = inspected.emptyFolders.filter(folder =>
+      path.resolve(folder) !== path.resolve(nasPath) &&
+      !path.resolve(folder).startsWith(path.resolve(getWillardAIDir(nasPath)) + path.sep)
+    );
+    let total =
+      (actions.includes("orphanedRecords") ? inspected.missing.length : 0) +
+      (actions.includes("orphanedDerivedData") ? inspected.report.issues.brokenMetadataReferences : 0) +
+      (actions.includes("orphanedThumbnails") ? inspected.orphanThumbs.length : 0) +
+      thumbnailTargets.length +
+      (actions.includes("emptyFolders") ? emptyFolderTargets.length : 0) +
+      (actions.includes("rebuildMetadata") ? 1 : 0);
+    total = Math.max(1, total);
     const progress = (message: string) => send("progress", { processed: done, total, message });
     let derivedCleanup: Record<string, unknown> | undefined;
 
     if (actions.includes("orphanedRecords")) {
       for (const row of inspected.missing) {
-        await purgeDerivedDataForMedia(nasPath, [row.id]);
-        await db.delete(mediaFilesTable).where(and(eq(mediaFilesTable.id, row.id), eq(mediaFilesTable.nasPath, nasPath)));
-        done++; progress("Removing orphaned index records…");
+        const source = resolveLibraryPath(nasPath, row.relativePath);
+        const result = await softDeleteMissingMediaRecord(source, async () => {
+          const [updated] = await db.update(mediaFilesTable)
+            .set({ lastScanAction: "DELETED", lastScannedAt: new Date() })
+            .where(and(
+              eq(mediaFilesTable.id, row.id),
+              eq(mediaFilesTable.nasPath, nasPath),
+              eq(mediaFilesTable.relativePath, row.relativePath),
+              ACTIVE,
+            ))
+            .returning({ id: mediaFilesTable.id });
+          return Boolean(updated);
+        });
+        done++;
+        if (result === "marked_deleted") {
+          progress("Marked a confirmed-missing file as removed from the library…");
+        } else if (result === "reappeared") {
+          progress("Skipped a file that reappeared during cleanup…");
+        } else {
+          progress("Skipped a media record that changed during cleanup…");
+        }
       }
     }
     if (actions.includes("orphanedDerivedData")) {
       const cleaned = await purgeOrphanedDerivedData(nasPath);
-      done += cleaned.orphanRows + cleaned.staleCropsRemoved;
+      faceCropFailures = cleaned.cropErrors.length;
+      failedItems += faceCropFailures;
+      // Orphaned metadata rows are included in the inspection count. Face-crop
+      // removals and failures are discovered during cleanup, so add those
+      // attempted items to both the denominator and processed count.
+      total +=
+        cleaned.orphanRows - inspected.report.issues.brokenMetadataReferences +
+        cleaned.staleCropsRemoved + cleaned.cropErrors.length;
+      done += cleaned.orphanRows + cleaned.staleCropsRemoved + cleaned.cropErrors.length;
       derivedCleanup = {
         orphanRows: cleaned.orphanRows,
         staleCropsRemoved: cleaned.staleCropsRemoved,
         peopleRows: cleaned.peopleRows,
         cropErrors: cleaned.cropErrors.length,
       };
-      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops…`);
+      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops${faceCropFailures > 0 ? `; ${faceCropFailures} face crop(s) could not be removed` : ""}…`);
     }
     if (actions.includes("orphanedThumbnails")) {
       for (const file of inspected.orphanThumbs) {
-        try { fs.unlinkSync(resolveWithinRoot(file, getWillardAIDir(nasPath))); } catch { /* stale or already gone */ }
-        done++; progress("Removing orphaned thumbnails…");
+        let removed = false;
+        const filename = path.basename(file);
+        const mediaFileId = Number(path.basename(filename, path.extname(filename)));
+        if (path.extname(filename).toLowerCase() === ".webp" &&
+            Number.isSafeInteger(mediaFileId) && mediaFileId > 0 &&
+            filename === thumbnailFilename(mediaFileId)) {
+          try {
+            removed = await removeOrphanedThumbnail(nasPath, file, async () => {
+              const [activeRow] = await db.select({ id: mediaFilesTable.id })
+                .from(mediaFilesTable)
+                .where(and(
+                  eq(mediaFilesTable.id, mediaFileId),
+                  eq(mediaFilesTable.nasPath, nasPath),
+                  ACTIVE,
+                ))
+                .limit(1);
+              return !activeRow;
+            });
+          } catch { /* changed or became unsafe since inspection */ }
+        }
+        done++;
+        progress(removed ? "Removed an orphaned thumbnail…" : "Skipped a thumbnail that changed or is no longer orphaned…");
       }
     }
     if (actions.includes("missingThumbnails") || actions.includes("fullThumbnailRebuild")) {
-      const targets = actions.includes("fullThumbnailRebuild") ? inspected.rows : inspected.missingThumbs;
-      for (const row of targets) {
-        if (row.mediaType !== "photo" && row.mediaType !== "video") continue;
+      for (const row of thumbnailTargets) {
         try {
           const source = resolveLibraryPath(nasPath, row.relativePath);
-          await generateThumbnail(row.id, source, path.extname(row.relativePath).slice(1), nasPath);
-        } catch { /* reported by the next health scan */ }
+          const result = await generateThumbnail(
+            row.id,
+            source,
+            path.extname(row.relativePath).slice(1),
+            nasPath,
+            undefined,
+            async ({ destPath }) => {
+              const safeThumbnailPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+              await db.update(mediaFilesTable).set({
+                thumbnailPath: safeThumbnailPath,
+                thumbnailGeneratedAt: new Date(),
+              }).where(and(
+                eq(mediaFilesTable.id, row.id),
+                eq(mediaFilesTable.nasPath, nasPath),
+                ACTIVE,
+              ));
+            },
+          );
+          if (result.error) throw new Error(result.error);
+        } catch {
+          failedItems++;
+          thumbnailFailures++;
+        }
         done++; progress("Regenerating thumbnails…");
       }
     }
     if (actions.includes("emptyFolders")) {
-      for (const folder of inspected.emptyFolders) {
-        if (path.resolve(folder) === path.resolve(nasPath) || path.resolve(folder).startsWith(path.resolve(getWillardAIDir(nasPath)) + path.sep)) continue;
+      for (const folder of emptyFolderTargets) {
         try { fs.rmdirSync(resolveWithinRoot(folder, nasPath)); } catch { /* changed since scan */ }
         done++; progress("Removing empty folders…");
       }
     }
-    if (actions.includes("rebuildMetadata")) send("progress", { processed: done, total, message: "Metadata rebuild is queued for the next library scan." });
+    if (actions.includes("rebuildMetadata")) {
+      // Release the temporary Health Center claim before the shared job engine
+      // attempts to claim this library for its durable METADATA worker.
+      await db.update(libraryJobsTable).set({
+        status: "DONE",
+        processedFiles: done,
+        totalFiles: total,
+        finishedAt: new Date(),
+        summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
+      }).where(eq(libraryJobsTable.id, job.id));
+
+      const metadataJob = await startJob({
+        jobType: "METADATA",
+        profile: "HEALTH_SCAN",
+        nasPath,
+      });
+      if (metadataJob.errorCode) {
+        throw new Error(metadataJob.errorMessage ?? "Metadata refresh could not start (" + metadataJob.errorCode + ")");
+      }
+      if (metadataJob.alreadyRunning) {
+        const [existing] = await db.select({
+          jobType: libraryJobsTable.jobType,
+          status: libraryJobsTable.status,
+        }).from(libraryJobsTable).where(eq(libraryJobsTable.id, metadataJob.jobId)).limit(1);
+        if (existing?.jobType !== "METADATA" || existing.status !== "RUNNING") {
+          throw new Error("Another library job is already active; metadata refresh was not started.");
+        }
+      }
+      metadataJobId = metadataJob.jobId;
+      done++;
+      progress("Metadata refresh job #" + metadataJobId + " is running.");
+    }
+    const partial = failedItems > 0;
+    const failureDetails = [
+      thumbnailFailures > 0 ? `${thumbnailFailures} thumbnail(s) could not be regenerated` : null,
+      faceCropFailures > 0 ? `${faceCropFailures} face crop(s) could not be removed` : null,
+    ].filter((detail): detail is string => Boolean(detail));
+    const completionMessage = partial
+      ? `Cleanup finished with ${failedItems} item(s) needing attention${failureDetails.length > 0 ? `: ${failureDetails.join("; ")}` : ""}.${metadataJobId !== null ? ` Metadata job #${metadataJobId} is running.` : ""}`
+      : metadataJobId !== null
+        ? `Cleanup completed. Metadata job #${metadataJobId} is running.`
+        : "Cleanup completed.";
     await db.update(libraryJobsTable).set({
-      status: "DONE",
+      status: partial ? "FAILED" : "DONE",
       processedFiles: done,
       totalFiles: total,
       finishedAt: new Date(),
-      summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
+      error: partial ? completionMessage : null,
+      summary: {
+        actions,
+        failedItems,
+        thumbnailFailures,
+        faceCropFailures,
+        ...(derivedCleanup ? { derivedCleanup } : {}),
+        ...(metadataJobId !== null ? { metadataJobId } : {}),
+      },
     }).where(eq(libraryJobsTable.id, job.id));
-    send("done", { ok: true, processed: done, total });
+    send("done", {
+      ok: !partial,
+      partial,
+      failedItems,
+      message: completionMessage,
+      processed: done,
+      total,
+      ...(metadataJobId !== null ? { metadataJobId } : {}),
+    });
   } catch (error) {
-    await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, job.id));
-    send("error", { message: "Cleanup failed safely; original media was not removed." });
+    if (jobId !== null) {
+      try {
+        await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, jobId));
+      } catch { /* Preserve the original cleanup failure for the connected client. */ }
+    }
+    send("error", { message: metadataJobId === null ? "Cleanup failed safely; original media was not removed." : "Cleanup failed after metadata refresh job #" + metadataJobId + " started; review Library Jobs before retrying." });
   } finally { return res.end(); }
 });
 

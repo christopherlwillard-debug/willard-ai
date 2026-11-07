@@ -6,6 +6,8 @@ import { recoverInterruptedJobs } from "./lib/library-engine";
 import { installShutdownHandlers } from "./lib/shutdown.ts";
 import { startLibraryBackupCoordinator } from "./lib/backup-coordinator.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
+import { getActiveNasPath } from "./lib/active-library.ts";
+import { recoverInterruptedConversionJobs } from "./lib/conversion-recovery.ts";
 import type { Server } from "node:http";
 
 let server: Server | null = null;
@@ -25,12 +27,18 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const schemaReady = process.env["WILLARD_SCHEMA_READY"] === "1";
-const startupMigrations = schemaReady ? Promise.resolve() : bootstrapSessionTable();
+// Always verify the connected database under the schema bootstrap lock. A
+// launcher marker cannot survive a database restore or DATABASE_URL change safely.
+const startupMigrations = bootstrapSessionTable();
 
 startupMigrations
   .then(() => {
-    server = app.listen(port, (err) => {
+    // Desktop installs set HOST=127.0.0.1 so the API cannot be reached
+    // directly from the LAN around the localhost-only desktop web proxy.
+    // Hosted deployments may explicitly set HOST=0.0.0.0 as required.
+    const host = process.env["HOST"]?.trim()
+      || (process.env["REPL_ID"] === undefined ? "127.0.0.1" : undefined);
+    server = app.listen({ port, ...(host ? { host } : {}) }, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");
         process.exit(1);
@@ -38,17 +46,32 @@ startupMigrations
       logger.info({ port }, "Server listening");
       startLibraryBackupCoordinator();
 
+      // Conversion recovery queries conversion_jobs and must run only after
+      // startupMigrations has completed. Keep it in the background so a slow
+      // NAS rollback never prevents the HTTP listener from becoming ready.
+      void recoverInterruptedConversionJobs()
+        .then((count) => {
+          if (count > 0) {
+            logger.warn(
+              { count },
+              "RECOVERY: Reconciled interrupted conversion operation(s); review Optimize Center before retrying or finalizing",
+            );
+          }
+        })
+        .catch((recoveryError) => {
+          markStartupDegraded("conversion_recovery", "Conversion recovery did not complete.");
+          logger.error({ err: recoveryError, operation: "conversion_recovery" }, "Conversion recovery did not complete");
+        });
+
       // Health/readiness must be available as soon as the required schema
       // gate has passed. These cleanup and recovery tasks are safe to run
       // after binding and must not block the launcher's health probe.
       void (async () => {
-        if (schemaReady) await initializeVectorCapability();
+        // Optional vector extension/index work must not delay the HTTP readiness gate.
+        await initializeVectorCapability();
         await recoverInterruptedJobs();
         await reconcileCleanupOperations();
-        const settings = await import("@workspace/db").then(({ db, appSettingsTable }) =>
-          db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1),
-        );
-        const nasPath = settings[0]?.nasPath?.trim();
+        const nasPath = await getActiveNasPath();
         if (nasPath) {
           purgeExpiredTrashEntries(nasPath).catch((error) =>
             (() => {

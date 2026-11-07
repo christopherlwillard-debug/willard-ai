@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { conversations, messages, mediaFilesTable, archivesTable, appSettingsTable } from "@workspace/db";
+import { conversations, messages, mediaFilesTable, archivesTable } from "@workspace/db";
 import { eq, desc, count, sql, ilike, and } from "drizzle-orm";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import {
@@ -9,45 +9,24 @@ import {
 } from "@workspace/api-zod";
 import { aiProviderBlockedReason, getAiPrivacySettings, canSendToAiProvider, isMediaExcluded } from "../../lib/ai-privacy";
 import { archiveScope } from "../../lib/archive-scope.ts";
+import { buildAiMediaExclusionCondition } from "../../lib/ai-media-scope.ts";
+import { getActiveAppSettings } from "../../lib/active-library.ts";
+import { parsePositiveIntegerParam } from "../../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
 const NOT_DELETED = sql`${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'DELETED'
   AND ${mediaFilesTable.lastScanAction} IS DISTINCT FROM 'RECYCLED'`;
 
-/** Query the local index for files matching a keyword, return summary. */
-async function searchLocalFiles(keyword: string): Promise<string> {
-  try {
-    const files = await db.select({
-      filename:  mediaFilesTable.name,
-      fileType:  mediaFilesTable.mediaType,
-      sizeBytes: mediaFilesTable.sizeBytes,
-      folder:    mediaFilesTable.relativePath,
-      modifiedAt: mediaFilesTable.modifiedAt,
-    })
-      .from(mediaFilesTable)
-      .where(and(NOT_DELETED, ilike(mediaFilesTable.name, `%${keyword}%`)))
-      .orderBy(desc(mediaFilesTable.sizeBytes))
-      .limit(10);
-
-    if (files.length === 0) return `No local files found matching "${keyword}".`;
-
-    const lines = files.map(f =>
-      `  • ${f.filename} (${f.fileType}, ${Math.round((f.sizeBytes ?? 0) / 1024)}KB) in ${f.folder ?? "/"}`
-    );
-    return `Found ${files.length} local files matching "${keyword}":\n${lines.join("\n")}`;
-  } catch {
-    return "";
-  }
-}
-
 /** Query storage breakdown for context. */
-async function getStorageContext(): Promise<string> {
+async function getStorageContext(settings: any): Promise<string> {
+  const nasPath = settings?.nasPath;
+  if (!nasPath) return "";
   const breakdown = await db.select({
     fileType:   mediaFilesTable.mediaType,
     fileCount:  count(),
     totalBytes: sql<number>`COALESCE(SUM(${mediaFilesTable.sizeBytes}), 0)`,
-  }).from(mediaFilesTable).where(NOT_DELETED).groupBy(mediaFilesTable.mediaType).orderBy(desc(sql`SUM(${mediaFilesTable.sizeBytes})`));
+  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))).groupBy(mediaFilesTable.mediaType).orderBy(desc(sql`SUM(${mediaFilesTable.sizeBytes})`));
 
   if (breakdown.length === 0) return "";
   return "Storage by type:\n" + breakdown.map(r =>
@@ -56,12 +35,14 @@ async function getStorageContext(): Promise<string> {
 }
 
 /** Query top large files. */
-async function getLargeFilesContext(): Promise<string> {
+async function getLargeFilesContext(settings: any): Promise<string> {
+  const nasPath = settings?.nasPath;
+  if (!nasPath) return "";
   const large = await db.select({
     filename:  mediaFilesTable.name,
     sizeBytes: mediaFilesTable.sizeBytes,
     folder:    mediaFilesTable.relativePath,
-  }).from(mediaFilesTable).where(NOT_DELETED).orderBy(desc(mediaFilesTable.sizeBytes)).limit(5);
+  }).from(mediaFilesTable).where(and(NOT_DELETED, eq(mediaFilesTable.nasPath, nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))).orderBy(desc(mediaFilesTable.sizeBytes)).limit(5);
 
   if (large.length === 0) return "";
   return "Top 5 largest files:\n" + large.map(f =>
@@ -114,7 +95,7 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 
   // File search intent
   const searchMatch = msg.match(/(?:find|search|look for|where is|show me|list)\s+(?:files?\s+(?:named?|called?|with)?\s+)?["']?([a-z0-9\s._-]{2,30})["']?/i);
-  if (searchMatch) {
+  if (searchMatch && settings?.nasPath) {
     const keyword = searchMatch[1].trim();
     if (keyword.length >= 2) {
       // Local file search — also collect structured results
@@ -130,8 +111,9 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
           .from(mediaFilesTable)
           .where(and(
             NOT_DELETED,
-            settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`,
+            eq(mediaFilesTable.nasPath, settings.nasPath),
             ilike(mediaFilesTable.name, `%${keyword}%`),
+            buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings),
           ))
           .orderBy(desc(mediaFilesTable.sizeBytes))
           .limit(10);
@@ -169,7 +151,10 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 
   // Storage / breakdown intent
   if (msg.includes("storage") || msg.includes("breakdown") || msg.includes("how much") || msg.includes("space")) {
-    const [storageCtx, largeCtx] = await Promise.all([getStorageContext(), getLargeFilesContext()]);
+    const [storageCtx, largeCtx] = await Promise.all([
+      getStorageContext(settings),
+      getLargeFilesContext(settings),
+    ]);
     if (storageCtx) parts.push(storageCtx);
     if (largeCtx) parts.push(largeCtx);
   }
@@ -188,6 +173,7 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
          WHERE content_hash IS NOT NULL
            AND ${NOT_DELETED}
            AND nas_path = ${settings?.nasPath ?? ""}
+           AND ${buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings)}
         GROUP BY content_hash HAVING COUNT(*) > 1
       ) t
     `);
@@ -204,7 +190,9 @@ async function buildQueryContext(userMessage: string, settings: any): Promise<Qu
 }
 
 async function buildSystemPrompt(settings: any): Promise<string> {
-  const nasCondition = settings?.nasPath ? eq(mediaFilesTable.nasPath, settings.nasPath) : sql`TRUE`;
+  const nasCondition = settings?.nasPath
+    ? and(eq(mediaFilesTable.nasPath, settings.nasPath), buildAiMediaExclusionCondition(mediaFilesTable.relativePath, mediaFilesTable.name, settings))
+    : sql`FALSE`;
   const [{ totalFiles }] = await db.select({ totalFiles: count() }).from(mediaFilesTable).where(and(NOT_DELETED, nasCondition));
   const [archiveCountRow] = await db.select({ archiveCount: count() })
     .from(archivesTable)
@@ -254,7 +242,8 @@ router.post("/openai/conversations", async (req, res) => {
 
 router.get("/openai/conversations/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
     const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
@@ -266,7 +255,8 @@ router.get("/openai/conversations/:id", async (req, res) => {
 
 router.delete("/openai/conversations/:id", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
     await db.delete(messages).where(eq(messages.conversationId, id));
@@ -279,7 +269,8 @@ router.delete("/openai/conversations/:id", async (req, res) => {
 
 router.get("/openai/conversations/:id/messages", async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(messages.createdAt);
     res.json(msgs);
   } catch {
@@ -297,15 +288,15 @@ router.post("/openai/conversations/:id/messages", async (req, res) => {
       });
       return;
     }
-    const id = parseInt(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) { res.status(400).json({ error: "Invalid conversation id" }); return; }
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
     if (!conv) { res.status(404).json({ error: "Conversation not found" }); return; }
 
     const { content } = SendOpenaiMessageBody.parse(req.body);
 
     // Run structured query against NAS data before calling the LLM
-    const settingsRows = await db.select().from(appSettingsTable).limit(1);
-    const settings = settingsRows[0];
+    const settings = await getActiveAppSettings();
     const { text: queryContextText, matchedFiles } = await buildQueryContext(content, settings);
 
     // Store user message (original, without the injected context)

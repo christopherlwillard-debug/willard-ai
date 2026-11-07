@@ -477,26 +477,99 @@ function Get-DeveloperUpdateJournalPath {
     return (Join-Path $parent ("." + $leaf + ".willard-update.json"))
 }
 
+function Assert-DeveloperUpdateJournalPaths($journal) {
+    if (-not $journal -or $journal.version -ne 1 -or
+        $journal.phase -notin @("prepared", "backup-created", "swapped", "starting", "committed")) {
+        throw "The developer update journal has an unsupported version or phase."
+    }
+
+    try {
+        $rootPath = [System.IO.Path]::GetFullPath($Root)
+        $livePath = [System.IO.Path]::GetFullPath([string]$journal.live)
+        $candidatePath = [System.IO.Path]::GetFullPath([string]$journal.candidate)
+        $backupPath = [System.IO.Path]::GetFullPath([string]$journal.backup)
+    } catch {
+        throw "The developer update journal contains an invalid path."
+    }
+
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    if (-not [string]::Equals($livePath, $rootPath, $comparison)) {
+        throw "The developer update journal does not belong to this installation."
+    }
+
+    $parent = [System.IO.Path]::GetDirectoryName($rootPath)
+    $leaf = [System.IO.Path]::GetFileName($rootPath)
+    $candidateParent = [System.IO.Path]::GetDirectoryName($candidatePath)
+    $candidateName = [System.IO.Path]::GetFileName($candidatePath)
+    $candidatePrefix = "." + $leaf + ".candidate-"
+    if (-not [string]::Equals($candidateParent, $parent, $comparison) -or
+        -not $candidateName.StartsWith($candidatePrefix, $comparison)) {
+        throw "The developer update journal candidate is outside the expected sibling workspace."
+    }
+    $candidateId = [guid]::Empty
+    $candidateSuffix = $candidateName.Substring($candidatePrefix.Length)
+    if (-not [guid]::TryParse($candidateSuffix, [ref]$candidateId)) {
+        throw "The developer update journal candidate identifier is invalid."
+    }
+
+    $backupPrefix = $rootPath + ".previous-"
+    if (-not $backupPath.StartsWith($backupPrefix, $comparison) -or
+        $backupPath.Substring($backupPrefix.Length) -notmatch '^\d{14}$') {
+        throw "The developer update journal backup is outside the expected sibling path."
+    }
+    return $true
+}
+
 function Read-DeveloperUpdateJournal {
     $journalPath = Get-DeveloperUpdateJournalPath
-    if (-not (Test-Path $journalPath)) { return $null }
-    try { return Get-Content $journalPath -Raw | ConvertFrom-Json } catch { return $null }
+    if (-not (Test-Path -LiteralPath $journalPath)) { return $null }
+    try {
+        $journal = Get-Content -LiteralPath $journalPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        Assert-DeveloperUpdateJournalPaths $journal | Out-Null
+        return $journal
+    } catch {
+        throw ("The developer update recovery journal is invalid or unreadable at " +
+            $journalPath + ": " + $_.Exception.Message)
+    }
 }
 
 function Write-DeveloperUpdateJournal($phase, $candidate, $backup) {
     $journalPath = Get-DeveloperUpdateJournalPath
-    @{
+    $journalDirectory = Split-Path -Parent $journalPath
+    New-Item -ItemType Directory -Force -Path $journalDirectory | Out-Null
+    $writeId = [guid]::NewGuid().ToString("N")
+    $temporary = "$journalPath.$writeId.tmp"
+    $replacementBackup = "$journalPath.$writeId.bak"
+    $contents = @{
         version = 1
         phase = $phase
         live = $Root
         candidate = $candidate
         backup = $backup
         updatedAt = (Get-Date).ToString("o")
-    } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+    } | ConvertTo-Json
+    try {
+        [System.IO.File]::WriteAllText(
+            $temporary,
+            $contents + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+            # File.Replace requires a same-directory backup path on Windows.
+            # It atomically publishes the new journal; remove the old copy in
+            # finally so a successful write leaves no backup artifact behind.
+            [System.IO.File]::Replace($temporary, $journalPath, $replacementBackup)
+        } else {
+            [System.IO.File]::Move($temporary, $journalPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $replacementBackup -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Remove-DeveloperUpdateJournal {
-    Remove-Item (Get-DeveloperUpdateJournalPath) -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Get-DeveloperUpdateJournalPath) -Force -ErrorAction SilentlyContinue
 }
 
 function Invoke-DeveloperVersionSwap($candidate, $backup) {
@@ -531,8 +604,20 @@ function Invoke-DeveloperVersionSwap($candidate, $backup) {
 
 function Restore-PendingDeveloperUpdate {
     $journal = Read-DeveloperUpdateJournal
-    if (-not $journal -or $journal.phase -notin @("backup-created", "swapped") -or
-        -not $journal.backup -or -not (Test-Path $journal.backup)) {
+    if (-not $journal) { return $false }
+
+    $liveExists = Test-Path -LiteralPath $Root
+    $backupExists = Test-Path -LiteralPath $journal.backup
+    if ($journal.phase -eq "prepared") {
+        if ($liveExists -and -not $backupExists) { return $false }
+        if ($liveExists -or -not $backupExists) {
+            throw "The prepared developer update has an ambiguous live/backup state. Both paths were preserved."
+        }
+    } elseif ($journal.phase -in @("backup-created", "swapped", "starting")) {
+        if (-not $backupExists) {
+            throw "The previous developer installation backup is missing. The current folder was preserved for manual recovery."
+        }
+    } else {
         return $false
     }
 
@@ -540,13 +625,18 @@ function Restore-PendingDeveloperUpdate {
     $parent = Split-Path -Parent $Root
     Push-Location $parent
     try {
-        if (Test-Path $Root) { Move-Item -LiteralPath $Root -Destination $failed -ErrorAction Stop }
+        if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+            Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+        }
+        if (Test-Path -LiteralPath $Root) {
+            Move-Item -LiteralPath $Root -Destination $failed -ErrorAction Stop
+        }
         Move-Item -LiteralPath $journal.backup -Destination $Root -ErrorAction Stop
-        Remove-Item $failed -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue
         Remove-DeveloperUpdateJournal
         return $true
     } catch {
-        if (-not (Test-Path $Root) -and (Test-Path $failed)) {
+        if (-not (Test-Path -LiteralPath $Root) -and (Test-Path -LiteralPath $failed)) {
             Move-Item -LiteralPath $failed -Destination $Root -ErrorAction SilentlyContinue
         }
         throw
@@ -558,23 +648,78 @@ function Restore-PendingDeveloperUpdate {
 function Recover-InterruptedDeveloperUpdate {
     $journal = Read-DeveloperUpdateJournal
     if (-not $journal) { return }
-    if ($journal.phase -in @("backup-created", "swapped")) {
-        if (Restore-PendingDeveloperUpdate) {
-            Write-Warn "An interrupted update was found; the previous runnable version was restored."
+
+    switch ([string]$journal.phase) {
+        "prepared" {
+            $liveExists = Test-Path -LiteralPath $Root
+            $backupExists = Test-Path -LiteralPath $journal.backup
+            if ($liveExists -and -not $backupExists) {
+                if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+                    Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+                }
+                Remove-DeveloperUpdateJournal
+                return
+            }
+            if (-not $liveExists -and $backupExists) {
+                if (Restore-PendingDeveloperUpdate) {
+                    Write-Warn "An interrupted update was found before the backup phase was recorded; the previous runnable version was restored."
+                }
+                return
+            }
+            throw "The prepared developer update has an ambiguous live/backup state. Both paths were preserved."
         }
-        return
+        "backup-created" {
+            if (Restore-PendingDeveloperUpdate) {
+                Write-Warn "An interrupted update was found; the previous runnable version was restored."
+            }
+            return
+        }
+        "swapped" {
+            if (-not (Test-Path -LiteralPath $journal.backup)) {
+                throw "The pending developer update has no rollback copy. The installed folder was preserved for manual recovery."
+            }
+            # The candidate is installed but has not passed startup health checks.
+            # start.ps1 changes this to "starting" immediately before launching it.
+            return
+        }
+        "starting" {
+            if (Restore-PendingDeveloperUpdate) {
+                Write-Warn "A previous startup did not verify the updated version; the prior runnable version was restored."
+            }
+            return
+        }
+        "committed" {
+            if (Test-Path -LiteralPath $journal.backup) {
+                Remove-Item -LiteralPath $journal.backup -Recurse -Force -ErrorAction Stop
+            }
+            if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+                Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+            }
+            Remove-DeveloperUpdateJournal
+            return
+        }
+        default {
+            throw "The developer update journal contains an unsupported recovery phase."
+        }
     }
-    if ($journal.candidate -and (Test-Path $journal.candidate)) {
-        Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    Remove-DeveloperUpdateJournal
 }
 
 function Confirm-DeveloperUpdateHealth {
     $journal = Read-DeveloperUpdateJournal
-    if (-not $journal -or $journal.phase -ne "swapped") { return }
-    if ($journal.backup -and (Test-Path $journal.backup)) {
-        Remove-Item $journal.backup -Recurse -Force -ErrorAction Stop
+    if (-not $journal -or $journal.phase -notin @("swapped", "starting")) { return }
+    if (-not (Test-Path -LiteralPath $journal.backup)) {
+        throw "The updated version cannot be committed because its rollback copy is missing."
+    }
+
+    # Commit the healthy version before deleting the rollback directory. If
+    # cleanup is interrupted, startup removes the leftover backup but never
+    # mistakes a partially deleted backup for a runnable prior version.
+    Write-DeveloperUpdateJournal "committed" $journal.candidate $journal.backup
+    if (Test-Path -LiteralPath $journal.backup) {
+        Remove-Item -LiteralPath $journal.backup -Recurse -Force -ErrorAction Stop
+    }
+    if ($journal.candidate -and (Test-Path -LiteralPath $journal.candidate)) {
+        Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
     }
     Remove-DeveloperUpdateJournal
 }
@@ -586,9 +731,18 @@ function Ensure-EnvFile {
     $example = Join-Path $Root ".env.example"
     if (-not (Test-Path $envPath) -and (Test-Path $example)) {
         Copy-Item $example $envPath
-        # Give the copy a real random session secret
-        $secret = -join ((1..48) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-        (Get-Content $envPath) -replace '^SESSION_SECRET=.*$', "SESSION_SECRET=$secret" | Set-Content $envPath
+        # Generate a full 256-bit session secret with the OS cryptographic RNG.
+        $secretBytes = New-Object byte[] 32
+        $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try {
+            $rng.GetBytes($secretBytes)
+        } finally {
+            $rng.Dispose()
+        }
+        $secret = ([BitConverter]::ToString($secretBytes)).Replace("-", "").ToLowerInvariant()
+        $updatedEnv = (Get-Content $envPath) -replace '^SESSION_SECRET=.*$', "SESSION_SECRET=$secret"
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllLines($envPath, [string[]]$updatedEnv, $utf8NoBom)
         return $true
     }
     return $false
@@ -768,42 +922,159 @@ function quoteIdentifier(identifier) {
     }
 }
 
+function Get-DeveloperListeningPorts {
+    $listeners = @()
+    foreach ($port in @(8080, 5000)) {
+        try {
+            $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+        } catch {
+            # Get-NetTCPConnection reports an empty filtered result as
+            # ObjectNotFound on supported Windows builds. That is a verified
+            # empty port, not a query failure.
+            if ($_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound) {
+                $connections = @()
+            } else {
+                throw "Windows could not verify whether Willard service port $port is free: $($_.Exception.Message)"
+            }
+        }
+        foreach ($connection in $connections) {
+            $ownerPid = 0
+            if (-not [int]::TryParse([string]$connection.OwningProcess, [ref]$ownerPid) -or $ownerPid -le 0) {
+                throw "Windows found a listener on Willard service port $port but could not verify its owning process."
+            }
+            $listeners += [pscustomobject]@{ port = $port; pid = $ownerPid }
+        }
+    }
+    return $listeners
+}
+
+function Assert-NoUntrackedDeveloperServices($tracked) {
+    # A complete journal is checked against exact process identity by the
+    # existing stop path. With no journal or only one recorded process, any
+    # listener on either application port is unowned until proven otherwise.
+    $completeJournal = $tracked -and $tracked.api -and $tracked.web
+    if ($completeJournal) { return }
+
+    $listeners = @(Get-DeveloperListeningPorts)
+    if ($listeners.Count -gt 0) {
+        $details = ($listeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard found a listener on $details, but its developer services state file is missing or incomplete. It did not stop the process or change application files. Keep the state file for diagnosis, inspect the listed process, and close only the confirmed Willard service before retrying."
+    }
+}
+
 function Test-PortFree($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-    return (-not $conn)
+    return (@(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port }).Count -eq 0)
 }
 
 function Get-PortOwnerPid($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($conn) { return $conn.OwningProcess }
+    $listener = @(Get-DeveloperListeningPorts | Where-Object { $_.port -eq [int]$port } | Select-Object -First 1)
+    if ($listener.Count -gt 0) { return $listener[0].pid }
     return $null
 }
 
-function Read-TrackedPids {
-    if (-not (Test-Path $PidFile)) { return $null }
-    try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
-}
-
-function Get-ProcessIdentity($processId) {
-    if (-not $processId) { return $null }
+function Stop-LauncherStartedProcessHandle($process) {
+    if (-not $process) { return }
     try {
-        $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
-        if (-not $process) { return $null }
-        return @{
-            pid = [int]$process.ProcessId
-            path = [string]$process.ExecutablePath
-            commandLine = [string]$process.CommandLine
-            creationDate = [string]$process.CreationDate
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            $process.Kill()
+            if (-not $process.WaitForExit(10000)) {
+                throw "Process $($process.Id) did not exit after a direct stop request."
+            }
         }
     } catch {
+        Write-Warn ("Willard could not stop a process started by this launcher: " + $_.Exception.Message)
+    }
+}
+
+function Read-TrackedPids {
+    if (-not (Test-Path -LiteralPath $PidFile)) { return $null }
+    try {
+        if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
+            throw "The services state path is not a file."
+        }
+        $state = Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($state -isnot [System.Management.Automation.PSCustomObject] -or $state.version -notin @(1, 2)) {
+            throw "The services state has an unsupported structure or version."
+        }
+        foreach ($name in @("api", "web")) {
+            if ($null -eq $state.PSObject.Properties[$name]) {
+                throw "The services state is missing the '$name' process record."
+            }
+        }
+        if ($state.version -eq 2 -and
+            ($state.runToken -isnot [string] -or [string]::IsNullOrWhiteSpace($state.runToken))) {
+            throw "The services state is missing its run token."
+        }
+        foreach ($process in @($state.api, $state.web)) {
+            if ($null -eq $process) { continue }
+            if ($process -isnot [System.Management.Automation.PSCustomObject]) {
+                throw "A services process record has an invalid structure."
+            }
+            $recordedPid = 0
+            if (-not [int]::TryParse([string]$process.pid, [ref]$recordedPid) -or $recordedPid -le 0) {
+                throw "A services process record has an invalid process ID."
+            }
+            if ($process.path -isnot [string] -or [string]::IsNullOrWhiteSpace($process.path) -or
+                $process.commandLine -isnot [string] -or [string]::IsNullOrWhiteSpace($process.commandLine)) {
+                throw "A services process record is missing executable identity information."
+            }
+        }
+        return $state
+    } catch {
+        throw "The developer services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard services remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
+    }
+}
+
+function Get-ProcessIdentity($processId, $expectedCreationDate, $expectedPath, $expectedCommandLine) {
+    if (-not $processId) { return $null }
+    try {
+        $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
+    } catch {
+        throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
+    }
+    if (-not $process) { return $null }
+    $currentCreationDate = [string]$process.CreationDate
+    if ([string]::IsNullOrWhiteSpace($currentCreationDate)) {
+        throw "Windows did not return a process creation time for Willard process $processId."
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+        -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
         return $null
+    }
+    $executablePath = [string]$process.ExecutablePath
+    $commandLine = [string]$process.CommandLine
+    # WMI can omit optional identity fields for a process that is still the
+    # same instance. Reuse persisted values only after the exact creation
+    # timestamp matches; a missing timestamp never falls back to PID alone.
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedPath)) {
+            $executablePath = [string]$expectedPath
+        } else {
+            throw "Windows did not return an executable path for Willard process $processId."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+            -not [string]::IsNullOrWhiteSpace([string]$expectedCommandLine)) {
+            $commandLine = [string]$expectedCommandLine
+        } else {
+            throw "Windows did not return a command line for Willard process $processId."
+        }
+    }
+    return @{
+        pid = [int]$process.ProcessId
+        path = $executablePath
+        commandLine = $commandLine
+        creationDate = $currentCreationDate
     }
 }
 
 function Test-ProcessIdentity($tracked) {
     if (-not $tracked) { return $false }
     $trackedProcessId = if ($tracked.pid) { $tracked.pid } else { $tracked }
-    $current = Get-ProcessIdentity $trackedProcessId
+    $current = Get-ProcessIdentity $trackedProcessId $tracked.creationDate $tracked.path $tracked.commandLine
     if (-not $current) { return $false }
     # Refuse to act on legacy PID-only records. A reused PID must never be
     # mistaken for a Willard process.
@@ -811,6 +1082,15 @@ function Test-ProcessIdentity($tracked) {
     return ($current.path -eq $tracked.path -and
         $current.commandLine -eq $tracked.commandLine -and
         (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
+}
+
+function Wait-ForProcessIdentityExit($process, $timeoutSeconds = 5) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    do {
+        if (-not (Test-ProcessIdentity $process)) { return $true }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return (-not (Test-ProcessIdentity $process))
 }
 
 function Save-TrackedPids($apiPid, $webPid) {
@@ -835,16 +1115,39 @@ function Test-ProcessAlive($processId) {
 
 function Stop-TrackedProcesses {
     # Stops ONLY what the launcher started (tracked PIDs + their children).
+    # Retain the PID manifest if any owned process survives the stop attempt.
     $pids = Read-TrackedPids
+    Assert-NoUntrackedDeveloperServices $pids
     $stopped = 0
+    $remaining = @()
+    $taskkillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+    if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+        throw "Windows taskkill.exe was not found in the system directory. The process list was retained for diagnosis."
+    }
     if ($pids) {
         foreach ($p in @($pids.api, $pids.web)) {
             if ($p -and (Test-ProcessIdentity $p)) {
-                # Stop the whole tree the tracked process spawned
-                & taskkill /PID $p.pid /T /F 2>&1 | Out-Null
-                $stopped++
+                $killOutput = @(& $taskkillPath /PID $p.pid /T /F 2>&1)
+                $killExitCode = $LASTEXITCODE
+                try {
+                    Wait-Process -Id $p.pid -Timeout 10 -ErrorAction SilentlyContinue
+                } catch {}
+                if (-not (Wait-ForProcessIdentityExit $p 5)) {
+                    $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
+                    $remaining += "PID $($p.pid) (taskkill exit code $killExitCode; $killText)"
+                } else {
+                    $stopped++
+                }
             }
         }
+    }
+    if ($remaining.Count -gt 0) {
+        throw "Could not stop tracked Willard process(es): $($remaining -join '; '). The process list was retained for a safe retry."
+    }
+    $remainingListeners = @(Get-DeveloperListeningPorts)
+    if ($remainingListeners.Count -gt 0) {
+        $details = ($remainingListeners | ForEach-Object { "port $($_.port) (PID $($_.pid))" }) -join ", "
+        throw "Willard services still have listening connections on $details. The process list was retained for a safe retry."
     }
     Clear-TrackedPids
     return $stopped

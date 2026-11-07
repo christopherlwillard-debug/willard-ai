@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 import { findHighSeverityImageAdvisories } from "./validate-release.mjs";
 
@@ -16,6 +20,10 @@ const config = await readFile(
 );
 const launcher = await readFile(
   new URL("../../desktop/WillardMediaCenter.ps1", import.meta.url),
+  "utf8",
+);
+const launcherInstanceLock = await readFile(
+  new URL("../../desktop/launcher-instance-lock.ps1", import.meta.url),
   "utf8",
 );
 const developerLauncher = await readFile(
@@ -58,8 +66,16 @@ const releaseStager = await readFile(
   new URL("./build-release.mjs", import.meta.url),
   "utf8",
 );
+const officialSevenZipBootstrap = await readFile(
+  new URL("./prepare-official-7zip.ps1", import.meta.url),
+  "utf8",
+);
 const workflow = await readFile(
   new URL("../../.github/workflows/windows-release.yml", import.meta.url),
+  "utf8",
+);
+const fastValidationWorkflow = await readFile(
+  new URL("../../.github/workflows/fast-validation.yml", import.meta.url),
   "utf8",
 );
 const backendAudit = await readFile(
@@ -94,6 +110,10 @@ const apiBuild = await readFile(
 );
 const updateSmoke = await readFile(
   new URL("./update-smoke.ps1", import.meta.url),
+  "utf8",
+);
+const updateJournalSmoke = await readFile(
+  new URL("./update-journal-smoke.ps1", import.meta.url),
   "utf8",
 );
 const loaderPage = await readFile(
@@ -169,7 +189,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /documentsRoot/);
   assert.match(launcher, /schema-ready\.json/);
   assert.match(launcher, /Get-SchemaFingerprint/);
-  assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.doesNotMatch(launcher, /WILLARD_SCHEMA_READY/);
   assert.match(launcher, /last-update-check\.txt/);
   assert.match(launcher, /UpdateStage/);
   assert.match(launcher, /checksum verification/);
@@ -217,6 +237,34 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   );
 });
 
+test("installer refuses payload replacement when the running application cannot stop", () => {
+  const stopStart = config.indexOf("function StopWillardServices");
+  const prepareStart = config.indexOf("function PrepareToInstall", stopStart);
+  const prepareEnd = config.indexOf("\nprocedure CurUninstallStepChanged", prepareStart);
+  const stopHelper = config.slice(stopStart, prepareStart);
+  const prepare = config.slice(prepareStart, prepareEnd);
+  assert.match(stopHelper, /if not Exec\(/);
+  assert.match(stopHelper, /ResultCode <> 0/);
+  assert.match(stopHelper, /existing installation was left unchanged/);
+  assert.match(prepare, /StopWillardServices/);
+
+  const packagedStopStart = launcher.indexOf("function Stop-Services {");
+  const packagedStopEnd = launcher.indexOf("\nfunction Save-Services", packagedStopStart);
+  const packagedStop = launcher.slice(packagedStopStart, packagedStopEnd);
+  assert.match(packagedStop, /Wait-Process/);
+  assert.match(packagedStop, /Test-ProcessIdentity/);
+  assert.match(packagedStop, /if \(\$remaining\.Count -gt 0\)/);
+  assert.ok(packagedStop.indexOf("Remove-Item $PidFile") > packagedStop.indexOf("if ($remaining.Count -gt 0)"));
+
+  const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses {");
+  const developerStopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", developerStopStart);
+  const developerStop = launcherCommon.slice(developerStopStart, developerStopEnd);
+  assert.match(developerStop, /Wait-Process/);
+  assert.match(developerStop, /Test-ProcessIdentity/);
+  assert.match(developerStop, /throw/);
+  assert.ok(developerStop.indexOf("Clear-TrackedPids") > developerStop.indexOf("if ($remaining.Count -gt 0)"));
+});
+
 test("installer deliberately leaves external services outside its payload", () => {
   const installSources = config
     .split(/\r?\n/)
@@ -233,7 +281,7 @@ test("source Setup and Repair automatically restore thumbnail media tools", () =
   assert.match(launcherCommon, /choco install ffmpeg -y --no-progress/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "Machine"\)/);
   assert.match(launcherCommon, /GetEnvironmentVariable\("Path", "User"\)/);
-  assert.match(setupLauncher, /if \(Install-WillardMediaTools\)/);
+  assert.match(setupLauncher, /if \(\$entryTracked\) \{\s+Stop-TrackedProcesses \| Out-Null/);
   assert.match(
     setupLauncher,
     /Setup stopped before scans could create repeated thumbnail failures/,
@@ -284,6 +332,14 @@ test("release helper produces a checksum-bearing update artifact", () => {
 test("Windows release workflow builds and publishes the versioned package", () => {
   assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(
+    workflow,
+    /validate_only:\s*\n\s+description:[^\n]*\n\s+required:\s*false\n\s+type:\s*boolean\n\s+default:\s*true/,
+  );
+  assert.match(
+    workflow,
+    /if:\s*\$\{\{\s*github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true\s*\}\}/,
+  );
   assert.match(workflow, /runs-on: windows-latest/);
   assert.match(
     workflow,
@@ -372,7 +428,7 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(trustMetadataStep, /SignerCertificate/);
   assert.match(trustMetadataStep, /TimeStamperCertificate/);
   assert.match(trustMetadataStep, /expected 'Willard Media Center'/);
-  assert.match(trustMetadataStep, /Release URL:/);
+  assert.match(trustMetadataStep, /Potential release URL \(only if published\):/);
   assert.match(trustMetadataStep, /Signer valid from:/);
   assert.match(trustMetadataStep, /Signer certification path: Valid/);
   assert.match(trustMetadataStep, /Timestamp signer valid from:/);
@@ -517,6 +573,40 @@ test("Windows release publication is preceded by every required quality gate", (
   assert.match(installerCompiler, /Get-FileHash \$setup -Algorithm SHA256/);
 });
 
+test("installed launcher serializes fresh starts and skips updates for an existing instance", () => {
+  assert.match(launcher, /launcher-instance-lock\.ps1/);
+  assert.match(launcherInstanceLock, /function Enter-WillardLauncherMutex/);
+  assert.match(launcherInstanceLock, /WaitOne\(\$TimeoutMilliseconds\)/);
+  assert.match(launcherInstanceLock, /AbandonedMutexException/);
+  assert.match(launcherInstanceLock, /function Exit-WillardLauncherMutex/);
+
+  const lockAcquire = launcher.indexOf("Enter-WillardLauncherMutex");
+  const existingCheck = launcher.indexOf("$existing = Read-Pids");
+  const updateCheck = launcher.lastIndexOf("  Try-Update\n");
+  assert.ok(lockAcquire >= 0 && lockAcquire < existingCheck && existingCheck < updateCheck,
+    "the startup lock must be acquired before the running-instance check and update check");
+
+  const existingFlow = launcher.slice(existingCheck, updateCheck);
+  assert.match(existingFlow, /Start-Process \$WebUrl/);
+  assert.match(existingFlow, /Exit-WillardLauncherMutex \$script:LauncherMutex/);
+  assert.doesNotMatch(existingFlow, /Try-Update/);
+
+  const releaseCalls = launcher.match(/Exit-WillardLauncherMutex \$script:LauncherMutex/g) ?? [];
+  assert.equal(releaseCalls.length, 5, "stop, existing-instance, normal-start, stop-failure, and startup-failure paths must release the lock");
+
+  assert.match(releaseStager, /desktop\/launcher-instance-lock\.ps1/);
+  assert.match(fastValidationWorkflow, /Verify installed launcher serializes concurrent startup/);
+});
+
+test("installed updater verifies signed metadata before SemVer comparison", () => {
+  const verifyIndex = launcher.indexOf('"--verify" $remoteManifestFile');
+  const compareIndex = launcher.indexOf('"--compare" $remote.version $local');
+  assert.ok(verifyIndex >= 0 && compareIndex > verifyIndex,
+    "the signed release manifest must be verified before its version is used");
+  assert.match(launcher, /version comparison/);
+  assert.doesNotMatch(launcher, /\[version\]\(\$remote\.version -replace/);
+});
+
 test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
   assert.match(launcher, /function Start-LoadingScreen/);
   assert.match(launcher, /Start-Process -FilePath \$LoadingScreen -PassThru/);
@@ -525,10 +615,10 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   assert.match(launcher, /startup-failure\.log/);
   assert.match(launcher, /System\.Windows\.MessageBox/);
   assert.match(launcher, /Recover-InterruptedUpdateSwap/);
-  assert.match(
-    launcher,
-    /\$env:PORT = "8080"\s*\n\s*Start-LoadingScreen\s*\n\s*\$apiProc/,
-  );
+  assert.match(launcher, /\$env:PORT = "8080"/);
+  assert.match(launcher, /Start-LoadingScreen/);
+  assert.match(launcher, /\$env:WILLARD_7ZIP_PATH = \$BundledSevenZip/);
+  assert.match(launcher, /\$apiProc = \$null/);
   assert.doesNotMatch(launcher, /if \(-not \(Ensure-Env\)\) \{ exit 1 \}/);
   assert.doesNotMatch(
     launcher,
@@ -552,6 +642,21 @@ test("packaged startup closes its owned loader and preserves actionable diagnost
   assert.match(
     loaderPage,
     /return;\s*\n\s*}\s*\n\s*window\.setTimeout\(waitForWillard, 800\)/,
+  );
+});
+
+test("local installer build fails closed when staging or validation fails", () => {
+  const helperStart = localBuildInstaller.indexOf("function Invoke-NodeBuildStep");
+  const helperEnd = localBuildInstaller.indexOf("$env:WILLARD_VERSION", helperStart);
+  const helper = localBuildInstaller.slice(helperStart, helperEnd);
+  assert.ok(helper.includes("& node (Join-Path $PSScriptRoot $scriptName)"));
+  assert.ok(helper.includes("$exitCode = $LASTEXITCODE"));
+  assert.ok(helper.includes("if ($exitCode -ne 0)"));
+  assert.ok(localBuildInstaller.includes('Invoke-NodeBuildStep "build-release.mjs"'));
+  assert.ok(localBuildInstaller.includes('Invoke-NodeBuildStep "validate-release.mjs"'));
+  assert.ok(
+    localBuildInstaller.indexOf('Invoke-NodeBuildStep "validate-release.mjs"') <
+      localBuildInstaller.indexOf('& (Join-Path $PSScriptRoot "compile-installer.ps1")'),
   );
 });
 
@@ -581,7 +686,7 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /UserProfile = Join-Path/);
   assert.match(installedLifecycleSmoke, /TEMP = \$script:UserTemp/);
   assert.match(installedLifecycleSmoke, /WaitForExit/);
-  assert.match(installedLifecycleSmoke, /Lifecycle: first install/);
+  assert.match(installedLifecycleSmoke, /Write-LifecycleStage "first install"/);
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PATH/);
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
@@ -623,6 +728,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
   assert.match(installedLifecycleSmoke, /startup-failure\.log/);
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
+  assert.match(installedLifecycleSmoke, /Upgrade removed or duplicated the Start Menu shortcut/);
+  assert.match(installedLifecycleSmoke, /Uninstall left the Start Menu shortcut behind/);
   assert.match(installedLifecycleSmoke, /willard_lifecycle_marker/);
   assert.match(installedLifecycleSmoke, /Dropdb/);
   assert.match(launcher, /WILLARD_SUPPRESS_STARTUP_DIALOG/);
@@ -636,9 +743,14 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /web\/willard-loading\.mp4/);
   assert.match(releaseValidator, /payload-manifest\.json/);
   assert.match(releaseValidator, /onnxruntime-node/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/7z\.exe/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/7z\.dll/);
+  assert.match(releaseValidator, /api-runtime\/vendor\/7zip\/License\.txt/);
+  assert.match(releaseValidator, /Packaged Windows release must contain verified official 7-Zip 26\.05/);
   assert.match(releaseValidator, /web\/index\.html/);
   assert.match(releaseValidator, /desktop\/database-backup\.mjs/);
   assert.match(releaseStager, /desktop\/database-backup\.mjs/);
+  assert.match(releaseStager, /desktop\/web-server-safety\.mjs/);
   assert.match(releaseValidator, /desktop\/backup-credentials\.mjs/);
   assert.match(releaseValidator, /desktop\/library-recovery\.mjs/);
   assert.match(releaseStager, /desktop\/backup-credentials\.mjs/);
@@ -647,7 +759,14 @@ test("release payload validation requires the bundled runtime and app entrypoint
   assert.match(releaseValidator, /validateReleaseManifest/);
   assert.match(releaseValidator, /sha256.*match/i);
   assert.match(releaseValidator, /sharp.*package\.json/);
-  assert.match(releaseValidator, /sharpManifest\.version !== "0\.35\.2"/);
+  assert.match(
+    releaseValidator,
+    /sourceSharpPackage = path\.join\(root, "artifacts", "api-server", "node_modules", "sharp", "package\.json"\)/,
+  );
+  assert.match(
+    releaseValidator,
+    /packagedSharpManifest\.version !== sourceSharpManifest\.version/,
+  );
 });
 
 test("release validation gates high and critical image parser advisories in both runtime graphs", () => {
@@ -796,7 +915,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /\$env:PORT = "8080"/);
   assert.match(developerLauncher, /schema-ready\.json/);
   assert.match(developerLauncher, /Get-FileHash/);
-  assert.match(developerLauncher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.doesNotMatch(developerLauncher, /WILLARD_SCHEMA_READY/);
   assert.match(developerLauncher, /dependencies-ready\.json/);
   assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);
@@ -825,7 +944,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(launcherCommon, /function Wait-ForDatabase/);
   assert.match(developerLauncher, /Wait-ForDatabase 30/);
   assert.doesNotMatch(developerLauncher, /Show-Failure \$friendly \$technical/);
-  assert.match(launcherCommon, /Get-CimInstance Win32_Process/);
+  assert.match(launcherCommon, /Get-CimInstance -ClassName Win32_Process/);
   assert.match(launcherCommon, /Test-ProcessIdentity/);
   assert.doesNotMatch(launcherCommon, /\$pid\s*=/i);
   assert.match(launcherCommon, /StatusCode -eq 200/);
@@ -853,6 +972,46 @@ test("developer updates preserve local reference assets without ignoring source 
     /Copy-PreservedDeveloperState \$candidate -IncludeLogs/,
   );
   assert.match(updater, /tracked source edits/);
+});
+
+test("Windows launchers generate cryptographic session secrets for new installs", () => {
+  assert.match(launcherCommon, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcherCommon, /\$secretBytes = New-Object byte\[\] 32/);
+  assert.match(launcherCommon, /\$rng\.GetBytes\(\$secretBytes\)/);
+  assert.doesNotMatch(launcherCommon, /\$secret = -join .*Get-Random/);
+  const helperNames = [];
+  let hereStringTerminator = null;
+  for (const line of launcherCommon.split(/\r?\n/)) {
+    if (hereStringTerminator) {
+      if (line.trim() === hereStringTerminator) hereStringTerminator = null;
+      continue;
+    }
+    const match = line.match(/^\s*function\s+([A-Za-z0-9_-]+)/);
+    if (match) helperNames.push(match[1]);
+    const opener = line.match(/=\s*@(['"])\s*$/);
+    if (opener) hereStringTerminator = opener[1] === "'" ? "'@" : '"@';
+  }
+  assert.equal(new Set(helperNames).size, helperNames.length, "PowerShell launcher helpers must not be duplicated");
+  const finalHelperStart = launcherCommon.lastIndexOf("function Wait-ForUrl(");
+  assert.ok(finalHelperStart >= 0, "the final shared helper must be present");
+  const finalHelper = launcherCommon.slice(finalHelperStart);
+  assert.match(finalHelper, /return \$false\r?\n\}\s*$/, "shared PowerShell helpers must end at the complete Wait-ForUrl function");
+  assert.doesNotMatch(finalHelper, /,\s*"SESSION_SECRET=\$secret"/, "orphaned secret-write fragments must not remain after the final helper");
+  const ensureEnvStart = launcherCommon.indexOf("function Ensure-EnvFile {");
+  const ensureEnvEnd = launcherCommon.indexOf("\nfunction New-WillardShortcut", ensureEnvStart);
+  const ensureEnv = launcherCommon.slice(ensureEnvStart, ensureEnvEnd);
+  assert.match(launcherCommon, /\[System\.Text\.UTF8Encoding\]::new\(\$false\)/);
+  assert.match(launcherCommon, /\[System\.IO\.File\]::WriteAllLines\(\$envPath, \[string\[\]\]\$updatedEnv, \$utf8NoBom\)/);
+  assert.ok(
+    ensureEnv.includes("[System.IO.File]::WriteAllLines($envPath, [string[]]$updatedEnv, $utf8NoBom)"),
+    "Ensure-EnvFile must persist the generated secret as UTF-8 without a BOM",
+  );
+  assert.doesNotMatch(ensureEnv, /Set-Content/);
+  assert.match(launcher, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(launcher, /\$sessionSecretBytes = New-Object byte\[\] 32/);
+  assert.match(launcher, /\$sessionSecretRng\.GetBytes\(\$sessionSecretBytes\)/);
+  assert.match(launcher, /SESSION_SECRET=\$sessionSecret/);
+  assert.doesNotMatch(launcher, /SESSION_SECRET=.*Get-Random/);
 });
 
 test("Windows backup credentials use native user-scoped DPAPI with legacy compatibility", () => {
@@ -1094,6 +1253,23 @@ test("installer coordinates upgrades and repair reports failures", async () => {
   assert.match(repair, /\$problems\.Count -gt 0\) \{ exit 1 \}/);
 });
 
+test("developer updater journal replacement is atomic without backup artifacts", () => {
+  assert.match(launcherCommon, /\$replacementBackup = "\$journalPath\.\$writeId\.bak"/);
+  assert.match(
+    launcherCommon,
+    /\[System\.IO\.File\]::Replace\(\$temporary, \$journalPath, \$replacementBackup\)/,
+  );
+  assert.match(
+    launcherCommon,
+    /Remove-Item -LiteralPath \$replacementBackup -Force -ErrorAction SilentlyContinue/,
+  );
+  assert.doesNotMatch(
+    launcherCommon,
+    /\[System\.IO\.File\]::Replace\(\$temporary, \$journalPath, \$null\)/,
+  );
+  assert.doesNotMatch(launcherCommon, /\$journalBackup/);
+});
+
 test("developer fallback stages a complete source archive", async () => {
   const updater = await readFile(
     new URL("../launcher/update.ps1", import.meta.url),
@@ -1169,8 +1345,55 @@ test("Windows update swaps are journaled and recoverable across copied, locked, 
   assert.match(launcher, /Remove-UpdateJournal/);
 });
 
+test("updater smoke can create its temporary branch from a detached source checkout", () => {
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "willard-detached-update-smoke-"));
+  const source = join(temporaryRoot, "source");
+  const remote = join(temporaryRoot, "remote");
+  const runGit = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+  try {
+    mkdirSync(source, { recursive: true });
+    runGit(["init", "--quiet", source]);
+    runGit(["-C", source, "config", "user.email", "smoke@example.invalid"]);
+    runGit(["-C", source, "config", "user.name", "Detached checkout regression"]);
+    writeFileSync(join(source, "README.md"), "source\n");
+    runGit(["-C", source, "add", "README.md"]);
+    runGit(["-C", source, "commit", "--quiet", "-m", "initial"]);
+    const sourceHead = runGit(["-C", source, "rev-parse", "HEAD"]).trim();
+    const sourceBranch = runGit(["-C", source, "branch", "--show-current"]).trim();
+    runGit(["-C", source, "checkout", "--quiet", "--detach", sourceHead]);
+    runGit(["-C", source, "update-ref", "-d", `refs/heads/${sourceBranch}`]);
+    runGit(["clone", "--quiet", source, remote]);
+
+    assert.equal(
+      runGit(["-C", remote, "branch", "--show-current"]).trim(),
+      "",
+      "the cloned source should reproduce a detached CI checkout",
+    );
+
+    const branch = "smoke-update-regression";
+    runGit(["-C", remote, "checkout", "--quiet", "-b", branch]);
+    assert.equal(runGit(["-C", remote, "branch", "--show-current"]).trim(), branch);
+    assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Fast Validation updater smoke checks out complete Git history for its local remote", () => {
+  const jobStart = fastValidationWorkflow.indexOf("windows-archive-and-updater-smoke:");
+  assert.ok(jobStart >= 0, "Fast Validation must contain the Windows updater smoke job");
+  const checkoutStart = fastValidationWorkflow.indexOf("uses: actions/checkout@", jobStart);
+  const checkoutEnd = fastValidationWorkflow.indexOf("\n\n", checkoutStart);
+  assert.ok(checkoutStart > jobStart && checkoutEnd > checkoutStart);
+  assert.match(fastValidationWorkflow.slice(checkoutStart, checkoutEnd), /fetch-depth:\s*0/);
+});
+
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
   assert.match(updateSmoke, /git clone/);
+  assert.match(updateSmoke, /\$remoteBranch = "smoke-update-\$\(\[guid\]::NewGuid\(\)\.ToString\('N'\)\)"/);
+  assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
+  assert.doesNotMatch(updateSmoke, /git -C \$Remote branch --show-current/);
   assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
@@ -1202,3 +1425,411 @@ test("developer setup creates identity shortcuts for the batch launcher", () => 
   assert.match(launcherCommon, /IconLocation/);
   assert.match(releaseStager, /icons\/willard\.ico/);
 });
+
+test("Windows release stages only hash-verified official 7-Zip binaries", () => {
+  assert.match(releaseStager, /prepare-official-7zip\.ps1/);
+  assert.match(releaseStager, /vendor", "7zip"/);
+  assert.match(launcher, /api-runtime\\vendor\\7zip\\7z\.exe/);
+  assert.match(launcher, /WILLARD_7ZIP_PATH/);
+  assert.match(officialSevenZipBootstrap, /Get-FileHash .*SHA256/);
+  assert.match(officialSevenZipBootstrap, /9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7/);
+  assert.match(officialSevenZipBootstrap, /f27a8f103c84785026edcba1f67faf1357225df9d19ddb0b7760d55947141bc7/);
+  assert.match(officialSevenZipBootstrap, /fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0/);
+});
+
+
+test("manual Windows installer validation can skip release publication", () => {
+  assert.match(workflow, /validate_only:[\s\S]*?type: boolean[\s\S]*?default: true/);
+  assert.match(
+    workflow,
+    /if: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true \}\}/,
+  );
+});
+
+
+test("packaged updater enforces its signed minimum Windows requirement before downloading", () => {
+  const signatureCheck = launcher.indexOf('"--verify"');
+  const compatibilityCheck = launcher.indexOf('"Windows compatibility check"');
+  const releaseDownload = launcher.indexOf('"release download"');
+  assert.ok(signatureCheck >= 0, "The packaged updater must verify the release signature.");
+  assert.ok(compatibilityCheck > signatureCheck, "Windows compatibility must be checked after signature verification.");
+  assert.ok(releaseDownload > compatibilityCheck, "Windows compatibility must be checked before downloading the artifact.");
+  assert.match(launcher, /Get-CimInstance -ClassName Win32_OperatingSystem/);
+  assert.match(launcher, /--compare-windows/);
+  assert.match(launcher, /minimumWindowsVersion/);
+});
+
+test("uninstaller stops the application after confirmation and aborts if shutdown fails", () => {
+  const uninstallStart = config.indexOf("procedure CurUninstallStepChanged");
+  const uninstall = config.slice(uninstallStart);
+  const stopHelperStart = config.indexOf("function StopWillardServices");
+  const stopHelperEnd = config.indexOf("\nfunction PrepareToInstall", stopHelperStart);
+  const stopHelper = config.slice(stopHelperStart, stopHelperEnd);
+  assert.match(uninstall, /CurUninstallStep = usUninstall/);
+  assert.match(uninstall, /StopWillardServices\(True\)/);
+  assert.match(uninstall, /SuppressibleMsgBox/);
+  assert.match(uninstall, /Abort/);
+  assert.match(stopHelper, /could not start its shutdown helper/);
+});
+
+test("installer upgrade and uninstall refuse to proceed when the packaged shutdown helper is missing", () => {
+  const stopHelperStart = config.indexOf("function StopWillardServices");
+  const stopHelperEnd = config.indexOf("\nfunction PrepareToInstall", stopHelperStart);
+  const stopHelper = config.slice(stopHelperStart, stopHelperEnd);
+  assert.match(stopHelper, /function StopWillardServices\(RequireLauncher: Boolean\)/);
+  assert.match(stopHelper, /if not FileExists\(Launcher\) then/);
+  assert.match(stopHelper, /if RequireLauncher then/);
+  assert.match(stopHelper, /shutdown helper is missing/);
+  assert.match(stopHelper, /reinstall or repair/i);
+
+  const prepareStart = config.indexOf("function PrepareToInstall");
+  const prepareEnd = config.indexOf("\nprocedure CurUninstallStepChanged", prepareStart);
+  const prepare = config.slice(prepareStart, prepareEnd);
+  assert.ok(prepare.includes("FileExists(ExistingRuntime)"),
+    "Fresh installs may omit the old shutdown helper, but an existing packaged runtime must require it.");
+  assert.ok(prepare.includes("StopWillardServices(FileExists(ExistingRuntime))"));
+
+  const uninstall = config.slice(config.indexOf("procedure CurUninstallStepChanged"));
+  assert.match(uninstall, /StopWillardServices\(True\)/);
+});
+
+test("packaged stop failures are non-modal and do not retry unsafe shutdown", () => {
+  const catchStart = launcher.indexOf("  $startupError = $_");
+  assert.ok(catchStart >= 0, "The packaged launcher failure handler must be present.");
+  const catchBlock = launcher.slice(catchStart);
+  const stopBranch = catchBlock.slice(0, catchBlock.indexOf("  $servicesStopped = $true"));
+  assert.match(stopBranch, /if \(\$args -contains "-Stop"\)/);
+  assert.match(stopBranch, /Report-StopFailure/);
+  assert.match(stopBranch, /Exit-WillardLauncherMutex/);
+  assert.match(stopBranch, /exit 1/);
+  assert.match(launcher, /if \(\$args -contains "-Stop"\) \{[\s\S]*Report-StopFailure \(\"Willard could not obtain its shutdown lock:/);
+  assert.doesNotMatch(stopBranch, /Stop-Services|Report-StartupFailure|MessageBox/);
+
+  const mutexCatchStart = launcher.indexOf("try {\n  $script:LauncherMutex = Enter-WillardLauncherMutex");
+  const mutexCatchEnd = launcher.indexOf('\nWrite-Host ""', mutexCatchStart);
+  const mutexCatch = launcher.slice(mutexCatchStart, mutexCatchEnd);
+  assert.match(mutexCatch, /if \(\$args -contains "-Stop"\)/);
+  assert.match(mutexCatch, /Report-StopFailure/);
+  assert.match(mutexCatch, /Report-StartupFailure/);
+
+  const reportStart = launcher.indexOf("function Report-StopFailure");
+  const reportEnd = launcher.indexOf("function Read-Version", reportStart + 1);
+  const report = launcher.slice(reportStart, reportEnd);
+  assert.match(report, /could not stop safely/i);
+  assert.match(report, /services state file/);
+  assert.doesNotMatch(report, /MessageBox|Read-Host/);
+});
+
+test("packaged process-state and WMI failures fail closed instead of hiding running services", () => {
+  const pidStart = launcher.indexOf("function Read-Pids {");
+  const pidEnd = launcher.indexOf("\nfunction Get-ProcessIdentity", pidStart);
+  const pidReader = launcher.slice(pidStart, pidEnd);
+  assert.match(pidReader, /ConvertFrom-Json -ErrorAction Stop/);
+  assert.match(pidReader, /services state file is unreadable or invalid/);
+  assert.match(pidReader, /rename or delete this file/);
+  assert.match(pidReader, /executable identity information/);
+  assert.doesNotMatch(pidReader, /catch \{ return \$null \}/);
+
+  const identityStart = launcher.indexOf("function Get-ProcessIdentity");
+  const identityEnd = launcher.indexOf("\nfunction Test-ProcessIdentity", identityStart);
+  const identityReader = launcher.slice(identityStart, identityEnd);
+  assert.match(identityReader, /could not verify the identity of Willard process/);
+  assert.match(identityReader, /did not return a process creation time/);
+  assert.match(identityReader, /did not return an executable path/);
+  assert.match(identityReader, /did not return a command line/);
+  assert.doesNotMatch(identityReader, /catch \{ return \$null \}/);
+  assert.match(identityReader, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
+  assert.match(identityReader, /Windows did not return a process creation time/);
+  assert.match(identityReader, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedPath\)\s*\)\s*\{\s*\$executablePath\s*=\s*\[string\]\$expectedPath/);
+  assert.match(identityReader, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCommandLine\)\s*\)\s*\{\s*\$commandLine\s*=\s*\[string\]\$expectedCommandLine/);
+  const creationDateCheck = identityReader.indexOf("$expectedCreationDate");
+  const executableCheck = identityReader.indexOf("$executablePath");
+  assert.ok(creationDateCheck >= 0 && executableCheck > creationDateCheck,
+    "A recorded creation-time mismatch must prove PID reuse before path/command-line checks can fail closed.");
+
+  const processIdentityStart = launcher.indexOf("function Test-ProcessIdentity");
+  const processIdentityEnd = launcher.indexOf("\nfunction Test-CommandLineContainsExactPath", processIdentityStart);
+  const processIdentity = launcher.slice(processIdentityStart, processIdentityEnd);
+  assert.match(processIdentity, /Get-ProcessIdentity \$tracked\.pid \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
+});
+
+test("packaged launcher detects orphaned API and web processes before startup or shutdown", () => {
+  const discoveryStart = launcher.indexOf("function Test-CommandLineContainsExactPath");
+  const discoveryEnd = launcher.indexOf("\nfunction Is-Alive", discoveryStart);
+  assert.ok(discoveryStart >= 0 && discoveryEnd > discoveryStart, "Packaged orphan discovery helpers must be present.");
+  const discovery = launcher.slice(discoveryStart, discoveryEnd);
+  assert.match(discovery, /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/);
+  assert.match(discovery, /\$Node/);
+  assert.match(discovery, /\$Api/);
+  assert.match(discovery, /\$WebServer/);
+  assert.match(discovery, /OrdinalIgnoreCase/);
+  assert.match(discovery, /not safely recorded/);
+  assert.doesNotMatch(discovery, /taskkill|Stop-Process|\.Kill\(|Remove-Item/);
+
+  const stopStart = launcher.indexOf("function Stop-Services {");
+  const stopEnd = launcher.indexOf("\nfunction Stop-StartedProcess", stopStart);
+  const stop = launcher.slice(stopStart, stopEnd);
+  assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") >= 0);
+  assert.ok(stop.indexOf("Assert-NoUntrackedPackagedServices $pids") < stop.indexOf("taskkill"));
+  assert.match(stop, /Join-Path \(\[Environment\]::SystemDirectory\) "taskkill\.exe"/);
+  assert.match(stop, /\$killOutput = @\(& \$taskkillPath \/PID \$process\.pid \/T \/F 2>&1\)/);
+  assert.match(stop, /\$killExitCode = \$LASTEXITCODE/);
+  assert.match(stop, /taskkill exit code/);
+
+  const startupRead = launcher.indexOf("$existing = Read-Pids");
+  const startupAssert = launcher.indexOf("Assert-NoUntrackedPackagedServices $existing", startupRead);
+  const startupDecision = launcher.indexOf("if ($existing -and (Is-Alive", startupRead);
+  assert.ok(startupRead >= 0 && startupAssert > startupRead && startupDecision > startupAssert,
+    "The launcher must inspect untracked services before deciding that no services are running.");
+
+  assert.match(updateJournalSmoke, /missing-journal/i);
+  assert.match(updateJournalSmoke, /partial-journal/i);
+  assert.match(updateJournalSmoke, /reused PID/i);
+  assert.match(updateJournalSmoke, /synthetic packaged WMI failure/i);
+});
+
+test("installed lifecycle smoke uninstalls while both packaged services are running", () => {
+  const start = installedLifecycleSmoke.indexOf('Invoke-InstalledLauncher "start" "uninstall-running-start"');
+  const uninstall = installedLifecycleSmoke.indexOf('Invoke-AsLifecycleUser $uninstaller');
+  assert.ok(start >= 0 && uninstall > start, "The lifecycle must start Willard before uninstalling.");
+  assert.match(installedLifecycleSmoke, /Wait-PortClosed 8080/);
+  assert.match(installedLifecycleSmoke, /Wait-PortClosed 5000/);
+  assert.match(installedLifecycleSmoke, /services\.json/);
+});
+
+test("installed lifecycle reports the failing phase and restores the parent environment on every exit", () => {
+  assert.match(installedLifecycleSmoke, /function Write-LifecycleStage\(\$stage\)/);
+  assert.match(installedLifecycleSmoke, /\$script:LifecycleStage = \[string\]\$stage/);
+  assert.match(installedLifecycleSmoke, /Lifecycle failure during '\$script:LifecycleStage': \$\(\$_.Exception.Message\)/);
+  assert.match(installedLifecycleSmoke, /Write-LifecycleStage "simulate swapped-phase recovery"/);
+
+  const finallyStart = installedLifecycleSmoke.lastIndexOf("} finally {");
+  const cleanup = installedLifecycleSmoke.slice(finallyStart);
+  const failureBranch = cleanup.indexOf("  } else {");
+  const environmentRestore = cleanup.indexOf("foreach ($entry in $script:ParentEnvironment.GetEnumerator())");
+  assert.ok(finallyStart >= 0 && failureBranch >= 0 && environmentRestore > failureBranch,
+    "The lifecycle must restore its parent process environment after either cleanup branch.");
+  assert.match(cleanup, /\n  }\s*foreach \(\$entry in \$script:ParentEnvironment\.GetEnumerator\(\)\)/);
+});
+
+test("launcher retains the previous release if service shutdown cannot be verified", () => {
+  const startupCatchStart = launcher.indexOf("\n} catch {\n  $startupError = $_");
+  assert.ok(startupCatchStart >= 0, "The startup failure handler must preserve the original error.");
+  const startupCatch = launcher.slice(startupCatchStart);
+  const stop = startupCatch.indexOf("Stop-Services");
+  const gate = startupCatch.indexOf("if ($servicesStopped)");
+  const restore = startupCatch.indexOf("Restore-UpdateBackup");
+  assert.ok(stop >= 0 && gate > stop && restore > gate, "Rollback must be gated after the service-stop attempt.");
+  assert.match(startupCatch, /Stop-StartedProcess \$webProc/);
+  assert.match(startupCatch, /Stop-StartedProcess \$apiProc/);
+  assert.match(startupCatch, /prior release backup was retained/);
+
+  const serviceStopStart = launcher.indexOf("function Stop-Services");
+  const serviceStopEnd = launcher.indexOf("\nfunction Stop-StartedProcess", serviceStopStart);
+  const serviceStop = launcher.slice(serviceStopStart, serviceStopEnd);
+  assert.match(serviceStop, /Wait-ForProcessIdentityExit \$process 5/);
+  const packagedWaitStart = launcher.indexOf("function Wait-ForProcessIdentityExit");
+  const packagedWaitEnd = launcher.indexOf("\nfunction Stop-Services", packagedWaitStart);
+  const packagedWait = launcher.slice(packagedWaitStart, packagedWaitEnd);
+  assert.match(packagedWait, /Start-Sleep -Milliseconds 200/);
+  assert.match(packagedWait, /return \(-not \(Test-ProcessIdentity \$process\)\)/);
+  const directStopStart = launcher.indexOf("function Stop-StartedProcess");
+  const directStopEnd = launcher.indexOf("\nfunction Save-Services", directStopStart);
+  const directStop = launcher.slice(directStopStart, directStopEnd);
+  assert.match(directStop, /\.Kill\(\)/);
+  assert.match(directStop, /WaitForExit\(10000\)/);
+});
+
+test("developer launcher fails closed on corrupt process state and WMI query failures", () => {
+  const readerStart = launcherCommon.indexOf("function Read-TrackedPids");
+  const readerEnd = launcherCommon.indexOf("\nfunction Get-ProcessIdentity", readerStart);
+  const reader = launcherCommon.slice(readerStart, readerEnd);
+  assert.match(reader, /ConvertFrom-Json -ErrorAction Stop/);
+  assert.match(reader, /developer services state file is unreadable or invalid/);
+  assert.match(reader, /rename or delete this file/);
+  assert.doesNotMatch(reader, /catch \{ return \$null \}/);
+
+  const identityStart = launcherCommon.indexOf("function Get-ProcessIdentity");
+  const identityEnd = launcherCommon.indexOf("\nfunction Test-ProcessIdentity", identityStart);
+  const identity = launcherCommon.slice(identityStart, identityEnd);
+  assert.match(identity, /could not verify the identity of Willard process/);
+  assert.match(identity, /function Get-ProcessIdentity\(\$processId, \$expectedCreationDate, \$expectedPath, \$expectedCommandLine\)/);
+  assert.match(identity, /did not return a process creation time/);
+  assert.match(identity, /did not return an executable path/);
+  assert.match(identity, /did not return a command line/);
+  assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedPath\)\s*\)\s*\{\s*\$executablePath\s*=\s*\[string\]\$expectedPath/);
+  assert.match(identity, /if\s*\(\s*-not\s+\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCreationDate\)\s*-and[\s\S]*?\[string\]::IsNullOrWhiteSpace\(\[string\]\$expectedCommandLine\)\s*\)\s*\{\s*\$commandLine\s*=\s*\[string\]\$expectedCommandLine/);
+  assert.doesNotMatch(identity, /catch \{ return \$null \}/);
+
+  const processIdentityStart = launcherCommon.indexOf("function Test-ProcessIdentity");
+  const processIdentityEnd = launcherCommon.indexOf("\nfunction Save-TrackedPids", processIdentityStart);
+  const processIdentity = launcherCommon.slice(processIdentityStart, processIdentityEnd);
+  assert.match(processIdentity, /Get-ProcessIdentity \$trackedProcessId \$tracked\.creationDate \$tracked\.path \$tracked\.commandLine/);
+
+  const developerWaitStart = launcherCommon.indexOf("function Wait-ForProcessIdentityExit");
+  const developerWaitEnd = launcherCommon.indexOf("\nfunction Save-TrackedPids", developerWaitStart);
+  const developerWait = launcherCommon.slice(developerWaitStart, developerWaitEnd);
+  assert.match(developerWait, /Start-Sleep -Milliseconds 200/);
+  assert.match(developerWait, /return \(-not \(Test-ProcessIdentity \$process\)\)/);
+  const developerStopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
+  const developerStopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", developerStopStart);
+  const developerStop = launcherCommon.slice(developerStopStart, developerStopEnd);
+  assert.match(developerStop, /Join-Path \(\[Environment\]::SystemDirectory\) "taskkill\.exe"/);
+  assert.match(developerStop, /\$killOutput = @\(& \$taskkillPath \/PID \$p\.pid \/T \/F 2>&1\)/);
+  assert.match(developerStop, /\$killExitCode = \$LASTEXITCODE/);
+  assert.match(developerStop, /taskkill exit code/);
+  assert.match(developerStop, /Wait-ForProcessIdentityExit \$p 5/);
+
+  const stopHandleStart = launcherCommon.indexOf("function Stop-LauncherStartedProcessHandle");
+  const stopHandleEnd = launcherCommon.indexOf("\nfunction Read-TrackedPids", stopHandleStart);
+  const stopHandle = launcherCommon.slice(stopHandleStart, stopHandleEnd);
+  assert.match(stopHandle, /\.Kill\(\)/);
+  assert.match(stopHandle, /WaitForExit\(10000\)/);
+
+  const startServicesStart = developerLauncher.indexOf("function Start-WillardServices");
+  const startServicesEnd = developerLauncher.indexOf("\n$services =", startServicesStart);
+  const startServices = developerLauncher.slice(startServicesStart, startServicesEnd);
+  assert.match(startServices, /Stop-LauncherStartedProcessHandle \$webProc/);
+  assert.match(startServices, /Stop-LauncherStartedProcessHandle \$apiProc/);
+});
+
+
+test("developer launch, setup, repair, and update fail closed on unjournaled service listeners", () => {
+  const portStart = launcherCommon.indexOf("function Get-DeveloperListeningPorts");
+  const portEnd = launcherCommon.indexOf("\nfunction Get-PortOwnerPid", portStart);
+  assert.ok(portStart >= 0 && portEnd > portStart, "Strict developer listener inspection must be shared.");
+  const portInspection = launcherCommon.slice(portStart, portEnd);
+  assert.match(portInspection, /Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction Stop/);
+  assert.match(portInspection, /CategoryInfo\.Category -eq \[System\.Management\.Automation\.ErrorCategory\]::ObjectNotFound/);
+  assert.match(portInspection, /could not verify whether Willard service port/);
+  assert.match(portInspection, /missing or incomplete/);
+
+  const stopStart = launcherCommon.indexOf("function Stop-TrackedProcesses");
+  const stopEnd = launcherCommon.indexOf("\nfunction Get-LogTail", stopStart);
+  const stop = launcherCommon.slice(stopStart, stopEnd);
+  assert.ok(stop.indexOf("Assert-NoUntrackedDeveloperServices $pids") >= 0);
+  assert.ok(stop.indexOf("Get-DeveloperListeningPorts") > stop.indexOf("Wait-Process"));
+  assert.ok(stop.indexOf("Get-DeveloperListeningPorts") < stop.indexOf("Clear-TrackedPids"));
+
+  const startGuard = developerLauncher.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const recovery = developerLauncher.indexOf("Recover-InterruptedDeveloperUpdate");
+  assert.ok(startGuard >= 0 && startGuard < recovery, "Start must guard listeners before update recovery.");
+
+  const repairGuard = repairLauncher.indexOf("Assert-NoUntrackedDeveloperServices $tracked");
+  const repairMutation = repairLauncher.indexOf("Install-WillardMediaTools");
+  assert.ok(repairGuard >= 0 && repairGuard < repairMutation, "Repair must guard listeners before repair mutations.");
+
+  const setupGuard = setupLauncher.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const setupMutation = setupLauncher.indexOf("Install-WillardMediaTools");
+  assert.ok(setupGuard >= 0 && setupGuard < setupMutation, "Setup must guard listeners before setup mutations.");
+  assert.match(setupLauncher, /if \\(\$entryTracked\\) \\{\\s+Stop-TrackedProcesses \\| Out-Null/);
+
+  const repairTrackedStart = repairLauncher.indexOf("if ($tracked) {", repairGuard);
+  const repairTrackedEnd = repairLauncher.indexOf("\n}\n\n# -- Helper programs", repairTrackedStart);
+  assert.ok(repairTrackedStart >= 0 && repairTrackedEnd > repairTrackedStart);
+  const repairTrackedBlock = repairLauncher.slice(repairTrackedStart, repairTrackedEnd);
+  assert.match(repairTrackedBlock, /Stop-TrackedProcesses/);
+  assert.doesNotMatch(repairTrackedBlock, /Clear-TrackedPids/);
+
+  const updateGuard = updater.indexOf("Assert-NoUntrackedDeveloperServices $entryTracked");
+  const updatePreparation = updater.indexOf("$candidate = New-CandidateDirectory $gitCommand");
+  assert.ok(updateGuard >= 0 && updateGuard < updatePreparation, "Update must guard listeners before preparing a candidate.");
+});
+
+
+const auditInstallerLifecycleWorkflow = await readFile(
+  new URL("../../.github/workflows/windows-installer-lifecycle-validation.yml", import.meta.url),
+  "utf8",
+);
+
+test("audit installer lifecycle validation is isolated from release publishing", () => {
+  assert.ok(auditInstallerLifecycleWorkflow.includes("pull_request:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("- opened"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("- reopened"));
+  const pullRequestTrigger = auditInstallerLifecycleWorkflow.slice(
+    auditInstallerLifecycleWorkflow.indexOf("  pull_request:"),
+    auditInstallerLifecycleWorkflow.indexOf("  push:"),
+  );
+  assert.doesNotMatch(pullRequestTrigger, /^\s+- synchronize\s*$/m,
+    "subsequent commits use the branch push trigger's per-commit path filter");
+  assert.ok(auditInstallerLifecycleWorkflow.includes("scripts/windows/installer-config.test.mjs"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("  push:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("      - audit/full-repository-review-2026-11"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("github.event.pull_request.head.ref"));
+
+  assert.ok(auditInstallerLifecycleWorkflow.includes("audit/full-repository-review-2026-11"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("workflow_dispatch:"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("contents: read"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("runs-on: windows-latest"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("build-installer.ps1"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("installer-lifecycle-smoke.ps1"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("PGPASSWORD"));
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /secrets\./);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /WILLARD_RELEASE_SIGNING_PRIVATE_KEY|WILLARD_WINDOWS_SIGNING_CERTIFICATE/);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /softprops\/action-gh-release|gh release create|upload-artifact/);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /contents:\s*write/);
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/installer-lifecycle-smoke.ps1"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"desktop/WillardMediaCenter.ps1"'));
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "scripts\/windows\/\*\*"$/m);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "artifacts\/api-server\/\*\*"$/m);
+  assert.doesNotMatch(auditInstallerLifecycleWorkflow, /^\s+- "artifacts\/willard-ai\/\*\*"$/m);
+});
+  
+test("audit installer lifecycle validation is not cancelled by subsequent PR updates", () => {
+  const concurrencyStart = auditInstallerLifecycleWorkflow.indexOf("concurrency:");
+  const jobsStart = auditInstallerLifecycleWorkflow.indexOf("jobs:", concurrencyStart);
+  const concurrency = auditInstallerLifecycleWorkflow.slice(concurrencyStart, jobsStart);
+  assert.ok(concurrency.includes("cancel-in-progress: false"));
+  assert.ok(!concurrency.includes("cancel-in-progress: true"));
+});
+
+test("installer lifecycle validation only runs for installer and packaging inputs", () => {
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"installer/**"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"scripts/windows/build-installer.ps1"'));
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"artifacts/api-server/package.json"'));
+  assert.equal((auditInstallerLifecycleWorkflow.match(/"desktop\/postgres-snapshot-process\.mjs"/g) ?? []).length, 2);
+  assert.equal((auditInstallerLifecycleWorkflow.match(/"desktop\/web-server-safety\.mjs"/g) ?? []).length, 2);
+  assert.ok(auditInstallerLifecycleWorkflow.includes('"pnpm-lock.yaml"'));
+
+});
+
+
+test("installed lifecycle runner disables interactive pause prompts", () => {
+  const runnerStart = installedLifecycleSmoke.indexOf("$runnerContents = @'");
+  const runnerEnd = installedLifecycleSmoke.indexOf("\n'@", runnerStart);
+  assert.ok(runnerStart >= 0 && runnerEnd > runnerStart, "the generated lifecycle runner should exist");
+  const runner = installedLifecycleSmoke.slice(runnerStart, runnerEnd);
+  assert.match(runner, /\$env:WILLARD_NO_PAUSE = "1"/);
+});
+
+test("installed lifecycle launcher invocation fails fast when the packaged launcher is missing", () => {
+  const helperStart = installedLifecycleSmoke.indexOf("function Invoke-InstalledLauncher");
+  const helperEnd = installedLifecycleSmoke.indexOf("\nfunction Stop-InstalledWillard", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, "the installed launcher helper should exist");
+  const helper = installedLifecycleSmoke.slice(helperStart, helperEnd);
+  const pathCheck = helper.indexOf("Test-Path -LiteralPath $launcher -PathType Leaf");
+  const invocation = helper.indexOf("Invoke-AsLifecycleUser");
+  assert.ok(pathCheck >= 0 && invocation > pathCheck, "the parent must check the packaged launcher before spawning PowerShell");
+  assert.match(helper, /Installed launcher is missing before/);
+
+  const runnerStart = installedLifecycleSmoke.indexOf("$runnerContents = @'");
+  const runnerEnd = installedLifecycleSmoke.indexOf("\n'@", runnerStart);
+  assert.ok(runnerStart >= 0 && runnerEnd > runnerStart, "the generated lifecycle runner should exist");
+  const runner = installedLifecycleSmoke.slice(runnerStart, runnerEnd);
+  const runnerPathCheck = runner.indexOf("Test-Path -LiteralPath $Launcher -PathType Leaf");
+  const runnerLaunch = runner.indexOf("& $Launcher");
+  assert.match(runner, /\$ErrorActionPreference = "Stop"/);
+  assert.ok(runnerPathCheck >= 0 && runnerLaunch > runnerPathCheck, "the child runner must reject a missing launcher before invocation");
+  assert.match(runner, /Installed launcher is missing:/);
+});
+
+test("packaged interrupted-update lifecycle fixtures use the accepted sibling path contract", () => {
+  assert.ok(launcher.includes(".candidate-[0-9a-fA-F-]{36}"));
+  assert.ok(launcher.includes(".previous-.+-\\d{14}"));
+  assert.match(installedLifecycleSmoke, /\$installParent = Split-Path -Parent \$InstallRoot/);
+  assert.match(installedLifecycleSmoke, /\$installLeaf = Split-Path -Leaf \$InstallRoot/);
+  assert.match(installedLifecycleSmoke, /"\.candidate-" \+ \[guid\]::NewGuid\(\)\.ToString\(\)/);
+  assert.match(installedLifecycleSmoke, /"\.previous-lifecycle-" \+ \(Get-Date -Format "yyyyMMddHHmmss"\)/);
+  assert.match(installedLifecycleSmoke, /"\.previous-prepared-" \+ \(Get-Date -Format "yyyyMMddHHmmss"\)/);
+  assert.doesNotMatch(installedLifecycleSmoke, /\$InstallRoot \+ "\.(?:lifecycle|prepared)-(?:backup|candidate)"/);
+});;

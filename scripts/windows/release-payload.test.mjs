@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import os from "node:os";
 import path from "node:path";
@@ -50,15 +50,42 @@ test("payload validation detects generated drift and missing files", async () =>
   }
 });
 
-test("release scripts reject stale build directories but allow isolated test output", async () => {
+test("Windows release stages official 7-Zip at the API resolver path", async () => {
+  const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
+  const resolverSource = await readFile(
+    new URL("../../artifacts/api-server/src/lib/sevenzip.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(buildSource, /path\.join\(deployOutput, "vendor", "7zip"\)/);
+  assert.match(buildSource, /await assertPackagedSevenZip\(apiOutput\)/);
+  assert.match(buildSource, /path\.join\(apiOutput, "vendor", "7zip"\)/);
+  assert.match(buildSource, /"7z\.exe", "7z\.dll", "License\.txt"/);
+  assert.match(resolverSource, /"\.\.\/vendor\/7zip", packagedName/);
+});
+
+test("release scripts only accept canonical staging and reject symlinked build paths", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-release-root-"));
   try {
-    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(path.join(root, "build", "windows"), root));
+    const canonical = path.join(root, "build", "windows");
+    await mkdir(canonical, { recursive: true });
+    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(canonical, root));
     assert.throws(
       () => assertCanonicalReleaseDirectory(path.join(root, "build", "windows-clean"), root),
       /canonical staging directory/,
     );
-    assert.doesNotThrow(() => assertCanonicalReleaseDirectory(path.join(root, "tmp", "release"), root));
+    assert.throws(
+      () => assertCanonicalReleaseDirectory(path.join(root, "tmp", "release"), root),
+      /canonical staging directory/,
+    );
+
+    const realBuild = path.join(root, "real-build");
+    await mkdir(realBuild);
+    await rm(path.join(root, "build"), { recursive: true, force: true });
+    await symlink(realBuild, path.join(root, "build"), "dir");
+    assert.throws(
+      () => assertCanonicalReleaseDirectory(canonical, root),
+      /real directory, not a symlink or file/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -73,5 +100,30 @@ test("payload manifests do not include their own generated file", async () => {
     assert.equal((await createPayloadManifest(root, "1.2.3")).files.length, manifest.files.length);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+test("Windows release stages every local helper imported by its desktop runtime entry points", async () => {
+  const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
+  const entrypoints = [
+    "desktop/desktop-web-server.mjs",
+    "desktop/database-backup.mjs",
+  ];
+  const stagedDesktopFiles = new Set(
+    [...buildSource.matchAll(/copy\(path\.join\(root, "desktop\/([^"]+)"\)/g)].map((match) => match[1]),
+  );
+
+  for (const entrypoint of entrypoints) {
+    const source = await readFile(new URL("../../" + entrypoint, import.meta.url), "utf8");
+    const importedHelpers = [
+      ...source.matchAll(/from\s+["']\.\/([^"']+\.mjs)["']/g),
+    ].map((match) => match[1]);
+
+    assert.ok(importedHelpers.length > 0, entrypoint + " must declare its local runtime helpers");
+    for (const helper of importedHelpers) {
+      assert.ok(
+        stagedDesktopFiles.has(helper),
+        "Windows installer does not stage desktop/" + helper + ", imported by " + entrypoint,
+      );
+    }
   }
 });

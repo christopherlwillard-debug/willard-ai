@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import type { ListArchivesParams } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 import { useListArchives, getListArchivesQueryKey, usePeekArchive, useGetArchive, getGetArchiveQueryKey } from "@workspace/api-client-react";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -155,8 +156,7 @@ function ArchivePeekDialog({ archiveId, onClose }: { archiveId: number; onClose:
                       <span className="flex items-center justify-center">
                         {entry.isDirectory ? <Folder className="w-3.5 h-3.5 text-muted-foreground" /> : fileIcon(entry.fileType)}
                       </span>
-                      <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>
-                      <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
+                      <span className="truncate text-foreground/80" title={entry.path}>{entry.path}</span>                      <span className="text-muted-foreground">{entry.fileType ?? "—"}</span>
                       <span className="text-right text-muted-foreground">{entry.isDirectory ? "—" : formatBytes(entry.sizeBytes ?? 0)}</span>
                     </div>
                   ))}
@@ -182,20 +182,20 @@ export default function Archives() {
   const [maxSizeMb, setMaxSizeMb] = useState<string>("");
   const [selectedArchiveId, setSelectedArchiveId] = useState<number | null>(null);
 
-  const params = {
+  const params: ListArchivesParams = {
     limit,
     offset: page * limit,
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     ...(categoryFilter !== "all" ? { category: categoryFilter } : {}),
     ...(dateFrom ? { dateFrom } : {}),
     ...(dateTo ? { dateTo } : {}),
-    ...(minSizeMb ? { minSize: Math.round(parseFloat(minSizeMb) * 1024 * 1024) } : {}),
-    ...(maxSizeMb ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
+    ...(minSizeMb !== "" ? { minSize: Math.round(parseFloat(minSizeMb) * 1024 * 1024) } : {}),
+    ...(maxSizeMb !== "" ? { maxSize: Math.round(parseFloat(maxSizeMb) * 1024 * 1024) } : {}),
   };
 
-  const { data, isLoading } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
+  const { data, isLoading, isError, refetch } = useListArchives(params, { query: { queryKey: getListArchivesQueryKey(params) } });
 
-  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || !!minSizeMb || !!maxSizeMb;
+  const hasFilters = statusFilter !== "all" || categoryFilter !== "all" || !!dateFrom || !!dateTo || minSizeMb !== "" || maxSizeMb !== "";
 
   const clearFilters = () => {
     setStatusFilter("all");
@@ -211,14 +211,14 @@ export default function Archives() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold font-mono tracking-tight">ARCHIVE_INDEX</h1>
-        <p className="text-muted-foreground mt-1 font-mono text-sm">{data?.total ?? 0} archives indexed</p>
+        <p className="text-muted-foreground mt-1 font-mono text-sm">{data ? `${data.total.toLocaleString()} archives indexed` : isError ? "Archive index unavailable" : "Loading archive index…"}</p>
       </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 p-4 bg-secondary/30 rounded-lg border items-center">
         <Filter className="w-4 h-4 text-muted-foreground flex-shrink-0" />
         <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[150px] h-9 font-mono text-xs">
+          <SelectTrigger aria-label="Archive status" className="w-[150px] h-9 font-mono text-xs">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -229,13 +229,14 @@ export default function Archives() {
           </SelectContent>
         </Select>
         <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-[150px] h-9 font-mono text-xs">
+          <SelectTrigger aria-label="Archive category" className="w-[150px] h-9 font-mono text-xs">
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Categories</SelectItem>
             <SelectItem value="Photo Archive">Photo Archive</SelectItem>
             <SelectItem value="Video Archive">Video Archive</SelectItem>
+            <SelectItem value="Audio Archive">Audio Archive</SelectItem>
             <SelectItem value="Document Backup">Document Backup</SelectItem>
             <SelectItem value="Software">Software</SelectItem>
             <SelectItem value="Nested Archives">Nested Archives</SelectItem>
@@ -247,24 +248,31 @@ export default function Archives() {
         </Select>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">From</span>
-          <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
+          <Input aria-label="Modified on or after" type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">To</span>
-          <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
+          <Input aria-label="Modified on or before" type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(0); }} className="h-9 w-[140px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">Min MB</span>
-          <Input type="number" min="0" placeholder="0" value={minSizeMb} onChange={(e) => { setMinSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+          <Input aria-label="Minimum archive size in megabytes" type="number" min="0" placeholder="0" value={minSizeMb} onChange={(e) => { setMinSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">Max MB</span>
-          <Input type="number" min="0" placeholder="∞" value={maxSizeMb} onChange={(e) => { setMaxSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
+          <Input aria-label="Maximum archive size in megabytes" type="number" min="0" placeholder="∞" value={maxSizeMb} onChange={(e) => { setMaxSizeMb(e.target.value); setPage(0); }} className="h-9 w-[90px] font-mono text-xs" />
         </div>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="font-mono text-xs h-9">Clear</Button>
         )}
       </div>
+
+      {isError && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+          <span>{data ? "Archive refresh failed. Showing the last loaded results." : "Unable to load archives. Check the library connection and filters, then retry."}</span>
+          <Button variant="outline" size="sm" onClick={() => refetch()} aria-label="Retry loading archives">Retry</Button>
+        </div>
+      )}
 
       <div className="rounded-md border">
         <Table>
@@ -282,15 +290,21 @@ export default function Archives() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isLoading ? (
+            {isLoading && !data ? (
               <TableRow><TableCell colSpan={9}><Skeleton className="h-24 w-full" /></TableCell></TableRow>
-            ) : data?.archives.length === 0 ? (
+            ) : !data ? (
+              <TableRow>
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-8 font-mono text-sm">
+                  Archive data is unavailable
+                </TableCell>
+              </TableRow>
+            ) : data.archives.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-muted-foreground py-8 font-mono text-sm">
                   {hasFilters ? "No archives match the current filters" : "No archives indexed yet — run a scan first"}
                 </TableCell>
               </TableRow>
-            ) : data?.archives.map((archive) => (
+            ) : data.archives.map((archive) => (
               <TableRow key={archive.id}>
                 <TableCell><Archive className="h-4 w-4 text-muted-foreground" /></TableCell>
                 <TableCell className="font-medium">

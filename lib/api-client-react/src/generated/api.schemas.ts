@@ -1040,6 +1040,11 @@ export interface AuthStatus {
 
 export interface AuthSetupInput {
   password: string;
+  /**
+     * Required for first-run setup from non-loopback clients when WILLARD_SETUP_TOKEN is configured.
+     * @maxLength 256
+     */
+  setupToken?: string;
 }
 
 export interface AuthSetupResult {
@@ -1147,6 +1152,7 @@ export const OrganizationJobStatus = {
   preflight: 'preflight',
   verified: 'verified',
   executing: 'executing',
+  rolling_back: 'rolling_back',
   completed: 'completed',
   failed: 'failed',
   rolled_back: 'rolled_back',
@@ -1232,8 +1238,18 @@ path?: string;
 export type ListArchivesParams = {
 category?: string;
 status?: string;
+/**
+ * @minimum 0
+ * @maximum 9007199254740991
+ */
 minSize?: number;
+/**
+ * @minimum 0
+ * @maximum 9007199254740991
+ */
 maxSize?: number;
+dateFrom?: string;
+dateTo?: string;
 limit?: number;
 offset?: number;
 };

@@ -1185,7 +1185,7 @@ function ScannerSettingsSection() {
               {settings.ignoredFolders.map(f => (
                 <Badge key={f} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
                   {f}
-                  <button onClick={() => removeFolder(f)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                  <button onClick={() => removeFolder(f)} aria-label={"Remove ignored folder " + f} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
                     <XIcon className="w-3 h-3" />
                   </button>
                 </Badge>
@@ -1220,7 +1220,7 @@ function ScannerSettingsSection() {
               {settings.ignoredExtensions.map(e => (
                 <Badge key={e} variant="secondary" className="font-mono text-xs gap-1.5 pl-2 pr-1 py-1">
                   .{e}
-                  <button onClick={() => removeExt(e)} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
+                  <button onClick={() => removeExt(e)} aria-label={"Remove ignored extension " + e} className="rounded hover:bg-destructive/20 hover:text-destructive transition-colors">
                     <XIcon className="w-3 h-3" />
                   </button>
                 </Badge>
@@ -1343,11 +1343,17 @@ function ThumbnailManagerSection() {
   const rebuildMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(apiUrl("/library/thumbnails/rebuild"), { method: "POST" });
-      if (!res.ok) throw new Error("Failed to start rebuild");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { message?: unknown; error?: unknown } | null;
+        const message = typeof body?.message === "string"
+          ? body.message
+          : typeof body?.error === "string" ? body.error : "Failed to start rebuild";
+        throw new Error(message);
+      }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Thumbnail rebuild started", description: "Existing thumbnails cleared and regeneration begun." });
+      toast({ title: "Thumbnail rebuild accepted", description: "Cache clearing starts only after the worker claims the library and confirms the NAS is writable." });
       void fetchStats();
     },
     onError: (err: any) => toast({ title: "Failed to rebuild cache", description: err?.message, variant: "destructive" }),
@@ -1356,11 +1362,20 @@ function ThumbnailManagerSection() {
   const clearMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(apiUrl("/library/thumbnails/cache"), { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to clear cache");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { message?: unknown; error?: unknown } | null;
+        const message = typeof body?.message === "string"
+          ? body.message
+          : typeof body?.error === "string" ? body.error : "Failed to start cache clearing";
+        throw new Error(message);
+      }
       return res.json();
     },
-    onSuccess: (data: any) => {
-      toast({ title: `Cleared ${data.deleted ?? 0} thumbnails` });
+    onSuccess: () => {
+      toast({
+        title: "Thumbnail cache clear accepted",
+        description: "The library worker will clear cached thumbnails after it claims the library and verifies the NAS.",
+      });
       void fetchStats();
     },
     onError: (err: any) => toast({ title: "Failed to clear cache", description: err?.message, variant: "destructive" }),
@@ -1521,7 +1536,7 @@ function ThumbnailManagerSection() {
             variant="ghost"
             size="sm"
             className="font-mono text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto"
-            disabled={clearMutation.isPending}
+            disabled={clearMutation.isPending || rebuildMutation.isPending || startMutation.isPending}
             onClick={() => clearMutation.mutate()}
           >
             {clearMutation.isPending

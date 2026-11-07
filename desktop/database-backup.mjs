@@ -19,14 +19,17 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { constants as fsConstants, existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   mkdir,
+  mkdtemp,
+  lstat,
+  open as openFile,
+  realpath,
   readdir,
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -35,12 +38,15 @@ import { fileURLToPath } from "node:url";
 import {
   DURABLE_JSON_COLUMNS,
   DURABLE_PATH_COLUMNS,
+  ensureLibraryDirectory,
   ensureLibraryIdentity,
   normalizeLibraryRoot,
+  readLibraryFileNoFollow,
   readLibraryIdentity,
   validateRecoveryAttachment,
 } from "./library-recovery.mjs";
 import { createRecoveryExport, decryptRecoveryExport } from "./backup-credentials.mjs";
+import { releaseExportedSnapshot, waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
@@ -95,6 +101,38 @@ function stableJson(value) {
 
 function sha256Bytes(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Read only a regular file, refusing final-component symlinks and replacement
+ * races. Backup manifests and encrypted dumps are untrusted input paths.
+ */
+export async function readRegularFileNoFollow(filePath, encoding, maxBytes = Number.MAX_SAFE_INTEGER) {
+  const initial = await lstat(filePath);
+  if (initial.isSymbolicLink() || !initial.isFile()) {
+    fail("Backup input must be a regular, non-symlink file.");
+  }
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const handle = await openFile(filePath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const opened = await handle.stat();
+    const current = await lstat(filePath);
+    if (
+      !opened.isFile() ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+      (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+    ) {
+      fail("Backup input changed or became a symlink while opening.");
+    }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || opened.size > maxBytes) {
+      fail("Backup input exceeds its permitted size limit.");
+    }
+    return await handle.readFile(encoding ? { encoding } : undefined);
+  } finally {
+    await handle.close();
+  }
 }
 
 function requireOption(options, name) {
@@ -241,7 +279,14 @@ function databaseConnection(options, restore = false) {
   return connectionEnvironment(connectionString);
 }
 
-function runTool(command, args, environment, label) {
+export function runTool(command, args, environment, label, {
+  maxOutputBytes = 64 * 1024 * 1024,
+  maxStderrBytes = 16 * 1024,
+} = {}) {
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 ||
+      !Number.isSafeInteger(maxStderrBytes) || maxStderrBytes < 1) {
+    return Promise.reject(new Error("Process output limits must be positive safe integers."));
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: ROOT,
@@ -250,23 +295,37 @@ function runTool(command, args, environment, label) {
       windowsHide: true,
     });
     let stdout = "";
-    let stderr = "";
+    let stdoutBytes = 0;
+    let stderr = Buffer.alloc(0);
+    let settled = false;
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+    };
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      reject(new Error(`${label} could not start: ${error.message}`));
-    });
-    child.on("close", (code, signal) => {
-      if (code !== 0) {
-        const detail = stderr.trim() || stdout.trim() || (signal ? `signal ${signal}` : `exit code ${code}`);
-        reject(new Error(`${label} failed: ${detail}`));
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxOutputBytes) {
+        try { child.kill("SIGKILL"); } catch { /* process may already have exited */ }
+        settle(reject, new Error(`${label} exceeded its ${maxOutputBytes}-byte output limit.`));
         return;
       }
-      resolve(stdout);
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = Buffer.concat([stderr, chunk]).subarray(-maxStderrBytes);
+    });
+    child.on("error", (error) => {
+      settle(reject, new Error(`${label} could not start: ${error.message}`));
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      if (code !== 0) {
+        const detail = stderr.toString("utf8").trim() || stdout.trim() || (signal ? `signal ${signal}` : `exit code ${code}`);
+        settle(reject, new Error(`${label} failed: ${detail}`));
+        return;
+      }
+      settle(resolve, stdout);
     });
   });
 }
@@ -305,55 +364,11 @@ async function openDatabaseSnapshot(environment) {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  child.stdin.write("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();\n");
-  const snapshot = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error("Timed out while exporting the PostgreSQL backup snapshot."));
-    }, 10_000);
-    const inspect = () => {
-      const exported = stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find((line) => /^[0-9a-f]+-[0-9a-f]+-\d+$/i.test(line));
-      if (exported) {
-        clearTimeout(timeout);
-        resolve(exported);
-      }
-    };
-    child.stdout.on("data", inspect);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(new Error(`PostgreSQL snapshot holder could not start: ${error.message}`));
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`PostgreSQL snapshot holder exited early: ${stderr.trim() || `exit code ${code}`}`));
-    });
-  });
+  const snapshot = await waitForExportedSnapshot(child);
   return {
     snapshot,
     async release() {
-      if (child.exitCode !== null) return;
-      child.stdin.end("ROLLBACK;\n\\q\n");
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 3000);
-        child.once("close", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
+      await releaseExportedSnapshot(child);
     },
   };
 }
@@ -519,7 +534,10 @@ function validateManifest(manifest) {
       !manifest.library.root ||
       !/^[a-f0-9]{64}$/i.test(manifest.library.markerSha256) ||
       !Number.isSafeInteger(manifest.library.catalogMediaCount) ||
+      (manifest.library.catalogInventoryScope !== undefined &&
+        !["all", "active"].includes(manifest.library.catalogInventoryScope)) ||
       !Array.isArray(manifest.library.mediaSamples) ||
+      manifest.library.mediaSamples.length > 32 ||
       manifest.library.mediaSamples.some(
         (sample) =>
           !sample ||
@@ -571,7 +589,7 @@ function validateManifest(manifest) {
   ) {
     fail("Backup manifest has no restore verification facts.");
   }
-  if (!manifest.verification.rowCounts || typeof manifest.verification.rowCounts !== "object") {
+  if (!manifest.verification.rowCounts || typeof manifest.verification.rowCounts !== "object" || Array.isArray(manifest.verification.rowCounts) || Object.keys(manifest.verification.rowCounts).length > 5000) {
     fail("Backup manifest has no table row counts.");
   }
   for (const [key, count] of Object.entries(manifest.verification.rowCounts)) {
@@ -583,16 +601,38 @@ function validateManifest(manifest) {
 }
 
 async function readBackup(backupDir) {
-  const manifestPath = path.join(backupDir, MANIFEST_FILE);
-  const manifest = validateManifest(JSON.parse(await readFile(manifestPath, "utf8").then((value) => value.replace(/^\uFEFF/, ""))));
-  const dumpPath = path.join(backupDir, manifest.dump.file);
-  if (path.dirname(dumpPath) !== path.resolve(backupDir)) fail("Backup dump path escapes its backup directory.");
-  const encrypted = await readFile(dumpPath);
+  const directoryStat = await lstat(backupDir);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    fail("Backup directory must be a regular, non-symlink directory.");
+  }
+  const directory = await realpath(backupDir);
+  const manifestPath = path.join(directory, MANIFEST_FILE);
+  const manifestText = await readRegularFileNoFollow(manifestPath, "utf8", 4 * 1024 * 1024);
+  const manifest = validateManifest(JSON.parse(manifestText.replace(/^\uFEFF/, "")));
+  const dumpPath = path.join(directory, manifest.dump.file);
+  if (path.dirname(dumpPath) !== directory) fail("Backup dump path escapes its backup directory.");
+  const encrypted = await readRegularFileNoFollow(dumpPath);
   if (encrypted.length !== manifest.integrity.encryptedBytes) fail("Encrypted backup size does not match its manifest.");
   if (sha256Bytes(encrypted) !== manifest.integrity.encryptedSha256) {
     fail("Encrypted backup failed its SHA-256 integrity check.");
   }
   return { manifest, encrypted, dumpPath };
+}
+
+async function verifyBackupDirectory(backupDir, secret) {
+  const backup = await readBackup(backupDir);
+  const dump = decryptDump(backup.encrypted, backup.manifest, secret);
+  try {
+    if (
+      dump.length !== backup.manifest.dump.plaintextBytes ||
+      sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256
+    ) {
+      fail("Backup failed authenticated plaintext verification.");
+    }
+    return backup;
+  } finally {
+    dump.fill(0);
+  }
 }
 
 function encryptDump(dump, manifest, secret) {
@@ -604,11 +644,15 @@ function encryptDump(dump, manifest, secret) {
     p: SCRYPT.p,
     maxmem: 64 * 1024 * 1024,
   });
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  cipher.setAAD(manifestAad(manifest));
-  const encrypted = Buffer.concat([cipher.update(dump), cipher.final()]);
-  manifest.integrity.authTag = cipher.getAuthTag().toString("base64");
-  return encrypted;
+  try {
+    const cipher = createCipheriv(ALGORITHM, key, iv);
+    cipher.setAAD(manifestAad(manifest));
+    const encrypted = Buffer.concat([cipher.update(dump), cipher.final()]);
+    manifest.integrity.authTag = cipher.getAuthTag().toString("base64");
+    return encrypted;
+  } finally {
+    key.fill(0);
+  }
 }
 
 function decryptDump(encrypted, manifest, secret) {
@@ -628,14 +672,55 @@ function decryptDump(encrypted, manifest, secret) {
     return Buffer.concat([decipher.update(encrypted), decipher.final()]);
   } catch {
     fail("The passphrase or authenticated backup metadata is incorrect.");
+  } finally {
+    key.fill(0);
   }
+}
+
+async function overwriteFileWithZeroes(handle, size, chunkSize = 1024 * 1024) {
+  if (!Number.isSafeInteger(size) || size < 0 || !Number.isSafeInteger(chunkSize) || chunkSize < 1) {
+    throw new Error("Temporary backup cleanup received an invalid file size.");
+  }
+  const zeroes = Buffer.alloc(Math.min(chunkSize, size));
+  let position = 0;
+  while (position < size) {
+    const length = Math.min(zeroes.length, size - position);
+    let written = 0;
+    while (written < length) {
+      const result = await handle.write(zeroes, written, length - written, position + written);
+      if (result.bytesWritten <= 0) throw new Error("Temporary backup cleanup made no write progress.");
+      written += result.bytesWritten;
+    }
+    position += length;
+  }
+  await handle.sync();
 }
 
 async function secureRemove(filePath) {
   try {
-    const info = await stat(filePath);
-    if (info.isFile() && info.size > 0) {
-      await writeFile(filePath, Buffer.alloc(info.size), { mode: 0o600 });
+    const info = await lstat(filePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error("Temporary plaintext backup must be a regular, non-symlink file.");
+    }
+    if (info.size > 0) {
+      const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+      const handle = await openFile(filePath, fsConstants.O_RDWR | noFollow);
+      try {
+        const opened = await handle.stat();
+        const current = await lstat(filePath);
+        if (
+          !opened.isFile() ||
+          current.isSymbolicLink() ||
+          !current.isFile() ||
+          (opened.dev !== 0 && current.dev !== 0 && opened.dev !== current.dev) ||
+          (opened.ino !== 0 && current.ino !== 0 && opened.ino !== current.ino)
+        ) {
+          throw new Error("Temporary plaintext backup changed or became a symlink during cleanup.");
+        }
+        await overwriteFileWithZeroes(handle, opened.size);
+      } finally {
+        await handle.close();
+      }
     }
   } catch {
     // Cleanup is best effort; the containing temporary directory is removed too.
@@ -683,7 +768,7 @@ async function sourceLibrary(environment, snapshot = null) {
   let output;
   try {
     output = await runSnapshotSql(
-      "SELECT nas_path FROM app_settings WHERE nas_path IS NOT NULL AND btrim(nas_path) <> '' LIMIT 1",
+      "SELECT nas_path FROM app_settings ORDER BY (password_hash IS NOT NULL) DESC, id ASC LIMIT 1",
       environment,
       snapshot,
       "Library identity inspection",
@@ -696,7 +781,7 @@ async function sourceLibrary(environment, snapshot = null) {
   if (!root) return null;
   const identity = await ensureLibraryIdentity(root);
   const countOutput = await runSnapshotSql(
-    "SELECT count(*)::text || E'\\t' || count(*) FILTER (WHERE content_hash ~ '^[a-fA-F0-9]{64}$')::text FROM media_files",
+    `SELECT count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED')::text || E'\\t' || count(*) FILTER (WHERE last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]')::text FROM media_files WHERE nas_path = ${sqlLiteral(root)}`,
     environment,
     snapshot,
     "Library catalog identity inspection",
@@ -710,13 +795,13 @@ async function sourceLibrary(environment, snapshot = null) {
     !Number.isSafeInteger(hashedMediaCount) ||
     hashedMediaCount !== catalogMediaCount
   ) {
-    fail("Library-bound backup requires canonical SHA-256 hashes for every media row. Complete a full scan before backup.");
+    fail("Library-bound backup requires canonical SHA-256 hashes for every active media row. Complete a full scan before backup.");
   }
   if (!Number.isSafeInteger(catalogMediaCount) || catalogMediaCount < 0) {
     fail("The library catalog returned an invalid media count.");
   }
   const sampleOutput = await runSnapshotSql(
-    "SELECT relative_path, lower(content_hash) FROM media_files WHERE content_hash ~ '^[a-fA-F0-9]{64}$' ORDER BY relative_path LIMIT 32",
+    `SELECT relative_path, lower(content_hash) FROM media_files WHERE nas_path = ${sqlLiteral(root)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED' AND length(content_hash) = 64 AND content_hash !~ '[^a-fA-F0-9]' ORDER BY relative_path LIMIT 32`,
     environment,
     snapshot,
     "Library media identity sample",
@@ -732,8 +817,16 @@ async function sourceLibrary(environment, snapshot = null) {
     root: identity.root,
     markerSha256: identity.markerSha256,
     catalogMediaCount,
+    catalogInventoryScope: "active",
     mediaSamples,
   };
+}
+
+export async function createPrivateBackupWorkDirectory(tempRoot = os.tmpdir()) {
+  // mkdtemp creates the directory with owner-only permissions on POSIX.
+  // The raw pg_dump is plaintext until encryption finishes, so its parent
+  // must not inherit a permissive shared-temp default mode.
+  return mkdtemp(path.join(tempRoot, "willard-db-backup-"));
 }
 
 async function createBackup(options) {
@@ -742,14 +835,18 @@ async function createBackup(options) {
   const keep = integerOption(options, "keep", DEFAULT_KEEP, 1);
   const environment = databaseConnection(options);
   const secret = await passphrase(true);
-  const actualWorkRoot = path.join(os.tmpdir(), `willard-db-backup-${randomBytes(8).toString("hex")}`);
-  await mkdir(actualWorkRoot, { recursive: true });
+  const actualWorkRoot = await createPrivateBackupWorkDirectory();
   const rawDump = path.join(actualWorkRoot, "database.dump");
   const staging = path.join(outputRoot, `.staging-${randomBytes(8).toString("hex")}`);
   let finalDir;
+  let finalBackupVerified = false;
   let snapshotHolder;
   try {
     await mkdir(outputRoot, { recursive: true });
+    const outputRootStat = await lstat(outputRoot);
+    if (outputRootStat.isSymbolicLink() || !outputRootStat.isDirectory()) {
+      fail("Backup output directory must be a regular, non-symlink directory.");
+    }
     snapshotHolder = await openDatabaseSnapshot(environment);
     const { snapshot } = snapshotHolder;
     const createdAt = new Date().toISOString();
@@ -791,7 +888,12 @@ async function createBackup(options) {
         authTag: "",
       },
     };
-    const encrypted = encryptDump(dump, manifest, secret);
+    let encrypted;
+    try {
+      encrypted = encryptDump(dump, manifest, secret);
+    } finally {
+      dump.fill(0);
+    }
     manifest.integrity.encryptedBytes = encrypted.length;
     manifest.integrity.encryptedSha256 = sha256Bytes(encrypted);
     validateManifest(manifest);
@@ -808,13 +910,18 @@ async function createBackup(options) {
     // decrypted from its final NAS location.
     const completed = await readBackup(finalDir);
     const verifiedDump = decryptDump(completed.encrypted, completed.manifest, secret);
-    if (
-      verifiedDump.length !== completed.manifest.dump.plaintextBytes ||
-      sha256Bytes(verifiedDump) !== completed.manifest.dump.plaintextSha256
-    ) {
-      fail("Completed backup failed post-write verification.");
+    try {
+      if (
+        verifiedDump.length !== completed.manifest.dump.plaintextBytes ||
+        sha256Bytes(verifiedDump) !== completed.manifest.dump.plaintextSha256
+      ) {
+        fail("Completed backup failed post-write verification.");
+      }
+    } finally {
+      verifiedDump.fill(0);
     }
-    const removed = await pruneBackups(outputRoot, retentionDays, keep);
+    finalBackupVerified = true;
+    const removed = await pruneBackups(outputRoot, retentionDays, keep, secret);
     console.log(`Encrypted database backup created: ${finalDir}`);
     if (removed.length) console.log(`Retention removed ${removed.length} older backup(s).`);
     return finalDir;
@@ -823,20 +930,34 @@ async function createBackup(options) {
     await secureRemove(rawDump);
     await rm(actualWorkRoot, { recursive: true, force: true }).catch(() => {});
     await rm(staging, { recursive: true, force: true }).catch(() => {});
+    if (finalDir && !finalBackupVerified) {
+      await rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
 async function listBackupDirectories(outputRoot) {
-  const entries = await readdir(outputRoot, { withFileTypes: true }).catch((error) => {
+  let rootStat;
+  try {
+    rootStat = await lstat(outputRoot);
+  } catch (error) {
     if (error?.code === "ENOENT") return [];
     throw error;
-  });
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    fail("Backup output directory must be a regular, non-symlink directory.");
+  }
+  const outputRootReal = await realpath(outputRoot);
+  const entries = await readdir(outputRootReal, { withFileTypes: true });
   const backups = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith("backup-")) continue;
     try {
-      const manifest = validateManifest(JSON.parse(await readFile(path.join(outputRoot, entry.name, MANIFEST_FILE), "utf8")));
-      backups.push({ path: path.join(outputRoot, entry.name), manifest });
+      const candidatePath = path.join(outputRootReal, entry.name);
+      const candidateStat = await lstat(candidatePath);
+      if (candidateStat.isSymbolicLink() || !candidateStat.isDirectory()) continue;
+      const manifest = validateManifest(JSON.parse(await readRegularFileNoFollow(path.join(candidatePath, MANIFEST_FILE), "utf8")));
+      backups.push({ path: candidatePath, manifest });
     } catch {
       // Retention never deletes an unrecognized directory.
     }
@@ -844,8 +965,20 @@ async function listBackupDirectories(outputRoot) {
   return backups.sort((left, right) => Date.parse(right.manifest.createdAt) - Date.parse(left.manifest.createdAt));
 }
 
-async function pruneBackups(outputRoot, retentionDays, keep) {
-  const backups = await listBackupDirectories(outputRoot);
+async function pruneBackups(outputRoot, retentionDays, keep, secret) {
+  // Retention is destructive: never trust a structurally valid but
+  // unauthenticated manifest to decide which backup should be deleted.
+  const candidates = await listBackupDirectories(outputRoot);
+  const backups = [];
+  for (const candidate of candidates) {
+    try {
+      const verified = await verifyBackupDirectory(candidate.path, secret);
+      backups.push({ path: candidate.path, manifest: verified.manifest });
+    } catch {
+      // Corrupt or tampered backups are preserved for manual inspection.
+    }
+  }
+  backups.sort((left, right) => Date.parse(right.manifest.createdAt) - Date.parse(left.manifest.createdAt));
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const removed = [];
   for (const [index, backup] of backups.entries()) {
@@ -858,7 +991,23 @@ async function pruneBackups(outputRoot, retentionDays, keep) {
 
 async function cleanTarget(environment) {
   const output = await runSql(
-    "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')",
+    `SELECT
+      (SELECT count(*) FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_namespace
+        WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+          AND nspname NOT LIKE 'pg_toast%')
+      + (SELECT count(*) FROM pg_catalog.pg_extension WHERE extname <> 'plpgsql')`,
     environment,
     "Restore target safety check",
   );
@@ -869,14 +1018,13 @@ async function cleanTarget(environment) {
   }
 }
 
-function recoveryJournalPath(targetRoot, manifest) {
-  return path.join(
-    normalizeLibraryRoot(targetRoot),
-    "WillardAI",
-    "config",
-    "recovery-attempts",
-    `${manifest.integrity.encryptedSha256}.json`,
+async function recoveryJournalPath(targetRoot, manifest, create = false) {
+  const directory = await ensureLibraryDirectory(
+    targetRoot,
+    path.join("WillardAI", "config", "recovery-attempts"),
+    create,
   );
+  return path.join(directory, `${manifest.integrity.encryptedSha256}.json`);
 }
 
 function recoveryJournalKey(manifest, secret) {
@@ -915,7 +1063,7 @@ async function createRecoveryTargetIdentity(environment, manifest) {
 }
 
 async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity, state, detail = null) {
-  const filePath = recoveryJournalPath(targetRoot, manifest);
+  const filePath = await recoveryJournalPath(targetRoot, manifest, true);
   const authenticated = {
     format: 1,
     backupSha256: manifest.integrity.encryptedSha256,
@@ -926,7 +1074,7 @@ async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity
     detail,
   };
   const journal = { ...authenticated, hmacSha256: signRecoveryJournal(authenticated, manifest, secret) };
-  await mkdir(path.dirname(filePath), { recursive: true });
+  // ensureLibraryDirectory rejects NAS symlinks before journal publication.
   const temporary = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.partial`;
   await writeFile(temporary, `${JSON.stringify(journal, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, filePath);
@@ -936,7 +1084,7 @@ async function writeRecoveryJournal(targetRoot, manifest, secret, targetIdentity
 async function validateRecoveryJournal(targetRoot, manifest, secret, environment) {
   let journal;
   try {
-    journal = JSON.parse(await readFile(recoveryJournalPath(targetRoot, manifest), "utf8"));
+    journal = JSON.parse(await readRegularFileNoFollow(await recoveryJournalPath(targetRoot, manifest), "utf8", 1024 * 1024));
   } catch {
     fail("Recovery resume refused: no matching recovery journal exists on the attached NAS.");
   }
@@ -972,26 +1120,35 @@ async function validateRecoveryJournal(targetRoot, manifest, secret, environment
 
 async function verifyLibraryMediaSamples(manifestLibrary, targetLibrary) {
   for (const sample of manifestLibrary.mediaSamples) {
-    const candidate = path.resolve(targetLibrary.root, sample.relativePath);
-    const relative = path.relative(targetLibrary.root, candidate);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      fail(`Recovery refused: invalid sampled media path ${sample.relativePath}.`);
-    }
     let bytes;
     try {
-      bytes = await readFile(candidate);
-    } catch {
-      fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
+      bytes = await readLibraryFileNoFollow(targetLibrary.root, sample.relativePath);
+    } catch (error) {
+      // Legacy manifests sampled all media rows, including recycled/deleted
+      // catalog entries. Defer only genuinely missing paths until the restored
+      // database can identify their row state. Symlinks and unsafe paths always
+      // fail closed, regardless of the manifest generation.
+      if (error?.code === "ENOENT" && manifestLibrary.catalogInventoryScope !== "active") continue;
+      if (error?.code === "ENOENT") {
+        fail(`Recovery refused: sampled canonical media is missing: ${sample.relativePath}.`);
+      }
+      fail(`Recovery refused: sampled canonical media path is unsafe or unreadable: ${sample.relativePath}.`);
     }
     if (sha256Bytes(bytes) !== sample.sha256) {
+      if (manifestLibrary.catalogInventoryScope !== "active") continue;
       fail(`Recovery refused: sampled canonical media hash does not match: ${sample.relativePath}.`);
     }
   }
 }
 
-async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary) {
+async function verifyRestoredLibraryInventory(environment, manifestLibrary, targetLibrary, catalogRoot = targetLibrary.root) {
+  const activeScope = manifestLibrary.catalogInventoryScope === "active";
+  const canonicalCatalogRoot = normalizeLibraryRoot(catalogRoot);
+  const inventoryFilter = activeScope
+    ? ` WHERE nas_path = ${sqlLiteral(canonicalCatalogRoot)} AND last_scan_action IS DISTINCT FROM 'DELETED' AND last_scan_action IS DISTINCT FROM 'RECYCLED'`
+    : ` WHERE nas_path = ${sqlLiteral(canonicalCatalogRoot)}`;
   const output = await runSql(
-    "SELECT relative_path, lower(content_hash) FROM media_files ORDER BY relative_path",
+    `SELECT relative_path, lower(content_hash), last_scan_action FROM media_files${inventoryFilter} ORDER BY relative_path`,
     environment,
     "Restored canonical media inventory",
   );
@@ -1004,7 +1161,8 @@ async function verifyRestoredLibraryInventory(environment, manifestLibrary, targ
       `${manifestLibrary.catalogMediaCount}.`,
     );
   }
-  for (const [relativePath, expectedHash] of rows) {
+  for (const [relativePath, expectedHash, lastScanAction] of rows) {
+    if (!activeScope && (lastScanAction === "DELETED" || lastScanAction === "RECYCLED")) continue;
     if (
       !relativePath ||
       path.isAbsolute(relativePath) ||
@@ -1013,16 +1171,11 @@ async function verifyRestoredLibraryInventory(environment, manifestLibrary, targ
     ) {
       fail("Recovery refused: the restored catalog contains an invalid canonical media identity.");
     }
-    const candidate = path.resolve(targetLibrary.root, relativePath);
-    const relative = path.relative(targetLibrary.root, candidate);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      fail(`Recovery refused: invalid catalog media path ${relativePath}.`);
-    }
     let bytes;
     try {
-      bytes = await readFile(candidate);
+      bytes = await readLibraryFileNoFollow(targetLibrary.root, relativePath);
     } catch {
-      fail(`Recovery refused: cataloged original is missing from the attached NAS: ${relativePath}.`);
+      fail(`Recovery refused: cataloged original is missing or unsafe on the attached NAS: ${relativePath}.`);
     }
     if (sha256Bytes(bytes) !== expectedHash) {
       fail(`Recovery refused: cataloged original hash does not match the attached NAS: ${relativePath}.`);
@@ -1072,9 +1225,15 @@ DECLARE
 BEGIN
   CASE jsonb_typeof(input)
     WHEN 'object' THEN
-      RETURN (SELECT jsonb_object_agg(key, pg_temp.willard_remap_jsonb(value)) FROM jsonb_each(input));
+      RETURN COALESCE(
+        (SELECT jsonb_object_agg(key, pg_temp.willard_remap_jsonb(value)) FROM jsonb_each(input)),
+        '{}'::jsonb
+      );
     WHEN 'array' THEN
-      RETURN (SELECT jsonb_agg(pg_temp.willard_remap_jsonb(value)) FROM jsonb_array_elements(input));
+      RETURN COALESCE(
+        (SELECT jsonb_agg(pg_temp.willard_remap_jsonb(value)) FROM jsonb_array_elements(input)),
+        '[]'::jsonb
+      );
     WHEN 'string' THEN
       text_value := input #>> '{}';
       IF ${
@@ -1146,10 +1305,6 @@ async function restoreBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
   const secret = await passphrase(false, options);
-  const dump = decryptDump(encrypted, manifest, secret);
-  if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
-    fail("Decrypted database dump failed its SHA-256 integrity check.");
-  }
   const environment = databaseConnection(options, true);
   const targetRoot = options["library-root"];
   let targetLibrary = null;
@@ -1174,6 +1329,7 @@ async function restoreBackup(options) {
   await assertTargetCompatibility(environment, manifest);
   let targetEmpty = true;
   let recoveryTargetIdentity = null;
+  let recoveryJournalState = null;
   try {
     await cleanTarget(environment);
   } catch (error) {
@@ -1181,11 +1337,18 @@ async function restoreBackup(options) {
     if (!options["resume-recovery"] || !manifest.library || !targetLibrary) throw error;
     const journal = await validateRecoveryJournal(targetLibrary.root, manifest, secret, environment);
     recoveryTargetIdentity = journal.targetIdentity;
+    recoveryJournalState = journal.state;
     const currentFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, currentFacts);
   }
-  const temporaryDump = path.join(os.tmpdir(), `willard-db-restore-${randomBytes(8).toString("hex")}.dump`);
+  const restoreWorkRoot = await createPrivateBackupWorkDirectory();
+  const temporaryDump = path.join(restoreWorkRoot, "database.dump");
+  let dump;
   try {
+    dump = decryptDump(encrypted, manifest, secret);
+    if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
+      fail("Decrypted database dump failed its SHA-256 integrity check.");
+    }
     if (targetEmpty) {
       if (manifest.library && targetLibrary) {
         recoveryTargetIdentity = await createRecoveryTargetIdentity(environment, manifest);
@@ -1193,7 +1356,7 @@ async function restoreBackup(options) {
           targetLibrary.root, manifest, secret, recoveryTargetIdentity, "RESTORING",
         );
       }
-      await writeFile(temporaryDump, dump, { mode: 0o600 });
+      await writeFile(temporaryDump, dump, { mode: 0o600, flag: "wx" });
       const targetDatabase = environment.PGDATABASE || "postgres";
       await runTool(
         resolveBinary("PGRESTORE_BIN", "pg_restore", "pg_restore.exe"),
@@ -1216,7 +1379,18 @@ async function restoreBackup(options) {
       }
     }
     if (manifest.library && targetLibrary) {
-      await verifyRestoredLibraryInventory(environment, manifest.library, targetLibrary);
+      // A fresh or interrupted restore still has the source NAS path in the
+      // restored catalog. A completed recovery journal means the path remap
+      // was already committed, so a resume must verify against the target.
+      const catalogRootBeforeRemap = recoveryJournalState === "COMPLETE"
+        ? targetLibrary.root
+        : manifest.library.root;
+      await verifyRestoredLibraryInventory(
+        environment,
+        manifest.library,
+        targetLibrary,
+        catalogRootBeforeRemap,
+      );
       try {
         await remapRestoredLibrary(environment, manifest.library.root, targetLibrary.root);
       } catch (error) {
@@ -1230,6 +1404,8 @@ async function restoreBackup(options) {
         ).catch(() => {});
         throw error;
       }
+      // Verify the canonical inventory again after the durable path remap.
+      await verifyRestoredLibraryInventory(environment, manifest.library, targetLibrary);
     }
     const actualFacts = await databaseFacts(environment);
     compareFacts(manifest.verification, actualFacts);
@@ -1240,7 +1416,9 @@ async function restoreBackup(options) {
     }
     console.log(`Database restored and verified: ${backupDir}`);
   } finally {
+    dump?.fill(0);
     await secureRemove(temporaryDump);
+    await rm(restoreWorkRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -1248,10 +1426,14 @@ async function verifyBackup(options) {
   const backupDir = path.resolve(requireOption(options, "backup-dir"));
   const { manifest, encrypted } = await readBackup(backupDir);
   const dump = decryptDump(encrypted, manifest, await passphrase(false, options));
-  if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
-    fail("Decrypted database dump failed its SHA-256 integrity check.");
+  try {
+    if (dump.length !== manifest.dump.plaintextBytes || sha256Bytes(dump) !== manifest.dump.plaintextSha256) {
+      fail("Decrypted database dump failed its SHA-256 integrity check.");
+    }
+    console.log(`Backup integrity verified: ${backupDir}`);
+  } finally {
+    dump.fill(0);
   }
-  console.log(`Backup integrity verified: ${backupDir}`);
 }
 
 async function exportRecovery(options) {
@@ -1287,18 +1469,22 @@ async function discoverBackups(options) {
     try {
       const { encrypted } = await readBackup(backup.path);
       const dump = decryptDump(encrypted, backup.manifest, secret);
-      if (dump.length !== backup.manifest.dump.plaintextBytes || sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256) {
-        continue;
+      try {
+        if (dump.length !== backup.manifest.dump.plaintextBytes || sha256Bytes(dump) !== backup.manifest.dump.plaintextSha256) {
+          continue;
+        }
+        entries.push({
+          backupDir: backup.path,
+          createdAt: backup.manifest.createdAt,
+          libraryId: backup.manifest.library?.libraryId ?? null,
+          applicationSchemaVersion: backup.manifest.compatibility.applicationSchemaVersion,
+          postgresMajor: backup.manifest.compatibility.postgresMajor,
+          catalogMediaCount: backup.manifest.library?.catalogMediaCount ?? null,
+          verified: true,
+        });
+      } finally {
+        dump.fill(0);
       }
-      entries.push({
-        backupDir: backup.path,
-        createdAt: backup.manifest.createdAt,
-        libraryId: backup.manifest.library?.libraryId ?? null,
-        applicationSchemaVersion: backup.manifest.compatibility.applicationSchemaVersion,
-        postgresMajor: backup.manifest.compatibility.postgresMajor,
-        catalogMediaCount: backup.manifest.library?.catalogMediaCount ?? null,
-        verified: true,
-      });
     } catch {
       // Discovery is fail-closed: corrupt/incomplete generations are omitted.
     }
@@ -1381,5 +1567,7 @@ export {
   encryptDump,
   findWindowsPostgresBinary,
   stableJson,
+  overwriteFileWithZeroes,
+  secureRemove,
   validateManifest,
 };

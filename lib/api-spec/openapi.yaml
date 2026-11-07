@@ -89,7 +89,7 @@ x-runtime-contracts:
         application/json:
           schema:
             $ref: "#/components/schemas/RuntimeJsonInput"
-    responses:
+    responses: &runtimeJsonMutationResponses
       "200":
         description: Successful JSON response
         content:
@@ -807,10 +807,24 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 0
+            maximum: 9007199254740991
         - name: maxSize
           in: query
           schema:
             type: integer
+            minimum: 0
+            maximum: 9007199254740991
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+            format: date
         - name: limit
           in: query
           schema:
@@ -1927,7 +1941,24 @@ paths:
     post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsPrioritize}
 
   /library/thumbnails/cache:
-    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteLibraryThumbnailsCache}
+    delete:
+      <<: *runtimeJsonMutationOperation
+      operationId: deleteLibraryThumbnailsCache
+      summary: Queue thumbnail cache clearing
+      responses:
+        <<: *runtimeJsonMutationResponses
+        "202":
+          description: Thumbnail cache clear job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeJsonResult"
+        "503":
+          description: NAS is offline or read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
 
   /library/thumbnails/rebuild:
     post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsRebuild}
@@ -3780,6 +3811,10 @@ components:
       properties:
         password:
           type: string
+        setupToken:
+          type: string
+          maxLength: 256
+          description: Required for first-run setup from non-loopback clients when WILLARD_SETUP_TOKEN is configured.
       required:
         - password
 
@@ -3925,7 +3960,7 @@ components:
           type: integer
         status:
           type: string
-          enum: [pending, analyzing, planned, preflight, verified, executing, completed, failed, rolled_back]
+          enum: [pending, analyzing, planned, preflight, verified, executing, rolling_back, completed, failed, rolled_back]
         sourceType:
           type: string
         sourcePath:

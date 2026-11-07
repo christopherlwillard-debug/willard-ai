@@ -1,9 +1,10 @@
 import * as path from "path";
 import * as fs from "fs";
 import { db } from "@workspace/db";
-import { appSettingsTable, indexedFilesTable, mediaFilesTable } from "@workspace/db";
+import { indexedFilesTable, mediaFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { resolveLibraryPath } from "./nas-storage";
+import { getActiveNasPath } from "./active-library.ts";
 
 export type CatalogReconciliationReport = {
   scanned: number;
@@ -28,9 +29,7 @@ const MEDIA_TYPE: Record<string, string> = {
  * Invalid, stale, and ambiguous rows remain in indexed_files and are reported.
  */
 export async function reconcileLegacyCatalog(): Promise<CatalogReconciliationReport> {
-  const [settings] = await db.select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable).limit(1);
-  const nasPath = settings?.nasPath?.trim();
+  const nasPath = await getActiveNasPath();
   if (!nasPath) throw new Error("No library location configured");
 
   const legacyRows = await db.select().from(indexedFilesTable);

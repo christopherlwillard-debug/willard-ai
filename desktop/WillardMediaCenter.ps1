@@ -178,6 +178,19 @@ function Report-StartupFailure($message) {
     }
   } catch {}
 }
+function Report-StopFailure($message) {
+  $failureLog = Join-Path $LogRoot "startup-failure.log"
+  $details = @(
+    "Willard Media Center could not stop safely.",
+    "Time: $((Get-Date).ToString("o"))",
+    "Reason: $message",
+    "Logs: $LogRoot",
+    "Next: Keep the services state file and inspect the listed process before retrying. Do not delete the state file while a Willard service may still be running."
+  )
+  try { $details | Set-Content $failureLog -Encoding UTF8 } catch {}
+  Fail $message
+  Write-Host "  Diagnostics: $failureLog" -ForegroundColor DarkGray
+}
 function Read-Version {
   if (-not (Test-Path $VersionFile)) { return "0.0.0" }
   try {
@@ -187,39 +200,241 @@ function Read-Version {
   return "0.0.0"
 }
 function Read-Pids {
-  if (-not (Test-Path $PidFile)) { return $null }
-  try { return Get-Content $PidFile -Raw | ConvertFrom-Json } catch { return $null }
+  if (-not (Test-Path -LiteralPath $PidFile)) { return $null }
+  try {
+    if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) {
+      throw "The services state path is not a file."
+    }
+    $state = Get-Content -LiteralPath $PidFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($state -isnot [System.Management.Automation.PSCustomObject] -or $state.version -notin @(1, 2)) {
+      throw "The services state has an unsupported structure or version."
+    }
+    foreach ($name in @("api", "web")) {
+      if ($null -eq $state.PSObject.Properties[$name]) {
+        throw "The services state is missing the '$name' process record."
+      }
+    }
+    if ($state.version -eq 2 -and
+      ($state.runToken -isnot [string] -or [string]::IsNullOrWhiteSpace($state.runToken))) {
+      throw "The services state is missing its run token."
+    }
+    foreach ($process in @($state.api, $state.web)) {
+      if ($null -eq $process) { continue }
+      if ($process -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "A services process record has an invalid structure."
+      }
+      $recordedPid = 0
+      if (-not [int]::TryParse([string]$process.pid, [ref]$recordedPid) -or $recordedPid -le 0) {
+        throw "A services process record has an invalid process ID."
+      }
+      if ($process.path -isnot [string] -or [string]::IsNullOrWhiteSpace($process.path) -or
+        $process.commandLine -isnot [string] -or [string]::IsNullOrWhiteSpace($process.commandLine)) {
+        throw "A services process record is missing executable identity information."
+      }
+    }
+    return $state
+  } catch {
+    throw "The Willard services state file is unreadable or invalid. The launcher refused to assume that no services are running. Keep a copy of '$PidFile' for diagnosis. After confirming that no Willard processes remain, rename or delete this file and retry. Details: $($_.Exception.Message)"
+  }
 }
-function Get-ProcessIdentity($processId) {
+function Get-ProcessIdentity($processId, $expectedCreationDate, $expectedPath, $expectedCommandLine) {
   if (-not $processId) { return $null }
   try {
-    $process = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
-    if (-not $process) { return $null }
-    return @{
-      pid = [int]$process.ProcessId
-      path = [string]$process.ExecutablePath
-      commandLine = [string]$process.CommandLine
-      creationDate = [string]$process.CreationDate
+    $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = " + [int]$processId) -ErrorAction Stop
+  } catch {
+    throw "Windows could not verify the identity of Willard process ${processId}: $($_.Exception.Message)"
+  }
+  if (-not $process) { return $null }
+  $currentCreationDate = [string]$process.CreationDate
+  if ([string]::IsNullOrWhiteSpace($currentCreationDate)) {
+    throw "Windows did not return a process creation time for Willard process $processId."
+  }
+  # A recorded creation time is the primary PID-reuse discriminator. If
+  # Windows has recycled the PID, the new process is not ours even if WMI
+  # omits optional executable/command-line fields.
+  if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+    -not [string]::Equals($currentCreationDate, [string]$expectedCreationDate, [StringComparison]::OrdinalIgnoreCase)) {
+    return $null
+  }
+  $executablePath = [string]$process.ExecutablePath
+  $commandLine = [string]$process.CommandLine
+  # Some Windows/WMI process queries return the PID and creation time but omit
+  # one or both optional identity fields. Reuse the persisted values only after
+  # the exact recorded creation time has matched; PID + creation time identifies
+  # the same process, while a missing creation time still fails closed above.
+  if ([string]::IsNullOrWhiteSpace($executablePath)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+      -not [string]::IsNullOrWhiteSpace([string]$expectedPath)) {
+      $executablePath = [string]$expectedPath
+    } else {
+      throw "Windows did not return an executable path for Willard process $processId."
     }
-  } catch { return $null }
+  }
+  if ([string]::IsNullOrWhiteSpace($commandLine)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$expectedCreationDate) -and
+      -not [string]::IsNullOrWhiteSpace([string]$expectedCommandLine)) {
+      $commandLine = [string]$expectedCommandLine
+    } else {
+      throw "Windows did not return a command line for Willard process $processId."
+    }
+  }
+  return @{
+    pid = [int]$process.ProcessId
+    path = $executablePath
+    commandLine = $commandLine
+    creationDate = $currentCreationDate
+  }
 }
 function Test-ProcessIdentity($tracked) {
   if (-not $tracked) { return $false }
-  $current = Get-ProcessIdentity $tracked.pid
+  $current = Get-ProcessIdentity $tracked.pid $tracked.creationDate $tracked.path $tracked.commandLine
   if (-not $current -or -not $tracked.path -or -not $tracked.commandLine) { return $false }
   return ($current.path -eq $tracked.path -and $current.commandLine -eq $tracked.commandLine -and
     (-not $tracked.creationDate -or $current.creationDate -eq $tracked.creationDate))
+}
+function Test-CommandLineContainsExactPath($commandLine, $targetPath) {
+  if ([string]::IsNullOrWhiteSpace($commandLine) -or [string]::IsNullOrWhiteSpace($targetPath)) {
+    return $false
+  }
+  $fullPath = [IO.Path]::GetFullPath($targetPath)
+  $offset = 0
+  while ($offset -lt $commandLine.Length) {
+    $index = $commandLine.IndexOf($fullPath, $offset, [StringComparison]::OrdinalIgnoreCase)
+    if ($index -lt 0) { return $false }
+    $afterIndex = $index + $fullPath.Length
+    $beforeBoundary = ($index -eq 0) -or ($commandLine.Substring($index - 1, 1) -match '["\s]')
+    $afterBoundary = ($afterIndex -ge $commandLine.Length) -or ($commandLine.Substring($afterIndex, 1) -match '["\s]')
+    if ($beforeBoundary -and $afterBoundary) { return $true }
+    $offset = $index + 1
+  }
+  return $false
+}
+function Get-PackagedServiceProcesses {
+  $expectedNode = [IO.Path]::GetFullPath($Node)
+  $expectedApi = [IO.Path]::GetFullPath($Api)
+  $expectedWeb = [IO.Path]::GetFullPath($WebServer)
+  try {
+    $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  } catch {
+    throw "Windows could not inspect running processes for orphaned Willard services: $($_.Exception.Message)"
+  }
+  foreach ($process in $processes) {
+    if (-not $process) { continue }
+    $executablePath = [string]$process.ExecutablePath
+    $commandLine = [string]$process.CommandLine
+    $roles = @()
+    if (-not [string]::IsNullOrWhiteSpace($commandLine)) {
+      if (Test-CommandLineContainsExactPath $commandLine $expectedApi) { $roles += "API" }
+      if (Test-CommandLineContainsExactPath $commandLine $expectedWeb) { $roles += "web" }
+    }
+    if ([string]::IsNullOrWhiteSpace($executablePath)) {
+      if ($roles.Count -gt 0) {
+        throw "Windows found a Willard service entrypoint but could not verify its executable path."
+      }
+      continue
+    }
+    try { $actualNode = [IO.Path]::GetFullPath($executablePath) } catch { continue }
+    if (-not [string]::Equals($actualNode, $expectedNode, [StringComparison]::OrdinalIgnoreCase)) {
+      continue
+    }
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+      throw "Windows found the packaged Node runtime but could not inspect its command line to rule out an orphaned Willard service."
+    }
+    if ($roles.Count -eq 0) { continue }
+    $processId = 0
+    if (-not [int]::TryParse([string]$process.ProcessId, [ref]$processId) -or $processId -le 0) {
+      throw "Windows found a Willard service command line but could not verify its process ID."
+    }
+    $creationDate = [string]$process.CreationDate
+    if ([string]::IsNullOrWhiteSpace($creationDate)) {
+      throw "Windows found a Willard service process but could not verify its creation time."
+    }
+    [pscustomobject]@{
+      pid = $processId
+      roles = $roles
+      path = $executablePath
+      commandLine = $commandLine
+      creationDate = $creationDate
+    }
+  }
+}
+function Assert-NoUntrackedPackagedServices($tracked) {
+  $trackedRecords = @()
+  if ($tracked) {
+    $trackedRecords = @($tracked.api, $tracked.web) | Where-Object { $null -ne $_ }
+  }
+  $untracked = @()
+  foreach ($candidate in @(Get-PackagedServiceProcesses)) {
+    $owned = $false
+    foreach ($record in $trackedRecords) {
+      if ([int]$record.pid -ne [int]$candidate.pid) { continue }
+      if (-not [string]::Equals([string]$record.path, [string]$candidate.path, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      if (-not [string]::Equals([string]$record.commandLine, [string]$candidate.commandLine, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      # Legacy PID records without a creation time cannot prove ownership
+      # against PID reuse; treat the live process as untracked and fail closed.
+      if ([string]::IsNullOrWhiteSpace([string]$record.creationDate)) { continue }
+      if (-not [string]::Equals([string]$record.creationDate, [string]$candidate.creationDate, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      $owned = $true
+      break
+    }
+    if (-not $owned) { $untracked += $candidate }
+  }
+  if ($untracked.Count -gt 0) {
+    $details = ($untracked | ForEach-Object { "$($_.roles -join '/') PID $($_.pid)" }) -join ", "
+    throw "Willard found packaged service process(es) not safely recorded in '$PidFile': $details. It did not stop them or change the installation. Use Task Manager to inspect the listed process command lines and close only the confirmed Willard services, then retry. Keep the services state file for diagnosis."
+  }
 }
 function Is-Alive($process) {
   if ($process -is [psobject] -and $process.pid) { return (Test-ProcessIdentity $process) }
   return $false
 }
+function Wait-ForProcessIdentityExit($process, $timeoutSeconds = 5) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+  do {
+    if (-not (Test-ProcessIdentity $process)) { return $true }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $deadline)
+  return (-not (Test-ProcessIdentity $process))
+}
 function Stop-Services {
   $pids = Read-Pids
+  Assert-NoUntrackedPackagedServices $pids
+  $remaining = @()
+  $taskkillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+  if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+    throw "Windows taskkill.exe was not found in the system directory. The running installation was left in place."
+  }
   foreach ($process in @($pids.api, $pids.web)) {
-    if (Test-ProcessIdentity $process) { & taskkill /PID $process.pid /T /F 2>&1 | Out-Null }
+    if (Test-ProcessIdentity $process) {
+      $killOutput = @(& $taskkillPath /PID $process.pid /T /F 2>&1)
+      $killExitCode = $LASTEXITCODE
+      try {
+        Wait-Process -Id $process.pid -Timeout 10 -ErrorAction SilentlyContinue
+      } catch {}
+      if (-not (Wait-ForProcessIdentityExit $process 5)) {
+        $killText = if ($killOutput.Count -gt 0) { ($killOutput | ForEach-Object { [string]$_ }) -join " " } else { "(no taskkill output)" }
+        $remaining += "PID $($process.pid) (taskkill exit code $killExitCode; $killText)"
+      }
+    }
+  }
+  if ($remaining.Count -gt 0) {
+    throw "Could not stop Willard Media Center process(es): $($remaining -join '; '). The running installation was left in place."
   }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+function Stop-StartedProcess($process) {
+  if (-not $process) { return }
+  try {
+    $process.Refresh()
+    if (-not $process.HasExited) {
+      $process.Kill()
+      if (-not $process.WaitForExit(10000)) {
+        throw "Process $($process.Id) did not exit after a direct stop request."
+      }
+    }
+  } catch {
+    Warn ("Willard could not stop a process started by this launcher: " + $_.Exception.Message)
+  }
 }
 function Save-Services($apiPid, $webPid) {
   $api = Get-ProcessIdentity $apiPid
@@ -228,19 +443,91 @@ function Save-Services($apiPid, $webPid) {
     ConvertTo-Json | Set-Content $PidFile
 }
 function Write-UpdateJournal($phase, $candidate, $backup) {
-  New-Item -ItemType Directory -Force (Split-Path $UpdateJournal) | Out-Null
-  @{
+  $journalDirectory = Split-Path $UpdateJournal
+  New-Item -ItemType Directory -Force $journalDirectory | Out-Null
+  $writeId = [guid]::NewGuid().ToString('N')
+  $temporary = "$UpdateJournal.$writeId.tmp"
+  $journalBackup = "$UpdateJournal.$writeId.bak"
+  $contents = @{
     version = 1
     phase = $phase
     installRoot = $InstallRoot
     candidate = $candidate
     backup = $backup
     updatedAt = (Get-Date).ToString("o")
-  } | ConvertTo-Json | Set-Content $UpdateJournal -Encoding UTF8
+  } | ConvertTo-Json
+  try {
+    [IO.File]::WriteAllText($temporary, $contents + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    if (Test-Path -LiteralPath $UpdateJournal -PathType Leaf) {
+      # Replace is atomic on the same volume. Supply a unique backup path
+      # because current .NET runtimes reject a null backup-file argument.
+      # A crash leaves either the old complete journal or the new complete
+      # journal; a leftover .bak is harmless and removed on the next write.
+      [IO.File]::Replace($temporary, $UpdateJournal, $journalBackup)
+    } else {
+      [IO.File]::Move($temporary, $UpdateJournal)
+    }
+  } finally {
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $journalBackup -Force -ErrorAction SilentlyContinue
+  }
 }
 function Read-UpdateJournal {
-  if (-not (Test-Path $UpdateJournal)) { return $null }
-  try { return Get-Content $UpdateJournal -Raw | ConvertFrom-Json } catch { return $null }
+  if (-not (Test-Path -LiteralPath $UpdateJournal)) { return $null }
+  if (-not (Test-Path -LiteralPath $UpdateJournal -PathType Leaf)) {
+    throw "The update recovery journal path exists but is not a file. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories."
+  }
+
+  try {
+    $journalText = Get-Content -LiteralPath $UpdateJournal -Raw -ErrorAction Stop
+    $journal = $journalText | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $detail = $_.Exception.Message
+    throw "The update recovery journal is unreadable or corrupt. Willard stopped without changing the installation. Preserve '$UpdateJournal' and any matching .candidate-* or .previous-* directories. Details: $detail"
+  }
+
+  if ($null -eq $journal -or $journal -isnot [System.Management.Automation.PSCustomObject]) {
+    throw "The update recovery journal is invalid. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories."
+  }
+  foreach ($property in @("version", "phase", "installRoot", "candidate", "backup")) {
+    if ($null -eq $journal.PSObject.Properties[$property]) {
+      throw "The update recovery journal is missing required field '$property'. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories."
+    }
+  }
+  if ($journal.version -ne 1 -or $journal.phase -notin @("prepared", "backup-created", "swapped") -or
+    $journal.installRoot -isnot [string] -or $journal.candidate -isnot [string] -or $journal.backup -isnot [string]) {
+    throw "The update recovery journal has an unsupported version, phase, or path value. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories."
+  }
+
+  try {
+    $separatorChars = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $installPath = [IO.Path]::GetFullPath($InstallRoot).TrimEnd($separatorChars)
+    $journalInstallPath = [IO.Path]::GetFullPath($journal.installRoot).TrimEnd($separatorChars)
+    $installParent = [IO.Path]::GetDirectoryName($installPath)
+    $candidatePath = [IO.Path]::GetFullPath($journal.candidate).TrimEnd($separatorChars)
+    $backupPath = [IO.Path]::GetFullPath($journal.backup).TrimEnd($separatorChars)
+    $candidateParent = [IO.Path]::GetDirectoryName($candidatePath)
+    $backupParent = [IO.Path]::GetDirectoryName($backupPath)
+    $installLeaf = [IO.Path]::GetFileName($installPath)
+    $candidateLeaf = [IO.Path]::GetFileName($candidatePath)
+    $backupLeaf = [IO.Path]::GetFileName($backupPath)
+  } catch {
+    $detail = $_.Exception.Message
+    throw "The update recovery journal contains invalid paths. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories. Details: $detail"
+  }
+
+  $comparison = [System.StringComparison]::OrdinalIgnoreCase
+  $candidatePattern = '^\.' + [regex]::Escape($installLeaf) + '\.candidate-[0-9a-fA-F-]{36}$'
+  $backupPattern = '^\.' + [regex]::Escape($installLeaf) + '\.previous-.+-\d{14}$'
+  if (-not [string]::Equals($installPath, $journalInstallPath, $comparison) -or
+    -not [string]::Equals($installParent, $candidateParent, $comparison) -or
+    -not [string]::Equals($installParent, $backupParent, $comparison) -or
+    $candidateLeaf -notmatch $candidatePattern -or $backupLeaf -notmatch $backupPattern -or
+    [string]::Equals($candidatePath, $backupPath, $comparison)) {
+    throw "The update recovery journal paths do not match this installation's expected sibling candidate and backup directories. Willard stopped without changing the installation. Preserve '$UpdateJournal' and the adjacent update directories."
+  }
+
+  return $journal
 }
 function Remove-UpdateJournal { Remove-Item $UpdateJournal -Force -ErrorAction SilentlyContinue }
 function Test-PackagedUpdateFault($point) {
@@ -249,9 +536,14 @@ function Test-PackagedUpdateFault($point) {
   }
 }
 function Restore-UpdateBackup {
-  $journal = Read-UpdateJournal
+  # Prefer the path captured in memory after this process moved the original
+  # installation. A damaged journal must not prevent that known-safe rollback.
+  # On a fresh process, the journal remains the only recovery source and is
+  # therefore required to parse and validate successfully.
+  $journal = $null
+  if (-not $script:UpdateBackup) { $journal = Read-UpdateJournal }
   $backup = if ($script:UpdateBackup) { $script:UpdateBackup } elseif ($journal) { $journal.backup } else { $null }
-  if (-not $backup -or -not (Test-Path $backup)) { return $false }
+  if (-not $backup -or -not (Test-Path -LiteralPath $backup -PathType Container)) { return $false }
 
   $failed = $InstallRoot + ".failed-" + [guid]::NewGuid().ToString()
   $parent = Split-Path -Parent $InstallRoot
@@ -276,19 +568,38 @@ function Restore-UpdateBackup {
 }
 function Recover-InterruptedUpdateSwap {
   $journal = Read-UpdateJournal
-  if (-not $journal) { return }
-  if ($journal.phase -in @("backup-created", "swapped")) {
+  if ($null -eq $journal) { return }
+
+  $backupExists = Test-Path -LiteralPath $journal.backup
+  $candidateExists = Test-Path -LiteralPath $journal.candidate
+  $installExists = Test-Path -LiteralPath $InstallRoot
+  if (($backupExists -and -not (Test-Path -LiteralPath $journal.backup -PathType Container)) -or
+    ($candidateExists -and -not (Test-Path -LiteralPath $journal.candidate -PathType Container)) -or
+    ($installExists -and -not (Test-Path -LiteralPath $InstallRoot -PathType Container))) {
+    throw "The update recovery journal references a path that is not a directory. Willard stopped without deleting recovery files. Preserve '$UpdateJournal' and the adjacent update directories."
+  }
+
+  if ($backupExists) {
     $script:UpdateBackup = $journal.backup
-    Restore-UpdateBackup | Out-Null
-    if ($journal.candidate -and (Test-Path $journal.candidate)) {
-      Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
+    $script:UpdateCandidate = $journal.candidate
+    if (-not (Restore-UpdateBackup)) {
+      throw "The previous Willard installation backup disappeared before recovery completed. Preserve '$UpdateJournal' and the adjacent update directories."
+    }
+    if ($candidateExists) {
+      Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
     }
     return
   }
-  if ($journal.candidate -and (Test-Path $journal.candidate)) {
-    Remove-Item $journal.candidate -Recurse -Force -ErrorAction SilentlyContinue
+
+  if ($journal.phase -eq "prepared" -and $installExists) {
+    if ($candidateExists) {
+      Remove-Item -LiteralPath $journal.candidate -Recurse -Force -ErrorAction Stop
+    }
+    Remove-UpdateJournal
+    return
   }
-  Remove-UpdateJournal
+
+  throw "The update recovery journal is inconsistent: phase '$($journal.phase)' requires a previous installation backup, but that backup is missing. Willard stopped without deleting the journal or candidate. Preserve '$UpdateJournal' and the adjacent update directories for recovery."
 }
 function Invoke-PackagedVersionSwap($candidate, $backup) {
   if (-not (Test-Path $candidate)) { throw "The verified release candidate is missing." }
@@ -299,6 +610,11 @@ function Invoke-PackagedVersionSwap($candidate, $backup) {
   Push-Location $parent
   try {
     Move-Item -LiteralPath $InstallRoot -Destination $backup -ErrorAction Stop
+    # Keep a trusted in-process rollback path before the next journal write.
+    # If that write fails or the journal becomes unreadable, this process can
+    # still restore the directory it just displaced.
+    $script:UpdateBackup = $backup
+    $script:UpdateCandidate = $candidate
     Write-UpdateJournal "backup-created" $candidate $backup
     Test-PackagedUpdateFault "swap-after-backup"
     Move-Item -LiteralPath $candidate -Destination $InstallRoot -ErrorAction Stop
@@ -335,7 +651,7 @@ function Ensure-Schema {
     try {
       $marker = Get-Content $SchemaMarker -Raw | ConvertFrom-Json
       if ($marker.version -eq 1 -and $marker.fingerprint -eq $fingerprint) {
-        Good "Media database schema is already ready."
+        Good "Previous schema setup found; the API will verify the connected database before serving requests."
         return
       }
     } catch {}
@@ -351,7 +667,7 @@ function Ensure-Schema {
     fingerprint = $fingerprint
     completedAt = (Get-Date).ToString("o")
   } | ConvertTo-Json | Set-Content $SchemaMarker
-  Good "Media database is ready."
+  Good "Database setup completed; the API will verify schema readiness before serving requests."
 }
 function Read-StartupLogTail($path) {
   if (-not (Test-Path $path)) { return "(log not found: $path)" }
@@ -409,10 +725,18 @@ function Ensure-Env {
       return $true
     }
   }
+  $sessionSecretBytes = New-Object byte[] 32
+  $sessionSecretRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $sessionSecretRng.GetBytes($sessionSecretBytes)
+  } finally {
+    $sessionSecretRng.Dispose()
+  }
+  $sessionSecret = ([BitConverter]::ToString($sessionSecretBytes)).Replace("-", "").ToLowerInvariant()
   @"
 DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/willard
 PORT=8080
-SESSION_SECRET=$(-join ((1..48) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) }))
+SESSION_SECRET=$sessionSecret
 "@ | Set-Content $EnvFile -Encoding UTF8
   Warn "A settings file was created. Update DATABASE_URL in '$EnvFile', then launch again."
   return $false
@@ -425,6 +749,32 @@ function Test-Dependencies {
   if (-not $env:DATABASE_URL -or $env:DATABASE_URL -match "yourpassword") { Warn "Your local database connection still needs to be configured in '$EnvFile'."; return $false }
   return $true
 }
+function Get-InstalledWindowsVersion {
+  try {
+    $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -Property Version -ErrorAction Stop
+    if (-not $operatingSystem) { throw "Windows did not return operating-system version information." }
+    $version = [string]$operatingSystem.Version
+    if ($version -notmatch '^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$') {
+      throw "Windows returned an unsupported operating-system version value."
+    }
+    return $version
+  } catch {
+    throw "Windows version could not be determined safely: $($_.Exception.Message)"
+  }
+}
+function Test-WindowsVersionRequirement($currentVersion, $minimumVersion) {
+  $comparisonOutput = & $Node $ReleaseContract "--compare-windows" $currentVersion $minimumVersion
+  if ($LASTEXITCODE -ne 0) {
+    throw "The signed Windows version requirement could not be compared safely."
+  }
+  try {
+    $comparison = [int]([string]$comparisonOutput).Trim()
+  } catch {
+    throw "The Windows version comparison returned an invalid result."
+  }
+  return ($comparison -ge 0)
+}
+
 function Try-Update {
   if ($env:WILLARD_SKIP_UPDATE -eq "1") { return }
   try {
@@ -434,16 +784,6 @@ function Try-Update {
     Assert-TrustedDownloadResponse $manifestResponse
     $remote = $manifestResponse.Content | ConvertFrom-Json
     $local = Read-Version
-    $remoteVersion = [version]($remote.version -replace "-.*$", "")
-    if ($remoteVersion -le [version]($local -replace "-.*$", "")) {
-      Good "Willard Media Center $local is current."
-      Set-Content $UpdateCheckFile (Get-Date).ToString("o")
-      return
-    }
-    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
-      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
-      throw "The release description is incomplete or unsafe."
-    }
     $remoteManifestFile = Join-Path $DataRoot "updates\release-manifest.json"
     New-Item -ItemType Directory -Force (Split-Path $remoteManifestFile) | Out-Null
     $remote | ConvertTo-Json -Depth 10 | Set-Content $remoteManifestFile -Encoding UTF8
@@ -451,8 +791,37 @@ function Try-Update {
       $script:UpdateStage = "manifest signature verification"
       & $Node $ReleaseContract "--verify" $remoteManifestFile
       if ($LASTEXITCODE -ne 0) { throw "The release description failed signature verification." }
+
+      $script:UpdateStage = "version comparison"
+      $comparisonOutput = & $Node $ReleaseContract "--compare" $remote.version $local
+      if ($LASTEXITCODE -ne 0) { throw "The release version could not be compared safely." }
+      try {
+        $comparison = [int]([string]$comparisonOutput).Trim()
+      } catch {
+        throw "The release version comparison returned an invalid result."
+      }
+      if ($comparison -le 0) {
+        Good "Willard Media Center $local is current."
+        Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+        return
+      }
     } finally {
       Remove-Item $remoteManifestFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($remote.minimumWindowsVersion) {
+      $script:UpdateStage = "Windows compatibility check"
+      $currentWindowsVersion = Get-InstalledWindowsVersion
+      if (-not (Test-WindowsVersionRequirement $currentWindowsVersion ([string]$remote.minimumWindowsVersion))) {
+        Warn ("Update " + $remote.version + " requires Windows " + $remote.minimumWindowsVersion +
+          " or later. This computer reports Windows " + $currentWindowsVersion +
+          "; the update was skipped and the installed version was left unchanged.")
+        Set-Content $UpdateCheckFile (Get-Date).ToString("o")
+        return
+      }
+    }
+    if (-not $remote.artifactUrl -or $remote.artifactUrl -notmatch "^https://" -or
+      -not $remote.sha256 -or $remote.sha256 -notmatch "^[a-fA-F0-9]{64}$") {
+      throw "The release description is incomplete or unsafe."
     }
     $stage = Join-Path $DataRoot "updates\$($remote.version)"
     $zip = Join-Path $DataRoot "updates\release.zip"
@@ -517,6 +886,18 @@ function Try-Update {
 }
 
 Ensure-Folders
+. (Join-Path $PSScriptRoot "launcher-instance-lock.ps1")
+$script:LauncherMutex = $null
+try {
+  $script:LauncherMutex = Enter-WillardLauncherMutex
+} catch {
+  if ($args -contains "-Stop") {
+    Report-StopFailure ("Willard could not obtain its shutdown lock: " + $_.Exception.Message)
+  } else {
+    Report-StartupFailure ("Willard could not obtain its startup lock: " + $_.Exception.Message)
+  }
+  exit 1
+}
 Write-Host ""
 Write-Host "  Willard Media Center" -ForegroundColor Cyan
 Write-Host "  Starting your local media library" -ForegroundColor Gray
@@ -524,12 +905,17 @@ try {
   if ($args -contains "-Stop") {
     Stop-Services
     Good "Willard Media Center services stopped."
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
     exit 0
   }
   $existing = Read-Pids
+  Assert-NoUntrackedPackagedServices $existing
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
     Start-Process $WebUrl
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
     exit 0
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
@@ -543,9 +929,14 @@ try {
   }
   Ensure-Schema
   Initialize-BackupProtection
-  $env:WILLARD_SCHEMA_READY = "1"
   $env:PORT = "8080"
+  # The API must only be reachable through the localhost-only desktop proxy.
+  $env:HOST = "127.0.0.1"
+    # This local-only launcher explicitly authorizes token-free first-run setup.
+    $env:WILLARD_LOCAL_SETUP = "true"
   Start-LoadingScreen
+  $BundledSevenZip = Join-Path $InstallRoot "api-runtime\vendor\7zip\7z.exe"
+  if (Test-Path -LiteralPath $BundledSevenZip -PathType Leaf) { $env:WILLARD_7ZIP_PATH = $BundledSevenZip }
   $apiProc = $null
   try {
     $apiProc = Start-Process $Node -ArgumentList @("--env-file=`"$EnvFile`"", "`"$Api`"") -WorkingDirectory (Join-Path $InstallRoot "api-runtime") -RedirectStandardOutput (Join-Path $LogRoot "api.log") -RedirectStandardError (Join-Path $LogRoot "api-error.log") -WindowStyle Hidden -PassThru
@@ -575,10 +966,34 @@ try {
   Good "Media Center is ready."
   Close-LoadingScreen
   Start-Process $WebUrl
+  Exit-WillardLauncherMutex $script:LauncherMutex
+  $script:LauncherMutex = $null
 } catch {
-  Stop-Services
-  try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  $startupError = $_
+  if ($args -contains "-Stop") {
+    Close-LoadingScreen
+    Report-StopFailure $startupError.Exception.Message
+    Exit-WillardLauncherMutex $script:LauncherMutex
+    $script:LauncherMutex = $null
+    exit 1
+  }
+  $servicesStopped = $true
+  try {
+    Stop-Services
+  } catch {
+    $servicesStopped = $false
+    Warn ("The running services could not be stopped safely: " + $_.Exception.Message)
+    Stop-StartedProcess $webProc
+    Stop-StartedProcess $apiProc
+  }
+  if ($servicesStopped) {
+    try { Restore-UpdateBackup | Out-Null } catch { Warn "The prior update backup could not be restored automatically." }
+  } elseif ($script:UpdateBackup) {
+    Warn "The prior release backup was retained because service shutdown could not be verified."
+  }
   Close-LoadingScreen
-  Report-StartupFailure $_.Exception.Message
+  Report-StartupFailure $startupError.Exception.Message
+  Exit-WillardLauncherMutex $script:LauncherMutex
+  $script:LauncherMutex = $null
   exit 1
 }

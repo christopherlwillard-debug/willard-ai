@@ -1,18 +1,20 @@
 import * as fs from "fs";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
+import { getActiveNasPath } from "../lib/active-library.ts";
 import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
 import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
 import { isVectorAvailable } from "../lib/vector-capability";
+import { handlePrivateMediaStreamError, setPrivateMediaResponseHeaders } from "../lib/private-media-response.ts";
+import { parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
 const NOT_DELETED = `(f.last_scan_action IS NULL OR f.last_scan_action NOT IN ('DELETED', 'RECYCLED'))`;
 
 async function getNasPath(): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT nas_path FROM app_settings LIMIT 1`);
-  return rows[0]?.nas_path?.trim() || null;
+  return getActiveNasPath();
 }
 
 function personOut(r: any) {
@@ -67,8 +69,8 @@ router.get("/faces/people", async (req: Request, res: Response) => {
 
 router.patch("/faces/people/:id", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const body = req.body ?? {};
     const hasName = typeof body.name === "string" || body.name === null;
     const hasHidden = typeof body.hidden === "boolean";
@@ -106,20 +108,21 @@ router.post("/faces/:faceId/reassign", async (req: Request, res: Response) => {
     if (!isVectorAvailable()) {
       return res.status(409).json({ error: "Face recognition requires pgvector" });
     }
-    const faceId = Number(req.params.faceId);
-    if (!Number.isInteger(faceId) || faceId <= 0) {
+    const faceId = parsePositiveIntegerParam(req.params.faceId);
+    if (faceId === null) {
       return res.status(400).json({ error: "Invalid face id" });
     }
 
-    const targetId = req.body?.personId == null ? null : Number(req.body.personId);
+    const rawTargetId = req.body?.personId;
+    const targetId = rawTargetId == null ? null : parsePositiveIntegerValue(rawTargetId);
+    if (rawTargetId != null && targetId === null) {
+      return res.status(400).json({ error: "Invalid target person id" });
+    }
     const newName = typeof req.body?.newPersonName === "string"
       ? req.body.newPersonName.trim().slice(0, 80)
       : "";
-    if ((targetId == null || !Number.isInteger(targetId) || targetId <= 0) && !newName) {
+    if (targetId == null && !newName) {
       return res.status(400).json({ error: "Choose an existing person or enter a new person name" });
-    }
-    if (targetId != null && (!Number.isInteger(targetId) || targetId <= 0)) {
-      return res.status(400).json({ error: "Invalid target person id" });
     }
     if (targetId != null && newName) {
       return res.status(400).json({ error: "Choose one reassignment target" });
@@ -177,9 +180,9 @@ router.post("/faces/:faceId/reassign", async (req: Request, res: Response) => {
 // Merge person B into person A (same real-world identity split by the clusterer).
 router.post("/faces/people/:id/merge", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    const fromId = Number(req.body?.fromPersonId);
-    if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(fromId) || fromId <= 0 || fromId === id) {
+    const id = parsePositiveIntegerParam(req.params.id);
+    const fromId = parsePositiveIntegerValue(req.body?.fromPersonId);
+    if (id === null || fromId === null || fromId === id) {
       return res.status(400).json({ error: "Invalid person ids" });
     }
     const nasPath = await getNasPath();
@@ -204,8 +207,8 @@ router.post("/faces/people/:id/merge", async (req: Request, res: Response) => {
 // Files a person appears in.
 router.get("/faces/people/:id/files", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(404).json({ error: "Person not found" });
     const { rows: pRows } = await pool.query(
@@ -247,8 +250,8 @@ router.get("/faces/people/:id/files", async (req: Request, res: Response) => {
 
 router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
   try {
-    const faceId = Number(req.params.faceId);
-    if (!Number.isInteger(faceId) || faceId <= 0) return res.status(400).json({ error: "Invalid id" });
+    const faceId = parsePositiveIntegerParam(req.params.faceId);
+    if (faceId === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(404).json({ error: "Crop not found" });
     const { rows } = await pool.query(
@@ -263,8 +266,13 @@ router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
     catch { return res.status(404).json({ error: "Crop not found" }); }
     if (!cropPath || !fs.existsSync(safeCropPath)) return res.status(404).json({ error: "Crop not found" });
     res.setHeader("Content-Type", "image/webp");
-    res.setHeader("Cache-Control", "private, max-age=86400");
-    return fs.createReadStream(safeCropPath).pipe(res);
+    setPrivateMediaResponseHeaders(res);
+    const stream = fs.createReadStream(safeCropPath);
+    stream.on("error", (streamError) => {
+      logger.warn({ err: streamError, faceId }, "face crop stream failed");
+      handlePrivateMediaStreamError(res, streamError);
+    });
+    return stream.pipe(res);
   } catch (err) {
     logger.error({ err }, "face crop failed");
     return res.status(500).json({ error: "Failed to load face crop" });
@@ -275,8 +283,8 @@ router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
 
 router.get("/media/files/:id/faces", async (req: Request, res: Response) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid id" });
+    const id = parsePositiveIntegerParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: "Invalid id" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(404).json({ error: "File not found" });
     const { rows } = await pool.query(

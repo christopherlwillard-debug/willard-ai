@@ -1,17 +1,15 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
-import { mediaFilesTable, appSettingsTable } from "@workspace/db";
+import { db, mediaFilesTable } from "@workspace/db";
 import { sql, count, desc, and, eq } from "drizzle-orm";
 import { activeMediaCondition } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
 
 const router: IRouter = Router();
 
 const ACTIVE_MEDIA = activeMediaCondition;
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const nasPath = row?.nasPath?.trim();
-  return nasPath || null;
+  return getActiveNasPath();
 }
 
 router.get("/storage", async (_req, res) => {

@@ -29,8 +29,11 @@ import {
   sha256File,
   sha256Buffer,
   moveFile,
+  moveFileNoReplace,
+  walkDirectoryFiles,
   verifiedMove,
   rollbackMoves,
+  canDeleteOrganizationJob,
   type FileMoveRecord,
 } from "../lib/organize-helpers.ts";
 
@@ -87,6 +90,24 @@ test("sha256File: throws for a missing file", async () => {
   );
 });
 
+test("sha256File: refuses symlink sources instead of hashing their targets", (t) => {
+  const target = writeFile(path.join(mkTmp("sha256-symlink-target"), "outside.txt"), "preserve target");
+  const link = path.join(mkTmp("sha256-symlink-link"), "linked.txt");
+  try {
+    fs.symlinkSync(target, link);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+  return assert.rejects(() => sha256File(link), /regular, non-symlink file/).then(() => {
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve target");
+  });
+});
+
 // ── 2. sha256Buffer ───────────────────────────────────────────────────────────
 
 test("sha256Buffer: consistent with sha256File for same content", async () => {
@@ -117,6 +138,79 @@ test("moveFile: creates deep intermediate directories", () => {
   const dest = path.join(tmpRoot, "mv-mkd-dst", "a", "b", "c", "f.txt");
   moveFile(src, dest);
   assert.ok(fs.existsSync(dest));
+});
+
+test("moveFileNoReplace: refuses to overwrite a destination created concurrently", () => {
+  const src = writeFile(path.join(mkTmp("mv-noreplace-src"), "photo.jpg"), "original media");
+  const dest = writeFile(path.join(mkTmp("mv-noreplace-dst"), "photo.jpg"), "new independent file");
+  assert.throws(() => moveFileNoReplace(src, dest), /EEXIST/);
+  assert.equal(fs.readFileSync(src, "utf8"), "original media");
+  assert.equal(fs.readFileSync(dest, "utf8"), "new independent file");
+});
+
+test("moveFileNoReplace: moves when destination is absent", () => {
+  const src = writeFile(path.join(mkTmp("mv-noreplace-ok-src"), "photo.jpg"), "restored media");
+  const dest = path.join(mkTmp("mv-noreplace-ok-dst"), "photo.jpg");
+  moveFileNoReplace(src, dest);
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "restored media");
+});
+
+test("walkDirectoryFiles: returns nested regular files with root-relative paths", () => {
+  const root = mkTmp("walk-regular");
+  writeFile(path.join(root, "nested", "photo.jpg"), "image-bytes");
+  const files = walkDirectoryFiles(root);
+  assert.equal(files.length, 1);
+  assert.equal(files[0]?.relativePath, path.join("nested", "photo.jpg"));
+  assert.equal(files[0]?.sizeBytes, 11);
+});
+
+test("walkDirectoryFiles: rejects a missing or non-directory source", () => {
+  assert.throws(() => walkDirectoryFiles(path.join(tmpRoot, "walk-missing")), /Unable to inspect source directory/);
+  const file = writeFile(path.join(mkTmp("walk-not-dir"), "file.txt"), "x");
+  assert.throws(() => walkDirectoryFiles(file), /not a regular directory/);
+});
+
+test("walkDirectoryFiles: rejects symlinks instead of silently omitting them", (t) => {
+  const root = mkTmp("walk-symlink");
+  const outside = writeFile(path.join(mkTmp("walk-symlink-target"), "outside.txt"), "outside");
+  try {
+    fs.symlinkSync(outside, path.join(root, "linked.txt"));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("symlink creation is not permitted on this runner");
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => walkDirectoryFiles(root), /Symbolic links are not supported/);
+});
+
+test("walkDirectoryFiles: surfaces unreadable nested directories instead of returning a partial scan", (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX directory permissions are required for this regression");
+    return;
+  }
+  const root = mkTmp("walk-unreadable");
+  writeFile(path.join(root, "visible.txt"), "visible");
+  const blocked = path.join(root, "blocked");
+  fs.mkdirSync(blocked);
+  fs.chmodSync(blocked, 0);
+
+  try {
+    try {
+      fs.readdirSync(blocked);
+      t.skip("runner can read a mode-000 directory");
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") throw error;
+    }
+    assert.throws(() => walkDirectoryFiles(root), /Unable to read source directory/);
+  } finally {
+    fs.chmodSync(blocked, 0o700);
+  }
 });
 
 // ── 4. verifiedMove — happy path ──────────────────────────────────────────────
@@ -150,20 +244,33 @@ test("verifiedMove: source hash equals sha256 of original content", async () => 
 
 // ── 5. verifiedMove — mismatch detection (real throw) ────────────────────────
 
-test("verifiedMove: throws on destination hash mismatch (afterMoveHook corruption)", async () => {
+test("verifiedMove: restores a failed hash-mismatch move to staging", async () => {
   const src  = writeFile(path.join(mkTmp("vm-mismatch-src"), "data.bin"), randomBytes(128));
   const dest = path.join(mkTmp("vm-mismatch-dst"), "data.bin");
 
   await assert.rejects(
     () => verifiedMove(src, dest, {
       afterMoveHook: (to) => {
-        // Corrupt destination after the move but before the post-hash runs
+        // Corrupt destination after the move but before the post-hash runs.
         fs.writeFileSync(to, randomBytes(128));
       },
     }),
     /SHA-256 mismatch/,
     "verifiedMove must throw when source and destination hashes differ",
   );
+
+  assert.equal(fs.existsSync(src), true, "the failed move must be restored to its source path");
+  assert.equal(fs.existsSync(dest), false, "an unverified file must not remain at its final destination");
+});
+
+test("verifiedMove: never overwrites a destination created after conflict checking", async () => {
+  const src = writeFile(path.join(mkTmp("vm-race-src"), "photo.jpg"), "source media");
+  const dest = writeFile(path.join(mkTmp("vm-race-dst"), "photo.jpg"), "independent concurrent file");
+
+  await assert.rejects(() => verifiedMove(src, dest), /EEXIST/);
+
+  assert.equal(fs.readFileSync(src, "utf8"), "source media");
+  assert.equal(fs.readFileSync(dest, "utf8"), "independent concurrent file");
 });
 
 // ── 6. verifiedMove — unreadable source ──────────────────────────────────────
@@ -292,4 +399,556 @@ test("rollbackMoves: restores files in last-in-first-out order", async () => {
   assert.equal(restoredOrder[0], "third.txt",  "third should be restored first (LIFO)");
   assert.equal(restoredOrder[1], "second.txt");
   assert.equal(restoredOrder[2], "first.txt",  "first should be restored last (LIFO)");
+});
+
+test("organization execution is claimed atomically before capacity reservation", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const claimAt = source.indexOf("const [claimedJob] = await db.update(organizationJobsTable)");
+  const reserveAt = source.indexOf("capacityReservation = await reserveCapacity", claimAt);
+  assert.ok(claimAt >= 0, "execution route must use a conditional database claim");
+  assert.ok(reserveAt > claimAt, "the claim must happen before capacity reservation and staging");
+  const claimBlock = source.slice(claimAt, reserveAt);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.id, id\)/);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
+  assert.match(claimBlock, /eq\(organizationJobsTable\.status, "verified"\)/);
+  assert.match(claimBlock, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+  assert.match(source, /\.set\(\{ status: "verified", error: message, stageUpdatedAt: new Date\(\), leaseToken: null \}\)/);
+});
+
+test("rollbackMoves: preserves a new file at the original path instead of overwriting it", async () => {
+  const originalPath = writeFile(path.join(mkTmp("rb-conflict-src"), "important.txt"), "original moved content");
+  const destinationPath = path.join(mkTmp("rb-conflict-dest"), "important.txt");
+  const record = await verifiedMove(originalPath, destinationPath);
+
+  writeFile(originalPath, "new independent file");
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a conflicting original path must not be overwritten");
+  assert.equal(fs.readFileSync(originalPath, "utf8"), "new independent file");
+  assert.equal(fs.readFileSync(destinationPath, "utf8"), "original moved content");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_FAIL") && message.includes("EEXIST")));
+});
+
+test("organization resume and reset require a stale execution lease", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.match(source, /ORGANIZATION_EXECUTION_LEASE_MS = 5 \* 60 \* 1000/);
+  assert.match(source, /ORGANIZATION_EXECUTION_HEARTBEAT_MS = 30 \* 1000/);
+  assert.match(source, /startOrganizationJobHeartbeat\(id, nasPath, executionLeaseToken\)/);
+  assert.match(source, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+
+  const resetStart = source.indexOf('router.post("/organize/jobs/:id/reset"');
+  const resetEnd = source.indexOf('router.post("/organize/jobs/:id/resume-token"', resetStart);
+  const resetRoute = source.slice(resetStart, resetEnd);
+  assert.match(resetRoute, /eq\(organizationJobsTable\.status, "failed"\)/);
+  assert.match(resetRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+  assert.match(resetRoute, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
+  const rollbackRoute = source.slice(rollbackStart, rollbackEnd);
+  assert.match(rollbackRoute, /status: "rolling_back"/);
+  assert.match(rollbackRoute, /startOrganizationJobHeartbeat\(id, nasPath, rollbackLeaseToken, "rolling_back"\)/);
+  assert.match(rollbackRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+
+  const helperSource = fs.readFileSync(new URL("../lib/organize-helpers.ts", import.meta.url), "utf8");
+  const rollbackMovesStart = helperSource.indexOf("export async function rollbackMoves");
+  const rollbackMovesSource = helperSource.slice(rollbackMovesStart);
+  assert.match(rollbackMovesSource, /moveFileNoReplace\(mv\.to, mv\.from\)/);
+  assert.doesNotMatch(rollbackMovesSource, /moveFile\(mv\.to, mv\.from\)/);
+
+  const recoveryStart = source.indexOf('router.get("/organize/recovery"');
+  const rollbackRouteStart = source.indexOf('router.post("/organize/jobs/:id/rollback"', recoveryStart);
+  const recoveryRoute = source.slice(recoveryStart, rollbackRouteStart);
+  assert.match(recoveryRoute, /eq\(organizationJobsTable\.nasPath, nasPath\)/);
+  assert.match(recoveryRoute, /inArray\(organizationJobsTable\.status, \["executing", "rolling_back"\]\)/);
+  assert.match(recoveryRoute, /lt\(organizationJobsTable\.stageUpdatedAt, staleBefore\)/);
+});
+
+test("rollbackMoves: repeated recovery recognizes a file already restored", async () => {
+  const src = writeFile(path.join(mkTmp("rb-idempotent-src"), "repeat.txt"), "recover once");
+  const dest = path.join(mkTmp("rb-idempotent-dest"), "repeat.txt");
+  const record = await verifiedMove(src, dest);
+
+  assert.equal(await rollbackMoves([record]), 1);
+  const logs: string[] = [];
+  assert.equal(await rollbackMoves([record], message => logs.push(message)), 1);
+  assert.equal(fs.readFileSync(src, "utf8"), "recover once");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_ALREADY_RESTORED")));
+});
+
+test("rollbackMoves: completes an interrupted same-volume hard-link restore", async () => {
+  const src = writeFile(path.join(mkTmp("rb-hardlink-src"), "linked.txt"), "hardlink recovery");
+  const dest = path.join(mkTmp("rb-hardlink-dest"), "linked.txt");
+  const record = await verifiedMove(src, dest);
+
+  fs.linkSync(dest, src); // simulate a crash after link creation but before unlinking the destination
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 1);
+  assert.equal(fs.readFileSync(src, "utf8"), "hardlink recovery");
+  assert.equal(fs.existsSync(dest), false);
+  assert.ok(logs.some(message => message.includes("hard-link finalized")));
+});
+
+test("processed archive dispositions never overwrite an existing archive", () => {
+  const routeSource = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const automaticStart = routeSource.indexOf('let dispositionApplied = "kept";');
+  const automaticEnd = routeSource.indexOf("// ── Report", automaticStart);
+  const manualStart = routeSource.indexOf('router.post("/organize/jobs/:id/apply-disposition"');
+  const manualEnd = routeSource.indexOf("// ── Recovery Center", manualStart);
+  assert.ok(automaticStart >= 0 && automaticEnd > automaticStart);
+  assert.ok(manualStart >= 0 && manualEnd > manualStart);
+  const automaticDisposition = routeSource.slice(automaticStart, automaticEnd);
+  const manualDisposition = routeSource.slice(manualStart, manualEnd);
+  assert.match(automaticDisposition, /moveFileNoReplace\(job\.sourcePath,\s*dest\)/);
+  assert.match(manualDisposition, /moveFileNoReplace\(sourcePath,\s*dest\)/);
+  assert.doesNotMatch(routeSource, /moveFile\((?:job\.sourcePath|sourcePath),\s*dest\)/);
+});
+
+
+test("rollbackMoves: does not count or restore a destination whose bytes changed after the forward move", async () => {
+  const sourcePath = writeFile(path.join(mkTmp("rb-tampered-src"), "important.bin"), "original verified bytes");
+  const destinationPath = path.join(mkTmp("rb-tampered-dest"), "important.bin");
+  const record = await verifiedMove(sourcePath, destinationPath);
+
+  fs.writeFileSync(destinationPath, "tampered destination bytes");
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a checksum-mismatched file is not a successful rollback");
+  assert.equal(fs.existsSync(sourcePath), false, "the unverified file must not be written over the source path");
+  assert.equal(fs.readFileSync(destinationPath, "utf8"), "tampered destination bytes", "the only remaining copy must be preserved");
+  assert.ok(logs.some(message => message.includes("ROLLBACK_VERIFY_FAIL") && message.includes("destination preserved")));
+});
+
+
+test("organization execute does not claim success when rollback is incomplete", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.ok(source.includes("const rollbackComplete = rolledBack === fileMoves.length"));
+  assert.ok(source.includes('status: rollbackComplete ? "rolled_back" : "failed"'));
+  assert.ok(source.includes("Rollback incomplete:"));
+  assert.ok(source.includes("File-move recovery checkpoint failed:"));
+});
+
+
+test("organization resume retains its journal when rollback is incomplete", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  assert.ok(source.includes("const resumeRollbackComplete = rolledBack === newMoves.length"));
+  assert.ok(source.includes("const retainedMoves = resumeRollbackComplete ? existingMoves : [...existingMoves, ...newMoves]"));
+  assert.ok(source.includes("Resume file-move recovery checkpoint failed:"));
+  assert.ok(source.includes("the full move journal was retained for manual recovery"));
+});
+
+
+test("organization completion re-hashes destination files in execute and resume", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const hashReads = source.match(/const actualHash = await sha256File\(mv\.to\)/g) ?? [];
+  assert.equal(hashReads.length, 2, "both execute and resume completion paths must hash destinations");
+  assert.equal((source.match(/actualHash !== mv\.sourceHash/g) ?? []).length, 2);
+  assert.ok(source.includes("missing or checksum-mismatched at destination"));
+});
+
+
+test("organization reset refuses to discard a non-empty recovery journal", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const resetStart = source.indexOf('router.post("/organize/jobs/:id/reset"');
+  const resetEnd = source.indexOf('router.post("/organize/jobs/:id/resume-token"', resetStart);
+  const resetRoute = source.slice(resetStart, resetEnd);
+  assert.match(resetRoute, /job\.fileMoves !== null/);
+  assert.match(resetRoute, /Array\.isArray\(job\.fileMoves\) \|\| job\.fileMoves\.length > 0/);
+  assert.match(resetRoute, /Resume it or complete rollback in Recovery Center before resetting/);
+  assert.match(resetRoute, /isNull\(organizationJobsTable\.fileMoves\)/);
+  assert.match(resetRoute, /CASE WHEN jsonb_typeof\(\$\{organizationJobsTable\.fileMoves\}\) = 'array' THEN jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0 ELSE false END/);
+});
+
+
+test("recovery routes validate persisted move journals before touching files", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const validatorStart = source.indexOf("function parseOrganizationMoveJournal");
+  const validatorEnd = source.indexOf("const ORGANIZATION_EXECUTION_LEASE_MS", validatorStart);
+  const validator = source.slice(validatorStart, validatorEnd);
+  assert.match(validator, /Array\.isArray\(value\)/);
+  assert.match(validator, /path\.isAbsolute\(move\.from\)/);
+  assert.match(validator, /path\.isAbsolute\(move\.to\)/);
+  assert.match(validator, /move\.sourceHash !== "string"/);
+  assert.match(validator, /move\.destHash !== move\.sourceHash/);
+  assert.match(validator, /typeof move\.verified !== "boolean"/);
+  assert.match(validator, /resolveWithinRoot\(move\.from, nasPath\)/);
+  assert.match(validator, /resolveWithinRoot\(move\.to, nasPath\)/);
+
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const rollbackEnd = source.indexOf('router.post("/organize/jobs/:id/reset"', rollbackStart);
+  assert.match(source.slice(rollbackStart, rollbackEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+
+  const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
+  const resumeEnd = source.indexOf('export default router', resumeStart);
+  assert.match(source.slice(resumeStart, resumeEnd), /parseOrganizationMoveJournal\(job\.fileMoves, nasPath\)/);
+  assert.match(source.slice(resumeStart, resumeEnd), /existingMoves\.some\(\(move\) => !move\.verified\)/);
+});
+
+test("rollbackMoves: refuses a symlink destination instead of counting its target as restored", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("symlink creation is not guaranteed on Windows runners");
+    return;
+  }
+  const content = "the original file bytes";
+  const src = writeFile(path.join(mkTmp("rb-symlink-src"), "linked.txt"), content);
+  const dest = path.join(mkTmp("rb-symlink-dest"), "linked.txt");
+  const external = writeFile(path.join(mkTmp("rb-symlink-external"), "outside.txt"), content);
+  const record = await verifiedMove(src, dest);
+
+  fs.unlinkSync(dest);
+  fs.symlinkSync(external, dest);
+  const logs: string[] = [];
+  const rolledBack = await rollbackMoves([record], message => logs.push(message));
+
+  assert.equal(rolledBack, 0, "a symlink is not a restored regular file");
+  assert.equal(fs.existsSync(src), false, "the symlink must not be moved into the staging source path");
+  assert.equal(fs.lstatSync(dest).isSymbolicLink(), true, "the untrusted destination symlink must be preserved");
+  assert.equal(fs.readFileSync(external, "utf8"), content, "the symlink target must remain untouched");
+  assert.ok(logs.some(message => message.includes("not a regular file") && message.includes("destination preserved")));
+});
+
+test("canDeleteOrganizationJob preserves active and unresolved recovery journals", () => {
+  const moves = [{ from: "/nas/temp/file", to: "/nas/files/file", sourceHash: "a".repeat(64), destHash: "a".repeat(64), verified: true }];
+  assert.equal(canDeleteOrganizationJob("failed", moves), false);
+  assert.equal(canDeleteOrganizationJob("failed", []), true);
+  assert.equal(canDeleteOrganizationJob("failed", null), true);
+  assert.equal(canDeleteOrganizationJob("completed", moves), true);
+  assert.equal(canDeleteOrganizationJob("rolled_back", moves), true);
+  assert.equal(canDeleteOrganizationJob("executing", []), false);
+  assert.equal(canDeleteOrganizationJob("rolling_back", []), false);
+  assert.equal(canDeleteOrganizationJob("analyzing", []), false);
+  assert.equal(canDeleteOrganizationJob("failed", { malformed: true }), false);
+  assert.equal(canDeleteOrganizationJob("unknown", null), false);
+});
+
+test("organize job deletion preserves unresolved journals and conditionally excludes active states", () => {
+  const routePath = new URL("../routes/organize.ts", import.meta.url);
+  const source = fs.readFileSync(routePath, "utf8");
+  const start = source.indexOf('router.delete("/organize/jobs/:id"');
+  const end = source.indexOf('router.post("/organize/jobs/:id/analyze"', start);
+  const route = source.slice(start, end);
+  assert.match(route, /canDeleteOrganizationJob\(job\.status, job\.fileMoves\)/);
+  assert.match(route, /jsonb_array_length\(\$\{organizationJobsTable\.fileMoves\}\) = 0/);
+  assert.match(route, /inArray\(organizationJobsTable\.status, \["completed", "rolled_back"\]\)/);
+  assert.match(route, /inArray\(organizationJobsTable\.status, \["pending", "planned", "verified", "failed"\]\)/);
+  assert.match(route, /\.returning\(\{ id: organizationJobsTable\.id \}\)/);
+});
+
+
+test("rollbackMoves: a pending move intent with its source intact is a safe no-op", async () => {
+  const source = writeFile(path.join(mkTmp("pending-intent"), "source.txt"), "original bytes");
+  const destination = path.join(mkTmp("pending-intent", "destination"), "source.txt");
+  const sourceHash = await sha256File(source);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("rollbackMoves: a pending intent restores a file moved before its verified checkpoint", async () => {
+  const source = writeFile(path.join(mkTmp("pending-after-move"), "source.txt"), "original bytes");
+  const destination = path.join(mkTmp("pending-after-move", "destination"), "source.txt");
+  const sourceHash = await sha256File(source);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.renameSync(source, destination);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("rollbackMoves: pending intent preserves an independent destination when source never moved", async () => {
+  const source = writeFile(path.join(mkTmp("pending-race"), "source.txt"), "original bytes");
+  const destination = writeFile(path.join(mkTmp("pending-race", "destination"), "source.txt"), "independent destination");
+  const sourceHash = await sha256File(source);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    sourceRelPath: "source.txt",
+  };
+
+  const count = await rollbackMoves([intent]);
+
+  assert.equal(count, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "original bytes");
+  assert.equal(fs.readFileSync(destination, "utf8"), "independent destination");
+});
+
+
+test("verifiedMove refuses bytes that differ from the persisted pre-move intent", async () => {
+  const source = writeFile(path.join(mkTmp("intent-hash"), "source.txt"), "changed after intent");
+  const destination = path.join(mkTmp("intent-hash", "destination"), "source.txt");
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, { expectedSourceHash: "0".repeat(64) }),
+    /Source changed after its recovery intent was recorded/,
+  );
+
+  assert.equal(fs.readFileSync(source, "utf8"), "changed after intent");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+
+test("execute and resume persist move intents before invoking filesystem moves", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const rollbackStart = source.indexOf('router.post("/organize/jobs/:id/rollback"');
+  const executeStart = source.indexOf('router.get("/organize/jobs/:id/execute"');
+  const resumeStart = source.indexOf('router.get("/organize/jobs/:id/resume"');
+  const executeRoute = source.slice(executeStart, rollbackStart);
+  const resumeEnd = source.indexOf("\\nrouter.", resumeStart + 1);
+  const resumeRoute = source.slice(resumeStart, resumeEnd < 0 ? source.length : resumeEnd);
+
+  for (const route of [executeRoute, resumeRoute]) {
+    const intentIndex = route.indexOf("const intent: FileMoveRecord");
+    const checkpointIndex = route.indexOf(".set({ fileMoves:", intentIndex);
+    const moveIndex = route.indexOf("verifiedMove(sf.fullPath, destFile", intentIndex);
+    assert.ok(intentIndex >= 0 && checkpointIndex > intentIndex && moveIndex > checkpointIndex);
+    assert.match(route.slice(moveIndex, moveIndex + 250), /expectedSourceHash: sourceHash/);
+  }
+});
+
+test("verifiedMove: lease loss after hashing prevents the filesystem move", async () => {
+  const source = writeFile(path.join(mkTmp("lease-before-move"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-before-move", "destination"), "source.txt");
+  let checks = 0;
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, {
+      beforeMove: async () => {
+        checks++;
+        throw new Error("worker lease lost");
+      },
+    }),
+    /worker lease lost/,
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(fs.readFileSync(source, "utf8"), "protected bytes");
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test("verifiedMove: lost lease prevents an automatic restore from racing a replacement worker", async () => {
+  const source = writeFile(path.join(mkTmp("lease-before-restore"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-before-restore", "destination"), "source.txt");
+  let restoreChecks = 0;
+
+  await assert.rejects(
+    () => verifiedMove(source, destination, {
+      afterMoveHook: async () => {
+        throw new Error("simulated verification failure");
+      },
+      beforeRestore: async () => {
+        restoreChecks++;
+        throw new Error("worker lease lost");
+      },
+    }),
+    (error: unknown) => error instanceof AggregateError &&
+      error.message.includes("could not be restored") &&
+      error.errors.some((item) => item instanceof Error && item.message === "worker lease lost"),
+  );
+
+  assert.equal(restoreChecks, 1);
+  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.readFileSync(destination, "utf8"), "protected bytes");
+});
+
+test("rollbackMoves: checks ownership before each individual restore", async () => {
+  const source = writeFile(path.join(mkTmp("lease-rollback"), "source.txt"), "protected bytes");
+  const destination = path.join(mkTmp("lease-rollback", "destination"), "source.txt");
+  const record = await verifiedMove(source, destination);
+  let checks = 0;
+
+  await assert.rejects(
+    () => rollbackMoves([record], undefined, async () => {
+      checks++;
+      throw new Error("worker lease lost");
+    }),
+    /worker lease lost/,
+  );
+
+  assert.equal(checks, 1);
+  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.readFileSync(destination, "utf8"), "protected bytes");
+});
+
+
+test("verifiedMove: stale worker cannot move after losing its lease during source hashing", async () => {
+  const src = writeFile(path.join(mkTmp("vm-lost-before-src"), "file.bin"), "preserve source");
+  const dest = path.join(mkTmp("vm-lost-before-dest"), "file.bin");
+
+  await assert.rejects(
+    () => verifiedMove(src, dest, {
+      beforeMove: async () => { throw new Error("Organization worker lease was lost"); },
+    }),
+    /lease was lost/,
+  );
+
+  assert.equal(fs.readFileSync(src, "utf8"), "preserve source");
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test("verifiedMove: stale worker preserves destination when lease is lost before local restore", async () => {
+  const src = writeFile(path.join(mkTmp("vm-lost-restore-src"), "file.bin"), "original bytes");
+  const dest = path.join(mkTmp("vm-lost-restore-dest"), "file.bin");
+
+  await assert.rejects(
+    () => verifiedMove(src, dest, {
+      afterMoveHook: (to) => fs.writeFileSync(to, "corrupted bytes"),
+      beforeRestore: async () => { throw new Error("Organization worker lease was lost"); },
+    }),
+    /could not be restored to its source path/,
+  );
+
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "corrupted bytes");
+});
+
+test("rollbackMoves: stops before mutation when ownership expires during checksum verification", async () => {
+  const src = writeFile(path.join(mkTmp("rb-lost-src"), "file.bin"), "rollback payload");
+  const dest = path.join(mkTmp("rb-lost-dest"), "file.bin");
+  const move = await verifiedMove(src, dest);
+  let checks = 0;
+
+  await assert.rejects(
+    () => rollbackMoves([move], undefined, async () => {
+      checks++;
+      if (checks === 2) throw new Error("Organization worker lease was lost");
+    }),
+    /lease was lost/,
+  );
+
+  assert.equal(checks, 2);
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(dest, "utf8"), "rollback payload");
+});
+
+
+test("organization analysis claims and fences every write with its lease token", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/analyze"');
+  const end = source.indexOf('router.patch("/organize/jobs/:id/plan"', start);
+  assert.ok(start >= 0 && end > start, "analysis route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /let analysisLeaseToken = ""/);
+  assert.match(route, /analysisLeaseToken = crypto\.randomUUID\(\)/);
+  assert.ok(route.indexOf("analysisLeaseToken = crypto.randomUUID()") < route.indexOf("const [claimedAnalysis]"));
+  assert.match(route, /eq\(organizationJobsTable\.status, job\.status\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/);
+  assert.match(route, /const failAnalysis = async \(message: string\)/);
+  assert.match(route, /await failAnalysis\("Archive record not found in the active library"\)/);
+  assert.match(route, /set\(\{ status: "planned", planJson, leaseToken: null \}\)/);
+  assert.ok((route.match(/eq\(organizationJobsTable\.leaseToken, analysisLeaseToken\)/g) ?? []).length >= 3,
+    "success and failure writes must be fenced by the analysis owner");
+});
+
+
+test("organization plan edits are serialized and release their claim on errors", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.patch("/organize/jobs/:id/plan"');
+  const end = source.indexOf('router.post("/organize/jobs/:id/preflight"', start);
+  assert.ok(start >= 0 && end > start, "plan route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /const \[claimedPlanEdit\]/);
+  assert.match(route, /isNull\(organizationJobsTable\.leaseToken\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, planEditToken\)/);
+  assert.match(route, /leaseToken: null/);
+  assert.match(route, /Plan update lost ownership/);
+  assert.match(route, /Do not leave a plan-edit claim behind/);
+});
+
+
+test("organization preflight holds and releases the execution row lease", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/preflight"');
+  const end = source.indexOf('router.get("/organize/jobs/:id/dry-run"', start);
+  assert.ok(start >= 0 && end > start, "preflight route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /\["executing", "analyzing", "rolling_back"\]/);
+  assert.match(route, /const \[claimedPreflight\]/);
+  assert.match(route, /isNull\(organizationJobsTable\.leaseToken\)/);
+  assert.match(route, /eq\(organizationJobsTable\.leaseToken, preflightLeaseToken\)/);
+  assert.match(route, /status: capacityAllOk \? "verified" : "planned"[\s\S]*?leaseToken: null/);
+  assert.match(route, /preflightClaimed && preflightLeaseToken && preflightNasPath/);
+  assert.match(route, /Preflight lost ownership/);
+});
+
+
+test("sha256File validates an already-open descriptor before reading from it", () => {
+  const source = fs.readFileSync(new URL("../lib/organize-helpers.ts", import.meta.url), "utf8");
+  const start = source.indexOf("export async function sha256File");
+  const end = source.indexOf("\n/**", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /const opened = fs\.fstatSync\(fd\)/);
+  assert.match(implementation, /const current = fs\.lstatSync\(filePath\)/);
+  assert.ok(implementation.indexOf("fs.fstatSync(fd)") < implementation.indexOf("fs.createReadStream(filePath, { fd"));
+  assert.doesNotMatch(implementation, /stream\.once\("open"/);
+});
+
+
+test("organization analysis clears its lease on every failed terminal update", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const start = source.indexOf('router.post("/organize/jobs/:id/analyze"');
+  const end = source.indexOf('router.patch("/organize/jobs/:id/plan"', start);
+  assert.ok(start >= 0 && end > start, "analysis route boundaries must exist");
+  const route = source.slice(start, end);
+  assert.match(route, /status: "failed", error: "NAS path is not configured[^\n]+leaseToken: null/);
+  assert.match(route, /status: "failed", error: "Archive file not found", leaseToken: null/);
+  assert.match(route, /if \(!updated\)[\s\S]*Analysis lost ownership before the plan could be saved/);
+  assert.match(route, /if \(analysisClaimed\) await db\.update/);
+});
+
+
+test("organization analysis, preflight, dry-run, and execute stay on the job's library", () => {
+  const source = fs.readFileSync(new URL("../routes/organize.ts", import.meta.url), "utf8");
+  const sections = [
+    ['router.post("/organize/jobs/:id/analyze"', 'router.patch("/organize/jobs/:id/plan"'],
+    ['router.post("/organize/jobs/:id/preflight"', 'router.get("/organize/jobs/:id/dry-run"'],
+    ['router.get("/organize/jobs/:id/dry-run"', 'router.post("/organize/jobs/:id/execute-token"'],
+    ['router.get("/organize/jobs/:id/execute"', 'router.get("/organize/jobs/:id/resume"'],
+  ];
+  for (const [startMarker, endMarker] of sections) {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    assert.ok(start >= 0 && end > start, `route boundaries must exist: ${startMarker}`);
+    const route = source.slice(start, end);
+    assert.match(route, /path\.resolve\(nasPath\) !== path\.resolve\((?:analysisNasPath|job\.nasPath)\)/);
+    assert.match(route, /active library changed/i);
+  }
 });

@@ -247,86 +247,97 @@ function ThumbnailCard({
   const canThumb = file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf";
 
   return (
-    <div
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
-      className={cn(
-        "group relative flex flex-col rounded-lg border overflow-hidden text-left transition-all duration-150",
-        "bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary",
-        selected ? "ring-2 ring-primary border-primary" : "border-border",
-      )}
-    >
-      <div className="relative w-full aspect-square bg-muted flex items-center justify-center overflow-hidden">
-        {canThumb ? (
-          <img
-            src={apiUrl(`/media/thumbnail/${file.id}`)}
-            alt={file.name}
-            loading="lazy"
-            className={cn(
-              "w-full h-full object-cover transition-transform duration-200 group-hover:scale-105",
-              thumbError && "opacity-0",
-            )}
-            onError={() => setThumbError(true)}
-          />
-        ) : (
-          <div className="flex flex-col items-center gap-1 text-muted-foreground p-2">
-            <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
-            <span className="text-xs font-mono uppercase">{file.extension || "—"}</span>
-          </div>
-        )}
-        {thumbError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted px-2 text-center text-muted-foreground pointer-events-none">
-            <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
-            <span className="text-[10px] font-mono uppercase">Thumbnail unavailable</span>
-          </div>
-        )}
-        {file.mediaType === "video" && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-black/50 rounded-full p-2">
-              <Play className="w-4 h-4 text-white fill-white" />
+    <div className={cn(
+      "group relative flex flex-col rounded-lg border overflow-hidden text-left transition-all duration-150",
+      "bg-card hover:bg-accent",
+      selected ? "ring-2 ring-primary border-primary" : "border-border",
+    )}>
+      <button
+        type="button"
+        aria-label={"Open " + file.name}
+        onClick={onClick}
+        className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+        data-testid={"button-open-media-" + file.id}
+      >
+        <div className="relative w-full aspect-square bg-muted flex items-center justify-center overflow-hidden">
+          {canThumb ? (
+            <img
+              src={apiUrl(`/media/thumbnail/${file.id}`)}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              className={cn(
+                "w-full h-full object-cover transition-transform duration-200 group-hover:scale-105",
+                thumbError && "opacity-0",
+              )}
+              onError={() => setThumbError(true)}
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-1 text-muted-foreground p-2" aria-hidden="true">
+              <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
+              <span className="text-xs font-mono uppercase">{file.extension || "—"}</span>
             </div>
-          </div>
-        )}
-        {file.durationSeconds !== null && (
-          <span className="absolute bottom-1 right-1 text-[10px] font-mono bg-black/70 text-white px-1 rounded">
-            {formatDuration(file.durationSeconds)}
-          </span>
-        )}
-        <button
-          type="button"
-          aria-label={selected ? `Deselect ${file.name}` : `Select ${file.name}`}
-          aria-pressed={selected}
-          onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
-          className={cn(
-            "absolute top-1.5 left-1.5 flex h-5 w-5 items-center justify-center rounded border text-xs transition-colors",
-            selected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-white/70 bg-black/50 text-transparent opacity-0 group-hover:opacity-100 hover:text-white",
           )}
-        >
-          ✓
-        </button>
-      </div>
-      <div className="p-2">
-        <p className="text-xs font-mono truncate text-foreground leading-tight" title={file.name}>
-          {file.name}
-        </p>
-        <p className="text-[10px] text-muted-foreground mt-0.5">
-          {formatBytes(file.sizeBytes)}
-        </p>
-      </div>
+          {thumbError && (
+            <div aria-hidden="true" className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted px-2 text-center text-muted-foreground pointer-events-none">
+              <MediaTypeIcon type={file.mediaType} className="w-6 h-6" />
+              <span className="text-[10px] font-mono uppercase">Thumbnail unavailable</span>
+            </div>
+          )}
+          {file.mediaType === "video" && (
+            <div aria-hidden="true" className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="bg-black/50 rounded-full p-2">
+                <Play className="w-4 h-4 text-white fill-white" />
+              </div>
+            </div>
+          )}
+          {file.durationSeconds !== null && (
+            <span className="absolute bottom-1 right-1 text-[10px] font-mono bg-black/70 text-white px-1 rounded">
+              {formatDuration(file.durationSeconds)}
+            </span>
+          )}
+        </div>
+        <div className="p-2">
+          <p className="text-xs font-mono truncate text-foreground leading-tight" title={file.name}>
+            {file.name}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            {formatBytes(file.sizeBytes)}
+          </p>
+        </div>
+      </button>
+      <button
+        type="button"
+        aria-label={selected ? "Deselect " + file.name : "Select " + file.name}
+        aria-pressed={selected}
+        onClick={onToggleSelect}
+        className={cn(
+          "absolute z-10 top-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded border text-xs transition-colors",
+          "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+          selected
+            ? "border-primary bg-primary text-primary-foreground opacity-100"
+            : "border-white/70 bg-black/50 text-white hover:bg-black/70",
+        )}
+        data-testid={"button-select-media-" + file.id}
+      >
+        ✓
+      </button>
       {onToggleFavorite && (
         <button
-          onClick={(e) => { e.stopPropagation(); onToggleFavorite(file); }}
-          title={file.favorite ? "Remove from favorites" : "Add to favorites"}
+          type="button"
+          aria-label={file.favorite ? "Remove " + file.name + " from favorites" : "Add " + file.name + " to favorites"}
+          aria-pressed={file.favorite}
+          onClick={() => onToggleFavorite(file)}
           className={cn(
-            "absolute top-1.5 right-1.5 p-1.5 rounded-full bg-black/50 transition-opacity",
-            file.favorite ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            "absolute z-10 top-1.5 right-1.5 p-1.5 rounded-full bg-black/50 transition-opacity",
+            "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+            file.favorite && "opacity-100",
           )}
+          data-testid={"button-favorite-media-" + file.id}
         >
-          <Heart className={cn("w-3.5 h-3.5", file.favorite ? "text-red-400 fill-red-400" : "text-white")} />
+          <Heart aria-hidden="true" className={cn("w-3.5 h-3.5", file.favorite ? "text-red-400 fill-red-400" : "text-white")} />
         </button>
       )}
     </div>
@@ -386,7 +397,7 @@ function ScanSummaryCard({ summary, jobId, onDismiss }: { summary: JobSummary; j
         {saved !== null && saved > 0.5 && (
           <span className="text-green-400 text-xs ml-1">— saved {saved.toFixed(1)}s vs full scan</span>
         )}
-        <button onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200" data-testid="button-dismiss-summary">
+        <button type="button" aria-label="Dismiss scan summary" onClick={onDismiss} className="ml-auto text-green-400 hover:text-green-200" data-testid="button-dismiss-summary">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -517,7 +528,7 @@ function ScanBanner({
           {reused > 0 ? `, ${reused.toLocaleString()} reused` : ""}
           {failed > 0 ? `, ${failed.toLocaleString()} still pending` : ""}.
         </span>
-        <button onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
+        <button type="button" aria-label="Dismiss thumbnail completion message" onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -542,7 +553,7 @@ function ScanBanner({
             : `Scan complete — ${progress.filesProcessed.toLocaleString()} files processed.`
           }
         </span>
-        <button onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
+        <button type="button" aria-label={isThumbs ? "Dismiss thumbnail completion message" : "Dismiss scan completion message"} onClick={onDismiss} className="ml-auto opacity-60 hover:opacity-100">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -556,7 +567,7 @@ function ScanBanner({
       <div className={`flex items-center gap-2 px-4 py-2 bg-${color}-900/30 border border-${color}-700/40 rounded-lg text-sm text-${color}-300 font-mono`}>
         <AlertCircle className="w-4 h-4 shrink-0" />
         <span>{progress.status === "CANCELLED" ? `${noun} cancelled.` : `${noun} failed.`}</span>
-        <button onClick={onDismiss} className="ml-auto">
+        <button type="button" aria-label={"Dismiss " + noun.toLowerCase() + " " + progress.status.toLowerCase() + " notification"} onClick={onDismiss} className="ml-auto">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -919,7 +930,7 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <span className="text-xs font-mono font-semibold text-muted-foreground uppercase tracking-widest">Details</span>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+        <button type="button" aria-label={"Close details for " + file.name} onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -1189,6 +1200,10 @@ function FolderTreeNode({
       >
         {/* Expand/collapse chevron */}
         <button
+          type="button"
+          aria-label={hasChildren ? (expanded ? "Collapse" : "Expand") + " folder " + node.name : "No subfolders in " + node.name}
+          aria-expanded={hasChildren ? expanded : undefined}
+          disabled={!hasChildren}
           onClick={(e) => { e.stopPropagation(); if (hasChildren) setExpanded((v) => !v); }}
           className="shrink-0 w-4 h-4 flex items-center justify-center"
         >
@@ -1201,6 +1216,7 @@ function FolderTreeNode({
 
         {/* Folder icon + name — clicking selects */}
         <button
+          type="button"
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
           onClick={() => onSelect(isSelected ? null : node.path)}
         >
@@ -1559,6 +1575,7 @@ export default function Media() {
         <div className="relative w-56">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
           <Input
+            aria-label="Search media files"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search files…"
@@ -1566,6 +1583,8 @@ export default function Media() {
           />
           {search && (
             <button
+              type="button"
+              aria-label="Clear media search"
               onClick={() => setSearch("")}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
@@ -1579,7 +1598,7 @@ export default function Media() {
           <div className="flex max-w-[26rem] flex-wrap items-center gap-1">
             <Tag className="h-3.5 w-3.5 text-muted-foreground" />
             {availableTags.map((tag) => (
-              <button key={tag.id} onClick={() => setSelectedTags((current) => current.includes(tag.name) ? current.filter((name) => name !== tag.name) : [...current, tag.name])}
+              <button key={tag.id} type="button" aria-pressed={selectedTags.includes(tag.name)} onClick={() => setSelectedTags((current) => current.includes(tag.name) ? current.filter((name) => name !== tag.name) : [...current, tag.name])}
                 className={cn("rounded-full border px-2 py-1 text-[10px] font-mono transition-colors", selectedTags.includes(tag.name) ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground")}
                 title={`${tag.count} file${tag.count === 1 ? "" : "s"}`}
               >{tag.name}</button>
@@ -1589,6 +1608,7 @@ export default function Media() {
 
         {/* Sort */}
         <select
+          aria-label="Sort media files"
           value={sort}
           onChange={(e) => setSort(e.target.value)}
           className="h-8 text-xs font-mono bg-background border border-border rounded-md px-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
@@ -1636,6 +1656,9 @@ export default function Media() {
         {/* View mode toggle */}
         <div className="flex items-center border border-border rounded-md overflow-hidden">
           <button
+            type="button"
+            aria-label="Grid view"
+            aria-pressed={viewMode === "grid"}
             onClick={() => setViewMode("grid")}
             className={cn(
               "h-8 w-8 flex items-center justify-center transition-colors",
@@ -1646,6 +1669,9 @@ export default function Media() {
             <LayoutGrid className="w-3.5 h-3.5" />
           </button>
           <button
+            type="button"
+            aria-label="List view"
+            aria-pressed={viewMode === "list"}
             onClick={() => setViewMode("list")}
             className={cn(
               "h-8 w-8 flex items-center justify-center transition-colors",
@@ -1665,6 +1691,7 @@ export default function Media() {
             queryClient.invalidateQueries({ queryKey: ["library-active-job"] });
           }}
           className="h-8 w-8 p-0"
+          aria-label="Refresh media files"
           title="Refresh"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -1693,6 +1720,8 @@ export default function Media() {
         {TYPE_TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
+            type="button"
+            aria-pressed={activeType === key}
             onClick={() => setActiveType(key)}
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-mono rounded-t-md border-b-2 transition-colors whitespace-nowrap",
@@ -1720,6 +1749,8 @@ export default function Media() {
             </div>
             {/* All files entry */}
             <button
+              type="button"
+              aria-pressed={selectedFolder === null}
               onClick={() => setSelectedFolder(null)}
               className={cn(
                 "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
@@ -1942,6 +1973,12 @@ export default function Media() {
              queryClient.invalidateQueries({ queryKey: ["media-tags"] });
              queryClient.invalidateQueries({ queryKey: ["media-files"] });
            }}
+          onRenameChange={(id, name, relativePath) => {
+            queryClient.setQueriesData<MediaFilesResponse>({ queryKey: ["media-files"] }, (data) => data
+              ? { ...data, files: data.files.map((item) => item.id === id ? { ...item, name, relativePath } : item) }
+              : data);
+            queryClient.invalidateQueries({ queryKey: ["media-files"] });
+          }}
           onDelete={() => {
             queryClient.invalidateQueries({ queryKey: ["media-files"] });
             setViewerIndex(null);

@@ -1,12 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { db } from "@workspace/db";
-import { appSettingsTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { ensurePrivateDir, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
-import { moveFile, sha256File } from "./organize-helpers.ts";
+import { canonicalizePath, ensureDirectoryWithinRoot, resolveLibraryPath, resolveWithinRoot } from "./nas-storage.ts";
+import { moveFileNoReplace, sha256File } from "./organize-helpers.ts";
+import { isTrashEntryExpired } from "./cleanup-retention.ts";
 import { purgeDerivedDataForMedia } from "./derived-cleanup.ts";
+import { getActiveNasPath } from "./active-library.ts";
 
 export type TrashManifestEntry = {
   ts?: string;
@@ -43,100 +44,258 @@ function affectedRows(result: unknown): number {
   return Array.isArray(queryResult.rows) ? queryResult.rows.length : 0;
 }
 
+const TRASH_MANIFEST_FILE_ERROR = "Trash manifest must be a private, unlinked regular file inside the configured library.";
+
+type TrashManifestOpenMode = "read" | "append" | "append-existing";
+
+/**
+ * Open the manifest once, validate the opened inode, and perform all I/O
+ * through that descriptor. A path-only lstat followed by open/readFile can
+ * follow a symlink swapped into place between the two operations.
+ *
+ * O_NOFOLLOW blocks the final-component swap on platforms that support it.
+ * The descriptor/path identity and link-count checks are retained as a
+ * portable defense on platforms where Node does not expose O_NOFOLLOW.
+ */
+export function openValidatedTrashManifest(filePath: string, mode: TrashManifestOpenMode): number {
+  const noFollow = (fs.constants as any).O_NOFOLLOW ?? 0;
+  const writeFlags = fs.constants.O_WRONLY | fs.constants.O_APPEND;
+  let fd: number;
+
+  if (mode === "append") {
+    try {
+      // Create atomically when absent; never create through an existing link.
+      fd = fs.openSync(
+        filePath,
+        writeFlags | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+        0o600,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      fd = fs.openSync(filePath, writeFlags | noFollow);
+    }
+  } else {
+    fd = fs.openSync(filePath, mode === "read" ? fs.constants.O_RDONLY | noFollow : writeFlags | noFollow);
+  }
+
+  try {
+    const opened = fs.fstatSync(fd);
+    const current = fs.lstatSync(filePath);
+    if (
+      !opened.isFile() || opened.nlink > 1 ||
+      current.isSymbolicLink() || !current.isFile() || current.nlink > 1 ||
+      opened.dev !== current.dev || opened.ino !== current.ino
+    ) {
+      throw new Error(TRASH_MANIFEST_FILE_ERROR);
+    }
+    if (mode !== "read") {
+      try { fs.fchmodSync(fd, 0o600); } catch { /* best effort on ACL-managed filesystems */ }
+    }
+    return fd;
+  } catch (error) {
+    try { fs.closeSync(fd); } catch { /* preserve the validation error */ }
+    throw error;
+  }
+}
+
 export function manifestPath(nasPath: string): string {
-  return path.join(nasPath, "WillardAI", "logs", "trash-manifest.jsonl");
+  const logsDir = ensureDirectoryWithinRoot(path.join(nasPath, "WillardAI", "logs"), nasPath);
+  const filePath = path.join(logsDir, "trash-manifest.jsonl");
+  try {
+    const info = fs.lstatSync(filePath);
+    if (info.isSymbolicLink() || !info.isFile() || info.nlink > 1) {
+      throw new Error(TRASH_MANIFEST_FILE_ERROR);
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return filePath;
 }
 
 function trashRoot(nasPath: string): string {
-  return resolveWithinRoot(path.join(nasPath, "WillardAI", ".Trash"), path.join(nasPath, "WillardAI"));
+  const configuredPath = path.resolve(nasPath, "WillardAI", ".Trash");
+  ensureDirectoryWithinRoot(configuredPath, nasPath);
+  // Preserve the configured root spelling so manifest paths stored under a
+  // symlinked library mount remain relative to the same lexical root.
+  return configuredPath;
+}
+
+export function resolveLibraryTrashPath(targetPath: string, nasPath: string): string {
+  return resolveTrashPath(targetPath, trashRoot(nasPath));
+}
+
+export function resolveTrashPath(targetPath: string, root: string): string {
+  const lexicalRoot = path.resolve(root);
+  const canonicalRoot = canonicalizePath(root);
+  let relative = path.relative(lexicalRoot, path.resolve(targetPath));
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    // The manual restore route may pass back the already-canonical path
+    // returned by this resolver. Accept that form only when the configured
+    // library root itself is a symlink alias; ordinary outside paths remain
+    // rejected and lexical symlink entries are still checked component-wise.
+    if (canonicalRoot === lexicalRoot) {
+      throw new Error("Trash path is outside the configured trash root");
+    }
+    const canonicalTarget = path.resolve(targetPath);
+    relative = path.relative(canonicalRoot, canonicalTarget);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("Trash path is outside the configured trash root");
+    }
+  }
+  const rootStat = fs.lstatSync(canonicalRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error("Trash root is not a regular directory");
+  }
+  const components = relative.split(path.sep).filter(Boolean);
+  let current = canonicalRoot;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]!);
+    let info: fs.Stats;
+    try {
+      info = fs.lstatSync(current);
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        return path.join(current, ...components.slice(index + 1));
+      }
+      throw error;
+    }
+    if (info.isSymbolicLink()) {
+      throw new Error("Trash path contains a symlink; refusing to follow it");
+    }
+    if (index < components.length - 1 && !info.isDirectory()) {
+      throw new Error("Trash path contains a non-directory parent");
+    }
+  }
+  return current;
+}
+
+function pathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function samePath(left: string, right: string): boolean {
-  const a = path.resolve(left);
-  const b = path.resolve(right);
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  return pathKey(left) === pathKey(right);
 }
 
 export function readTrashManifest(nasPath: string): { lines: string[]; entries: TrashManifestEntry[] } {
   const filePath = manifestPath(nasPath);
-  if (!fs.existsSync(filePath)) return { lines: [], entries: [] };
-  const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
-  const entries = lines.flatMap((line) => {
+  let fd: number;
+  try {
+    fd = openValidatedTrashManifest(filePath, "read");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { lines: [], entries: [] };
+    throw error;
+  }
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(fd, "utf8").split("\n").filter(Boolean);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const root = trashRoot(nasPath);
+  const normalizeTrashKey = (value: string) => {
+    try { return pathKey(resolveTrashPath(value, root)); }
+    catch { return pathKey(value); }
+  };
+  const removedPaths = new Set<string>();
+  const entries: TrashManifestEntry[] = [];
+  for (const line of lines) {
     try {
-      const entry = JSON.parse(line) as Partial<TrashManifestEntry>;
-      if (typeof entry.originalPath !== "string" || typeof entry.trashPath !== "string") return [];
-      return [entry as TrashManifestEntry];
+      const record = JSON.parse(line) as Record<string, unknown>;
+      if (record.recordType === "REMOVE" && typeof record.trashPath === "string") {
+        // A tombstone is authoritative only after the trash file has left its
+        // recorded path. A forged or partial journal append must not hide a
+        // still-recoverable file from the trash list and restore route.
+        try {
+          const resolvedTrashPath = resolveTrashPath(record.trashPath, root);
+          try {
+            fs.lstatSync(resolvedTrashPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              removedPaths.add(pathKey(resolvedTrashPath));
+            }
+          }
+        } catch {
+          // Invalid or symlinked tombstones must not hide a manifest entry.
+        }
+        continue;
+      }
+      if (typeof record.originalPath === "string" && typeof record.trashPath === "string") {
+        entries.push(record as unknown as TrashManifestEntry);
+      }
     } catch {
-      return [];
+      // Preserve malformed/unknown lines for diagnostics; they are not active entries.
     }
-  });
-  return { lines, entries };
+  }
+  return {
+    lines,
+    entries: entries.filter((entry) =>
+      !removedPaths.has(normalizeTrashKey(entry.trashPath)),
+    ),
+  };
 }
 
 export function appendTrashManifestEntry(nasPath: string, entry: TrashManifestEntry): void {
   const filePath = manifestPath(nasPath);
-  ensurePrivateDir(path.dirname(filePath));
-  const fd = fs.openSync(filePath, "a", 0o600);
+  resolveTrashPath(entry.trashPath, trashRoot(nasPath));
+  const fd = openValidatedTrashManifest(filePath, "append");
   try {
     fs.writeSync(fd, JSON.stringify(entry) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
 }
 
 /**
- * Remove one manifest record with a replace-then-rename write. A crash before
- * the rename leaves the old manifest intact; a crash after it is safe because
- * the restore operation remains durable until it reaches RECORDED.
+ * Mark one manifest record as removed by appending a tombstone. The trash
+ * file must already be absent; this keeps recoverable media visible if a
+ * caller fails before completing its filesystem move or purge.
  */
 export function removeTrashManifestEntry(nasPath: string, targetTrashPath: string, operationId: string): boolean {
   const filePath = manifestPath(nasPath);
   if (!fs.existsSync(filePath)) return false;
 
-  const { lines } = readTrashManifest(nasPath);
   const root = trashRoot(nasPath);
-  let removed = false;
-  const kept = lines.filter((line) => {
-    try {
-      const entry = JSON.parse(line) as Record<string, unknown>;
-      if (typeof entry.trashPath !== "string") return true;
-      const resolved = resolveWithinRoot(entry.trashPath, root);
-      if (samePath(resolved, targetTrashPath)) {
-        removed = true;
-        return false;
-      }
-    } catch {
-      // Preserve malformed/unknown lines rather than destroying recovery data.
-    }
-    return true;
-  });
-  if (!removed) return false;
-
-  const tempPath = `${filePath}.${operationId}.tmp`;
-  const content = kept.length ? `${kept.join("\n")}\n` : "";
-  const fd = fs.openSync(tempPath, "w", 0o600);
+  let resolvedTarget: string;
   try {
-    fs.writeSync(fd, content);
+    resolvedTarget = resolveTrashPath(targetTrashPath, root);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("symlink")) throw error;
+    return false;
+  }
+  let targetExists = false;
+  try {
+    fs.lstatSync(resolvedTarget);
+    targetExists = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (targetExists) {
+    throw new Error("Trash file still exists; refusing to mark its manifest entry as removed");
+  }
+  const { entries } = readTrashManifest(nasPath);
+  if (!entries.some((entry) => {
+    try { return samePath(resolveTrashPath(entry.trashPath, root), resolvedTarget); }
+    catch { return false; }
+  })) return false;
+
+  // The manifest is an append-only journal. A tombstone makes removal durable
+  // without replacing the file; a crash can never erase unrelated trash rows.
+  const tombstone = {
+    recordType: "REMOVE",
+    operationId,
+    trashPath: resolvedTarget,
+    removedAt: new Date().toISOString(),
+  };
+  const fd = openValidatedTrashManifest(filePath, "append-existing");
+  try {
+    fs.writeSync(fd, JSON.stringify(tombstone) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  try {
-    try {
-      fs.renameSync(tempPath, filePath);
-    } catch (error: any) {
-      // Windows cannot replace an existing file with renameSync. The durable
-      // operation state still makes this recoverable if this small gap fails.
-      if (process.platform !== "win32") throw error;
-      fs.rmSync(filePath, { force: true });
-      fs.renameSync(tempPath, filePath);
-    }
-  } finally {
-    fs.rmSync(tempPath, { force: true });
-  }
-  try { fs.chmodSync(filePath, 0o600); } catch { /* best effort */ }
   return true;
 }
 
@@ -151,7 +310,7 @@ async function markNeedsReview(operationId: string, error: string): Promise<void
 async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
   const source = resolveWithinRoot(op.sourcePath, op.nasPath);
   const trash = op.trashPath
-    ? resolveWithinRoot(op.trashPath, path.join(op.nasPath, "WillardAI", ".Trash"))
+    ? resolveTrashPath(op.trashPath, trashRoot(op.nasPath))
     : null;
   const sourceExists = fs.existsSync(source);
   const trashExists = Boolean(trash && fs.existsSync(trash));
@@ -173,33 +332,92 @@ async function reconcileCleanupOperation(op: PendingOperation): Promise<void> {
     return;
   }
 
+  if (op.mediaFileId === null) {
+    await markNeedsReview(op.operationId, "Cleanup operation has no canonical media row");
+    return;
+  }
+
+  const canonicalResult = await db.execute(sql`
+    SELECT relative_path AS "relativePath", last_scan_action AS "lastScanAction",
+           size_bytes AS "sizeBytes", content_hash AS "contentHash"
+      FROM media_files
+     WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+     LIMIT 1
+  `);
+  const canonical = canonicalResult.rows[0] as {
+    relativePath?: string;
+    lastScanAction?: string | null;
+    sizeBytes?: number | string | null;
+    contentHash?: string | null;
+  } | undefined;
+  if (!canonical || typeof canonical.relativePath !== "string") {
+    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row is missing");
+    return;
+  }
+  if (canonical.lastScanAction === "DELETED") {
+    await markNeedsReview(op.operationId, "Canonical media row was deleted independently; trash file preserved for review");
+    return;
+  }
+  let canonicalSource: string;
+  try {
+    canonicalSource = resolveLibraryPath(op.nasPath, canonical.relativePath);
+  } catch {
+    await markNeedsReview(op.operationId, "Canonical media row contains an invalid library path");
+    return;
+  }
+  if (!samePath(canonicalSource, source)) {
+    await markNeedsReview(op.operationId, "Canonical media path changed during cleanup; trash file preserved for review");
+    return;
+  }
+
+  const trashStat = fs.lstatSync(trash);
+  if (trashStat.isSymbolicLink() || !trashStat.isFile()) {
+    await markNeedsReview(op.operationId, "Cleanup trash destination is not a regular file");
+    return;
+  }
+  const expectedSize = Number(canonical.sizeBytes ?? op.sizeBytes ?? 0);
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || trashStat.size !== expectedSize ||
+      (op.sizeBytes !== null && Number(op.sizeBytes) !== expectedSize)) {
+    await markNeedsReview(op.operationId, "Trash file size no longer matches the canonical media row");
+    return;
+  }
+  const actualHash = await sha256File(trash);
+  if (canonical.contentHash != null) {
+    if (typeof canonical.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(canonical.contentHash) ||
+        actualHash.toLowerCase() !== canonical.contentHash.toLowerCase()) {
+      await markNeedsReview(op.operationId, "Trash file hash no longer matches the canonical media row");
+      return;
+    }
+  }
+
   const { entries } = readTrashManifest(op.nasPath);
   if (!entries.some((entry) => {
-    try { return samePath(resolveWithinRoot(entry.trashPath, trashRoot(op.nasPath)), trash); }
+    try { return samePath(resolveTrashPath(entry.trashPath, trashRoot(op.nasPath)), trash); }
     catch { return false; }
   })) {
     appendTrashManifestEntry(op.nasPath, {
       ts: new Date().toISOString(),
       nasPath: op.nasPath,
-      mediaFileId: op.mediaFileId ?? undefined,
+      mediaFileId: op.mediaFileId,
       originalPath: source,
       trashPath: trash,
-      sizeBytes: Number(op.sizeBytes ?? 0),
+      sizeBytes: expectedSize,
+      contentHash: actualHash,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       recoveredByStartup: true,
     });
   }
 
-  if (op.mediaFileId === null) {
-    await markNeedsReview(op.operationId, "Cleanup operation has no canonical media row");
-    return;
-  }
   const updated = await db.execute(sql`
     UPDATE media_files SET last_scan_action = 'RECYCLED'
-    WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+     WHERE id = ${op.mediaFileId} AND nas_path = ${op.nasPath}
+       AND relative_path = ${canonical.relativePath}
+       AND size_bytes IS NOT DISTINCT FROM ${canonical.sizeBytes}
+       AND content_hash IS NOT DISTINCT FROM ${canonical.contentHash}
+       AND last_scan_action IS DISTINCT FROM 'DELETED'
   `);
   if (affectedRows(updated) !== 1) {
-    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row is missing");
+    await markNeedsReview(op.operationId, "Cleanup file reached trash but its canonical media row changed during recovery");
     return;
   }
   await purgeDerivedDataForMedia(op.nasPath, [op.mediaFileId]);
@@ -216,6 +434,28 @@ export type ExpiredTrashResult = {
 };
 
 /**
+ * Verify a local-trash object before retention is allowed to destroy it.
+ * Legacy entries without a trustworthy SHA-256 are preserved for manual review.
+ */
+export async function assertTrashFileIntegrity(entry: TrashManifestEntry, trashPath: string): Promise<void> {
+  const stat = fs.lstatSync(trashPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("Expired trash object is not a regular file; preserving it for review");
+  }
+  if (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0 || stat.size !== entry.sizeBytes) {
+    throw new Error("Expired trash object size does not match its manifest; preserving it for review");
+  }
+  if (typeof entry.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(entry.contentHash)) {
+    throw new Error("Expired trash object has no valid SHA-256 manifest; preserving it for review");
+  }
+  const actualHash = await sha256File(trashPath);
+  if (actualHash.toLowerCase() !== entry.contentHash.toLowerCase()) {
+    throw new Error("Expired trash object hash does not match its manifest; preserving it for review");
+  }
+}
+
+
+/**
  * Permanently remove expired local-trash files and their canonical rows.
  * Windows' OS recycle bin is intentionally not guessed at: only manifest
  * entries with a validated WillardAI/.Trash path are eligible here.
@@ -225,37 +465,60 @@ export async function purgeExpiredTrashEntries(nasPath: string): Promise<Expired
   const { entries } = readTrashManifest(nasPath);
   const trash = trashRoot(nasPath);
   for (const entry of entries) {
-    if (!entry.expiresAt || new Date(entry.expiresAt).getTime() >= Date.now()) continue;
+    if (!isTrashEntryExpired(entry.expiresAt)) continue;
     result.expired++;
     let trashPath: string;
-    try { trashPath = resolveWithinRoot(entry.trashPath, trash); }
+    try { trashPath = resolveTrashPath(entry.trashPath, trash); }
     catch (error) {
       result.errors.push(error instanceof Error ? error.message : String(error));
       continue;
     }
     try {
-      if (fs.existsSync(trashPath)) fs.rmSync(trashPath, { force: true });
-      if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
-      if (entry.mediaFileId != null) {
-        const canonical = await db.execute(sql`
-          SELECT id
-            FROM media_files
-           WHERE id = ${Number(entry.mediaFileId)}
-             AND nas_path = ${nasPath}
-             AND last_scan_action = 'RECYCLED'
-             AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
-                 REPLACE(${entry.originalPath}, chr(92), '/')
-           LIMIT 1
-        `);
-        if (affectedRows(canonical) === 1) {
-          await purgeDerivedDataForMedia(nasPath, [Number(entry.mediaFileId)]);
-          await db.execute(sql`
-            DELETE FROM media_files
-             WHERE id = ${Number(entry.mediaFileId)}
-               AND nas_path = ${nasPath}
-               AND last_scan_action = 'RECYCLED'
-          `);
+      // A missing trash object is ambiguous: it may have been moved, manually
+      // removed, or lost during an interrupted retention run. Without a
+      // durable permanent-delete intent, never infer that it is safe to erase
+      // the canonical row or hide its manifest record.
+      const trashStat = (() => {
+        try { return fs.lstatSync(trashPath); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
         }
+      })();
+      if (!trashStat) {
+        throw new Error("expired trash file is missing without a durable deletion record; preserving canonical data for review");
+      }
+      if (entry.mediaFileId == null) {
+        throw new Error("expired trash entry has no canonical media ID; preserving it for review");
+      }
+      // Verify the canonical row before touching the only recoverable file.
+      // A stale manifest must never cause an unrelated or already-restored
+      // media row to be deleted as part of retention.
+      const canonical = await db.execute(sql`
+        SELECT id
+          FROM media_files
+         WHERE id = ${Number(entry.mediaFileId)}
+           AND nas_path = ${nasPath}
+           AND last_scan_action = 'RECYCLED'
+           AND REPLACE(nas_path || '/' || relative_path, chr(92), '/') =
+               REPLACE(${entry.originalPath}, chr(92), '/')
+         LIMIT 1
+      `);
+      if (affectedRows(canonical) !== 1) {
+        throw new Error("canonical recycled media row does not match this trash entry; preserving file for review");
+      }
+      await assertTrashFileIntegrity(entry, trashPath);
+      fs.unlinkSync(trashPath);
+      if (fs.existsSync(trashPath)) throw new Error("expired trash file still exists");
+      await purgeDerivedDataForMedia(nasPath, [Number(entry.mediaFileId)]);
+      const deleted = await db.execute(sql`
+        DELETE FROM media_files
+         WHERE id = ${Number(entry.mediaFileId)}
+           AND nas_path = ${nasPath}
+           AND last_scan_action = 'RECYCLED'
+      `);
+      if (affectedRows(deleted) !== 1) {
+        throw new Error("trash file was removed but canonical row changed during retention; manual recovery is required");
       }
       removeTrashManifestEntry(nasPath, trashPath, `expiry-${randomUUID()}`);
       result.permanentlyRemoved++;
@@ -273,7 +536,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
   }
 
   const root = trashRoot(op.nasPath);
-  const sourceTrash = resolveWithinRoot(op.sourcePath, root);
+  const sourceTrash = resolveTrashPath(op.sourcePath, root);
   const destination = resolveWithinRoot(op.trashPath, op.nasPath);
   const [row] = await db.execute(sql`
     SELECT id, relative_path AS "relativePath", last_scan_action AS "lastScanAction",
@@ -334,7 +597,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
     if (sourceExists) {
       await verifyFile(sourceTrash);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      moveFile(sourceTrash, destination);
+      moveFileNoReplace(sourceTrash, destination);
     }
     await verifyFile(destination);
   } catch (error) {
@@ -378,9 +641,7 @@ async function reconcileRestoreOperation(op: PendingOperation): Promise<void> {
  * run repeatedly after every restart; it never removes an unknown file.
  */
 export async function reconcileCleanupOperations(): Promise<void> {
-  const [settings] = await db.select({ nasPath: appSettingsTable.nasPath })
-    .from(appSettingsTable).limit(1);
-  const nasPath = settings?.nasPath?.trim();
+  const nasPath = await getActiveNasPath();
   if (!nasPath) return;
 
   const result = await db.execute(sql`

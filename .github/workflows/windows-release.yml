@@ -10,9 +10,14 @@ on:
         description: "Optional semantic version (defaults to 0.1.<run number>)"
         required: false
         type: string
+      validate_only:
+        description: "Build, sign, and test the Windows installer without publishing a GitHub release."
+        required: false
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: windows-release-${{ github.ref }}
@@ -26,6 +31,10 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -60,6 +69,7 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
 
       - name: Restore portable PostgreSQL
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
@@ -382,13 +392,13 @@ jobs:
           $setup = Join-Path $env:GITHUB_WORKSPACE "build\installer\WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe"
           $signature = Get-AuthenticodeSignature -FilePath $setup
           if ($signature.Status -ne "Valid") {
-            throw "Published installer signature status was $($signature.Status), not Valid."
+            throw "Packaged installer signature status was $($signature.Status), not Valid."
           }
           if (-not $signature.SignerCertificate) {
-            throw "Published installer has no signer certificate."
+            throw "Packaged installer has no signer certificate."
           }
           if (-not $signature.TimeStamperCertificate) {
-            throw "Published installer has no trusted timestamp certificate."
+            throw "Packaged installer has no trusted timestamp certificate."
           }
           $signer = $signature.SignerCertificate.GetNameInfo(
             [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
@@ -404,7 +414,7 @@ jobs:
           @"
           ## Windows installer trust metadata
           - Release/version: $env:GITHUB_REPOSITORY / v$env:WILLARD_VERSION
-          - Release URL: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/v$env:WILLARD_VERSION/WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe
+          - Potential release URL (only if published): $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/v$env:WILLARD_VERSION/WillardMediaCenter-$env:WILLARD_VERSION-Setup.exe
           - Build: $env:WILLARD_VERSION
           - SHA-256: $((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant())
           - Authenticode status: $($signature.Status)
@@ -438,15 +448,40 @@ jobs:
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\installer-lifecycle-smoke.ps1
 
+      - name: Upload validated release artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release-artifacts
+          if-no-files-found: error
+          path: |
+            build/installer/WillardMediaCenter-${{ env.WILLARD_VERSION }}-Setup.exe
+            build/release/WillardMediaCenter-${{ env.WILLARD_VERSION }}-windows-x64.zip
+            build/release/WillardMediaCenter-${{ env.WILLARD_VERSION }}-source.zip
+            build/release/release-manifest.json
+
+  publish-release:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated Windows release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-release-artifacts
+          path: release-assets
+
       - name: Publish installer, update ZIP, and manifest
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Willard Media Center ${{ steps.version.outputs.version }}
+          tag_name: v${{ needs.build-windows.outputs.version }}
+          name: Willard Media Center ${{ needs.build-windows.outputs.version }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            build/installer/WillardMediaCenter-${{ steps.version.outputs.version }}-Setup.exe
-            build/release/WillardMediaCenter-${{ steps.version.outputs.version }}-windows-x64.zip
-            build/release/WillardMediaCenter-${{ steps.version.outputs.version }}-source.zip
-            build/release/release-manifest.json
+            release-assets/installer/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-Setup.exe
+            release-assets/release/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-windows-x64.zip
+            release-assets/release/WillardMediaCenter-${{ needs.build-windows.outputs.version }}-source.zip
+            release-assets/release/release-manifest.json

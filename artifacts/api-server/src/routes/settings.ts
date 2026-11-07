@@ -1,16 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
 import { appSettingsTable } from "@workspace/db";
-import { asc, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { GetSettingsResponse, UpdateSettingsBody } from "@workspace/api-zod";
 import * as fs from "fs";
 import * as path from "path";
 import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream, normalizeNasPath } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
+import { handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
+import { invalidateNasPathCache } from "./media";
 import {
   getLibraryBackupStatus,
   requestLibraryBackup,
@@ -56,12 +59,46 @@ function getBrandingDir(): string {
   return path.join(process.cwd(), "data", "branding");
 }
 
+/**
+ * Do not follow a substituted data/branding symlink. realpath containment
+ * alone would treat the symlink target as the trusted root and could permit
+ * reads or deletion outside the application's own branding directory.
+ */
+function ensureBrandingDirectory(): string {
+  const dataDir = path.join(process.cwd(), "data");
+  const brandingDir = getBrandingDir();
+  for (const directory of [dataDir, brandingDir]) {
+    try {
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("Branding storage must use regular directories inside the application data folder.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      fs.mkdirSync(directory, { mode: 0o700 });
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("Branding storage directory changed during initialization.");
+      }
+    }
+  }
+  return brandingDir;
+}
+
 // Defense-in-depth: only ever read/delete files inside the branding dir, even if
 // the stored DB path were somehow tampered with.
 function isWithinBrandingDir(targetPath: string): boolean {
-  const root = path.resolve(getBrandingDir());
-  const resolved = path.resolve(targetPath);
-  return resolved === root || resolved.startsWith(root + path.sep);
+  try {
+    ensureBrandingDirectory();
+    // Lexical containment alone does not stop a symlink inside branding/
+    // from pointing at an arbitrary readable file elsewhere on the machine.
+    const root = fs.realpathSync(getBrandingDir());
+    const resolved = fs.realpathSync(targetPath);
+    const relative = path.relative(root, resolved);
+    return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
+  } catch {
+    return false;
+  }
 }
 
 async function getOrCreateSettings() {
@@ -153,7 +190,6 @@ router.put("/settings", async (req, res) => {
       }
       try {
         bootstrapWillardAIDir(normalizedNasPath);
-        nasLogStream.setNasPath(normalizedNasPath).catch(() => {});
         logger.info({ nasPath: normalizedNasPath }, "WillardAI directory bootstrapped on NAS");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
@@ -173,6 +209,16 @@ router.put("/settings", async (req, res) => {
       .set({ ...rest, ...extra })
       .where(eq(appSettingsTable.id, existing.id))
       .returning();
+
+    if (normalizedNasPath && normalizedNasPath !== existing.nasPath) {
+      invalidateNasPathCache();
+      // Switch the background log destination only after the new library path
+      // has been committed. A failed settings write must leave the old stream
+      // attached to the still-active library.
+      nasLogStream.setNasPath(normalizedNasPath).catch((error) => {
+        logger.warn({ err: error, nasPath: normalizedNasPath }, "Unable to switch NAS log stream after library settings update");
+      });
+    }
 
     if (normalizedNasPath && normalizedNasPath !== existing.nasPath && existing.nasPath && updated.nasPath) {
       const cancelledJobs = cancelJobsForLibrary(existing.nasPath);
@@ -311,8 +357,19 @@ router.get("/settings/logo", async (_req, res) => {
       ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
       "application/octet-stream";
     res.setHeader("Content-Type", contentType);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // SVG is an active document format. Keep uploaded branding inert even if
+    // someone navigates directly to this same-origin endpoint.
+    if (ext === ".svg") {
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
     res.setHeader("Cache-Control", "no-cache");
-    fs.createReadStream(settings.logoPath).pipe(res);
+    const stream = fs.createReadStream(settings.logoPath);
+    stream.on("error", (streamError) => {
+      logger.error({ err: streamError }, "Branding logo stream failed");
+      handlePrivateMediaStreamError(res, streamError, "Logo file not found");
+    });
+    stream.pipe(res);
   } catch (err) {
     res.status(500).json({ error: "Failed to load logo" });
   }
@@ -337,26 +394,46 @@ router.post(
       const body = file.buffer;
 
       const settings = await getOrCreateSettings();
-      const dir = getBrandingDir();
-      fs.mkdirSync(dir, { recursive: true });
+      const dir = ensureBrandingDirectory();
 
-      // Remove any previously stored logo (it may have a different extension)
-      if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
-        try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
+      // Publish to a unique path first. Never delete the current logo until
+      // the replacement is safely written and its database pointer is committed.
+      const destPath = path.join(dir, `logo-${randomUUID()}.${ext}`);
+      fs.writeFileSync(destPath, body, { flag: "wx" });
+
+      let updated: typeof settings;
+      try {
+        const [saved] = await db
+          .update(appSettingsTable)
+          .set({ logoPath: destPath })
+          .where(and(
+            eq(appSettingsTable.id, settings.id),
+            settings.logoPath ? eq(appSettingsTable.logoPath, settings.logoPath) : isNull(appSettingsTable.logoPath),
+          ))
+          .returning();
+        if (!saved) {
+          const conflict = new Error("Branding logo changed during upload. Refresh settings and try again.");
+          Object.assign(conflict, { status: 409 });
+          throw conflict;
+        }
+        updated = saved;
+      } catch (error) {
+        try { fs.unlinkSync(destPath); } catch { /* preserve original database pointer */ }
+        throw error;
       }
 
-      const destPath = path.join(dir, `logo.${ext}`);
-      fs.writeFileSync(destPath, body);
-
-      const [updated] = await db
-        .update(appSettingsTable)
-        .set({ logoPath: destPath })
-        .where(eq(appSettingsTable.id, settings.id))
-        .returning();
+      if (settings.logoPath && settings.logoPath !== destPath &&
+          isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
+        try { fs.unlinkSync(settings.logoPath); } catch { /* old logo is harmless orphan; cleanup can retry */ }
+      }
 
       logger.info({ destPath }, "Branding logo uploaded");
       res.json(sanitizeSettings(updated));
     } catch (err) {
+      if (typeof err === "object" && err !== null && "status" in err && err.status === 409) {
+        res.status(409).json({ error: err instanceof Error ? err.message : "Branding logo changed during upload." });
+        return;
+      }
       logger.error({ err }, "Failed to upload logo");
       res.status(500).json({ error: "Failed to upload logo" });
     }
@@ -366,14 +443,24 @@ router.post(
 router.delete("/settings/logo", async (_req, res) => {
   try {
     const settings = await getOrCreateSettings();
-    if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
-      try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal */ }
-    }
     const [updated] = await db
       .update(appSettingsTable)
       .set({ logoPath: null })
-      .where(eq(appSettingsTable.id, settings.id))
+      .where(and(
+        eq(appSettingsTable.id, settings.id),
+        settings.logoPath ? eq(appSettingsTable.logoPath, settings.logoPath) : isNull(appSettingsTable.logoPath),
+      ))
       .returning();
+    if (!updated) {
+      res.status(409).json({ error: "Branding logo changed before it could be removed. Refresh settings and try again." });
+      return;
+    }
+
+    // Clear the database pointer first. If the database update fails, preserve
+    // the current logo; a failed best-effort unlink can only leave an orphan.
+    if (settings.logoPath && isWithinBrandingDir(settings.logoPath) && fs.existsSync(settings.logoPath)) {
+      try { fs.unlinkSync(settings.logoPath); } catch { /* non-fatal orphan cleanup */ }
+    }
     res.json(sanitizeSettings(updated));
   } catch (err) {
     res.status(500).json({ error: "Failed to remove logo" });

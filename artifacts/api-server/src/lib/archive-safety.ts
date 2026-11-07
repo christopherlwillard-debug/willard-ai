@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { Transform } from "node:stream";
 import { assertWithinRoot } from "./nas-storage.ts";
+import { moveFileNoReplace } from "./organize-helpers.ts";
 
 /**
  * These limits are deliberately finite even though the NAS may be large.
@@ -17,8 +19,23 @@ export const ARCHIVE_LIMITS = Object.freeze({
   maxArchiveBytes: 128 * 1024 ** 3,
   maxBufferedZipBytes: 1 * 1024 ** 3,
   maxBufferedZipEntryBytes: 512 * 1024 ** 2,
+  maxDecompressedTarBytes: 66 * 1024 ** 3,
 });
 
+export function createArchiveExpansionLimiter(maxBytes: number): Transform {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("Invalid archive expansion limit");
+  let bytesWritten = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytesWritten += chunk.length;
+      if (bytesWritten > maxBytes) {
+        callback(new ArchiveSafetyError("Decompressed archive exceeds the " + formatBytes(maxBytes) + " safety limit"));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
 export class ArchiveSafetyError extends Error {
   readonly code = "ARCHIVE_SAFETY_LIMIT";
 
@@ -32,6 +49,11 @@ export interface ArchiveBudget {
   entryCount: number;
   totalBytes: number;
   paths: Set<string>;
+  /** File paths and explicit or implicit directory paths are tracked separately
+   * so a file cannot occupy a path required as a parent directory (or vice versa).
+   */
+  filePaths: Set<string>;
+  directoryPaths: Set<string>;
 }
 
 export interface ArchiveEntryMetadata {
@@ -40,8 +62,95 @@ export interface ArchiveEntryMetadata {
   isDirectory?: boolean;
 }
 
+/**
+ * ZIP external attributes store Unix file type in the high 16 bits.
+ * Mask the file-type nibble: comparing the full mode to 0xA000 misses
+ * normal symlinks because permission bits are also present.
+ */
+export function isZipSymlinkEntry(externalAttributes: number | undefined): boolean {
+  if (typeof externalAttributes !== "number") return false;
+  const unixFileType = (externalAttributes >>> 16) & 0xF000;
+  const dosAttributes = externalAttributes & 0xFFFF;
+  // Unix creators store S_IFLNK in the upper 16-bit mode. Windows creators
+  // store FILE_ATTRIBUTE_REPARSE_POINT in the lower DOS attribute word.
+  return unixFileType === 0xA000 || (dosAttributes & 0x0400) !== 0;
+}
+
+/** TAR entry types that create filesystem links rather than regular files. */
+export function isTarLinkEntry(type: unknown): boolean {
+  return type === "SymbolicLink" || type === "Link" || type === "HardLink";
+}
+
+/**
+ * node-7z's ordinary list event exposes only the compact DOS attribute
+ * column (for example "....A"). With its `techInfo` option enabled, the
+ * POSIX mode is available separately in techInfo.get("Attributes").
+ * Check both fields: a symlink mode such as "A_ lrwxrwxrwx" is not present
+ * in the ordinary attributes column.
+ */
+export function isSevenZipLinkEntry(
+  attributes: string | undefined,
+  technicalAttributes?: string | undefined,
+): boolean {
+  return [attributes, technicalAttributes].some(value =>
+    typeof value === "string" && (
+      value.includes("L") ||
+      /(?:^|\s)l[rwxstST-]{9}(?:\s|$)/.test(value)
+    ),
+  );
+}
+
+export function isSevenZipDirectoryEntry(
+  attributes: string | undefined,
+  folder?: string | undefined,
+): boolean {
+  if (folder === "+" || folder?.toLowerCase() === "true") return true;
+  if (typeof attributes !== "string") return false;
+  const trimmed = attributes.trimStart();
+  return trimmed.startsWith("D") ||
+    /(?:^|\s)d[rwxstST-]{9}(?:\s|$)/.test(trimmed);
+}
+
+export interface SevenZipEntryInfo {
+  isDirectory: boolean;
+  isLink: boolean;
+  sizeBytes?: number | string;
+  crc?: number | string;
+}
+
+/**
+ * Read the actual node-7z list event shape. In techInfo mode, size, CRC,
+ * Folder, and POSIX Attributes are carried in a Map rather than the ordinary
+ * event's size/attributes fields.
+ */
+export function getSevenZipEntryInfo(entry: {
+  attributes?: unknown;
+  size?: unknown;
+  crc?: unknown;
+  techInfo?: { get(key: string): unknown };
+}): SevenZipEntryInfo {
+  const technicalAttributes = entry.techInfo?.get("Attributes");
+  const folder = entry.techInfo?.get("Folder");
+  const rawSize = entry.size ?? entry.techInfo?.get("Size");
+  const rawCrc = entry.crc ?? entry.techInfo?.get("CRC");
+  const attributes = typeof entry.attributes === "string" ? entry.attributes : undefined;
+  const mode = typeof technicalAttributes === "string" ? technicalAttributes : undefined;
+  return {
+    isDirectory: isSevenZipDirectoryEntry(mode ?? attributes, typeof folder === "string" ? folder : undefined),
+    isLink: isSevenZipLinkEntry(attributes, mode),
+    sizeBytes: typeof rawSize === "number" || typeof rawSize === "string" ? rawSize : undefined,
+    crc: typeof rawCrc === "number" || typeof rawCrc === "string" ? rawCrc : undefined,
+  };
+}
+
 export function createArchiveBudget(): ArchiveBudget {
-  return { entryCount: 0, totalBytes: 0, paths: new Set<string>() };
+  return {
+    entryCount: 0,
+    totalBytes: 0,
+    paths: new Set<string>(),
+    filePaths: new Set<string>(),
+    directoryPaths: new Set<string>(),
+  };
 }
 
 function entrySize(sizeBytes: ArchiveEntryMetadata["sizeBytes"]): number {
@@ -51,6 +160,22 @@ function entrySize(sizeBytes: ArchiveEntryMetadata["sizeBytes"]): number {
     throw new ArchiveSafetyError(`Archive entry has an invalid size: ${String(sizeBytes)}`);
   }
   return size;
+}
+
+function assertPortableArchivePathComponents(rawPath: string, components: string[]): void {
+  const reservedDevice = /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/i;
+  for (const component of components) {
+    const deviceBaseName = component.split(".", 1)[0]!.replace(/[. ]+$/g, "");
+    if (
+      /[\u0001-\u001F<>:"|?*]/.test(component) ||
+      /[. ]$/.test(component) ||
+      reservedDevice.test(deviceBaseName)
+    ) {
+      throw new ArchiveSafetyError(
+        `Archive entry "${rawPath}" contains a Windows-incompatible path component`,
+      );
+    }
+  }
 }
 
 /**
@@ -63,7 +188,7 @@ export function validateArchiveEntry(
   budget: ArchiveBudget,
 ): { normalizedPath: string; sizeBytes: number; isDirectory: boolean } {
   const rawPath = entry.path;
-  if (typeof rawPath !== "string" || rawPath.includes("\0")) {
+  if (typeof rawPath !== "string" || rawPath.length === 0 || rawPath.includes("\0")) {
     throw new ArchiveSafetyError(`Archive traversal rejected: invalid entry path`);
   }
 
@@ -72,6 +197,9 @@ export function validateArchiveEntry(
     .replace(/^(\.\/)+/, "")
     .replace(/\/+$/, "") || ".";
   const isDirectory = entry.isDirectory === true;
+  if (canonicalPath === "." && !isDirectory) {
+    throw new ArchiveSafetyError("Archive traversal rejected: file entry has no usable path");
+  }
   if (normalizedPath.length > ARCHIVE_LIMITS.maxPathLength) {
     throw new ArchiveSafetyError(
       `Archive entry path exceeds the ${ARCHIVE_LIMITS.maxPathLength}-character limit`,
@@ -80,13 +208,14 @@ export function validateArchiveEntry(
   if (
     path.isAbsolute(rawPath) ||
     path.isAbsolute(normalizedPath) ||
-    /^[A-Za-z]:[\\/]/.test(rawPath) ||
+    /^[A-Za-z]:/.test(rawPath) ||
     normalizedPath.startsWith("//")
   ) {
     throw new ArchiveSafetyError(`Archive traversal rejected: absolute path in entry "${rawPath}"`);
   }
 
   const components = normalizedPath.split("/");
+  assertPortableArchivePathComponents(rawPath, components.filter(component => component !== "" && component !== "." && component !== ".."));
   if (components.some(component => component === "..")) {
     throw new ArchiveSafetyError(
       `Archive traversal rejected: ".." traversal component in entry "${rawPath}"`,
@@ -100,10 +229,35 @@ export function validateArchiveEntry(
   }
 
   const sizeBytes = entrySize(entry.sizeBytes);
-  if (budget.paths.has(canonicalPath)) {
+  // Archives may be previewed on Linux and extracted later on Windows or
+  // macOS. Reject names that collide on common case-insensitive filesystems.
+  const collisionKey = canonicalPath.normalize("NFC").toLowerCase();
+  if (budget.paths.has(collisionKey)) {
     throw new ArchiveSafetyError(`Archive contains duplicate entry path "${rawPath}"`);
   }
-  budget.paths.add(canonicalPath);
+
+  const collisionComponents = collisionKey.split("/");
+  const parentKeys = collisionComponents.slice(0, -1).map((_component, index) =>
+    collisionComponents.slice(0, index + 1).join("/"),
+  );
+  if (parentKeys.some(parent => budget.filePaths.has(parent))) {
+    throw new ArchiveSafetyError(
+      `Archive entry "${rawPath}" conflicts with an existing file used as a parent directory`,
+    );
+  }
+  if (!isDirectory && budget.directoryPaths.has(collisionKey)) {
+    throw new ArchiveSafetyError(
+      `Archive file "${rawPath}" conflicts with an existing directory or child entry`,
+    );
+  }
+
+  budget.paths.add(collisionKey);
+  if (isDirectory) {
+    budget.directoryPaths.add(collisionKey);
+  } else {
+    budget.filePaths.add(collisionKey);
+  }
+  for (const parent of parentKeys) budget.directoryPaths.add(parent);
   budget.entryCount++;
   if (budget.entryCount > ARCHIVE_LIMITS.maxEntries) {
     throw new ArchiveSafetyError(
@@ -280,7 +434,9 @@ export function writeArchiveFileAtomically(
     fs.closeSync(fd);
     fd = undefined;
     assertSafeOutputFile(root, outputPath);
-    fs.renameSync(temporaryPath, outputPath);
+    // The final publication must be exclusive too: a file can appear after
+    // the preflight check, and POSIX rename would silently replace it.
+    moveFileNoReplace(temporaryPath, outputPath);
     assertSafeOutputFile(root, outputPath);
   } finally {
     if (fd !== undefined) {

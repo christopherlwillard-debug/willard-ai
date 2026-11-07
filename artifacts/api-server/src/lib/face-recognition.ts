@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import crypto from "node:crypto";
-import { db, pool, appSettingsTable } from "@workspace/db";
+import { pool } from "@workspace/db";
+import { getActiveAppSettings } from "./active-library.ts";
 import { checkNasReachableAsync, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { logger } from "./logger.ts";
 import { isVectorAvailable } from "./vector-capability.ts";
@@ -584,10 +585,7 @@ export async function runFaceTick(): Promise<void> {
     let nasPath: string | null = null;
     let paused = false;
     try {
-      const [row] = await db.select({
-        nasPath: appSettingsTable.nasPath,
-        indexingPaused: appSettingsTable.indexingPaused,
-      }).from(appSettingsTable).limit(1);
+      const row = await getActiveAppSettings();
       nasPath = row?.nasPath ?? null;
       paused = row?.indexingPaused ?? false;
     } catch { return; }

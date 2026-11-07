@@ -14,6 +14,7 @@ import { appSettingsTable, organizationJobsTable, conversionJobsTable } from "@w
 import { eq, inArray, or, and, isNotNull } from "drizzle-orm";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { getActiveNasPath } from "./lib/active-library.ts";
 import { bootstrapWillardAIDir, nasLogStream, checkNasReachableAsync } from "./lib/nas-storage";
 import { checkMediaToolsOnStartup } from "./lib/media-tools";
 import { recoverInterruptedJobs, notifyUiConnected, emitStartupHealth, startThumbnailReconciliation } from "./lib/library-engine";
@@ -22,12 +23,13 @@ import { startLibraryMonitor } from "./lib/library-monitor";
 import { startLibraryWatcher } from "./lib/library-watcher";
 import { startAiEnrichment } from "./lib/ai-enrichment";
 import { startFaceRecognition } from "./lib/face-recognition";
-import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "./lib/conversion-recovery";
 import { isVectorAvailable, setVectorAvailable } from "./lib/vector-capability";
 import { withSchemaBootstrapLock, type Queryable } from "./lib/schema-bootstrap-lock";
 import { isShuttingDown } from "./lib/shutdown-state.ts";
 import { apiErrorHandler, apiNotFoundHandler } from "./lib/api-errors.ts";
 import { markStartupDegraded } from "./lib/startup-health.ts";
+import { isSessionCredentialCurrent, isSessionInactive } from "./lib/auth-session-guard.ts";
+import { revokeSession } from "./lib/auth-session-revocation.ts";
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   "http://localhost",
@@ -44,11 +46,17 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
 
 const pool = dbPool;
 
+type RequiredSchemaVerification = {
+  ready: boolean;
+  missing: string[];
+};
+
 type RequiredSchemaBootstrap = {
   runRequiredSchema: (
     client: Queryable,
     options?: { log?: boolean },
   ) => Promise<void>;
+  verifyRequiredSchema: (client: Queryable) => Promise<RequiredSchemaVerification>;
 };
 
 function loadRequiredSchemaBootstrap(): RequiredSchemaBootstrap {
@@ -64,8 +72,11 @@ function loadRequiredSchemaBootstrap(): RequiredSchemaBootstrap {
     if (!existsSync(candidate)) continue;
     try {
       const bootstrap = createRequire(import.meta.url)(candidate) as Partial<RequiredSchemaBootstrap>;
-      if (typeof bootstrap.runRequiredSchema !== "function") {
-        throw new Error("setup-db.cjs does not export runRequiredSchema");
+      if (
+        typeof bootstrap.runRequiredSchema !== "function" ||
+        typeof bootstrap.verifyRequiredSchema !== "function"
+      ) {
+        throw new Error("setup-db.cjs does not export the required schema verification contract");
       }
       return bootstrap as RequiredSchemaBootstrap;
     } catch (error) {
@@ -136,8 +147,15 @@ export async function initializeVectorCapability(queryable: Queryable = pool): P
 
 export async function bootstrapSessionTable(): Promise<void> {
   await withSchemaBootstrapLock(dbPool, async (client) => {
-    const { runRequiredSchema } = loadRequiredSchemaBootstrap();
-    await runRequiredSchema(client, { log: false });
+    const { runRequiredSchema, verifyRequiredSchema } = loadRequiredSchemaBootstrap();
+    let verification = await verifyRequiredSchema(client);
+    if (!verification.ready) {
+      logger.warn(
+        { missing: verification.missing },
+        "Database schema is incomplete; applying required migrations",
+      );
+      await runRequiredSchema(client, { log: false });
+    }
     await client.query(`
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_enabled boolean NOT NULL DEFAULT true;
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_schedule_hours integer NOT NULL DEFAULT 24;
@@ -147,8 +165,12 @@ export async function bootstrapSessionTable(): Promise<void> {
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_verified_at timestamp;
       ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_last_error text;
     `);
-    // pgvector is optional; probe it only after all required tables exist.
-    await initializeVectorCapability(client);
+    verification = await verifyRequiredSchema(client);
+    if (!verification.ready) {
+      throw new Error(
+        `Required database schema remains incomplete after migration: ${verification.missing.join(", ")}`,
+      );
+    }
   });
 }
 
@@ -156,10 +178,22 @@ const PgStore = connectPgSimple(session);
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-function destroySession(req: Request): Promise<void> {
-  return new Promise((resolve, reject) => {
-    req.session.destroy((error) => (error ? reject(error) : resolve()));
-  });
+async function destroySession(req: Request): Promise<void> {
+  const sid = req.sessionID;
+  // Write the durable marker before relying on deletion from the upserting store.
+  await revokeSession(sid);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((error) => (error ? reject(error) : resolve()));
+    });
+  } catch (error) {
+    try {
+      await pool.query("DELETE FROM session WHERE sid = $1", [sid]);
+    } catch (fallbackError) {
+      // A committed tombstone still blocks authorization if physical cleanup fails.
+      req.log.warn({ err: fallbackError, operation: "revoked_session_row_cleanup", sid, originalError: error }, "Session row cleanup failed; durable revocation tombstone remains active");
+    }
+  }
 }
 
 const envSecret = process.env["SESSION_SECRET"];
@@ -284,19 +318,79 @@ app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  if (sess.lastSeenAt) {
-    const elapsed = Date.now() - new Date(sess.lastSeenAt as string).getTime();
-    if (elapsed > INACTIVITY_TIMEOUT_MS) {
-      try {
-        await destroySession(req);
-      } catch (error) {
-        req.log.warn({ err: error }, "Unable to destroy expired session");
-      }
-      res.clearCookie("willard.sid");
-      res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
+  if (isSessionInactive(sess.lastSeenAt, Date.now(), INACTIVITY_TIMEOUT_MS)) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.error({ err: error }, "Unable to durably revoke expired session");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
       return;
     }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session expired due to inactivity. Please log in again." });
+    return;
   }
+  // A request that started before a password reset can finish afterward and
+  // connect-pg-simple may upsert its stale session again. Bind every session
+  // to the credential version that created it so a late save cannot restore
+  // authorization after password-change/recovery revocation.
+  const credentialSettingsId = sess.credentialSettingsId;
+  if (!Number.isSafeInteger(credentialSettingsId) || credentialSettingsId <= 0) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.error({ err: error }, "Unable to durably revoke a session without credential ownership");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session credentials are no longer valid. Please log in again." });
+    return;
+  }
+
+  let currentPasswordHash: string | null;
+  let sessionRevoked = false;
+  try {
+    const credential = await pool.query<{ password_hash: string | null; session_revoked: boolean }>(
+      `SELECT password_hash,
+              EXISTS (SELECT 1 FROM revoked_sessions WHERE sid = $2) AS session_revoked
+         FROM app_settings WHERE id = $1`,
+      [credentialSettingsId, req.sessionID],
+    );
+    currentPasswordHash = credential.rows[0]?.password_hash ?? null;
+    sessionRevoked = credential.rows[0]?.session_revoked === true;
+  } catch (error) {
+    req.log.error({ err: error, operation: "session_credential_check" }, "Unable to verify session credentials or revocation");
+    res.status(503).json({ error: "Session credentials could not be verified. Please retry." });
+    return;
+  }
+
+  if (sessionRevoked) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.error({ err: error }, "Unable to confirm an existing session revocation");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "This session has been revoked. Please log in again." });
+    return;
+  }
+
+  if (!isSessionCredentialCurrent(sess.credentialVersion, currentPasswordHash)) {
+    try {
+      await destroySession(req);
+    } catch (error) {
+      req.log.error({ err: error }, "Unable to durably revoke a session with changed credentials");
+      res.status(503).json({ error: "Session revocation could not be confirmed. Please retry." });
+      return;
+    }
+    res.clearCookie("willard.sid");
+    res.status(401).json({ error: "Session revoked because account credentials changed. Please log in again." });
+    return;
+  }
+
   if (!_firstAuthSeen) {
     _firstAuthSeen = true;
     notifyUiConnected();
@@ -310,8 +404,7 @@ app.use(apiNotFoundHandler);
 app.use(apiErrorHandler);
 
 // Initialize NAS log stream from persisted settings on startup
-db.select().from(appSettingsTable).limit(1).then(async (rows) => {
-  const nasPath = rows[0]?.nasPath;
+getActiveNasPath().then(async (nasPath) => {
   if (nasPath) {
     // Only bootstrap/attach logging when the location is actually reachable.
     // Bootstrapping an unreachable path (e.g. a Windows "Z:" drive) would
@@ -369,22 +462,6 @@ startLibraryMonitor();
 startLibraryWatcher();
 startAiEnrichment();
 startFaceRecognition();
-
-// Detect conversion jobs interrupted mid-run (server died while status was "running").
-// Mark them failed immediately so the UI can offer a retry instead of showing a stuck job.
-recoverInterruptedConversionJobs()
-  .then((count) => {
-    if (count > 0) {
-      logger.warn(
-        { count, error: INTERRUPTED_CONVERSION_ERROR },
-        "RECOVERY: Marked interrupted conversion job(s) as failed — visit Optimize Center to retry",
-      );
-    }
-  })
-  .catch((err) => {
-    markStartupDegraded("conversion_recovery", "Conversion recovery did not complete.");
-    logger.error({ err, operation: "conversion_recovery" }, "Conversion recovery did not complete");
-  });
 
 // Detect organize jobs interrupted mid-execution: "executing" status (server died) or
 // "failed" jobs that have a lastStage set (meaning they failed during execute, not during analyze).

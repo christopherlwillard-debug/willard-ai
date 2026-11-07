@@ -1,13 +1,15 @@
 import { Router, type IRouter } from "express";
-import { db, pool, appSettingsTable } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import {
   parseIntent, executeSearch, findSimilar, getSuggestions,
-  buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, type SearchIntent,
+  buildNoResultSuggestions, emptyIntent, mergeRefinedIntent, localSearchClearFilters, type SearchIntent, type SearchIntentClear,
 } from "../lib/ai-search.ts";
 import { AI_VERSION, getEnrichmentStatus } from "../lib/ai-enrichment.ts";
 import { logger } from "../lib/logger.ts";
 import { canSendToAiProvider, getAiPrivacySettings } from "../lib/ai-privacy.ts";
 import { activeMediaSql } from "../lib/media-scope.ts";
+import { getActiveNasPath } from "../lib/active-library.ts";
+import { normalizeOptionalDateOnlyRange, parseOptionalDateOnlyRange, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import {
   SAVED_SEARCH_LIMIT,
   SEARCH_HISTORY_RETENTION,
@@ -17,9 +19,7 @@ import {
 const router: IRouter = Router();
 
 async function getNasPath(): Promise<string | null> {
-  const [row] = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
-  const p = row?.nasPath?.trim();
-  return p ? p : null;
+  return getActiveNasPath();
 }
 
 function sanitizeIntent(raw: unknown): SearchIntent | null {
@@ -27,13 +27,14 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
   const base = emptyIntent();
   const o = raw as Record<string, unknown>;
   const arr = (v: unknown) => Array.isArray(v) ? v.map(String).slice(0, 10) : [];
+  const dates = normalizeOptionalDateOnlyRange(o.dateFrom, o.dateTo);
   return {
     ...base,
     semanticQuery: typeof o.semanticQuery === "string" ? o.semanticQuery : null,
     keywords: arr(o.keywords),
     mediaTypes: arr(o.mediaTypes),
-    dateFrom: typeof o.dateFrom === "string" ? o.dateFrom : null,
-    dateTo: typeof o.dateTo === "string" ? o.dateTo : null,
+    dateFrom: dates.dateFrom,
+    dateTo: dates.dateTo,
     objects: arr(o.objects),
     exclude: arr(o.exclude),
     favoriteOnly: o.favoriteOnly === true,
@@ -46,8 +47,16 @@ function sanitizeIntent(raw: unknown): SearchIntent | null {
 function localSearchIntent(query: string, previous: SearchIntent | null): SearchIntent {
   const words = query.toLowerCase().split(/\s+/).filter((word) => word.length > 2).slice(0, 7);
   const keywords = [query.toLowerCase(), ...words];
-  const fallback: SearchIntent = { ...emptyIntent(), semanticQuery: query, keywords };
-  return previous ? mergeRefinedIntent(previous, fallback) : fallback;
+  const clear: SearchIntentClear = previous ? localSearchClearFilters(query) : {};
+  const hasClearAction = Object.values(clear).some((value) => value === true || (Array.isArray(value) && value.length > 0));
+  const objectMatch = query.trim().match(/^try just\s+["']?(.+?)["']?\s+on its own\s*$/i);
+  const objectName = objectMatch?.[1]?.trim().toLowerCase();
+  const fallback: SearchIntent = hasClearAction
+    ? objectName
+      ? { ...emptyIntent(), semanticQuery: objectName, keywords: [objectName], objects: [objectName] }
+      : emptyIntent()
+    : { ...emptyIntent(), semanticQuery: query, keywords };
+  return previous ? mergeRefinedIntent(previous, fallback, clear) : fallback;
 }
 
 async function findNamedPeople(nasPath: string, query: string): Promise<string[]> {
@@ -96,12 +105,25 @@ router.post("/search/ai", async (req, res) => {
     // filters override whatever the language parse inferred.
     const f = req.body?.filters;
     if (f && typeof f === "object") {
-      if (Array.isArray(f.mediaTypes) && f.mediaTypes.length) {
+      if (Array.isArray(f.mediaTypes)) {
         intent.mediaTypes = f.mediaTypes.map(String).slice(0, 6);
       }
-      if (f.favoriteOnly === true) intent.favoriteOnly = true;
-      if (typeof f.dateFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f.dateFrom)) intent.dateFrom = f.dateFrom;
-      if (typeof f.dateTo === "string" && /^\d{4}-\d{2}-\d{2}$/.test(f.dateTo)) intent.dateTo = f.dateTo;
+      if (typeof f.favoriteOnly === "boolean") intent.favoriteOnly = f.favoriteOnly;
+      if (f.dateFrom !== undefined || f.dateTo !== undefined) {
+        try {
+          const dates = parseOptionalDateOnlyRange(f.dateFrom ?? undefined, f.dateTo ?? undefined);
+          if (f.dateFrom !== undefined) intent.dateFrom = dates.from ? String(f.dateFrom) : null;
+          if (f.dateTo !== undefined) intent.dateTo = dates.toExclusive ? String(f.dateTo) : null;
+          const normalizedDates = normalizeOptionalDateOnlyRange(intent.dateFrom, intent.dateTo);
+          intent.dateFrom = normalizedDates.dateFrom;
+          intent.dateTo = normalizedDates.dateTo;
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return res.status(400).json({ error: err.message });
+          }
+          throw err;
+        }
+      }
     }
 
     const results = await executeSearch(nasPath, intent);
@@ -136,8 +158,9 @@ router.post("/search/ai", async (req, res) => {
 
 router.get("/search/similar/:id", async (req, res) => {
   try {
-    const fileId = Number(req.params.id);
-    if (!Number.isInteger(fileId)) return res.status(400).json({ error: "Invalid file id" });
+    const fileId = parsePositiveIntegerParam(req.params.id);
+    if (fileId === null) return res.status(400).json({ error: "Invalid file id" });
+    
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
     const results = await findSimilar(nasPath, fileId);
@@ -217,14 +240,20 @@ router.post("/search/saved", async (req, res) => {
 
 router.post("/search/saved/:id/run", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
     const { rows } = await pool.query(`SELECT query, intent_json FROM saved_searches WHERE id = $1`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Saved search not found" });
     const nasPath = await getNasPath();
     if (!nasPath) return res.status(409).json({ error: "No library configured" });
     // Saved searches stay current: re-parse if no stored intent, else reuse it.
     const stored = sanitizeIntent(rows[0].intent_json);
-    const intent = stored ?? await parseIntent(rows[0].query, null);
+    const aiPrivacy = await getAiPrivacySettings();
+    const intent = stored ?? (
+      canSendToAiProvider(aiPrivacy)
+        ? await parseIntent(rows[0].query, null)
+        : localSearchIntent(rows[0].query, null)
+    );
     const results = await executeSearch(nasPath, intent);
     pool.query(`UPDATE saved_searches SET last_used_at = now() WHERE id = $1`, [id]).catch(() => {});
     return res.json({
@@ -238,7 +267,9 @@ router.post("/search/saved/:id/run", async (req, res) => {
 });
 
 router.delete("/search/saved/:id", async (req, res) => {
-  await pool.query(`DELETE FROM saved_searches WHERE id = $1`, [Number(req.params.id)]);
+  const id = parsePositiveIntegerParam(req.params.id);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+  await pool.query(`DELETE FROM saved_searches WHERE id = $1`, [id]);
   res.json({ ok: true });
 });
 

@@ -244,9 +244,29 @@ pnpm install
 
 Terminal 1 — API server (reads `.env`, listens on port 8080):
 
+For a direct local first launch, explicitly enable the loopback-only setup
+bypass. The packaged and developer desktop launchers set these values for you;
+a manually started API process does not. Set them only in the local API
+terminal, and do not use this bypass on a hosted server or behind a reverse
+proxy.
+
+PowerShell:
+
 ```powershell
+$env:HOST = "127.0.0.1"
+$env:WILLARD_LOCAL_SETUP = "true"
 pnpm --filter @workspace/api-server run dev
 ```
+
+macOS/Linux:
+
+```bash
+HOST=127.0.0.1 WILLARD_LOCAL_SETUP=true pnpm --filter @workspace/api-server run dev
+```
+
+After the first administrator password is created, the local setup bypass is
+no longer needed. Remote/LAN first-run setup must instead use the
+operator-configured `WILLARD_SETUP_TOKEN`.
 
 Terminal 2 — web app (defaults to http://localhost:5000):
 

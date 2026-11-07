@@ -1,20 +1,22 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { archivesTable, appSettingsTable, mediaFilesTable } from "@workspace/db";
+import { archivesTable, mediaFilesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import { sendToWindowsRecycleBin } from "../lib/windows-recycle-bin.ts";
 import { randomUUID } from "crypto";
-import { resolveLibraryPath, resolveWithinRoot, getWillardAIDir, appendPrivateJsonl } from "../lib/nas-storage";
+import { canonicalizePath, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot, appendPrivateJsonl } from "../lib/nas-storage";
 import { activeMediaCondition, activeMediaSql } from "../lib/media-scope.ts";
-import { appendTrashManifestEntry, manifestPath, purgeExpiredTrashEntries, readTrashManifest, removeTrashManifestEntry } from "../lib/cleanup-recovery.ts";
-import { sha256File } from "../lib/organize-helpers.ts";
+import { appendTrashManifestEntry, manifestPath, readTrashManifest, removeTrashManifestEntry, resolveLibraryTrashPath } from "../lib/cleanup-recovery.ts";
+import { moveFileNoReplace, sha256File } from "../lib/organize-helpers.ts";
 import { DUPLICATE_CONFIRMATION_LIMIT_BYTES } from "../lib/library-engine/indexer.ts";
 import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { getDuplicateSummary } from "../lib/duplicate-summary.ts";
+import { findEmptyDirectories } from "../lib/empty-folder-scan.ts";
+import { parseBoundedInteger, RequestValidationError } from "../lib/request-validation.ts";
 
 const router: IRouter = Router();
 
@@ -38,14 +40,12 @@ router.get("/cleanup/duplicates", async (req, res) => {
       res.json({ groups: [], totalGroups: 0, totalWastedBytes: 0 });
       return;
     }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "20"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const pageLimit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 20));
-    const pageOffset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const pageLimit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 100, defaultValue: 20 });
+    const pageOffset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
 
     // ── 1. Exact-hash groups ────────────────────────────────────────────────
     const exactHashGroups = await db.execute(sql`
-      SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size
+      SELECT content_hash AS group_key, COUNT(*) as file_count, SUM(size_bytes) as total_size, MAX(size_bytes) as largest_file_size
       FROM ${mediaFilesTable}
        WHERE nas_path = ${nasPath}
          AND content_hash IS NOT NULL
@@ -60,6 +60,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         m.quick_fingerprint AS group_key,
         COUNT(*) AS file_count,
          SUM(m.size_bytes) AS total_size,
+        MAX(m.size_bytes) AS largest_file_size,
          COUNT(*) FILTER (
            WHERE m.content_hash IS NULL
              AND m.size_bytes > ${DUPLICATE_CONFIRMATION_LIMIT_BYTES}
@@ -82,6 +83,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       groupKey: string;
       fileCount: number;
       totalSize: number;
+      largestFileSize: number;
       matchType: "HASH_IDENTICAL" | "PERCEPTUAL_SIMILAR";
       matchConfidence: number;
       confirmationStatus: "CONFIRMED" | "UNCONFIRMED_FINGERPRINT" | "UNCONFIRMED_LARGE";
@@ -92,6 +94,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         groupKey:        String(r.group_key),
         fileCount:       parseInt(r.file_count),
         totalSize:       Number(r.total_size),
+        largestFileSize: Number(r.largest_file_size),
         matchType:       "HASH_IDENTICAL" as const,
         matchConfidence: 5,
         confirmationStatus: "CONFIRMED" as const,
@@ -100,6 +103,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
         groupKey:        String(r.group_key),
         fileCount:       parseInt(r.file_count),
         totalSize:       Number(r.total_size),
+        largestFileSize: Number(r.largest_file_size),
         matchType:       "PERCEPTUAL_SIMILAR" as const,
         matchConfidence: Number(r.large_unconfirmed_count) > 0 ? 2 : 4,
         confirmationStatus: Number(r.large_unconfirmed_count) > 0
@@ -107,14 +111,14 @@ router.get("/cleanup/duplicates", async (req, res) => {
           : "UNCONFIRMED_FINGERPRINT" as const,
       })),
     ].sort((a, b) => {
-      const wastedA = (a.fileCount - 1) * (a.totalSize / a.fileCount);
-      const wastedB = (b.fileCount - 1) * (b.totalSize / b.fileCount);
+      const wastedA = a.totalSize - a.largestFileSize;
+      const wastedB = b.totalSize - b.largestFileSize;
       return wastedB - wastedA;
     });
 
     const totalGroups      = allRaw.length;
     const totalWastedBytes = allRaw.reduce((sum, g) => {
-      return sum + Math.round((g.fileCount - 1) * (g.totalSize / g.fileCount));
+      return sum + Math.max(0, g.totalSize - g.largestFileSize);
     }, 0);
 
     // Apply pagination to the merged list
@@ -182,7 +186,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
       }
 
       const wastedBytes = raw.fileCount > 1
-        ? Math.round((raw.fileCount - 1) * (raw.totalSize / raw.fileCount))
+        ? Math.max(0, raw.totalSize - raw.largestFileSize)
         : 0;
 
       return {
@@ -200,6 +204,7 @@ router.get("/cleanup/duplicates", async (req, res) => {
 
     res.json({ groups, totalGroups, totalWastedBytes });
   } catch (e: any) {
+    if (e instanceof RequestValidationError) { res.status(400).json({ error: e.message }); return; }
     logger.error({ err: e, operation: "cleanup_duplicates" }, "Duplicate cleanup failed");
     res.status(500).json({ error: "Failed to get duplicates" });
   }
@@ -211,10 +216,8 @@ router.get("/cleanup/large-files", async (req, res) => {
   try {
     const nasPath = await getConfiguredNasPath();
     if (!nasPath) { res.json({ files: [], total: 0, totalSizeBytes: 0 }); return; }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
-    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const limit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 200, defaultValue: 50 });
+    const offset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
     const result = await db.execute(sql`
       SELECT id, nas_path || '/' || relative_path AS path, name AS filename, extension,
              media_type AS "fileType", size_bytes AS "sizeBytes", modified_at AS "modifiedAt",
@@ -234,7 +237,8 @@ router.get("/cleanup/large-files", async (req, res) => {
     `);
     const row = (totals.rows[0] ?? {}) as any;
     res.json({ files: result.rows, total: Number(row.total ?? 0), totalSizeBytes: Number(row.total_size ?? 0) });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestValidationError) { res.status(400).json({ error: error.message }); return; }
     res.status(500).json({ error: "Failed to get large files" });
   }
 });
@@ -245,10 +249,8 @@ router.get("/cleanup/old-files", async (req, res) => {
   try {
     const nasPath = await getConfiguredNasPath();
     if (!nasPath) { res.json({ files: [], total: 0 }); return; }
-    const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
-    const rawOffset = Number.parseInt(String(req.query.offset ?? "0"), 10);
-    const limit = Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 50));
-    const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
+    const limit = parseBoundedInteger(req.query.limit, { name: "limit", min: 1, max: 200, defaultValue: 50 });
+    const offset = parseBoundedInteger(req.query.offset, { name: "offset", min: 0, max: 10_000_000, defaultValue: 0 });
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - OLD_FILE_YEARS);
     const result = await db.execute(sql`
@@ -269,7 +271,8 @@ router.get("/cleanup/old-files", async (req, res) => {
          AND ${activeMediaCondition}
     `);
     res.json({ files: result.rows, total: Number((totals.rows[0] as any)?.total ?? 0) });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestValidationError) { res.status(400).json({ error: error.message }); return; }
     res.status(500).json({ error: "Failed to get old files" });
   }
 });
@@ -285,35 +288,8 @@ router.get("/cleanup/empty-folders", async (_req, res) => {
       return;
     }
 
-    const emptyFolders: { path: string; sizeBytes: number }[] = [];
-
-    function findEmptyDirs(dir: string) {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-
-      for (const e of entries) {
-        if (e.isDirectory()) findEmptyDirs(path.join(dir, e.name));
-      }
-
-      const hasFiles = entries.some(e => e.isFile());
-      const hasNonEmptySubdirs = entries.some(e => {
-        if (!e.isDirectory()) return false;
-        try {
-          const sub = fs.readdirSync(path.join(dir, e.name));
-          return sub.length > 0;
-        } catch { return false; }
-      });
-
-      if (!hasFiles && !hasNonEmptySubdirs && dir !== nasPath) {
-        emptyFolders.push({ path: dir, sizeBytes: 0 });
-      }
-    }
-
-    findEmptyDirs(nasPath);
+    const emptyFolders = (await findEmptyDirectories(nasPath))
+      .map((folderPath) => ({ path: folderPath, sizeBytes: 0 }));
     res.json(emptyFolders.slice(0, 200));
   } catch {
     res.status(500).json({ error: "Failed to find empty folders" });
@@ -355,24 +331,12 @@ router.get("/cleanup/summary", async (_req, res) => {
     const largeBytes = Number(summaryRow.large_bytes ?? 0);
     const oldFiles = Number(summaryRow.old_files ?? 0);
 
-    let emptyFolderCount = 0;
-    if (fs.existsSync(nasPath)) {
-      const distinctFolders = await db.execute(sql`
-        SELECT DISTINCT regexp_replace(relative_path, '[^/]+$', '') AS folder
-          FROM ${mediaFilesTable}
-         WHERE nas_path = ${nasPath} AND ${activeMediaCondition}
-      `);
-      for (const row of distinctFolders.rows as any[]) {
-        const relativeFolder = String(row.folder ?? "").replace(/^\/+|\/+$/g, "");
-        if (relativeFolder) {
-          try {
-            const folder = resolveLibraryPath(nasPath, relativeFolder);
-            const entries = fs.readdirSync(folder);
-            if (entries.length === 0) emptyFolderCount++;
-          } catch { /* stale rows and missing folders are ignored */ }
-        }
-      }
-    }
+    // Empty directories cannot be inferred from media_files: by definition,
+    // folders with no indexed files have no row from which to discover them.
+    // Use the same fail-closed filesystem scan as the Empty Folders feature.
+    const emptyFolderCount = fs.existsSync(nasPath)
+      ? (await findEmptyDirectories(nasPath)).length
+      : 0;
 
     res.json({
       libraryKey:            (await getActiveLibraryContext())?.libraryKey,
@@ -415,7 +379,7 @@ router.post("/cleanup/execute", async (req, res) => {
     let recoveredBytes = 0;
     const errors: string[] = [];
     const deletedFiles: Array<{ path: string; sizeBytes: number }> = [];
-    const trashTimestamp = String(Date.now());
+    const trashTimestamp = `${Date.now()}-${randomUUID()}`;
 
     const uniqueFileIds = [...new Set(deleteFileIds)];
     for (const fileId of uniqueFileIds) {
@@ -440,12 +404,54 @@ router.post("/cleanup/execute", async (req, res) => {
           errors.push(`File ID ${fileId}: stored path is outside the configured library`);
           continue;
         }
-        if (!fs.existsSync(filePath)) {
-          errors.push(`File ID ${fileId}: not found on disk (${filePath})`);
+        // Resolve the lexical database path under the canonical library root
+        // and inspect every component without following symlinks. A stale media
+        // row must never recycle a different in-library file reached through a
+        // newly substituted symlink.
+        const canonicalRoot = canonicalizePath(nasPath);
+        const lexicalPath = path.resolve(canonicalRoot, file.relativePath.replace(/[\\/]/g, path.sep));
+        const relativeToRoot = path.relative(canonicalRoot, lexicalPath);
+        if (!relativeToRoot || relativeToRoot === ".." || relativeToRoot.startsWith(".." + path.sep) || path.isAbsolute(relativeToRoot)) {
+          errors.push(`File ID ${fileId}: stored path is not a regular child of the configured library`);
           continue;
         }
-
+        let currentPath = canonicalRoot;
+        const components = relativeToRoot.split(path.sep).filter(Boolean);
+        let sourceStat: fs.Stats;
+        try {
+          for (let index = 0; index < components.length; index += 1) {
+            currentPath = path.join(currentPath, components[index]!);
+            const info = fs.lstatSync(currentPath);
+            if (info.isSymbolicLink()) throw new Error("Stored media path contains a symbolic link");
+            if (index < components.length - 1 && !info.isDirectory()) throw new Error("Stored media path has a non-directory parent");
+            if (index === components.length - 1 && !info.isFile()) throw new Error("Stored media path is not a regular file");
+            if (index === components.length - 1) sourceStat = info;
+          }
+        } catch (error) {
+          errors.push(`File ID ${fileId}: ${error instanceof Error ? error.message : "source file is unavailable"}`);
+          continue;
+        }
+        if (path.resolve(filePath) !== path.resolve(lexicalPath)) {
+          errors.push(`File ID ${fileId}: stored path resolved through a link or changed canonical location`);
+          continue;
+        }
         const sizeBytes = file.sizeBytes ?? 0;
+        if (sourceStat!.size !== Number(sizeBytes)) {
+          errors.push(`File ID ${fileId}: source size changed since indexing; refresh the library before cleanup`);
+          continue;
+        }
+        const currentContentHash = await sha256File(filePath);
+        if (file.contentHash != null) {
+          if (typeof file.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(file.contentHash)) {
+            errors.push(`File ID ${fileId}: indexed content hash is invalid; refresh the library before cleanup`);
+            continue;
+          }
+          if (currentContentHash.toLowerCase() !== file.contentHash.toLowerCase()) {
+            errors.push(`File ID ${fileId}: source content changed since indexing; refresh the library before cleanup`);
+            continue;
+          }
+        }
+
         const operationId = randomUUID();
         let trashPath: string | null = null;
         await db.execute(sql`
@@ -457,26 +463,26 @@ router.post("/cleanup/execute", async (req, res) => {
 
         if (process.platform === "win32") {
           await db.execute(sql`UPDATE cleanup_operations SET status = 'MOVING', updated_at = NOW() WHERE operation_id = ${operationId}`);
-          // Windows: move to OS Recycle Bin via PowerShell (recoverable)
-          const psResult = spawnSync("powershell", [
-            "-NoProfile", "-Command",
-            `Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('${filePath.replace(/'/g, "''")}','OnlyErrorDialogs','SendToRecycleBin')`,
-          ], { encoding: "utf8", stdio: "pipe", timeout: 30_000 });
-
-          if (psResult.status !== 0) {
-            await db.execute(sql`UPDATE cleanup_operations SET status = 'FAILED', error = ${(psResult.stderr ?? "").slice(0, 500)}, updated_at = NOW() WHERE operation_id = ${operationId}`);
-            errors.push(`File ID ${fileId}: Recycle Bin failed: ${(psResult.stderr ?? "").slice(0, 200)}`);
+          // Keep the Windows Recycle Bin operation off the API event loop.
+          // The target path is passed as environment data, never interpolated
+          // into PowerShell source. The helper enforces a bounded process timeout.
+          try {
+            await sendToWindowsRecycleBin(filePath);
+          } catch (error) {
+            const detail = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+            await db.execute(sql`UPDATE cleanup_operations SET status = 'FAILED', error = ${detail}, updated_at = NOW() WHERE operation_id = ${operationId}`);
+            errors.push(`File ID ${fileId}: Recycle Bin failed: ${detail.slice(0, 200)}`);
             continue;
           }
           await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
         } else {
           // Linux / Replit: move to WillardAI/.Trash/<timestamp>/ (reversible by user)
           // Prefix filename with fileId to prevent collision when two deleted files share the same basename
-          const trashDir = resolveWithinRoot(
-            path.join(nasPath, "WillardAI", ".Trash", trashTimestamp),
-            getWillardAIDir(nasPath),
+          const trashRoot = ensureDirectoryWithinRoot(
+            path.join(nasPath, "WillardAI", ".Trash"),
+            nasPath,
           );
-          fs.mkdirSync(trashDir, { recursive: true });
+          const trashDir = ensureDirectoryWithinRoot(path.join(trashRoot, trashTimestamp), nasPath);
           const safeBasename = `${fileId}_${path.basename(file.name)}`;
           trashPath = resolveWithinRoot(path.join(trashDir, safeBasename), trashDir);
           await db.execute(sql`
@@ -484,7 +490,7 @@ router.post("/cleanup/execute", async (req, res) => {
             SET status = 'MOVING', trash_path = ${trashPath}, updated_at = NOW()
             WHERE operation_id = ${operationId}
           `);
-          fs.renameSync(filePath, trashPath);
+          moveFileNoReplace(filePath, trashPath);
           await db.execute(sql`UPDATE cleanup_operations SET status = 'FILESYSTEM_MOVED', updated_at = NOW() WHERE operation_id = ${operationId}`);
 
           // Record in trash manifest so user can locate the file later
@@ -496,7 +502,7 @@ router.post("/cleanup/execute", async (req, res) => {
             originalPath: filePath,
             trashPath,
             sizeBytes,
-            contentHash:  file.contentHash ?? undefined,
+            contentHash:  currentContentHash,
             expiresAt:    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           });
           await db.execute(sql`UPDATE cleanup_operations SET status = 'MANIFESTED', updated_at = NOW() WHERE operation_id = ${operationId}`);
@@ -508,6 +514,11 @@ router.post("/cleanup/execute", async (req, res) => {
           UPDATE media_files
           SET last_scan_action = 'RECYCLED'
           WHERE id = ${fileId} AND nas_path = ${nasPath}
+            AND relative_path = ${file.relativePath}
+            AND size_bytes IS NOT DISTINCT FROM ${file.sizeBytes}
+            AND content_hash IS NOT DISTINCT FROM ${file.contentHash}
+            AND last_scan_action IS DISTINCT FROM 'DELETED'
+            AND last_scan_action IS DISTINCT FROM 'RECYCLED'
         `);
         if (Number(restoredRow.rowCount ?? restoredRow.rows.length) !== 1) {
           throw new Error("File moved to trash but its canonical media row could not be marked RECYCLED");
@@ -554,7 +565,7 @@ router.get("/cleanup/trash", async (_req, res) => {
       return;
     }
 
-    await purgeExpiredTrashEntries(nasPath);
+    // GET is strictly read-only; retention cleanup runs in the background.
     const filePath = manifestPath(nasPath);
     if (!fs.existsSync(filePath)) {
       res.json({ entries: [] });
@@ -601,13 +612,9 @@ router.post("/cleanup/restore", async (req, res) => {
     }
 
     // ── Path constraint: trashPath must resolve under <nasPath>/WillardAI/.Trash ──
-    const trashDir = resolveWithinRoot(
-      path.join(nasPath, "WillardAI", ".Trash"),
-      getWillardAIDir(nasPath),
-    );
     let resolvedTrashPath: string;
     try {
-      resolvedTrashPath = resolveWithinRoot(trashPath, trashDir);
+      resolvedTrashPath = resolveLibraryTrashPath(trashPath, nasPath);
     } catch {
       res.status(400).json({ error: "Invalid trashPath — must be within the .Trash directory" });
       return;
@@ -624,7 +631,7 @@ router.post("/cleanup/restore", async (req, res) => {
     const entry = manifestEntries.find(e => {
       if (typeof e.nasPath === "string" && e.nasPath !== nasPath) return false;
       try {
-        return resolveWithinRoot(e.trashPath, trashDir) === resolvedTrashPath;
+        return resolveLibraryTrashPath(e.trashPath, nasPath) === resolvedTrashPath;
       } catch {
         return false;
       }
@@ -718,8 +725,11 @@ router.post("/cleanup/restore", async (req, res) => {
     `);
 
     // ── Ensure destination directory exists ───────────────────────────────────
-    const destinationDir = resolveWithinRoot(path.dirname(resolvedOriginalPath), nasPath);
-    fs.mkdirSync(destinationDir, { recursive: true });
+    // The destination may be lexically inside the library but have a
+    // symlinked parent. Validate each existing component before creating any
+    // missing directories so restore cannot write through an in-library link.
+    const canonicalNasRoot = canonicalizePath(nasPath);
+    ensureDirectoryWithinRoot(path.dirname(resolvedOriginalPath), canonicalNasRoot);
 
     // ── Verify and move file back ──────────────────────────────────────────────
     const verifyFile = async (filePath: string) => {
@@ -730,11 +740,11 @@ router.post("/cleanup/restore", async (req, res) => {
       }
     };
     await verifyFile(resolvedTrashPath);
-    fs.renameSync(resolvedTrashPath, resolvedOriginalPath);
+    moveFileNoReplace(resolvedTrashPath, resolvedOriginalPath);
     try {
       await verifyFile(resolvedOriginalPath);
     } catch (error) {
-      try { fs.renameSync(resolvedOriginalPath, resolvedTrashPath); } catch { /* recovery will flag the conflict */ }
+      try { moveFileNoReplace(resolvedOriginalPath, resolvedTrashPath); } catch { /* recovery will flag the conflict */ }
       await db.execute(sql`
         UPDATE cleanup_operations SET status = 'NEEDS_REVIEW',
           error = ${error instanceof Error ? error.message : "Restored file verification failed"},

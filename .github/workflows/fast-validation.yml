@@ -11,12 +11,26 @@ permissions:
 
 concurrency:
   group: fast-validation-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve long-running Linux/Windows validation when a newer audit commit is pushed.
+  cancel-in-progress: false
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: willard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d willard"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -59,21 +73,278 @@ jobs:
       - name: Typecheck and validate generated contracts
         run: |
           pnpm run check:artifacts
-          pnpm run typecheck
           pnpm run check:router
           pnpm run check:api-contracts
+          pnpm run typecheck
+
+      - name: Smoke-test Expo CLI configuration after dependency overrides
+        run: pnpm --filter @workspace/willard-mobile exec expo config --json > /dev/null
+
+      - name: Validate desktop web server safety
+        run: node --test desktop/web-server-safety.test.mjs
 
       - name: Validate release and storage contracts
         run: |
           pnpm run test:database-backup
           pnpm run test:release-contracts
+          pnpm run test:ui-contracts
+          node --experimental-strip-types --test artifacts/willard-ai/src/lib/__tests__/library-job-recovery.test.ts artifacts/willard-ai/src/lib/__tests__/health-cleanup-events.test.ts
           pnpm run test:storage-conformance
 
+      - name: Verify official Windows 7-Zip download retry policy
+        run: node --test scripts/windows/prepare-official-7zip-retry.test.mjs
+
+      - name: Download and verify official static 7-Zip 26.05
+        run: |
+          mkdir -p "$RUNNER_TEMP/official-7zip"
+          archive="$RUNNER_TEMP/7z2605-linux-x64.tar.xz"
+          curl --fail --location --silent --show-error "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-linux-x64.tar.xz" --output "$archive"
+          echo "22cf82fcc6eb7474f1d5bb4f02c0f8ebd573a718089d6833dc30f8350a3b232e  $archive" | sha256sum --check -
+          tar -xJf "$archive" -C "$RUNNER_TEMP/official-7zip"
+          chmod 0555 "$RUNNER_TEMP/official-7zip/7zzs"
+
+      - name: Verify official static 7-Zip works with node-7z
+        env:
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7zzs
+          WILLARD_7ZIP_LINK_ARCHIVE_OUTPUT: ${{ runner.temp }}/sevenzip-link-fixture.7z
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/sevenzip-bin-full.compat.test.mjs
+
+      - name: Share the verified symlink archive with Windows validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sevenzip-link-fixture
+          path: ${{ runner.temp }}/sevenzip-link-fixture.7z
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Verify media LIKE filters against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-query-validation.test.ts
+
+      - name: Verify PostgreSQL conversion advisory locks across connections
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-job-lock-postgres.test.ts
+
+      - name: Verify conversion finalization restart recovery with PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalization-recovery-postgres.test.ts
+
+      - name: Verify session revocation tombstones survive late PostgreSQL upserts
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/auth-session-revocation-postgres.test.ts
+
       - name: Run targeted backend regressions
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/willard
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7zzs
         run: |
           node --experimental-strip-types --test \
             artifacts/api-server/src/__tests__/capacity-service.test.ts \
+            artifacts/api-server/src/__tests__/organize-preflight-capacity.test.ts \
+            artifacts/api-server/src/__tests__/request-validation.test.ts \
+            artifacts/api-server/src/__tests__/media-query-validation.test.ts \
             artifacts/api-server/src/__tests__/cleanup-queue.test.ts \
+            artifacts/api-server/src/__tests__/cleanup-retention.test.ts \
+            artifacts/api-server/src/__tests__/cleanup-recovery-manifest.test.ts \
+            artifacts/api-server/src/__tests__/windows-recycle-bin.test.ts \
             artifacts/api-server/src/__tests__/organize-helpers.test.ts \
+            artifacts/api-server/src/__tests__/sevenzip-path.test.ts \
+            artifacts/api-server/src/__tests__/archive-safety.test.ts \
+            artifacts/api-server/src/__tests__/archive-tar-input.test.ts \
+            artifacts/api-server/src/__tests__/archive-classification.test.ts \
             artifacts/api-server/src/__tests__/storage-policy.test.ts \
-            artifacts/api-server/src/__tests__/thumbnail-engine.test.ts
+            artifacts/api-server/src/__tests__/nas-storage-paths.test.ts \
+            artifacts/api-server/src/__tests__/storage-migration.test.ts \
+            artifacts/api-server/src/__tests__/thumbnail-engine.test.ts \
+            artifacts/api-server/src/__tests__/private-media-response.test.ts \
+            artifacts/api-server/src/__tests__/media-rename.test.ts \
+            artifacts/api-server/src/__tests__/auth-session-guard.test.ts \
+            artifacts/api-server/src/__tests__/setup-authorization.test.ts \
+            artifacts/api-server/src/__tests__/install-auth-reliability.test.ts \
+            artifacts/api-server/src/__tests__/schema-bootstrap.test.ts \
+            artifacts/api-server/src/__tests__/schema-bootstrap-postgres.test.ts \
+            artifacts/api-server/src/__tests__/empty-folder-scan.test.ts \
+            artifacts/api-server/src/__tests__/ai-library-context.test.ts \
+            artifacts/api-server/src/__tests__/media-health-scan.test.ts \
+            artifacts/api-server/src/__tests__/library-consistency-contract.test.ts \
+            artifacts/api-server/src/__tests__/active-library-cache.test.ts \
+            artifacts/api-server/src/__tests__/storage-active-library.test.ts \
+            artifacts/api-server/src/__tests__/canonical-active-library.test.ts \
+            artifacts/api-server/src/__tests__/background-active-library.test.ts \
+            artifacts/api-server/src/__tests__/ai-media-scope.test.ts \
+            artifacts/api-server/src/__tests__/ai-search.test.ts \
+            artifacts/api-server/src/__tests__/optimize-job-claim.test.ts \
+            artifacts/api-server/src/__tests__/media-tools-async.test.ts \
+            artifacts/api-server/src/__tests__/optimize-scan.test.ts \
+            artifacts/api-server/src/__tests__/backup-timeout-process-tree.test.ts \
+            artifacts/api-server/src/__tests__/optimize-cancel-ui-finalization.test.ts \
+            artifacts/api-server/src/__tests__/library-job-failure-persistence.test.ts \
+            artifacts/api-server/src/__tests__/conversion-job-lock.test.ts \
+            artifacts/api-server/src/__tests__/png-safety.test.ts \
+            artifacts/api-server/src/__tests__/conversion-finalize.test.ts
+
+  windows-archive-and-updater-smoke:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The updater smoke creates a local Git remote and needs the full
+          # ancestry of the checked-out PR merge commit.
+          fetch-depth: 0
+
+      - name: Set up Node.js for Windows binary smoke
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.13.1"
+
+      - name: Parse Windows launcher PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @()
+          foreach ($directory in @("scripts/launcher", "scripts/windows", "desktop")) {
+            if (Test-Path -LiteralPath $directory) {
+              $files += Get-ChildItem -LiteralPath $directory -Filter "*.ps1" -File -Recurse
+            }
+          }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $details = $errors | ForEach-Object { "{0}:{1}: {2}" -f $file.Name, $_.Extent.StartLineNumber, $_.Message }
+              throw ($details -join [Environment]::NewLine)
+            }
+          }
+          Write-Host "PowerShell syntax validation passed for $($files.Count) launcher and installer scripts."
+
+      - name: Verify installed launcher serializes concurrent startup
+        shell: pwsh
+        run: .\scripts\windows\launcher-instance-lock-smoke.ps1
+
+      - name: Verify developer launcher fails closed on orphaned services
+        shell: pwsh
+        run: .\scripts\windows\developer-process-ownership-smoke.ps1
+
+      - name: Verify fresh launcher environment file is UTF-8 and Node-readable
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP ("willard-env-encoding-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $testRoot | Out-Null
+          try {
+            [System.IO.File]::WriteAllLines((Join-Path $testRoot ".env.example"), [string[]]@("SESSION_SECRET="), [System.Text.UTF8Encoding]::new($false))
+            . .\scripts\launcher\common.ps1
+            $script:Root = $testRoot
+            if (-not (Ensure-EnvFile)) { throw "Ensure-EnvFile did not create a new settings file." }
+            $envFile = Join-Path $testRoot ".env"
+            $loaded = & node "--env-file=$envFile" -e "process.stdout.write(process.env.SESSION_SECRET || '')"
+            if ($LASTEXITCODE -ne 0 -or $loaded -notmatch '^[0-9a-f]{64}$') {
+              throw "Generated session secret was not readable by Node as UTF-8."
+            }
+          } finally {
+            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Enable pnpm for Windows archive compatibility tests
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.12.4 --activate
+
+      - name: Install API server test dependency graph
+        run: pnpm install --filter @workspace/api-server... --frozen-lockfile --ignore-scripts --no-optional
+
+      - name: Verify organization capacity probes on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/capacity-service.test.ts artifacts/api-server/src/__tests__/organize-preflight-capacity.test.ts
+
+      - name: Verify media rename no-overwrite and portable filename behavior on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-rename.test.ts
+
+      - name: Verify media conversion subprocesses do not block the event loop on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/media-tools-async.test.ts
+
+      - name: Verify Optimize Center scans yield and bound codec probes on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/optimize-scan.test.ts
+
+      - name: Run storage migration concurrency and no-overwrite regressions on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-migration.test.ts
+
+      - name: Verify NAS temp path and cleanup safety on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/nas-storage-paths.test.ts
+ 
+      - name: Verify conversion finalization no-overwrite and rollback on Windows
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/conversion-finalize.test.ts
+
+      - name: Download, hash-verify, and stage official Windows 7-Zip
+        shell: pwsh
+        run: |
+          $guard = Join-Path $env:RUNNER_TEMP ("official-7zip-guard-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $guard | Out-Null
+          $marker = Join-Path $guard "preserve-me.txt"
+          Set-Content -LiteralPath $marker -Value "preserve" -NoNewline
+          $rejected = $false
+          try {
+            try {
+              .\scripts\windows\prepare-official-7zip.ps1 -Destination $guard
+            } catch {
+              $rejected = $true
+            }
+            if (-not $rejected) { throw "7-Zip staging accepted a non-empty destination." }
+            if ((Get-Content -LiteralPath $marker -Raw) -ne "preserve") {
+              throw "7-Zip staging altered existing destination content."
+            }
+          } finally {
+            Remove-Item -LiteralPath $guard -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $destination = Join-Path $env:RUNNER_TEMP "official-7zip"
+          .\scripts\windows\prepare-official-7zip.ps1 -Destination $destination -ExportPathToGitHubEnvironment
+          $binary = Join-Path $destination "7z.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Official 7-Zip executable was not staged." }
+          $version = (& $binary i 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '7-Zip(?: \(z\))? 26\.05') { throw "Unexpected or unsupported 7-Zip version: $version" }
+          $root = Join-Path $env:RUNNER_TEMP ("willard-7zip-" + [guid]::NewGuid().ToString("N"))
+          $source = Join-Path $root "source"
+          $output = Join-Path $root "output"
+          New-Item -ItemType Directory -Force -Path $source, $output | Out-Null
+          try {
+            Set-Content -LiteralPath (Join-Path $source "payload.txt") -Value "verified windows payload" -NoNewline
+            Push-Location $source
+            try { & $binary a (Join-Path $root "payload.7z") "payload.txt" | Out-Null } finally { Pop-Location }
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip archive creation failed." }
+            & $binary x (Join-Path $root "payload.7z") "-o$output" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip archive extraction failed." }
+            if ((Get-Content -LiteralPath (Join-Path $output "payload.txt") -Raw) -ne "verified windows payload") { throw "Extracted payload did not match." }
+          } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          Write-Host "Official Windows 7-Zip hash verification and archive smoke passed."
+      
+      - name: Download Linux-created symlink archive fixture
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sevenzip-link-fixture
+          path: ${{ runner.temp }}/sevenzip-link-fixture
+
+      - name: Verify Windows 7-Zip and node-7z preserve symlink metadata
+        env:
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7z.exe
+          WILLARD_7ZIP_LINK_ARCHIVE: ${{ runner.temp }}/sevenzip-link-fixture/sevenzip-link-fixture.7z
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/sevenzip-bin-full.compat.test.mjs
+
+      - name: Verify compressed TAR preview with official Windows 7-Zip
+        env:
+          WILLARD_7ZIP_PATH: ${{ runner.temp }}/official-7zip/7z.exe
+        run: node --experimental-strip-types --test artifacts/api-server/src/__tests__/archive-tar-input.test.ts
+
+      - name: Verify packaged updater journal writes
+        shell: pwsh
+        run: .\scripts\windows\update-journal-smoke.ps1
+
+      - name: Verify developer updater preservation and rollback
+        shell: pwsh
+        run: .\scripts\windows\update-smoke.ps1

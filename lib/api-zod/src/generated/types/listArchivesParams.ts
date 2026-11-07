@@ -9,8 +9,18 @@
 export type ListArchivesParams = {
 category?: string;
 status?: string;
+/**
+ * @minimum 0
+ * @maximum 9007199254740991
+ */
 minSize?: number;
+/**
+ * @minimum 0
+ * @maximum 9007199254740991
+ */
 maxSize?: number;
+dateFrom?: Date;
+dateTo?: Date;
 limit?: number;
 offset?: number;
 };

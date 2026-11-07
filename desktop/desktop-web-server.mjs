@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { isAllowedDesktopRequestHost, parseDesktopRequestUrl, resolveApiProxyTarget, resolveStaticFile, staticFileReadErrorStatus } from "./web-server-safety.mjs";
 import { URL } from "node:url";
 
 const args = new Map();
@@ -33,7 +34,9 @@ function sendError(response, status, message) {
 }
 
 function proxyApi(request, response) {
-  const target = new URL(request.url, apiOrigin);
+  let target;
+  try { target = resolveApiProxyTarget(request.url, apiOrigin); }
+  catch { return sendError(response, 400, "Invalid API request target."); }
   const proxy = http.request(target, {
     method: request.method,
     headers: { ...request.headers, host: target.host },
@@ -41,29 +44,49 @@ function proxyApi(request, response) {
     response.writeHead(upstream.statusCode ?? 502, upstream.headers);
     upstream.pipe(response);
   });
-  proxy.on("error", () => sendError(response, 502, "The local library service is unavailable."));
+  proxy.on("error", () => {
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
+    sendError(response, 502, "The local library service is unavailable.");
+  });
+  request.once("aborted", () => proxy.destroy());
+  response.once("close", () => {
+    if (!response.writableEnded) proxy.destroy();
+  });
   request.pipe(proxy);
 }
 
 const server = http.createServer((request, response) => {
-  if (!request.url) return sendError(response, 400, "Bad request.");
-  if (new URL(request.url, "http://localhost").pathname.startsWith("/api/")) return proxyApi(request, response);
-  const requested = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
-  const relative = requested === "/" ? "/index.html" : requested;
-  const candidate = path.resolve(root, `.${relative}`);
-  if (!candidate.startsWith(`${root}${path.sep}`) && candidate !== path.join(root, "index.html")) {
-    return sendError(response, 403, "Forbidden.");
+  // Bind to loopback AND validate the HTTP authority. Loopback binding alone
+  // does not stop DNS-rebinding pages from sending a hostile Host header to
+  // this local service and reaching its API proxy.
+  if (!isAllowedDesktopRequestHost(request.headers.host, request.headers.origin, port, request.headers["sec-fetch-site"])) {
+    return sendError(response, 403, "Untrusted local request host.");
   }
-  fs.stat(candidate, (error, stats) => {
-    const file = !error && stats.isFile() ? candidate : path.join(root, "index.html");
-    fs.readFile(file, (readError, data) => {
-      if (readError) return sendError(response, 404, "Media Center is not installed correctly.");
-      response.writeHead(200, {
-        "cache-control": file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
-        "content-type": mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream",
-      });
-      response.end(data);
+  if (!request.url) return sendError(response, 400, "Bad request.");
+  let parsedRequest;
+  try { parsedRequest = parseDesktopRequestUrl(request.url); }
+  catch { return sendError(response, 400, "Invalid request path."); }
+  if (parsedRequest.pathname.startsWith("/api/")) return proxyApi(request, response);
+  let file;
+  try { file = resolveStaticFile(root, parsedRequest.pathname); }
+  catch { return sendError(response, 500, "Media Center could not access its installed files."); }
+  if (!file) return sendError(response, 403, "Forbidden.");
+  fs.readFile(file, (readError, data) => {
+    if (readError) {
+      const status = staticFileReadErrorStatus(readError);
+      return sendError(response, status, status === 404
+        ? "Media Center is not installed correctly."
+        : "Media Center could not read an installed file.");
+    }
+    response.writeHead(200, {
+      "cache-control": file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable",
+      "content-type": mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream",
+      "x-content-type-options": "nosniff",
     });
+    response.end(data);
   });
 });
 
