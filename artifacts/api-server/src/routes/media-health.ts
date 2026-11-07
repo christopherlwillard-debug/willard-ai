@@ -9,6 +9,7 @@ import { isMissingRegularMediaFile } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeDerivedDataForMedia, purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
+import { startJob } from "../lib/library-engine";
 
 const router = Router();
 const ACTIVE = activeMediaCondition;
@@ -185,6 +186,7 @@ router.post("/media/cleanup", async (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   let jobId: number | null = null;
+  let metadataJobId: number | null = null;
   try {
     const [job] = await db.insert(libraryJobsTable).values({
       jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
@@ -238,22 +240,61 @@ router.post("/media/cleanup", async (req, res) => {
         done++; progress("Removing empty folders…");
       }
     }
-    if (actions.includes("rebuildMetadata")) send("progress", { processed: done, total, message: "Metadata rebuild is queued for the next library scan." });
+    if (actions.includes("rebuildMetadata")) {
+      // Release the temporary Health Center claim before the shared job engine
+      // attempts to claim this library for its durable METADATA worker.
+      await db.update(libraryJobsTable).set({
+        status: "DONE",
+        processedFiles: done,
+        totalFiles: total,
+        finishedAt: new Date(),
+        summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
+      }).where(eq(libraryJobsTable.id, job.id));
+
+      const metadataJob = await startJob({
+        jobType: "METADATA",
+        profile: "HEALTH_SCAN",
+        nasPath,
+      });
+      if (metadataJob.errorCode) {
+        throw new Error(metadataJob.errorMessage ?? "Metadata refresh could not start (" + metadataJob.errorCode + ")");
+      }
+      if (metadataJob.alreadyRunning) {
+        const [existing] = await db.select({
+          jobType: libraryJobsTable.jobType,
+          status: libraryJobsTable.status,
+        }).from(libraryJobsTable).where(eq(libraryJobsTable.id, metadataJob.jobId)).limit(1);
+        if (existing?.jobType !== "METADATA" || existing.status !== "RUNNING") {
+          throw new Error("Another library job is already active; metadata refresh was not started.");
+        }
+      }
+      metadataJobId = metadataJob.jobId;
+      progress("Metadata refresh job #" + metadataJobId + " is running.");
+    }
     await db.update(libraryJobsTable).set({
       status: "DONE",
       processedFiles: done,
       totalFiles: total,
       finishedAt: new Date(),
-      summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
+      summary: {
+        actions,
+        ...(derivedCleanup ? { derivedCleanup } : {}),
+        ...(metadataJobId !== null ? { metadataJobId } : {}),
+      },
     }).where(eq(libraryJobsTable.id, job.id));
-    send("done", { ok: true, processed: done, total });
+    send("done", {
+      ok: true,
+      processed: done,
+      total,
+      ...(metadataJobId !== null ? { metadataJobId } : {}),
+    });
   } catch (error) {
     if (jobId !== null) {
       try {
         await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, jobId));
       } catch { /* Preserve the original cleanup failure for the connected client. */ }
     }
-    send("error", { message: "Cleanup failed safely; original media was not removed." });
+    send("error", { message: metadataJobId === null ? "Cleanup failed safely; original media was not removed." : "Cleanup failed after metadata refresh job #" + metadataJobId + " started; review Library Jobs before retrying." });
   } finally { return res.end(); }
 });
 

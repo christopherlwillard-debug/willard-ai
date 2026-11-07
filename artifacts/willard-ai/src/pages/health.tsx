@@ -33,7 +33,7 @@ const actions = [
   ["orphanedThumbnails", "Delete orphaned thumbnails"],
   ["missingThumbnails", "Regenerate missing thumbnails"],
   ["emptyFolders", "Remove empty folders"],
-  ["rebuildMetadata", "Rebuild metadata on the next scan"],
+  ["rebuildMetadata", "Rebuild outdated metadata now"],
   ["fullThumbnailRebuild", "Full thumbnail rebuild"],
 ] as const;
 

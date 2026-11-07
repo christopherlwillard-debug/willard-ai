@@ -62,3 +62,22 @@ test("health cleanup reports durable job creation failures through its SSE error
   assert.match(cleanupRoute, /let jobId: number \| null = null/);
   assert.match(cleanupRoute, /if \(jobId !== null\)/);
 });
+
+
+test("Health Center metadata rebuild starts the durable METADATA worker instead of reporting a no-op", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+
+  assert.ok(source.includes('import { startJob } from "../lib/library-engine";'));
+  assert.ok(cleanupRoute.includes('jobType: "METADATA"'));
+  assert.ok(cleanupRoute.includes('profile: "HEALTH_SCAN"'));
+  assert.ok(cleanupRoute.includes("metadataJob.errorCode"));
+  assert.ok(cleanupRoute.includes('existing?.jobType !== "METADATA" || existing.status !== "RUNNING"'));
+  assert.ok(cleanupRoute.includes("Metadata refresh job #"));
+  assert.ok(!cleanupRoute.includes("Metadata rebuild is queued for the next library scan."));
+
+  const releasedTemporaryClaim = cleanupRoute.indexOf('status: "DONE"');
+  const metadataStart = cleanupRoute.indexOf("const metadataJob = await startJob");
+  assert.ok(releasedTemporaryClaim >= 0 && metadataStart > releasedTemporaryClaim);
+});

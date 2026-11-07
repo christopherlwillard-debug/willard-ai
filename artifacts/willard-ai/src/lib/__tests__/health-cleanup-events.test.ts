@@ -44,3 +44,9 @@ test("Health Center only clears selected actions after a successful completion e
   assert.match(page, /if \(!completed\) throw/);
   assert.ok(page.indexOf("if (!completed) throw") < page.indexOf("setSelected([])"));
 });
+
+
+test("Health Center labels metadata rebuild as an immediate worker action", () => {
+  const page = readFileSync(new URL("../../pages/health.tsx", import.meta.url), "utf8");
+  assert.ok(page.includes('["rebuildMetadata", "Rebuild outdated metadata now"]'));
+});
