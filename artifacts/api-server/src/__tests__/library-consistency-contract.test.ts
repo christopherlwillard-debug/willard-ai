@@ -128,17 +128,17 @@ test("full thumbnail rebuild invalidates cache only after durable job admission 
   const startJobEnd = engine.indexOf("// ── Resume a paused job", startJobStart);
   const startJob = engine.slice(startJobStart, startJobEnd);
   const durableRunningInsert = startJob.indexOf('status:   "RUNNING"');
-  const thumbnailDispatch = startJob.indexOf("startJobRun(job.id, runThumbnailJob(state, opts.rebuildThumbnails === true), reservation)");
+  const thumbnailDispatch = startJob.indexOf("startJobRun(job.id, runThumbnailJob(state, opts.rebuildThumbnails === true, opts.clearThumbnailsOnly === true), reservation)");
   assert.ok(durableRunningInsert >= 0 && thumbnailDispatch > durableRunningInsert,
     "thumbnail worker must be dispatched only after the durable RUNNING row is inserted");
-  assert.ok(startJob.includes('opts.rebuildThumbnails && opts.jobType !== "THUMBNAILS"'));
+  assert.ok(startJob.includes('(opts.rebuildThumbnails || opts.clearThumbnailsOnly) && opts.jobType !== "THUMBNAILS"'));
 
   const workerStart = engine.indexOf("async function runThumbnailJob");
   const workerEnd = engine.indexOf("// ── Fail a job", workerStart);
   const worker = engine.slice(workerStart, workerEnd);
   const reachability = worker.indexOf("const initialReach = await checkNasReachableAsync(nasPath)");
-  const rebuildGuard = worker.indexOf("if (rebuild)");
-  const cacheClear = worker.indexOf("clearThumbnailCache(nasPath)");
+  const rebuildGuard = worker.indexOf("if (rebuild || clearOnly)");
+  const cacheClear = worker.indexOf("await clearThumbnailCache(");
   const pointerReset = worker.indexOf("thumbnailPath: null");
   const reconciliation = worker.indexOf("reconcileThumbnailPointers(nasPath)");
   assert.ok(reachability >= 0 && rebuildGuard > reachability && cacheClear > rebuildGuard &&
