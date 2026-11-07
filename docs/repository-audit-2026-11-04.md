@@ -4018,3 +4018,10 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 - **Fix:** updated the contract test to assert the `let` declaration and subsequent `crypto.randomUUID()` assignment for execution, resume, and rollback tokens. Existing assertions continue to verify that each token is included in the database ownership predicates and that filesystem move/restore hooks recheck the lease.
 - **Validation:** the failed run's typecheck and all other tests in the targeted step passed; only this lease-token declaration assertion failed. A new exact-head Fast Validation run is required before marking the correction target-tested. No application source changed in this correction.
 - **Remaining risk:** the test correction does not change organization worker behavior. The separate durable pre-move intent-journal gap and replacement-policy backup risk remain open as documented above.
+
+
+### Validation follow-up — lease callback assertions also needed to match async fencing hooks
+
+- Fast Validation [#42361179865](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361179865), run #1382 on exact head `d0ae68d1f025ca88f0f79219830b22308e4cedb7`, passed typecheck/generated contracts, Expo configuration, desktop safety, release/storage contracts, official 7-Zip compatibility, and all four PostgreSQL integration steps. The targeted backend test step then failed a second assertion in the same contract test: it expected one-line `beforeMove: () => assertOrganizationLease` and `beforeRestore` callbacks, while the implementation correctly uses `async () => { await assertOrganizationLease(...); }` to await the durable lease check before each move and restore.
+- This is another stale test-shape assertion, not an application failure. The regression now asserts the actual async callback form and that the awaited lease check uses the execution token. The existing resume/rollback token predicates remain asserted.
+- **Status:** test correction committed; exact-head validation pending. The Windows smoke job was skipped because Linux targeted tests failed.

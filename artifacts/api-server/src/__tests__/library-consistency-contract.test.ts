@@ -49,8 +49,8 @@ test("organization execution, resume, and rollback are fenced by unique lease to
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, executionLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, resumeLeaseToken\)/);
   assert.match(routes, /eq\(organizationJobsTable\.leaseToken, rollbackLeaseToken\)/);
-  assert.match(routes, /beforeMove: \(\) => assertOrganizationLease/);
-  assert.match(routes, /beforeRestore: \(\) => assertOrganizationLease/);
+  assert.match(routes, /beforeMove: async \(\) => \{\s*await assertOrganizationLease\(id, nasPath, executionLeaseToken\);/);
+  assert.match(routes, /beforeRestore: async \(\) => \{\s*await assertOrganizationLease\(id, nasPath, executionLeaseToken\);/);
   assert.match(routes, /if \(!updatedRollback\)/);
   assert.match(routes, /function publicOrganizationJob[\s\S]*leaseToken: _leaseToken/);
   assert.match(routes, /jobs\.map\(publicOrganizationJob\)/);
