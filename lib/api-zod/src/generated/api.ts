@@ -2183,7 +2183,7 @@ export const CreateLibraryThumbnailsPrioritizeResponse = zod.union([zod.record(z
 
 
 /**
- * @summary Runtime JSON mutation endpoint
+ * @summary Queue thumbnail cache clearing
  */
 export const DeleteLibraryThumbnailsCacheBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
 

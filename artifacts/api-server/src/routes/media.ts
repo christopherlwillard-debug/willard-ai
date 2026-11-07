@@ -685,9 +685,16 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  let safeResultPath = "";
   let result;
   try {
-    result = await generateThumbnail(id, sourcePath, file.extension, nasPath);
+    result = await generateThumbnail(id, sourcePath, file.extension, nasPath, undefined, async ({ destPath }) => {
+      safeResultPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+      await db.update(mediaFilesTable)
+        .set({ thumbnailPath: safeResultPath, thumbnailGeneratedAt: new Date() })
+        .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
+        .catch(() => {});
+    });
   } catch (error) {
     if (error instanceof StoragePolicyError) {
       res.status(503).json({ error: "NAS storage is unavailable for thumbnail generation" });
@@ -695,18 +702,12 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     }
     throw error;
   }
-  if (result.error || !result.destPath || !fs.existsSync(result.destPath)) {
+  if (result.error || !result.destPath || !safeResultPath || !fs.existsSync(result.destPath)) {
     res.status(500).json({ error: result.error ?? "Thumbnail generation failed" });
     return;
   }
 
-  const safeResultPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
   _thumbCache.set(id, { nasPath, path: safeResultPath });
-  db.update(mediaFilesTable)
-    .set({ thumbnailPath: safeResultPath, thumbnailGeneratedAt: new Date() })
-    .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-    .catch(() => {});
-
   serveCachedThumb(res, safeResultPath, id);
 });
 

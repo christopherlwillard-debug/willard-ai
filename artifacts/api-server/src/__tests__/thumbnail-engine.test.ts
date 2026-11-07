@@ -294,4 +294,67 @@ describe("thumbnail publication", { concurrency: false }, () => {
     );
     assert.equal(invalidStored.size, 0, "an invalid stored pointer must remain pending");
   });
+
+  test("cache clearing waits for catalog persistence after a new thumbnail publication", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const generation = generateThumbnail(901, source, "jpg", root, undefined, async ({ destPath, reused }) => {
+      assert.equal(reused, false);
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(path.join(getThumbnailDir(root), "901.webp")), true,
+      "cache clearing must wait for the in-flight catalog pointer write");
+
+    releaseReady();
+    const generated = await generation;
+    assert.equal(generated.error, null);
+    assert.equal(await clearing, 1);
+    assert.equal(fs.existsSync(generated.destPath), false);
+  });
+
+  test("cache clearing waits for catalog persistence when a valid thumbnail is reused", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const first = await generateThumbnail(902, source, "jpg", root);
+    assert.equal(first.error, null);
+
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const reuse = generateThumbnail(902, source, "jpg", root, undefined, async ({ destPath, reused }) => {
+      assert.equal(reused, true);
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(first.destPath), true,
+      "cache clearing must wait for the reused thumbnail's catalog pointer write");
+
+    releaseReady();
+    const reused = await reuse;
+    assert.equal(reused.error, null);
+    assert.equal(reused.reused, true);
+    assert.equal(await clearing, 1);
+    assert.equal(fs.existsSync(first.destPath), false);
+  });
+
 });

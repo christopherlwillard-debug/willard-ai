@@ -3053,7 +3053,13 @@ async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly
             if (state.cancelRequested) return;
           }
           try {
-            result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality);
+            result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality, async ({ destPath }) => {
+              const safeThumbnailPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+              await db.update(mediaFilesTable).set({
+                thumbnailPath: safeThumbnailPath,
+                thumbnailGeneratedAt: new Date(),
+              }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
+            });
             if (!result.error) break;
             lastError = result.error;
           } catch (err: any) {
@@ -3062,11 +3068,6 @@ async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly
         }
 
         if (result && !result.error && result.destPath) {
-          const safeThumbnailPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
-          await db.update(mediaFilesTable).set({
-            thumbnailPath: safeThumbnailPath,
-            thumbnailGeneratedAt: new Date(),
-          }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
           if (result.reused) {
             thumbnailsReused++;
           } else {

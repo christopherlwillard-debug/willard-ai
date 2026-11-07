@@ -573,16 +573,15 @@ export async function generateThumbnail(
   extension: string,
   nasPath: string,
   quality?: string | null,
+  onReady?: (thumbnail: { destPath: string; reused: boolean }) => Promise<void>,
 ): Promise<ThumbnailResult> {
   const thumbDir = ensureThumbnailDir(nasPath);
   await cleanStaleThumbnailPartials(nasPath);
   const destPath = path.join(thumbDir, thumbnailFilename(mediaFileId));
 
-  // Publishers never write directly to the final path, so this fast path
-  // cannot expose an in-progress file. Invalid legacy output is handled only
-  // after acquiring the destination lock.
-  if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
-
+  // Hold the same destination lock through both file publication and the
+  // caller's canonical catalog-pointer update. Cache clearing uses this lock
+  // too, so it cannot unlink a thumbnail and then race a late DB pointer write.
   let releaseLock: (() => void) | null = null;
   try {
     releaseLock = await acquireThumbnailLock(destPath);
@@ -592,12 +591,15 @@ export async function generateThumbnail(
 
   const tempPath = uniqueThumbnailTempPath(destPath);
   try {
-    // Re-check after waiting: another process may have published it.
-    if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
+    // Re-check after acquiring the lock: another process may have published it.
+    if (isThumbnailFileValid(destPath)) {
+      await onReady?.({ destPath, reused: true });
+      return { destPath, error: null, reused: true };
+    }
     try { fs.rmSync(destPath, { force: true }); } catch { /* regenerate below */ }
 
     const preset = qualityPreset(quality);
-    const ext = extension.toLowerCase().replace(/^\./, "");
+    const ext = extension.toLowerCase().replace(/^\\./, "");
     let error: string | null = null;
 
     if (IMAGE_EXTS.has(ext)) {
@@ -620,6 +622,8 @@ export async function generateThumbnail(
 
     if (error) return { destPath: "", error };
     publishThumbnail(tempPath, destPath);
+    await onReady?.({ destPath, reused: false });
+
     // Do not hold this destination lock while quota eviction acquires locks
     // for older thumbnails; that could deadlock concurrent publishers.
     releaseLock?.();

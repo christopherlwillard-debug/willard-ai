@@ -152,4 +152,16 @@ test("full thumbnail rebuild invalidates cache only after durable job admission 
   assert.ok(reachability >= 0 && rebuildGuard > reachability && cacheClear > rebuildGuard &&
     pointerReset > cacheClear && reconciliation > pointerReset,
     "cache invalidation and pointer reset must follow NAS validation and precede thumbnail reconciliation");
+
+test("thumbnail catalog pointer persistence is serialized with cache clearing", () => {
+  const thumbnail = source("lib/thumbnail-engine.ts");
+  const media = source("routes/media.ts");
+  const engine = source("lib/library-engine/job-engine.ts");
+
+  assert.match(thumbnail, /await onReady\\?\\.\\(\\{ destPath, reused: true \\}\\)/);
+  assert.match(thumbnail, /publishThumbnail\\(tempPath, destPath\\);\\s*await onReady\\?\\.\\(\\{ destPath, reused: false \\}\\)/);
+  assert.match(media, /generateThumbnail\\([\\s\\S]*?async \\(\\{ destPath \\}\\) => \\{[\\s\\S]*?db\\.update\\(mediaFilesTable\\)/);
+  assert.match(engine, /generateThumbnail\\([\\s\\S]*?async \\(\\{ destPath \\}\\) => \\{[\\s\\S]*?db\\.update\\(mediaFilesTable\\)/);
+});
+
 });
