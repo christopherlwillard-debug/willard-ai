@@ -179,9 +179,16 @@ router.get("/media/health", async (_req, res) => {
 });
 
 router.post("/media/cleanup", async (req, res) => {
-  const requested = Array.isArray(req.body?.actions) ? req.body.actions : [];
+  const requested: unknown = req.body?.actions;
   const allowed = new Set(["orphanedRecords", "orphanedDerivedData", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
-  const actions = requested.filter((action: unknown): action is string => typeof action === "string" && allowed.has(action));
+  if (
+    !Array.isArray(requested) ||
+    requested.length === 0 ||
+    requested.some((action: unknown) => typeof action !== "string" || !allowed.has(action))
+  ) {
+    return res.status(400).json({ error: "actions must be a non-empty array containing only supported cleanup actions" });
+  }
+  const actions = [...new Set(requested as string[])];
   const nasPath = (await getActiveLibraryContext())?.nasPath ?? null;
   if (!nasPath) return res.status(409).json({ error: "No library is configured" });
 
@@ -199,7 +206,24 @@ router.post("/media/cleanup", async (req, res) => {
     jobId = job.id;
     const inspected = await inspectLibrary(nasPath);
     let done = 0;
-    const total = Math.max(1, inspected.missing.length + inspected.orphanThumbs.length + inspected.missingThumbs.length + inspected.emptyFolders.length);
+    const isThumbnailEligible = (row: HealthRow) => row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
+    const thumbnailTargets = actions.includes("fullThumbnailRebuild")
+      ? inspected.rows.filter(isThumbnailEligible)
+      : actions.includes("missingThumbnails")
+        ? inspected.missingThumbs.filter(isThumbnailEligible)
+        : [];
+    const emptyFolderTargets = inspected.emptyFolders.filter(folder =>
+      path.resolve(folder) !== path.resolve(nasPath) &&
+      !path.resolve(folder).startsWith(path.resolve(getWillardAIDir(nasPath)) + path.sep)
+    );
+    let total =
+      (actions.includes("orphanedRecords") ? inspected.missing.length : 0) +
+      (actions.includes("orphanedDerivedData") ? inspected.report.issues.brokenMetadataReferences : 0) +
+      (actions.includes("orphanedThumbnails") ? inspected.orphanThumbs.length : 0) +
+      thumbnailTargets.length +
+      (actions.includes("emptyFolders") ? emptyFolderTargets.length : 0) +
+      (actions.includes("rebuildMetadata") ? 1 : 0);
+    total = Math.max(1, total);
     const progress = (message: string) => send("progress", { processed: done, total, message });
     let derivedCleanup: Record<string, unknown> | undefined;
 
@@ -232,7 +256,11 @@ router.post("/media/cleanup", async (req, res) => {
       const cleaned = await purgeOrphanedDerivedData(nasPath);
       faceCropFailures = cleaned.cropErrors.length;
       failedItems += faceCropFailures;
-      done += cleaned.orphanRows + cleaned.staleCropsRemoved;
+      // Orphaned metadata rows are included in the inspection count. Face-crop
+      // removals and failures are discovered during cleanup, so add those
+      // attempted items to both the denominator and processed count.
+      total += cleaned.staleCropsRemoved + cleaned.cropErrors.length;
+      done += cleaned.orphanRows + cleaned.staleCropsRemoved + cleaned.cropErrors.length;
       derivedCleanup = {
         orphanRows: cleaned.orphanRows,
         staleCropsRemoved: cleaned.staleCropsRemoved,
@@ -268,9 +296,7 @@ router.post("/media/cleanup", async (req, res) => {
       }
     }
     if (actions.includes("missingThumbnails") || actions.includes("fullThumbnailRebuild")) {
-      const targets = actions.includes("fullThumbnailRebuild") ? inspected.rows : inspected.missingThumbs;
-      for (const row of targets) {
-        if (row.mediaType !== "photo" && row.mediaType !== "video" && row.extension !== "pdf") continue;
+      for (const row of thumbnailTargets) {
         try {
           const source = resolveLibraryPath(nasPath, row.relativePath);
           const result = await generateThumbnail(
@@ -300,8 +326,7 @@ router.post("/media/cleanup", async (req, res) => {
       }
     }
     if (actions.includes("emptyFolders")) {
-      for (const folder of inspected.emptyFolders) {
-        if (path.resolve(folder) === path.resolve(nasPath) || path.resolve(folder).startsWith(path.resolve(getWillardAIDir(nasPath)) + path.sep)) continue;
+      for (const folder of emptyFolderTargets) {
         try { fs.rmdirSync(resolveWithinRoot(folder, nasPath)); } catch { /* changed since scan */ }
         done++; progress("Removing empty folders…");
       }
