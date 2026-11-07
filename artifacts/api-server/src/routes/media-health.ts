@@ -259,7 +259,9 @@ router.post("/media/cleanup", async (req, res) => {
       // Orphaned metadata rows are included in the inspection count. Face-crop
       // removals and failures are discovered during cleanup, so add those
       // attempted items to both the denominator and processed count.
-      total += cleaned.staleCropsRemoved + cleaned.cropErrors.length;
+      total +=
+        cleaned.orphanRows - inspected.report.issues.brokenMetadataReferences +
+        cleaned.staleCropsRemoved + cleaned.cropErrors.length;
       done += cleaned.orphanRows + cleaned.staleCropsRemoved + cleaned.cropErrors.length;
       derivedCleanup = {
         orphanRows: cleaned.orphanRows,
