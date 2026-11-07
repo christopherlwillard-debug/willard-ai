@@ -1343,11 +1343,17 @@ function ThumbnailManagerSection() {
   const rebuildMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(apiUrl("/library/thumbnails/rebuild"), { method: "POST" });
-      if (!res.ok) throw new Error("Failed to start rebuild");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { message?: unknown; error?: unknown } | null;
+        const message = typeof body?.message === "string"
+          ? body.message
+          : typeof body?.error === "string" ? body.error : "Failed to start rebuild";
+        throw new Error(message);
+      }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Thumbnail rebuild started", description: "Existing thumbnails cleared and regeneration begun." });
+      toast({ title: "Thumbnail rebuild accepted", description: "Cache clearing starts only after the worker claims the library and confirms the NAS is writable." });
       void fetchStats();
     },
     onError: (err: any) => toast({ title: "Failed to rebuild cache", description: err?.message, variant: "destructive" }),
