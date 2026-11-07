@@ -246,7 +246,25 @@ router.post("/media/cleanup", async (req, res) => {
         if (row.mediaType !== "photo" && row.mediaType !== "video") continue;
         try {
           const source = resolveLibraryPath(nasPath, row.relativePath);
-          await generateThumbnail(row.id, source, path.extname(row.relativePath).slice(1), nasPath);
+          const result = await generateThumbnail(
+            row.id,
+            source,
+            path.extname(row.relativePath).slice(1),
+            nasPath,
+            undefined,
+            async ({ destPath }) => {
+              const safeThumbnailPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+              await db.update(mediaFilesTable).set({
+                thumbnailPath: safeThumbnailPath,
+                thumbnailGeneratedAt: new Date(),
+              }).where(and(
+                eq(mediaFilesTable.id, row.id),
+                eq(mediaFilesTable.nasPath, nasPath),
+                ACTIVE,
+              ));
+            },
+          );
+          if (result.error) throw new Error(result.error);
         } catch { /* reported by the next health scan */ }
         done++; progress("Regenerating thumbnails…");
       }

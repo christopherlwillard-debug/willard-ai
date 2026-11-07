@@ -158,9 +158,11 @@ test("thumbnail catalog pointer persistence is serialized with cache clearing", 
   const thumbnail = source("lib/thumbnail-engine.ts");
   const media = source("routes/media.ts");
   const engine = source("lib/library-engine/job-engine.ts");
+  const health = source("routes/media-health.ts");
 
   assert.match(thumbnail, /await onReady\?\.\(\{ destPath, reused: true \}\)/);
   assert.match(thumbnail, /publishThumbnail\(tempPath, destPath\);\s*await onReady\?\.\(\{ destPath, reused: false \}\)/);
   assert.match(media, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
   assert.match(engine, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
+  assert.match(health, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
 });
