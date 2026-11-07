@@ -128,10 +128,10 @@ test("Health Center orphan cleanup uses reversible conditional soft-delete and p
   const cleanup = route.slice(start, end);
 
   assert.ok(start >= 0 && end > start);
-  assert.match(cleanup, /softDeleteMissingMediaRecord\\(source/);
+  assert.match(cleanup, /softDeleteMissingMediaRecord\(source/);
   assert.match(cleanup, /lastScanAction: "DELETED"/);
-  assert.match(cleanup, /eq\\(mediaFilesTable\\.relativePath, row\\.relativePath\\)/);
+  assert.match(cleanup, /eq\(mediaFilesTable\.relativePath, row\.relativePath\)/);
   assert.match(cleanup, /ACTIVE/);
-  assert.doesNotMatch(cleanup, /db\\.delete\\(mediaFilesTable\\)|purgeDerivedDataForMedia/);
-  assert.match(engine, /lastScanAction:[\\s\\S]*excluded\\.last_scan_action/);
+  assert.doesNotMatch(cleanup, /db\.delete\(mediaFilesTable\)|purgeDerivedDataForMedia/);
+  assert.match(engine, /lastScanAction:[\s\S]*excluded\.last_scan_action/);
 });
