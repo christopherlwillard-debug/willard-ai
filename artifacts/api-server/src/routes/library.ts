@@ -686,20 +686,23 @@ router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) 
     return;
   }
 
-  clearThumbnailCache(nasPath);
-
-  await db.update(mediaFilesTable).set({
-    thumbnailPath: null,
-    thumbnailGeneratedAt: null,
-  }).where(eq(mediaFilesTable.nasPath, nasPath));
-
   const result = await startJob({
     jobType: "THUMBNAILS",
     profile: "FULL",
     nasPath,
+    rebuildThumbnails: true,
   });
 
   if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
+  if (result.alreadyRunning) {
+    res.status(409).json({
+      code: "LIBRARY_JOB_ALREADY_RUNNING",
+      error: "Library job already running",
+      message: "Wait for or cancel the active library job before rebuilding all thumbnails.",
+      jobId: result.jobId,
+    });
+    return;
+  }
   res.json(result);
 });
 
