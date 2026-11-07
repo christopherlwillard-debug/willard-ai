@@ -360,6 +360,7 @@ router.post("/media/cleanup", async (req, res) => {
         }
       }
       metadataJobId = metadataJob.jobId;
+      done++;
       progress("Metadata refresh job #" + metadataJobId + " is running.");
     }
     const partial = failedItems > 0;
