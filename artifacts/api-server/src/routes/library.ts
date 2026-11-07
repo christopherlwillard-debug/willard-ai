@@ -30,6 +30,44 @@ async function getNasPath(): Promise<string | null> {
   return getActiveNasPath();
 }
 
+type LibraryJobStartResult = Awaited<ReturnType<typeof startJob>>;
+
+/** Translate durable worker admission failures into HTTP failures consistently. */
+function respondToLibraryJobStartFailure(
+  res: Response,
+  result: LibraryJobStartResult,
+  nasPath: string,
+): boolean {
+  if (result.errorCode === "NAS_OFFLINE") {
+    res.status(503).json({
+      code: "NAS_OFFLINE",
+      error: "NAS Not Available",
+      message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  if (result.errorCode === "NAS_READ_ONLY") {
+    res.status(503).json({
+      code: "NAS_READ_ONLY",
+      error: "NAS is read-only",
+      message: result.errorMessage ?? `Cannot write to ${nasPath}. Check the NAS permissions and mount state.`,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  if (result.errorCode === "CAPACITY_UNSAFE") {
+    res.status(507).json({
+      code: "CAPACITY_UNSAFE",
+      error: "Insufficient safe storage capacity",
+      message: result.errorMessage,
+      jobId: result.jobId,
+    });
+    return true;
+  }
+  return false;
+}
+
 async function getScopedJob(id: number, nasPath: string) {
   const [job] = await db.select().from(libraryJobsTable).where(and(
     eq(libraryJobsTable.id, id),
@@ -257,24 +295,7 @@ router.post("/library/scan", async (req: Request, res: Response) => {
     rootPath,
   });
 
-  if (result.errorCode === "NAS_OFFLINE") {
-    res.status(503).json({
-      code: "NAS_OFFLINE",
-      error: "NAS Not Available",
-      message: `Cannot reach ${nasPath}. ${result.errorMessage ?? "Check that your NAS is online and the drive is mounted."}`,
-      jobId: result.jobId,
-    });
-    return;
-  }
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
 
   res.json(result);
 });
@@ -515,15 +536,7 @@ router.post("/library/thumbnails", async (req: Request, res: Response) => {
     nasPath,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
   res.json(result);
 });
 
@@ -686,15 +699,7 @@ router.post("/library/thumbnails/rebuild", async (_req: Request, res: Response) 
     nasPath,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
   res.json(result);
 });
 
@@ -1021,15 +1026,7 @@ router.post("/library/reprocess", async (_req: Request, res: Response) => {
     nasPath,
   });
 
-  if (result.errorCode === "CAPACITY_UNSAFE") {
-    res.status(507).json({
-      code: "CAPACITY_UNSAFE",
-      error: "Insufficient safe storage capacity",
-      message: result.errorMessage,
-      jobId: result.jobId,
-    });
-    return;
-  }
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
   res.json(result);
 });
 
