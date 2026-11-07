@@ -76,11 +76,28 @@ test("all library job-start routes fail HTTP admission when NAS is offline or re
 
   const startCalls = library.match(/const result = await startJob\(/g) ?? [];
   const handledCalls = library.match(/respondToLibraryJobStartFailure\(res, result, nasPath\)/g) ?? [];
-  assert.equal(startCalls.length, 4, "all four library worker start routes should be covered");
+  assert.equal(startCalls.length, 5, "all five library worker start routes should be covered");
   assert.equal(handledCalls.length, startCalls.length, "every library worker start route must map admission failures");
   assert.match(library, /result\.errorCode === "NAS_OFFLINE"/);
   assert.match(library, /result\.errorCode === "NAS_READ_ONLY"/);
   assert.match(library, /result\.errorCode === "CAPACITY_UNSAFE"/);
+
+  const clearStart = library.indexOf('router.delete("/library/thumbnails/cache"');
+  const clearEnd = library.indexOf("// ── POST /api/library/thumbnails/rebuild", clearStart);
+  const clearRoute = library.slice(clearStart, clearEnd);
+  assert.ok(clearRoute.includes('profile: "HEALTH_SCAN"'));
+  assert.ok(clearRoute.includes("clearThumbnailsOnly: true"));
+  assert.ok(clearRoute.includes("respondToLibraryJobStartFailure(res, result, nasPath)"));
+  assert.ok(clearRoute.includes("if (result.alreadyRunning)") && clearRoute.includes("res.status(409)"));
+  assert.doesNotMatch(clearRoute, /clearThumbnailCache|thumbnailPath: null|thumbnailGeneratedAt: null/);
+
+  const engine = source("lib/library-engine/job-engine.ts");
+  assert.match(engine, /\(opts\.rebuildThumbnails \|\| opts\.clearThumbnailsOnly\) && opts\.jobType !== "THUMBNAILS"/);
+  assert.match(engine, /if \(!opts\.clearThumbnailsOnly\)/);
+  assert.match(engine, /async function runThumbnailJob\(state: ActiveJobState, rebuild = false, clearOnly = false\)/);
+  assert.match(engine, /await clearThumbnailCache\(\s*nasPath,/);
+  assert.match(engine, /thumbnailOperation: "CLEAR_ONLY"/);
+  assert.match(engine, /jobDiagnostics\.thumbnailOperation === "CLEAR_ONLY"/);
 
   assert.match(legacyScan, /result\.errorCode === "NAS_OFFLINE"/);
   assert.match(legacyScan, /result\.errorCode === "NAS_READ_ONLY"/);

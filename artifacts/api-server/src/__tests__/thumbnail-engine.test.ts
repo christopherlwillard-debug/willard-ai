@@ -12,6 +12,7 @@ import {
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
   clearThumbnailCache,
+  ensureThumbnailDir,
   findValidThumbnailPath,
   findReusableThumbnailPaths,
   THUMBNAIL_REUSE_PROBE_MAX_FILES,
@@ -142,11 +143,49 @@ describe("thumbnail publication", { concurrency: false }, () => {
     fs.writeFileSync(partial, Buffer.alloc(128));
     fs.writeFileSync(frame, Buffer.alloc(128));
 
-    assert.equal(clearThumbnailCache(root), 1);
+    assert.equal(await clearThumbnailCache(root), 1);
     assert.equal(fs.existsSync(generated.destPath), false);
     assert.equal(fs.existsSync(lock), true);
     assert.equal(fs.existsSync(partial), true);
     assert.equal(fs.existsSync(frame), true);
+  });
+
+  test("waits for an active thumbnail publisher lock before removing its final WebP", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const generated = await generateThumbnail(54, source, "jpg", root);
+    assert.equal(generated.error, null);
+
+    const lock = `${generated.destPath}.lock`;
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const remainedWhileLocked = fs.existsSync(generated.destPath);
+    fs.unlinkSync(lock);
+
+    assert.equal(await clearing, 1);
+    assert.equal(remainedWhileLocked, true, "cache cleanup must wait while a publisher owns the same thumbnail lock");
+    assert.equal(fs.existsSync(generated.destPath), false);
+  });
+
+  test("rejects symlinked thumbnail cache directories before stats, writes, or cleanup", async (t) => {
+    if (process.platform === "win32") {
+      t.skip("creating directory symlinks requires elevated privileges on some Windows runners");
+      return;
+    }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-outside-"));
+    roots.push(root, outside);
+    fs.mkdirSync(path.dirname(getThumbnailDir(root)), { recursive: true });
+    const sentinel = path.join(outside, "preserve.webp");
+    fs.writeFileSync(sentinel, Buffer.alloc(128));
+    fs.symlinkSync(outside, getThumbnailDir(root), "dir");
+
+    assert.throws(() => getThumbnailCacheStats(root), /symlink/i);
+    assert.throws(() => ensureThumbnailDir(root), /symlink/i);
+    await assert.rejects(clearThumbnailCache(root), /symlink/i);
+    assert.equal(fs.existsSync(sentinel), true, "cleanup must never follow a cache-directory symlink");
   });
 
   test("reuses a real-size thumbnail cache after restart without rewriting completed files", async () => {

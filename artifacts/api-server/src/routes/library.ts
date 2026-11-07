@@ -9,7 +9,6 @@ import {
 } from "../lib/library-engine";
 import {
   getThumbnailCacheStats,
-  clearThumbnailCache,
   THUMBNAIL_CACHE_MAX_BYTES,
 } from "../lib/thumbnail-engine";
 import { runLibraryCheck, getLibraryHealthSnapshot, acknowledgeReconnect } from "../lib/library-monitor";
@@ -666,15 +665,24 @@ router.delete("/library/thumbnails/cache", async (_req: Request, res: Response) 
     return;
   }
 
-  const deleted = clearThumbnailCache(nasPath);
+  const result = await startJob({
+    jobType: "THUMBNAILS",
+    profile: "HEALTH_SCAN",
+    nasPath,
+    clearThumbnailsOnly: true,
+  });
 
-  // Reset thumbnailPath in DB so the backfill job can regenerate them
-  await db.update(mediaFilesTable).set({
-    thumbnailPath: null,
-    thumbnailGeneratedAt: null,
-  }).where(eq(mediaFilesTable.nasPath, nasPath));
-
-  res.json({ deleted });
+  if (respondToLibraryJobStartFailure(res, result, nasPath)) return;
+  if (result.alreadyRunning) {
+    res.status(409).json({
+      code: "LIBRARY_JOB_ALREADY_RUNNING",
+      error: "Library job already running",
+      message: "Wait for or cancel the active library job before clearing the thumbnail cache.",
+      jobId: result.jobId,
+    });
+    return;
+  }
+  res.status(202).json({ ...result, operation: "CACHE_CLEAR" });
 });
 
 // ── POST /api/library/thumbnails/rebuild — wipe cache then start fresh job ────

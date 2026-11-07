@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
+import { ensureDataDirectoryWithinRoot, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "./media-tools.ts";
 import { StoragePolicyError } from "./storage-policy.ts";
 
@@ -28,18 +28,29 @@ export function getThumbnailDir(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", "thumbnails");
 }
 
+/** Return an existing cache directory only after rejecting symlinked ancestors. */
+function getExistingThumbnailDir(nasPath: string): string | null {
+  const dir = getThumbnailDir(nasPath);
+  try {
+    fs.lstatSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return ensureDataDirectoryWithinRoot(dir, nasPath);
+}
+
 export function ensureThumbnailDir(nasPath: string): string {
   const dir = getThumbnailDir(nasPath);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    return ensureDataDirectoryWithinRoot(dir, nasPath);
   } catch (err) {
     throw new StoragePolicyError(
-      `NAS storage is required for thumbnail derivatives; the NAS cache directory could not be created: ${
+      `NAS storage is required for thumbnail derivatives; the NAS cache directory could not be created safely: ${
         err instanceof Error ? err.message : "unknown error"
       }`,
     );
   }
-  return dir;
 }
 
 // ── Safe filename from media file id ──────────────────────────────────────────
@@ -60,6 +71,11 @@ export function findValidThumbnailPath(
   storedPath?: string | null,
 ): string | null {
   const root = getWillardAIDir(nasPath);
+  try {
+    getExistingThumbnailDir(nasPath);
+  } catch {
+    return null;
+  }
   if (storedPath) {
     try {
       const safePath = resolveWithinRoot(storedPath, root);
@@ -347,8 +363,8 @@ export function cleanStaleThumbnailPartials(
   nasPath: string,
   olderThanMs = INCOMPLETE_FILE_RETENTION_MS,
 ): { files: number; bytes: number } {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return { files: 0, bytes: 0 };
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return { files: 0, bytes: 0 };
   let files = 0;
   let bytes = 0;
   try {
@@ -368,8 +384,8 @@ export function cleanStaleThumbnailPartials(
 }
 
 export function getThumbnailCacheStats(nasPath: string): ThumbnailCacheStats {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) {
     return { bytes: 0, files: 0, reclaimableBytes: 0, incompleteFiles: 0, incompleteBytes: 0 };
   }
   let bytes = 0;
@@ -410,8 +426,8 @@ export function enforceThumbnailCacheQuota(
   maxBytes = THUMBNAIL_CACHE_MAX_BYTES,
   protectedPath?: string,
 ): ThumbnailCacheStats {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return getThumbnailCacheStats(nasPath);
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return getThumbnailCacheStats(nasPath);
   const candidates: Array<{ filePath: string; size: number; mtime: number }> = [];
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -510,21 +526,41 @@ export function getThumbnailCacheSizeBytes(nasPath: string): number {
   return getThumbnailCacheStats(nasPath).bytes;
 }
 
-export function clearThumbnailCache(nasPath: string): number {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return 0;
-  let deleted = 0;
+export async function clearThumbnailCache(
+  nasPath: string,
+  shouldStop?: () => boolean,
+): Promise<number> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return 0;
+  let files: string[];
   try {
-    for (const file of fs.readdirSync(dir)) {
-      // Do not unlink a worker's inter-process lock or in-flight output.
-      // Removing a live lock would allow another process to acquire the same
-      // destination and publish concurrently.
-      if (isIncompleteThumbnailName(file)) continue;
+    files = await fs.promises.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+
+  let deleted = 0;
+  for (const file of files) {
+    if (shouldStop?.()) break;
+    if (isIncompleteThumbnailName(file) || !file.toLowerCase().endsWith(".webp")) continue;
+
+    const filePath = path.join(dir, file);
+    // Use the same per-thumbnail inter-process lock as publishers. A directory
+    // snapshot alone is insufficient: an on-demand request can publish a file
+    // after readdir but before this cleanup reaches that filename.
+    const releaseLock = await acquireThumbnailLock(filePath);
+    try {
+      if (shouldStop?.()) break;
       try {
-        fs.rmSync(path.join(dir, file));
+        await fs.promises.unlink(filePath);
         deleted++;
-      } catch { /* skip */ }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    } finally {
+      releaseLock();
     }
-  } catch { /* skip */ }
+  }
   return deleted;
 }
