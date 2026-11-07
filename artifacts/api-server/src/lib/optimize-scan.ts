@@ -69,10 +69,14 @@ export async function readOptimizeScanCache(
     const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
     handle = await fs.promises.open(safeCachePath, fs.constants.O_RDONLY | noFollow);
     const opened = await handle.stat();
+    const verifiedCacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(verifiedCacheDir) !== path.resolve(cacheDir)) return null;
     const afterOpen = await fs.promises.lstat(safeCachePath);
     if (!sameFileIdentity(beforeOpen, opened) || !sameFileIdentity(opened, afterOpen)) return null;
 
     const raw = await handle.readFile({ encoding: "utf8" });
+    const verifiedReadDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(verifiedReadDir) !== path.resolve(cacheDir)) return null;
     const afterRead = await fs.promises.lstat(safeCachePath);
     if (!sameFileIdentity(opened, afterRead)) return null;
 
@@ -126,7 +130,11 @@ export async function writeOptimizeScanCache(
     await fs.promises.rename(temporaryPath, safeCachePath);
     temporaryPath = undefined;
 
-    const published = await fs.promises.lstat(safeCachePath);
+    const publishedCacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(publishedCacheDir) !== path.resolve(cacheDir)) {
+      throw new Error("Optimize scan cache directory changed during publication");
+    }
+    const published = await fs.promises.lstat(path.join(publishedCacheDir, path.basename(cachePath)));
     if (!published.isFile() || published.isSymbolicLink()) {
       throw new Error("Optimize scan cache publication did not produce a regular file");
     }
