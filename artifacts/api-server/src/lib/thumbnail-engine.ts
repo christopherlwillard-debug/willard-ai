@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
+import { ensureDataDirectoryWithinRoot, getWillardAIDir, resolveWithinRoot } from "./nas-storage.ts";
 import { formatMediaToolExecutionError, runMediaToolAsync } from "./media-tools.ts";
 import { StoragePolicyError } from "./storage-policy.ts";
 
@@ -28,18 +28,29 @@ export function getThumbnailDir(nasPath: string): string {
   return path.join(getWillardAIDir(nasPath), "cache", "thumbnails");
 }
 
+/** Return an existing cache directory only after rejecting symlinked ancestors. */
+function getExistingThumbnailDir(nasPath: string): string | null {
+  const dir = getThumbnailDir(nasPath);
+  try {
+    fs.lstatSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return ensureDataDirectoryWithinRoot(dir, nasPath);
+}
+
 export function ensureThumbnailDir(nasPath: string): string {
   const dir = getThumbnailDir(nasPath);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    return ensureDataDirectoryWithinRoot(dir, nasPath);
   } catch (err) {
     throw new StoragePolicyError(
-      `NAS storage is required for thumbnail derivatives; the NAS cache directory could not be created: ${
+      `NAS storage is required for thumbnail derivatives; the NAS cache directory could not be created safely: ${
         err instanceof Error ? err.message : "unknown error"
       }`,
     );
   }
-  return dir;
 }
 
 // ── Safe filename from media file id ──────────────────────────────────────────
@@ -60,6 +71,11 @@ export function findValidThumbnailPath(
   storedPath?: string | null,
 ): string | null {
   const root = getWillardAIDir(nasPath);
+  try {
+    getExistingThumbnailDir(nasPath);
+  } catch {
+    return null;
+  }
   if (storedPath) {
     try {
       const safePath = resolveWithinRoot(storedPath, root);
@@ -338,38 +354,82 @@ function isStalePartialName(name: string): boolean {
   return name.endsWith(".tmp.webp") || name.endsWith(".frame.png");
 }
 
+/** Derive the final WebP destination name from a known temporary output name. */
+function thumbnailDestinationNameForPartial(name: string): string | null {
+  if (name.endsWith(".frame.png")) {
+    return `${name.slice(0, -".frame.png".length)}.webp`;
+  }
+  const match = name.match(/^(.+\.webp)\.\d+\.\d+\.\d+\.tmp\.webp$/);
+  return match?.[1] ?? null;
+}
+
 /**
- * Remove only abandoned, process-generated partial files. A live lock is left
- * alone; acquireThumbnailLock owns stale-lock expiry and uses the same safety
- * window.
+ * Remove old temporary outputs only while holding the destination's publisher
+ * lock. A crashed process may leave a lock behind; it is preserved rather than
+ * risking deletion of a live worker's partial output.
  */
-export function cleanStaleThumbnailPartials(
+export async function cleanStaleThumbnailPartials(
   nasPath: string,
   olderThanMs = INCOMPLETE_FILE_RETENTION_MS,
-): { files: number; bytes: number } {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return { files: 0, bytes: 0 };
+): Promise<{ files: number; bytes: number }> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return { files: 0, bytes: 0 };
+
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return { files: 0, bytes: 0 };
+  }
+
   let files = 0;
   let bytes = 0;
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !isStalePartialName(entry.name)) continue;
-      const filePath = path.join(dir, entry.name);
-      try {
-        const stat = fs.statSync(filePath);
-        if (Date.now() - stat.mtimeMs < olderThanMs) continue;
-        fs.unlinkSync(filePath);
-        files++;
-        bytes += stat.size;
-      } catch { /* another worker may be publishing or cleaning it */ }
+  for (const entry of entries) {
+    if (!entry.isFile() || !isStalePartialName(entry.name)) continue;
+    const destinationName = thumbnailDestinationNameForPartial(entry.name);
+    if (!destinationName) continue;
+    const destPath = path.join(dir, destinationName);
+    const lockPath = `${destPath}.lock`;
+
+    // Fast path for an active publisher. If a publisher races this check,
+    // acquireThumbnailLock below serializes cleanup with that writer.
+    try {
+      await fs.promises.lstat(lockPath);
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
     }
-  } catch { /* a transient NAS outage must not make cache inspection destructive */ }
+
+    let releaseLock: (() => void) | null = null;
+    try {
+      releaseLock = await acquireThumbnailLock(destPath);
+    } catch {
+      continue;
+    }
+
+    try {
+      const currentDir = getExistingThumbnailDir(nasPath);
+      if (!currentDir || path.resolve(currentDir) !== path.resolve(dir)) continue;
+      const filePath = path.join(dir, entry.name);
+      const stat = await fs.promises.lstat(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      if (Date.now() - stat.mtimeMs < olderThanMs) continue;
+      await fs.promises.unlink(filePath);
+      files++;
+      bytes += stat.size;
+    } catch {
+      // The worker may have completed or replaced its partial while we waited.
+    } finally {
+      releaseLock?.();
+    }
+  }
+
   return { files, bytes };
 }
 
 export function getThumbnailCacheStats(nasPath: string): ThumbnailCacheStats {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) {
     return { bytes: 0, files: 0, reclaimableBytes: 0, incompleteFiles: 0, incompleteBytes: 0 };
   }
   let bytes = 0;
@@ -405,39 +465,105 @@ export function getThumbnailCacheStats(nasPath: string): ThumbnailCacheStats {
  * thumbnails are evicted first; the just-published thumbnail is protected so a
  * request never deletes the result it is about to serve.
  */
-export function enforceThumbnailCacheQuota(
+export async function enforceThumbnailCacheQuota(
   nasPath: string,
   maxBytes = THUMBNAIL_CACHE_MAX_BYTES,
   protectedPath?: string,
-): ThumbnailCacheStats {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return getThumbnailCacheStats(nasPath);
-  const candidates: Array<{ filePath: string; size: number; mtime: number }> = [];
+): Promise<ThumbnailCacheStats> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return getThumbnailCacheStats(nasPath);
+
+  let entries: fs.Dirent[];
   try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".webp")) continue;
-      const filePath = path.join(dir, entry.name);
-      if (protectedPath && path.resolve(filePath) === path.resolve(protectedPath)) continue;
-      try {
-        const stat = fs.statSync(filePath);
-        if (isThumbnailFileValid(filePath)) {
-          candidates.push({ filePath, size: stat.size, mtime: stat.mtimeMs });
-        }
-      } catch { /* skip a disappearing file */ }
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return getThumbnailCacheStats(nasPath);
+  }
+
+  const protectedResolved = protectedPath ? path.resolve(protectedPath) : null;
+  const candidates: Array<{
+    filePath: string;
+    size: number;
+    mtimeMs: number;
+    ino: number;
+    dev: number;
+  }> = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".webp")) continue;
+    const filePath = path.join(dir, entry.name);
+    if (protectedResolved && path.resolve(filePath) === protectedResolved) continue;
+    try {
+      const stat = await fs.promises.lstat(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || !isThumbnailFileValid(filePath)) continue;
+      candidates.push({
+        filePath,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ino: stat.ino,
+        dev: stat.dev,
+      });
+    } catch {
+      // Entries can disappear while another process is reconciling the cache.
     }
-  } catch { return getThumbnailCacheStats(nasPath); }
+  }
 
   let current = getThumbnailCacheStats(nasPath).bytes;
   if (current > maxBytes) {
-    candidates.sort((a, b) => a.mtime - b.mtime);
+    candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
     for (const candidate of candidates) {
       if (current <= maxBytes) break;
+      const lockPath = `${candidate.filePath}.lock`;
       try {
-        fs.unlinkSync(candidate.filePath);
-        current -= candidate.size;
-      } catch { /* another process may have reclaimed it */ }
+        await fs.promises.lstat(lockPath);
+        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+      }
+
+      let releaseLock: (() => void) | null = null;
+      try {
+        releaseLock = await acquireThumbnailLock(candidate.filePath);
+      } catch {
+        continue;
+      }
+
+      try {
+        const currentDir = getExistingThumbnailDir(nasPath);
+        if (!currentDir || path.resolve(currentDir) !== path.resolve(dir)) break;
+        const stat = await fs.promises.lstat(candidate.filePath);
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+          current = getThumbnailCacheStats(nasPath).bytes;
+          continue;
+        }
+        if (
+          stat.ino !== candidate.ino ||
+          stat.dev !== candidate.dev ||
+          stat.size !== candidate.size ||
+          stat.mtimeMs !== candidate.mtimeMs
+        ) {
+          current = getThumbnailCacheStats(nasPath).bytes;
+          continue;
+        }
+        if (!isThumbnailFileValid(candidate.filePath)) {
+          current = getThumbnailCacheStats(nasPath).bytes;
+          continue;
+        }
+        await fs.promises.unlink(candidate.filePath);
+        current = Math.max(0, current - stat.size);
+      } catch {
+        // Quota enforcement is best-effort; a busy or unsafe entry is retained.
+        try {
+          current = getThumbnailCacheStats(nasPath).bytes;
+        } catch {
+          break;
+        }
+      } finally {
+        releaseLock?.();
+      }
     }
   }
+
   return getThumbnailCacheStats(nasPath);
 }
 
@@ -447,16 +573,15 @@ export async function generateThumbnail(
   extension: string,
   nasPath: string,
   quality?: string | null,
+  onReady?: (thumbnail: { destPath: string; reused: boolean }) => Promise<void>,
 ): Promise<ThumbnailResult> {
   const thumbDir = ensureThumbnailDir(nasPath);
-  cleanStaleThumbnailPartials(nasPath);
+  await cleanStaleThumbnailPartials(nasPath);
   const destPath = path.join(thumbDir, thumbnailFilename(mediaFileId));
 
-  // Publishers never write directly to the final path, so this fast path
-  // cannot expose an in-progress file. Invalid legacy output is handled only
-  // after acquiring the destination lock.
-  if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
-
+  // Hold the same destination lock through both file publication and the
+  // caller's canonical catalog-pointer update. Cache clearing uses this lock
+  // too, so it cannot unlink a thumbnail and then race a late DB pointer write.
   let releaseLock: (() => void) | null = null;
   try {
     releaseLock = await acquireThumbnailLock(destPath);
@@ -466,8 +591,11 @@ export async function generateThumbnail(
 
   const tempPath = uniqueThumbnailTempPath(destPath);
   try {
-    // Re-check after waiting: another process may have published it.
-    if (isThumbnailFileValid(destPath)) return { destPath, error: null, reused: true };
+    // Re-check after acquiring the lock: another process may have published it.
+    if (isThumbnailFileValid(destPath)) {
+      await onReady?.({ destPath, reused: true });
+      return { destPath, error: null, reused: true };
+    }
     try { fs.rmSync(destPath, { force: true }); } catch { /* regenerate below */ }
 
     const preset = qualityPreset(quality);
@@ -494,13 +622,19 @@ export async function generateThumbnail(
 
     if (error) return { destPath: "", error };
     publishThumbnail(tempPath, destPath);
-    enforceThumbnailCacheQuota(nasPath, THUMBNAIL_CACHE_MAX_BYTES, destPath);
+    await onReady?.({ destPath, reused: false });
+
+    // Do not hold this destination lock while quota eviction acquires locks
+    // for older thumbnails; that could deadlock concurrent publishers.
+    releaseLock?.();
+    releaseLock = null;
+    await enforceThumbnailCacheQuota(nasPath, THUMBNAIL_CACHE_MAX_BYTES, destPath);
     return { destPath, error: null, reused: false };
   } catch (err: any) {
     return { destPath: "", error: err?.message ?? "Thumbnail publication failed" };
   } finally {
     try { fs.rmSync(tempPath, { force: true }); } catch { /* best effort */ }
-    releaseLock();
+    releaseLock?.();
   }
 }
 
@@ -510,21 +644,98 @@ export function getThumbnailCacheSizeBytes(nasPath: string): number {
   return getThumbnailCacheStats(nasPath).bytes;
 }
 
-export function clearThumbnailCache(nasPath: string): number {
-  const dir = getThumbnailDir(nasPath);
-  if (!fs.existsSync(dir)) return 0;
-  let deleted = 0;
+export async function clearThumbnailCache(
+  nasPath: string,
+  shouldStop?: () => boolean,
+): Promise<number> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return 0;
+  let files: string[];
   try {
-    for (const file of fs.readdirSync(dir)) {
-      // Do not unlink a worker's inter-process lock or in-flight output.
-      // Removing a live lock would allow another process to acquire the same
-      // destination and publish concurrently.
-      if (isIncompleteThumbnailName(file)) continue;
+    files = await fs.promises.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+
+  let deleted = 0;
+  for (const file of files) {
+    if (shouldStop?.()) break;
+    if (isIncompleteThumbnailName(file) || !file.toLowerCase().endsWith(".webp")) continue;
+
+    const filePath = path.join(dir, file);
+    // Use the same per-thumbnail inter-process lock as publishers. A directory
+    // snapshot alone is insufficient: an on-demand request can publish a file
+    // after readdir but before this cleanup reaches that filename.
+    const releaseLock = await acquireThumbnailLock(filePath);
+    try {
+      if (shouldStop?.()) break;
       try {
-        fs.rmSync(path.join(dir, file));
+        await fs.promises.unlink(filePath);
         deleted++;
-      } catch { /* skip */ }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    } finally {
+      releaseLock();
     }
-  } catch { /* skip */ }
+  }
   return deleted;
+}
+
+/**
+ * Remove a canonical id-based thumbnail only while it is still orphaned.
+ * The per-file lock is shared with publishers, and the catalog predicate is
+ * rechecked after acquiring it so a concurrent publisher/scan cannot be
+ * invalidated by a stale Health Center inventory.
+ */
+export async function removeOrphanedThumbnail(
+  nasPath: string,
+  thumbnailPath: string,
+  isStillOrphaned: () => Promise<boolean>,
+): Promise<boolean> {
+  const dir = getExistingThumbnailDir(nasPath);
+  if (!dir) return false;
+
+  const filePath = path.resolve(thumbnailPath);
+  if (path.dirname(filePath) !== path.resolve(dir)) return false;
+  const filename = path.basename(filePath);
+  const mediaFileId = Number(path.basename(filename, path.extname(filename)));
+  if (!Number.isSafeInteger(mediaFileId) || mediaFileId <= 0 || filename !== thumbnailFilename(mediaFileId)) {
+    return false;
+  }
+
+  const releaseLock = await acquireThumbnailLock(filePath);
+  try {
+    const currentDir = getExistingThumbnailDir(nasPath);
+    if (!currentDir || path.resolve(currentDir) !== path.resolve(dir)) return false;
+
+    let before: fs.Stats;
+    try {
+      before = await fs.promises.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!before.isFile() || before.isSymbolicLink()) return false;
+    if (!(await isStillOrphaned())) return false;
+
+    let after: fs.Stats;
+    try {
+      after = await fs.promises.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    if (!after.isFile() || after.isSymbolicLink() ||
+        before.dev !== after.dev || before.ino !== after.ino ||
+        before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+      return false;
+    }
+
+    await fs.promises.unlink(filePath);
+    return true;
+  } finally {
+    releaseLock();
+  }
 }

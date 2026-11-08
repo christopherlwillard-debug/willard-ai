@@ -52,7 +52,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/api-server && node --experimental-strip-types --test src/__tests__/optimize-cycle.test.ts"
+args = "node scripts/backend-audit-disposable.mjs --test optimize-cycle.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
@@ -63,7 +63,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node --experimental-strip-types --test e2e/dashboard-after-scan.test.ts"
+args = "node scripts/backend-audit-disposable.mjs --test dashboard-after-scan.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
@@ -128,4 +128,3 @@ args = "artifacts/willard-ai"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm run test:routed"
-

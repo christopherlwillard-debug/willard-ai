@@ -1,5 +1,5 @@
 /**
- * E2E integration test: Dashboard loads correctly after a scan on a real NAS path.
+ * E2E integration test: Dashboard loads correctly after scanning an isolated fixture library.
  *
  * Covers the three "done looks like" criteria from the task:
  *   1. All 6 dashboard stat-card fields (Photos, Videos, Documents, Storage Used,
@@ -8,35 +8,33 @@
  *      (database, thumbnailsOk, missingFiles === 0, corruptFiles === 0).
  *   3. The storage-breakdown (donut chart) data is populated when files were indexed.
  *
- * Prerequisites
- * ─────────────
- *   • The API server must be running and reachable.
- *   • Set WILLARD_API_URL to the server base URL (e.g. http://localhost:8080).
- *     Falls back to https://<REPLIT_DEV_DOMAIN> when running inside Replit.
- *   • The app password must be "willard123", or the app must be in first-run
- *     setup mode (no password yet).  The test will call /auth/setup if needed.
- *   • The NAS path must point to a readable directory (e.g. ./test-media which
- *     ships with the repo and contains sample Photos, Videos, and Documents).
+ * Prerequisites: run through the disposable backend-audit wrapper. The test
+ * rejects the shared application database/API and uses a fixture under the
+ * wrapper-owned temporary directory.
  *
  * Run with:
- *   node --experimental-strip-types --test --test-concurrency=1 e2e/dashboard-after-scan.test.ts
+ *   pnpm run audit:backend
  */
 
 import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { acquireLibraryTestLock } from "../artifacts/api-server/src/__tests__/test-library-lock.ts";
+import {
+  requireDisposableAuditApiUrl,
+  requireDisposableTestRoot,
+} from "../artifacts/api-server/src/__tests__/integration-test-safety.ts";
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-const REPLIT_BASE = process.env["REPLIT_DEV_DOMAIN"]
-  ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
-  : undefined;
-
-const API_BASE =
-  process.env["WILLARD_API_URL"] ?? REPLIT_BASE ?? "http://localhost:3000";
-
-const NAS_PATH =
-  process.env["WILLARD_NAS_PATH"] ?? `${process.cwd()}/test-media`;
+const API_BASE = requireDisposableAuditApiUrl();
+const TEST_ROOT = requireDisposableTestRoot();
+const NAS_PATH = path.join(TEST_ROOT, "dashboard-media");
+const PNG_FIXTURE = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
 
 const TEST_PASSWORD = "willard123";
 
@@ -157,6 +155,8 @@ interface ScanStatusResponse {
 describe("Dashboard after scan", { concurrency: false }, async () => {
   before(async () => {
     releaseLibraryTestLock = await acquireLibraryTestLock();
+    fs.mkdirSync(NAS_PATH);
+    fs.writeFileSync(path.join(NAS_PATH, "dashboard-fixture.png"), PNG_FIXTURE, { flag: "wx" });
     // ── 1. Authenticate ────────────────────────────────────────────────────
     const statusRes = await fetch(`${API_BASE}/api/auth/status`);
     assert.strictEqual(

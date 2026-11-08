@@ -7,8 +7,10 @@ import { fileURLToPath } from "node:url";
 import {
   createConcurrencyLimiter,
   mapSettledWithConcurrency,
+  readOptimizeScanCache,
   walkForConversion,
   walkForOptimize,
+  writeOptimizeScanCache,
   type OptimizeConversionFile,
   type OptimizeExtGroup,
 } from "../lib/optimize-scan.ts";
@@ -282,9 +284,12 @@ test("Optimize scan and conversion routes use asynchronous traversal and bounded
   assert.match(optimizeRouteSource, /mapSettledWithConcurrency\(videoProbeTasks, 4/);
   assert.doesNotMatch(optimizeScanSource, /readdirSync|lstatSync/);
   assert.doesNotMatch(optimizeRouteSource, /\bfs\.(?:existsSync|statSync|lstatSync|readdirSync|readFileSync|writeFileSync|mkdirSync|rmSync|unlinkSync)\b/);
-  assert.match(optimizeRouteSource, /async function readScanCache/);
-  assert.match(optimizeRouteSource, /await fs\.promises\.readFile/);
-  assert.match(optimizeRouteSource, /await fs\.promises\.writeFile/);
+  assert.match(optimizeRouteSource, /readOptimizeScanCache/);
+  assert.match(optimizeRouteSource, /writeOptimizeScanCache/);
+  assert.match(optimizeScanSource, /ensureDirectoryWithinRoot/);
+  assert.match(optimizeScanSource, /O_NOFOLLOW/);
+  assert.match(optimizeScanSource, /sameFileIdentity/);
+  assert.match(optimizeScanSource, /fs\.promises\.rename/);
 });
 
 test("scan-limit state is cached, returned by the API, and warned about in Optimize Center", () => {
@@ -307,4 +312,177 @@ test("Optimize scan route rejects a missing active library before using its NAS 
   assert.ok(guard < route.indexOf("await readScanCache(nasPath"), "library guard must precede cache access");
   assert.ok(guard < route.indexOf("await walkForOptimize(nasPath"), "library guard must precede NAS traversal");
   assert.match(route, /const nasPath = library\.nasPath;/);
+});
+
+function scanCachePath(root: string): string {
+  return path.join(root, "WillardAI", "cache", "optimize-scan.json");
+}
+
+function scanCacheOptions(now: number, overrides: Partial<{
+  expectedVersion: number;
+  ttlMs: number;
+  profile: string;
+  rawConversionEnabled: boolean;
+}> = {}) {
+  return {
+    expectedVersion: 8,
+    ttlMs: 24 * 60 * 60 * 1000,
+    profile: "ARCHIVE",
+    rawConversionEnabled: false,
+    now,
+    ...overrides,
+  };
+}
+
+test("Optimize scan cache accepts only the exact version and a valid non-future timestamp", async () => {
+  const f = fixture();
+  const now = Date.parse("2026-11-06T12:00:00.000Z");
+  const cachePath = scanCachePath(f.root);
+  try {
+    await writeOptimizeScanCache(cachePath, f.root, {
+      scannedAt: new Date(now - 60_000).toISOString(),
+      profile: "ARCHIVE",
+      rawConversionEnabled: false,
+      groups: [],
+    }, 8);
+    const valid = await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now));
+    assert.equal(valid?.cacheVersion, 8);
+
+    for (const invalid of [
+      { scannedAt: "not-a-date", cacheVersion: 8 },
+      { scannedAt: new Date(now + 1).toISOString(), cacheVersion: 8 },
+      { scannedAt: new Date(now - 25 * 60 * 60 * 1000).toISOString(), cacheVersion: 8 },
+      { scannedAt: new Date(now - 60_000).toISOString(), cacheVersion: 7 },
+      { scannedAt: new Date(now - 60_000).toISOString(), cacheVersion: 9 },
+    ]) {
+      await writeOptimizeScanCache(cachePath, f.root, {
+        ...invalid,
+        profile: "ARCHIVE",
+        rawConversionEnabled: false,
+      }, Number(invalid.cacheVersion));
+      const cached = await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now));
+      assert.equal(cached, null, `invalid cache should be rejected: ${JSON.stringify(invalid)}`);
+    }
+
+    await fs.promises.writeFile(cachePath, JSON.stringify({
+      scannedAt: new Date(now - 60_000).toISOString(),
+      profile: "ARCHIVE",
+      rawConversionEnabled: false,
+    }), "utf8");
+    assert.equal(await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now)), null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("Optimize scan cache rejects profile and raw-conversion mismatches", async () => {
+  const f = fixture();
+  const now = Date.now();
+  const cachePath = scanCachePath(f.root);
+  try {
+    await writeOptimizeScanCache(cachePath, f.root, {
+      scannedAt: new Date(now - 1_000).toISOString(),
+      profile: "ARCHIVE",
+      rawConversionEnabled: false,
+    }, 8);
+    assert.equal(await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now, { profile: "BALANCED" })), null);
+    assert.equal(await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now, { rawConversionEnabled: true })), null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("Optimize scan cache never reads or writes through a symlinked cache directory", {
+  skip: process.platform === "win32",
+}, async () => {
+  const f = fixture();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-optimize-cache-outside-"));
+  const outsideCache = path.join(outside, "optimize-scan.json");
+  const cacheDir = path.join(f.root, "WillardAI", "cache");
+  try {
+    fs.mkdirSync(path.dirname(cacheDir), { recursive: true });
+    fs.writeFileSync(outsideCache, "outside sentinel");
+    fs.symlinkSync(outside, cacheDir, "dir");
+
+    assert.equal(await readOptimizeScanCache(
+      scanCachePath(f.root), f.root, scanCacheOptions(Date.now()),
+    ), null);
+    await writeOptimizeScanCache(scanCachePath(f.root), f.root, {
+      scannedAt: new Date().toISOString(),
+    }, 8);
+    assert.equal(fs.readFileSync(outsideCache, "utf8"), "outside sentinel");
+  } finally {
+    f.cleanup();
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("Optimize scan cache never follows a symlinked cache file", {
+  skip: process.platform === "win32",
+}, async () => {
+  const f = fixture();
+  const outside = path.join(f.root, "outside-cache-target.json");
+  const cachePath = scanCachePath(f.root);
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(outside, "outside sentinel");
+    fs.symlinkSync(outside, cachePath);
+
+    assert.equal(await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(Date.now())), null);
+    await writeOptimizeScanCache(cachePath, f.root, {
+      scannedAt: new Date().toISOString(),
+      profile: "ARCHIVE",
+      rawConversionEnabled: false,
+    }, 8);
+    assert.equal(fs.readFileSync(outside, "utf8"), "outside sentinel");
+
+    const finalEntry = fs.lstatSync(cachePath);
+    assert.ok(finalEntry.isSymbolicLink() || finalEntry.isFile());
+    if (!finalEntry.isSymbolicLink()) {
+      assert.equal(finalEntry.isFile(), true, "atomic publication must leave a regular cache file");
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("Optimize scan cache rejects a regular file replaced between lstat and open", async () => {
+  const f = fixture();
+  const now = Date.now();
+  const cachePath = scanCachePath(f.root);
+  const displacedPath = `${cachePath}.displaced`;
+  try {
+    await writeOptimizeScanCache(cachePath, f.root, {
+      scannedAt: new Date(now - 1_000).toISOString(),
+      profile: "ARCHIVE",
+      rawConversionEnabled: false,
+    }, 8);
+
+    const promises = fs.promises as unknown as { open: typeof fs.promises.open };
+    const originalOpen = promises.open;
+    let replaced = false;
+    promises.open = async (...args: Parameters<typeof fs.promises.open>) => {
+      const [target] = args;
+      if (!replaced && path.resolve(String(target)) === path.resolve(cachePath)) {
+        fs.renameSync(cachePath, displacedPath);
+        fs.writeFileSync(cachePath, JSON.stringify({
+          scannedAt: new Date(now - 1_000).toISOString(),
+          cacheVersion: 8,
+          profile: "ARCHIVE",
+          rawConversionEnabled: false,
+        }), "utf8");
+        replaced = true;
+      }
+      return originalOpen(...args);
+    };
+    try {
+      const cached = await readOptimizeScanCache(cachePath, f.root, scanCacheOptions(now));
+      assert.equal(replaced, true, "the test must replace the path after the initial lstat");
+      assert.equal(cached, null, "a different file identity must not be accepted as the opened cache entry");
+    } finally {
+      promises.open = originalOpen;
+    }
+  } finally {
+    f.cleanup();
+  }
 });

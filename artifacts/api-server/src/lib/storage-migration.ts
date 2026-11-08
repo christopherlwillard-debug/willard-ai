@@ -718,6 +718,28 @@ export function createStorageMigrationService(options: MigrationServiceOptions) 
         Object.assign(manifest, counts, { updatedAt: new Date().toISOString() });
         await saveManifest(options.manifestDir, manifest);
       }
+      // A destination can already match the preview hash, causing an entry to
+      // be marked verified without copying. Revalidate BOTH sides for every
+      // verified entry immediately before redirecting database references:
+      // the source may have changed since preview (or during a long copy batch).
+      for (const entry of manifest.entries) {
+        if (entry.state !== "verified") continue;
+        if (!entry.sourceHash || !entry.destinationHash) {
+          throw new Error(`Verified migration entry is missing a content hash: ${entry.relativePath}`);
+        }
+        const safeSourcePath = assertRegularFileWithoutSymlinks(entry.sourcePath, manifest.sourceRoot);
+        const safeDestinationPath = assertRegularFileWithoutSymlinks(entry.destinationPath, manifest.destinationRoot);
+        const [currentSourceHash, currentDestinationHash] = await Promise.all([
+          hashFile(safeSourcePath),
+          hashFile(safeDestinationPath),
+        ]);
+        if (currentSourceHash !== entry.sourceHash) {
+          throw new Error(`Source changed after migration preview; database references were not updated: ${entry.relativePath}`);
+        }
+        if (currentDestinationHash !== entry.sourceHash) {
+          throw new Error(`Destination changed after migration verification; database references were not updated: ${entry.relativePath}`);
+        }
+      }
       const allReferences = manifest.entries.flatMap((entry) => entry.references);
       if (allReferences.length > 0) {
         try {

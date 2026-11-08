@@ -25,7 +25,7 @@ import { isSystemDir, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot, ensureDirectoryWithinRoot } from "../nas-storage.ts";
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import {
-  getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
+  clearThumbnailCache, getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
   findReusableThumbnailPaths, THUMBNAIL_REUSE_PROBE_MAX_FILES,
   getThumbnailCacheStats, cleanStaleThumbnailPartials, enforceThumbnailCacheQuota,
 } from "../thumbnail-engine.ts";
@@ -863,6 +863,10 @@ export interface StartJobOptions {
   profile:  JobProfile;
   nasPath:  string;
   rootPath?: string;
+  /** Clear and regenerate thumbnail derivatives only after a full job is durably claimed. */
+  rebuildThumbnails?: boolean;
+  /** Clear derivatives without regeneration, under the same durable per-library job claim. */
+  clearThumbnailsOnly?: boolean;
 }
 
 export async function startJob(opts: StartJobOptions): Promise<{
@@ -871,6 +875,12 @@ export async function startJob(opts: StartJobOptions): Promise<{
   errorCode?: "NAS_OFFLINE" | "NAS_READ_ONLY" | "CAPACITY_UNSAFE";
   errorMessage?: string;
 }> {
+  if ((opts.rebuildThumbnails || opts.clearThumbnailsOnly) && opts.jobType !== "THUMBNAILS") {
+    throw new Error("Only thumbnail jobs can change the thumbnail cache");
+  }
+  if (opts.rebuildThumbnails && opts.clearThumbnailsOnly) {
+    throw new Error("A thumbnail job cannot rebuild and clear-only at the same time");
+  }
   if (isShuttingDown()) {
     throw new Error("Server is shutting down");
   }
@@ -915,11 +925,13 @@ export async function startJob(opts: StartJobOptions): Promise<{
     };
   }
 
-  const capacity = await evaluateCapacity({
-    nasPath: opts.nasPath,
-    operation: `${opts.jobType} job`,
-    nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
-  });
+  const capacity = opts.clearThumbnailsOnly
+    ? { allowed: true, message: "Thumbnail cache clearing does not allocate NAS capacity." }
+    : await evaluateCapacity({
+      nasPath: opts.nasPath,
+      operation: `${opts.jobType} job`,
+      nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+    });
   if (!capacity.allowed) {
     const [failedJob] = await db.insert(libraryJobsTable).values({
       jobType: opts.jobType,
@@ -948,16 +960,18 @@ export async function startJob(opts: StartJobOptions): Promise<{
     };
   }
 
-  let reservation: CapacityReservation;
-  try {
-    reservation = await reserveCapacity({
-      nasPath: opts.nasPath,
-      operation: `${opts.jobType} job`,
-      nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
-    });
-  } catch (error) {
-    if (error instanceof Error) throw error;
-    throw new Error("Unable to reserve capacity for the library job");
+  let reservation: CapacityReservation | undefined;
+  if (!opts.clearThumbnailsOnly) {
+    try {
+      reservation = await reserveCapacity({
+        nasPath: opts.nasPath,
+        operation: `${opts.jobType} job`,
+        nasBytes: opts.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+      });
+    } catch (error) {
+      if (error instanceof Error) throw error;
+      throw new Error("Unable to reserve capacity for the library job");
+    }
   }
 
   const priority: JobPriority = opts.profile === "QUICK" ? "HIGH"
@@ -968,7 +982,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
   // and also prevented independent libraries from running concurrently.
   const existingId = getActiveJobId(opts.nasPath);
   if (existingId !== null) {
-    releaseCapacity(reservation.id);
+    if (reservation) releaseCapacity(reservation.id);
     const existing = activeJobs.get(existingId)!;
     // Preempt if new job has higher priority
     if (PRIORITY_RANK[priority] > PRIORITY_RANK[existing.priority]) {
@@ -983,7 +997,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
     // authority whenever no local worker is present.
     const durableExisting = await findDurableActiveJob(opts.nasPath);
     if (durableExisting) {
-      releaseCapacity(reservation.id);
+      if (reservation) releaseCapacity(reservation.id);
       return { jobId: durableExisting.id, alreadyRunning: true };
     }
   }
@@ -1008,17 +1022,20 @@ export async function startJob(opts: StartJobOptions): Promise<{
             message: reach.message,
             requiresNas: true,
           },
+          ...(opts.jobType === "THUMBNAILS" ? {
+            thumbnailOperation: opts.clearThumbnailsOnly ? "CLEAR_ONLY" : opts.rebuildThumbnails ? "REBUILD" : "BACKFILL",
+          } : {}),
         },
       }).returning();
       job = inserted;
     } catch (error) {
       if (!isActiveJobClaimConflict(error)) {
-        releaseCapacity(reservation.id);
+        if (reservation) releaseCapacity(reservation.id);
         throw error;
       }
       const winner = await findDurableActiveJob(opts.nasPath);
       if (winner) {
-        releaseCapacity(reservation.id);
+        if (reservation) releaseCapacity(reservation.id);
         return { jobId: winner.id, alreadyRunning: true };
       }
       // The winner may have completed between the conflicting insert and the
@@ -1026,7 +1043,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
     }
   }
   if (!job) {
-    releaseCapacity(reservation.id);
+    if (reservation) releaseCapacity(reservation.id);
     throw new Error("Unable to claim library job");
   }
 
@@ -1058,7 +1075,7 @@ export async function startJob(opts: StartJobOptions): Promise<{
 
   // Run async without blocking the response
   if (opts.jobType === "THUMBNAILS") {
-    startJobRun(job.id, runThumbnailJob(state), reservation);
+    startJobRun(job.id, runThumbnailJob(state, opts.rebuildThumbnails === true, opts.clearThumbnailsOnly === true), reservation);
   } else if (opts.jobType === "METADATA") {
     startJobRun(job.id, runMetadataRefreshJob(state), reservation);
   } else {
@@ -1078,19 +1095,25 @@ export async function resumeJob(jobId: number): Promise<boolean> {
 
   const priority = (job.priority as JobPriority) ?? "NORMAL";
   const profile  = (job.profile  as JobProfile)  ?? "QUICK";
+  const jobDiagnostics = (job.diagnostics ?? {}) as Record<string, unknown>;
+  const clearThumbnailsOnly = job.jobType === "THUMBNAILS" && jobDiagnostics.thumbnailOperation === "CLEAR_ONLY";
+  const rebuildThumbnails = job.jobType === "THUMBNAILS" && jobDiagnostics.thumbnailOperation === "REBUILD";
   const resumeReach = await checkNasReachableAsync(job.nasPath);
   if (!resumeReach.online || !resumeReach.writable) return false;
-  const capacity = await evaluateCapacity({
-    nasPath: job.nasPath,
-    operation: `${job.jobType} resume`,
-    nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
-  });
-  if (!capacity.allowed) return false;
-  const reservation = await reserveCapacity({
-    nasPath: job.nasPath,
-    operation: `${job.jobType} resume`,
-    nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
-  });
+  let reservation: CapacityReservation | undefined;
+  if (!clearThumbnailsOnly) {
+    const capacity = await evaluateCapacity({
+      nasPath: job.nasPath,
+      operation: `${job.jobType} resume`,
+      nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+    });
+    if (!capacity.allowed) return false;
+    reservation = await reserveCapacity({
+      nasPath: job.nasPath,
+      operation: `${job.jobType} resume`,
+      nasBytes: job.jobType === "THUMBNAILS" ? 1 * 1024 ** 3 : 0,
+    });
+  }
 
   // Claim the library atomically.  Two resume requests must not both turn the
   // same checkpoint into workers, and a resume must not race a fresh start.
@@ -1104,14 +1127,14 @@ export async function resumeJob(jobId: number): Promise<boolean> {
       )).returning();
   } catch (error) {
     if (isActiveJobClaimConflict(error)) {
-      releaseCapacity(reservation.id);
+      if (reservation) releaseCapacity(reservation.id);
       return false;
     }
-    releaseCapacity(reservation.id);
+    if (reservation) releaseCapacity(reservation.id);
     throw error;
   }
   if (!claimed) {
-    releaseCapacity(reservation.id);
+    if (reservation) releaseCapacity(reservation.id);
     return false;
   }
 
@@ -1148,7 +1171,7 @@ export async function resumeJob(jobId: number): Promise<boolean> {
   activeJobs.set(job.id, state);
 
   if (job.jobType === "THUMBNAILS") {
-    startJobRun(job.id, runThumbnailJob(state), reservation);
+    startJobRun(job.id, runThumbnailJob(state, rebuildThumbnails, clearThumbnailsOnly), reservation);
   } else if (job.jobType === "METADATA") {
     startJobRun(job.id, runMetadataRefreshJob(state), reservation);
   } else {
@@ -2835,7 +2858,7 @@ export async function reconcileThumbnailPointers(
   };
 }
 
-async function runThumbnailJob(state: ActiveJobState): Promise<void> {
+async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly = false): Promise<void> {
   const jobId   = state.id;
   const nasPath = state.nasPath;
 
@@ -2851,6 +2874,69 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         initialReach.message,
       );
       return;
+    }
+
+    if (clearOnly && (state.cancelRequested || state.pauseRequested)) {
+      const status = state.cancelRequested ? "CANCELLED" : "PAUSED";
+      await db.update(libraryJobsTable).set({
+        status,
+        cancellationReason: state.cancelRequested ? state.cancellationReason ?? "USER_CANCELLED" : null,
+        pausedAt: status === "PAUSED" ? new Date() : null,
+        finishedAt: status === "PAUSED" ? null : new Date(),
+      }).where(eq(libraryJobsTable.id, jobId));
+      activeJobs.delete(jobId);
+      return;
+    }
+
+    if (rebuild || clearOnly) {
+      // The durable RUNNING claim and NAS write check must succeed before any
+      // existing derivative is invalidated. Clear-only requests use this same
+      // worker fence and stop before thumbnail generation.
+      const deleted = await clearThumbnailCache(
+        nasPath,
+        () => state.cancelRequested || state.pauseRequested,
+      );
+      await db.update(mediaFilesTable).set({
+        thumbnailPath: null,
+        thumbnailGeneratedAt: null,
+      }).where(eq(mediaFilesTable.nasPath, nasPath));
+
+      if (clearOnly) {
+        const elapsedMs = Date.now() - state.startedAt.getTime();
+        const summary: JobSummary = {
+          newFiles: 0, modifiedFiles: 0, movedFiles: 0, deletedFiles: 0, unchangedFiles: 0,
+          hashedFiles: 0,
+          thumbnailsGenerated: 0,
+          thumbnailsFailed: 0,
+          thumbnailsReused: 0,
+          elapsedMs,
+          previousElapsedMs: null,
+        };
+        const cacheStats = getThumbnailCacheStats(nasPath);
+        const terminalStatus = state.cancelRequested ? "CANCELLED" : state.pauseRequested ? "PAUSED" : "DONE";
+        await db.update(libraryJobsTable).set({
+          status: terminalStatus,
+          cancellationReason: terminalStatus === "CANCELLED" ? state.cancellationReason ?? "USER_CANCELLED" : null,
+          pausedAt: terminalStatus === "PAUSED" ? new Date() : null,
+          finishedAt: terminalStatus === "PAUSED" ? null : new Date(),
+          processedFiles: 0,
+          totalFiles: 0,
+          summary,
+          diagnostics: {
+            storagePolicy: {
+              requiresNas: true,
+              cacheBytes: cacheStats.bytes,
+              cacheFiles: cacheStats.files,
+              incompleteBytes: cacheStats.incompleteBytes,
+            },
+            thumbnailOperation: "CLEAR_ONLY",
+            cacheFilesDeleted: deleted,
+          },
+        }).where(eq(libraryJobsTable.id, jobId));
+        if (terminalStatus === "DONE") recordCompletion(state, summary);
+        activeJobs.delete(jobId);
+        return;
+      }
     }
 
     // Read thumbnail quality setting
@@ -2967,7 +3053,13 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
             if (state.cancelRequested) return;
           }
           try {
-            result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality);
+            result = await generateThumbnail(file.id, sourcePath, file.extension, nasPath, thumbQuality, async ({ destPath }) => {
+              const safeThumbnailPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
+              await db.update(mediaFilesTable).set({
+                thumbnailPath: safeThumbnailPath,
+                thumbnailGeneratedAt: new Date(),
+              }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
+            });
             if (!result.error) break;
             lastError = result.error;
           } catch (err: any) {
@@ -2976,11 +3068,6 @@ async function runThumbnailJob(state: ActiveJobState): Promise<void> {
         }
 
         if (result && !result.error && result.destPath) {
-          const safeThumbnailPath = resolveWithinRoot(result.destPath, getWillardAIDir(nasPath));
-          await db.update(mediaFilesTable).set({
-            thumbnailPath: safeThumbnailPath,
-            thumbnailGeneratedAt: new Date(),
-          }).where(and(eq(mediaFilesTable.id, file.id), eq(mediaFilesTable.nasPath, nasPath)));
           if (result.reused) {
             thumbnailsReused++;
           } else {
@@ -3141,7 +3228,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
   const runPass = async (): Promise<void> => {
     try {
       if (!(await checkNasReachableAsync(nasPath)).online) return;
-      cleanStaleThumbnailPartials(nasPath);
+      await cleanStaleThumbnailPartials(nasPath);
 
       const rows = await db.select({
         id: mediaFilesTable.id,
@@ -3189,7 +3276,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
             }
           }
         } catch { /* cache cleanup is best effort */ }
-        enforceThumbnailCacheQuota(nasPath);
+        await enforceThumbnailCacheQuota(nasPath);
         cursor = 0;
         passResets = 0;
         return;

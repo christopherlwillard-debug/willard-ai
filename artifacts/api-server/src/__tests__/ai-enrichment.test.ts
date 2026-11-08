@@ -82,6 +82,7 @@ mock.module("../lib/nas-storage.ts", {
     getWillardAIDir: (nasPath: string) => nasPath,
     resolveLibraryPath: (nasPath: string, relativePath: string) => path.join(nasPath, relativePath),
     resolveWithinRoot: (candidate: string) => candidate,
+    ensureDataDirectoryWithinRoot: (candidate: string) => candidate,
   },
 });
 mock.module("../lib/logger.ts", {

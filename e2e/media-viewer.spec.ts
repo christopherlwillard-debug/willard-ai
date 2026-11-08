@@ -81,6 +81,9 @@ async function dismissDevelopmentBanner(page: Page): Promise<void> {
 async function mockLibrary(page: Page): Promise<void> {
   const files = [mediaFile(901, "sunset.jpg"), mediaFile(902, "beach.jpg")];
 
+  await page.route("**/api/healthz", (route) =>
+    route.fulfill({ status: 200, json: { ok: true } }),
+  );
   await page.route("**/api/auth/status", (route) =>
     route.fulfill({ json: { setup: false, authenticated: true } }),
   );
@@ -149,8 +152,9 @@ test.describe("Media viewer", () => {
     await page.goto("/media");
     await dismissDevelopmentBanner(page);
 
-    await expect(page.locator("img[alt='sunset.jpg']").first()).toBeVisible({ timeout: 20_000 });
-    await page.locator("img[alt='sunset.jpg']").first().click();
+    const sunsetCard = page.getByRole("button", { name: "Open sunset.jpg" });
+    await expect(sunsetCard).toBeVisible({ timeout: 20_000 });
+    await sunsetCard.click();
 
     const viewer = page.getByRole("dialog");
     await expect(viewer).toHaveAttribute("aria-label", "Viewing sunset.jpg");
@@ -197,6 +201,6 @@ test.describe("Media viewer", () => {
     // Escape closes the immersive viewer without deleting the file.
     await page.keyboard.press("Escape");
     await expect(viewer).not.toBeVisible();
-    await expect(page.locator("img[alt='sunset.jpg']").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open sunset.jpg" })).toBeVisible();
   });
 });

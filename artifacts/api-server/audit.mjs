@@ -30,6 +30,9 @@ const testEnvironment = {
   DATABASE_URL: auditDatabaseUrl,
   WILLARD_API_URL: auditApiUrl.origin,
 };
+delete testEnvironment.REPLIT_DEV_DOMAIN;
+delete testEnvironment.REPLIT_DOMAINS;
+delete testEnvironment.REPL_ID;
 const apiTestFiles = readdirSync(testDirectory)
   .filter((name) => name.endsWith(".test.ts"))
   .sort()
@@ -46,7 +49,23 @@ const integrationTestFiles = [
   ...(process.platform === "win32" ? [] : [cleanupIntegrationTest]),
   path.join(workspaceDirectory, "e2e", "dashboard-after-scan.test.ts"),
 ];
-const testFiles = [...apiTestFiles, ...integrationTestFiles];
+const availableTestFiles = [...apiTestFiles, ...integrationTestFiles];
+const auditTestFilter = process.env.WILLARD_AUDIT_TEST_FILTER?.trim();
+if (
+  auditTestFilter
+  && (
+    path.basename(auditTestFilter) !== auditTestFilter
+    || !auditTestFilter.endsWith(".test.ts")
+  )
+) {
+  throw new Error("WILLARD_AUDIT_TEST_FILTER must be one test file name.");
+}
+const testFiles = auditTestFilter
+  ? availableTestFiles.filter((file) => path.basename(file) === auditTestFilter)
+  : availableTestFiles;
+if (auditTestFilter && testFiles.length !== 1) {
+  throw new Error(`[backend-audit] Requested test file was not found in this platform's audit set: ${auditTestFilter}`);
+}
 
 if (process.platform === "win32") {
   console.log(
@@ -57,6 +76,7 @@ if (process.platform === "win32") {
 
 const timeoutMs = Number(process.env.WILLARD_AUDIT_TEST_TIMEOUT_MS ?? 300_000);
 const heartbeatMs = Number(process.env.WILLARD_AUDIT_HEARTBEAT_MS ?? 30_000);
+const processStopGraceMs = 5_000;
 
 if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   throw new Error("WILLARD_AUDIT_TEST_TIMEOUT_MS must be a positive number.");
@@ -86,11 +106,13 @@ function runTestFile(testFile) {
       {
         cwd: testWorkingDirectory,
         env: testEnvironment,
+        detached: process.platform !== "win32",
         stdio: "inherit",
         windowsHide: false,
       },
     );
     let settled = false;
+    let timedOut = false;
     const heartbeat = setInterval(() => {
       console.log(
         `[backend-audit] HEARTBEAT ${name} elapsedMs=${Date.now() - startedAt}`,
@@ -102,33 +124,105 @@ function runTestFile(testFile) {
       clearInterval(heartbeat);
       resolve(result);
     };
-    const timeout = setTimeout(() => {
+    const timeout = setTimeout(async () => {
+      if (settled) return;
+      timedOut = true;
       console.error(
         `[backend-audit] TIMEOUT ${name} afterMs=${Date.now() - startedAt}`,
       );
-      if (process.platform === "win32" && child.pid) {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-          stdio: "inherit",
-          windowsHide: true,
-        });
-      } else {
-        child.kill("SIGTERM");
+      try {
+        await terminateTestProcess(child);
+      } catch (error) {
+        console.error(
+          `[backend-audit] Could not stop timed-out test process ${name}: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
       }
       finish({ code: 124, timedOut: true });
     }, timeoutMs);
 
     child.once("error", (error) => {
       clearTimeout(timeout);
-      if (settled) return;
+      if (settled || timedOut) return;
       settled = true;
       clearInterval(heartbeat);
       reject(error);
     });
     child.once("exit", (code, signal) => {
+      if (timedOut) return;
       clearTimeout(timeout);
       finish({ code: code ?? 1, signal, timedOut: false });
     });
   });
+}
+
+function waitForProcessExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      child.off("exit", onExit);
+      reject(error);
+    };
+    const onExit = () => {
+      child.off("error", onError);
+      resolve();
+    };
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+function spawnAndWait(command, args) {
+  const process = spawn(command, args, {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  return waitForProcessExit(process).then(() => {
+    if (process.exitCode !== 0) {
+      throw new Error(`${command} exited with code ${process.exitCode ?? process.signalCode ?? "unknown"}.`);
+    }
+  });
+}
+
+async function terminateTestProcess(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exit = waitForProcessExit(child);
+
+  if (process.platform === "win32" && child.pid) {
+    try {
+      await spawnAndWait("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+    } catch {
+      child.kill("SIGKILL");
+    }
+  } else {
+    const signalGroup = (signal) => {
+      if (!child.pid) {
+        child.kill(signal);
+        return;
+      }
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+    };
+    signalGroup("SIGTERM");
+    const deadline = Date.now() + processStopGraceMs;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(-child.pid, 0);
+      } catch (error) {
+        if (error?.code === "ESRCH") return;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    signalGroup("SIGKILL");
+  }
+
+  await exit;
 }
 
 for (const testFile of testFiles) {

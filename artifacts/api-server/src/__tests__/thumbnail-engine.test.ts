@@ -12,6 +12,8 @@ import {
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
   clearThumbnailCache,
+  removeOrphanedThumbnail,
+  ensureThumbnailDir,
   findValidThumbnailPath,
   findReusableThumbnailPaths,
   THUMBNAIL_REUSE_PROBE_MAX_FILES,
@@ -104,6 +106,25 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(stats.incompleteBytes, 904);
   });
 
+  test("does not remove a stale partial while its destination publisher lock exists", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const dir = ensureThumbnailDir(root);
+    const partial = path.join(dir, "54.webp.123.456.1.tmp.webp");
+    const lock = path.join(dir, "54.webp.lock");
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.writeFileSync(partial, Buffer.alloc(17));
+    fs.utimesSync(partial, old, old);
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 0, bytes: 0 });
+    assert.equal(fs.existsSync(partial), true, "an active publisher's partial must be preserved");
+
+    fs.unlinkSync(lock);
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
+    assert.equal(fs.existsSync(partial), false);
+  });
+
   test("removes abandoned partials and evicts oldest valid files over quota", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
     roots.push(root);
@@ -115,16 +136,40 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.equal(second.error, null);
 
     const dir = getThumbnailDir(root);
-    const stale = path.join(dir, "old.1.tmp.webp");
+    const stale = path.join(dir, "old.webp.123.456.1.tmp.webp");
     fs.writeFileSync(stale, Buffer.alloc(17));
     const oldTime = new Date(Date.now() - 60 * 60_000);
     fs.utimesSync(stale, oldTime, oldTime);
-    assert.deepEqual(cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
+    assert.deepEqual(await cleanStaleThumbnailPartials(root), { files: 1, bytes: 17 });
 
-    const kept = enforceThumbnailCacheQuota(root, fs.statSync(second.destPath!).size, second.destPath!);
+    const kept = await enforceThumbnailCacheQuota(root, fs.statSync(second.destPath!).size, second.destPath!);
     assert.equal(fs.existsSync(second.destPath!), true);
     assert.equal(fs.existsSync(first.destPath!), false);
     assert.equal(kept.files, 1);
+  });
+
+  test("quota eviction preserves a thumbnail with an active publisher lock", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const first = await generateThumbnail(71, source, "jpg", root);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await generateThumbnail(72, source, "jpg", root);
+    assert.equal(first.error, null);
+    assert.equal(second.error, null);
+
+    const lock = `${first.destPath}.lock`;
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    const maxBytes = fs.statSync(second.destPath!).size;
+    const whileLocked = await enforceThumbnailCacheQuota(root, maxBytes, second.destPath!);
+    assert.equal(fs.existsSync(first.destPath!), true);
+    assert.equal(whileLocked.files, 2);
+
+    fs.unlinkSync(lock);
+    const afterRelease = await enforceThumbnailCacheQuota(root, maxBytes, second.destPath!);
+    assert.equal(fs.existsSync(first.destPath!), false);
+    assert.equal(fs.existsSync(second.destPath!), true);
+    assert.equal(afterRelease.files, 1);
   });
 
   test("cache clearing preserves active thumbnail locks and partial outputs", async () => {
@@ -142,11 +187,49 @@ describe("thumbnail publication", { concurrency: false }, () => {
     fs.writeFileSync(partial, Buffer.alloc(128));
     fs.writeFileSync(frame, Buffer.alloc(128));
 
-    assert.equal(clearThumbnailCache(root), 1);
+    assert.equal(await clearThumbnailCache(root), 1);
     assert.equal(fs.existsSync(generated.destPath), false);
     assert.equal(fs.existsSync(lock), true);
     assert.equal(fs.existsSync(partial), true);
     assert.equal(fs.existsSync(frame), true);
+  });
+
+  test("waits for an active thumbnail publisher lock before removing its final WebP", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const generated = await generateThumbnail(54, source, "jpg", root);
+    assert.equal(generated.error, null);
+
+    const lock = `${generated.destPath}.lock`;
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const remainedWhileLocked = fs.existsSync(generated.destPath);
+    fs.unlinkSync(lock);
+
+    assert.equal(await clearing, 1);
+    assert.equal(remainedWhileLocked, true, "cache cleanup must wait while a publisher owns the same thumbnail lock");
+    assert.equal(fs.existsSync(generated.destPath), false);
+  });
+
+  test("rejects symlinked thumbnail cache directories before stats, writes, or cleanup", async (t) => {
+    if (process.platform === "win32") {
+      t.skip("creating directory symlinks requires elevated privileges on some Windows runners");
+      return;
+    }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-outside-"));
+    roots.push(root, outside);
+    fs.mkdirSync(path.dirname(getThumbnailDir(root)), { recursive: true });
+    const sentinel = path.join(outside, "preserve.webp");
+    fs.writeFileSync(sentinel, Buffer.alloc(128));
+    fs.symlinkSync(outside, getThumbnailDir(root), "dir");
+
+    assert.throws(() => getThumbnailCacheStats(root), /symlink/i);
+    assert.throws(() => ensureThumbnailDir(root), /symlink/i);
+    await assert.rejects(clearThumbnailCache(root), /symlink/i);
+    assert.equal(fs.existsSync(sentinel), true, "cleanup must never follow a cache-directory symlink");
   });
 
   test("reuses a real-size thumbnail cache after restart without rewriting completed files", async () => {
@@ -212,4 +295,110 @@ describe("thumbnail publication", { concurrency: false }, () => {
     );
     assert.equal(invalidStored.size, 0, "an invalid stored pointer must remain pending");
   });
+
+  test("cache clearing waits for catalog persistence after a new thumbnail publication", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const generation = generateThumbnail(901, source, "jpg", root, undefined, async ({ destPath, reused }) => {
+      assert.equal(reused, false);
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(path.join(getThumbnailDir(root), "901.webp")), true,
+      "cache clearing must wait for the in-flight catalog pointer write");
+
+    releaseReady();
+    const generated = await generation;
+    assert.equal(generated.error, null);
+    assert.equal(await clearing, 1);
+    assert.equal(fs.existsSync(generated.destPath), false);
+  });
+
+  test("cache clearing waits for catalog persistence when a valid thumbnail is reused", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const first = await generateThumbnail(902, source, "jpg", root);
+    assert.equal(first.error, null);
+
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const reuse = generateThumbnail(902, source, "jpg", root, undefined, async ({ destPath, reused }) => {
+      assert.equal(reused, true);
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    const clearing = clearThumbnailCache(root);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(first.destPath), true,
+      "cache clearing must wait for the reused thumbnail's catalog pointer write");
+
+    releaseReady();
+    const reused = await reuse;
+    assert.equal(reused.error, null);
+    assert.equal(reused.reused, true);
+    assert.equal(await clearing, 1);
+    assert.equal(fs.existsSync(first.destPath), false);
+  });
+
+
+  test("orphan cleanup waits for a publisher and rechecks active catalog membership", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    let signalReady!: () => void;
+    let releaseReady!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => { signalReady = resolve; });
+    const callbackGate = new Promise<void>((resolve) => { releaseReady = resolve; });
+
+    const generation = generateThumbnail(903, source, "jpg", root, undefined, async ({ destPath }) => {
+      assert.equal(isThumbnailFileValid(destPath), true);
+      signalReady();
+      await callbackGate;
+    });
+    await callbackStarted;
+
+    let checkedCatalog = false;
+    const cleanup = removeOrphanedThumbnail(root, path.join(getThumbnailDir(root), "903.webp"), async () => {
+      checkedCatalog = true;
+      return false;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(checkedCatalog, false, "orphan status must be rechecked only after the publisher lock is released");
+    releaseReady();
+    assert.equal((await generation).error, null);
+    assert.equal(await cleanup, false);
+    assert.equal(checkedCatalog, true);
+    assert.equal(fs.existsSync(path.join(getThumbnailDir(root), "903.webp")), true);
+  });
+
+  test("orphan cleanup removes only a regular canonical thumbnail still confirmed orphaned", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-thumbnail-"));
+    roots.push(root);
+    const source = await createSource(root);
+    const generated = await generateThumbnail(904, source, "jpg", root);
+    assert.equal(generated.error, null);
+
+    assert.equal(await removeOrphanedThumbnail(root, generated.destPath, async () => true), true);
+    assert.equal(fs.existsSync(generated.destPath), false);
+    assert.equal(await removeOrphanedThumbnail(root, path.join(getThumbnailDir(root), "../904.webp"), async () => true), false);
+  });
+
 });

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
+import { parseHealthCleanupEvent, type HealthCleanupEvent } from "@/lib/health-cleanup-events";
 
 type Report = {
   checkedAt: string;
@@ -27,12 +28,12 @@ const checks = [
 ] as const;
 
 const actions = [
-  ["orphanedRecords", "Remove orphaned database records"],
+  ["orphanedRecords", "Hide missing files from library (reversible)"],
   ["orphanedDerivedData", "Remove orphaned AI and face data"],
   ["orphanedThumbnails", "Delete orphaned thumbnails"],
   ["missingThumbnails", "Regenerate missing thumbnails"],
   ["emptyFolders", "Remove empty folders"],
-  ["rebuildMetadata", "Rebuild metadata on the next scan"],
+  ["rebuildMetadata", "Rebuild outdated metadata now"],
   ["fullThumbnailRebuild", "Full thumbnail rebuild"],
 ] as const;
 
@@ -43,6 +44,7 @@ export default function Health() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number; message: string } | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,7 +64,7 @@ export default function Health() {
   const statusColor = report?.status === "healthy" ? "text-emerald-400" : report?.status === "action_required" ? "text-red-400" : "text-amber-400";
 
   const runCleanup = async () => {
-    setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError("");
+    setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError(""); setNotice("");
     try {
       const response = await fetch(apiUrl("/media/cleanup"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected }),
@@ -71,19 +73,49 @@ export default function Health() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let completed = false;
+      const completions: Extract<HealthCleanupEvent, { type: "done" }>[] = [];
+      const handleEvent = (block: string) => {
+        const event = parseHealthCleanupEvent(block);
+        if (!event) return;
+        if (event.type === "progress") {
+          setProgress({ processed: event.processed, total: event.total, message: event.message });
+          return;
+        }
+        if (event.type === "error") throw new Error(event.message);
+        if (!event.ok && !event.partial) throw new Error(event.message ?? "Cleanup did not complete successfully.");
+        completed = true;
+        completions.push(event);
+        setProgress({
+          processed: event.processed ?? 0,
+          total: event.total ?? 1,
+          message: event.message ?? (event.metadataJobId !== undefined
+            ? `Cleanup completed. Metadata job #${event.metadataJobId} is running.`
+            : event.partial
+              ? `Cleanup finished with ${event.failedItems ?? "some"} item(s) needing attention.`
+              : "Cleanup completed."),
+        });
+      };
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n"); buffer = events.pop() ?? "";
-        for (const event of events) {
-          const data = event.match(/^data: (.+)$/m)?.[1];
-          if (!data) continue;
-          const parsed = JSON.parse(data) as { processed?: number; total?: number; message?: string };
-          if (parsed.message) setProgress({ processed: parsed.processed ?? 0, total: parsed.total ?? 1, message: parsed.message });
-        }
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+        for (const event of events) handleEvent(event);
       }
-      setSelected([]);
+      buffer += decoder.decode();
+      if (buffer.trim()) handleEvent(buffer);
+      const completion = completions[0] ?? null;
+      if (!completed || !completion) throw new Error("Cleanup ended before the server confirmed completion.");
+      if (completion.ok) {
+        setSelected([]);
+        if (completion.metadataJobId !== undefined) {
+          setNotice(completion.message ?? `Cleanup completed. Metadata job #${completion.metadataJobId} is running.`);
+        }
+      } else if (completion.partial) {
+        setNotice(completion.message ?? `Cleanup finished with ${completion.failedItems ?? "some"} item(s) needing attention. Review and retry the selected actions.`);
+      }
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Cleanup failed"); }
     finally { setRunning(false); }
@@ -117,7 +149,8 @@ export default function Health() {
         </CardContent>
       </Card>
 
-      {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {notice && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {checks.map(([key, label, description]) => (

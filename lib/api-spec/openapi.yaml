@@ -89,7 +89,7 @@ x-runtime-contracts:
         application/json:
           schema:
             $ref: "#/components/schemas/RuntimeJsonInput"
-    responses:
+    responses: &runtimeJsonMutationResponses
       "200":
         description: Successful JSON response
         content:
@@ -1941,7 +1941,24 @@ paths:
     post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsPrioritize}
 
   /library/thumbnails/cache:
-    delete: {<<: *runtimeJsonMutationOperation, operationId: deleteLibraryThumbnailsCache}
+    delete:
+      <<: *runtimeJsonMutationOperation
+      operationId: deleteLibraryThumbnailsCache
+      summary: Queue thumbnail cache clearing
+      responses:
+        <<: *runtimeJsonMutationResponses
+        "202":
+          description: Thumbnail cache clear job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeJsonResult"
+        "503":
+          description: NAS is offline or read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
 
   /library/thumbnails/rebuild:
     post: {<<: *runtimeJsonMutationOperation, operationId: createLibraryThumbnailsRebuild}

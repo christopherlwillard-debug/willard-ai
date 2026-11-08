@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { ensureDirectoryWithinRoot } from "./nas-storage.ts";
 
 export interface OptimizeScanCounter {
   total: number;
@@ -27,6 +29,121 @@ export interface OptimizeConversionFile {
 function filesystemError(error: unknown): string {
   const detail = error as NodeJS.ErrnoException;
   return detail.code ?? detail.message ?? String(error);
+}
+
+type OptimizeScanCacheOptions = {
+  expectedVersion: number;
+  ttlMs: number;
+  profile?: string;
+  rawConversionEnabled?: boolean;
+  now?: number;
+};
+
+function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
+  return left.isFile() && right.isFile() &&
+    (left.dev === 0 || right.dev === 0 || left.dev === right.dev) &&
+    (left.ino === 0 || right.ino === 0 || left.ino === right.ino) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs;
+}
+
+/**
+ * Read the best-effort scan cache only from a regular file below the active
+ * library. O_NOFOLLOW prevents the final path component from being followed
+ * where the platform supports it; descriptor/path identity checks cover the
+ * open and read boundaries on all supported platforms.
+ */
+export async function readOptimizeScanCache(
+  cachePath: string,
+  libraryRoot: string,
+  options: OptimizeScanCacheOptions,
+): Promise<(Record<string, unknown> & { scannedAt: string }) | null> {
+  let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+  try {
+    const cacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    const safeCachePath = path.join(cacheDir, path.basename(cachePath));
+    const beforeOpen = await fs.promises.lstat(safeCachePath);
+    if (!beforeOpen.isFile() || beforeOpen.isSymbolicLink()) return null;
+
+    const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+    handle = await fs.promises.open(safeCachePath, fs.constants.O_RDONLY | noFollow);
+    const opened = await handle.stat();
+    const verifiedCacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(verifiedCacheDir) !== path.resolve(cacheDir)) return null;
+    const afterOpen = await fs.promises.lstat(safeCachePath);
+    if (!sameFileIdentity(beforeOpen, opened) || !sameFileIdentity(opened, afterOpen)) return null;
+
+    const raw = await handle.readFile({ encoding: "utf8" });
+    const verifiedReadDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(verifiedReadDir) !== path.resolve(cacheDir)) return null;
+    const afterRead = await fs.promises.lstat(safeCachePath);
+    if (!sameFileIdentity(opened, afterRead)) return null;
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const data = parsed as Record<string, unknown> & { scannedAt?: unknown; cacheVersion?: unknown };
+    if (data.cacheVersion !== options.expectedVersion || typeof data.scannedAt !== "string") return null;
+    if (!Number.isSafeInteger(options.expectedVersion) || options.expectedVersion <= 0) return null;
+    if (!Number.isFinite(options.ttlMs) || options.ttlMs < 0) return null;
+
+    const scannedAt = Date.parse(data.scannedAt);
+    const now = options.now ?? Date.now();
+    if (!Number.isFinite(scannedAt) || scannedAt > now || now - scannedAt > options.ttlMs) return null;
+    if (options.profile !== undefined && data.profile !== options.profile) return null;
+    if (options.rawConversionEnabled !== undefined && data.rawConversionEnabled !== options.rawConversionEnabled) return null;
+    return data as Record<string, unknown> & { scannedAt: string };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Publish cache data through an exclusive private temporary file in the same
+ * directory. Rename replaces a final symlink itself rather than opening or
+ * truncating its target. Cache failures remain non-fatal to the scan workflow.
+ */
+export async function writeOptimizeScanCache(
+  cachePath: string,
+  libraryRoot: string,
+  data: Record<string, unknown>,
+  cacheVersion: number,
+): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+  let temporaryPath: string | undefined;
+  try {
+    const cacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    const safeCachePath = path.join(cacheDir, path.basename(cachePath));
+    temporaryPath = path.join(cacheDir, `.${path.basename(cachePath)}.${randomUUID()}.tmp`);
+    handle = await fs.promises.open(temporaryPath, "wx", 0o600);
+    await handle.writeFile(JSON.stringify({ ...data, cacheVersion }), { encoding: "utf8" });
+    await handle.close();
+    handle = undefined;
+
+    // Revalidate every directory component immediately before publishing.
+    const revalidatedCacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(revalidatedCacheDir) !== path.resolve(cacheDir)) {
+      throw new Error("Optimize scan cache directory changed during publication");
+    }
+    await fs.promises.rename(temporaryPath, safeCachePath);
+    temporaryPath = undefined;
+
+    const publishedCacheDir = ensureDirectoryWithinRoot(path.dirname(cachePath), libraryRoot);
+    if (path.resolve(publishedCacheDir) !== path.resolve(cacheDir)) {
+      throw new Error("Optimize scan cache directory changed during publication");
+    }
+    const published = await fs.promises.lstat(path.join(publishedCacheDir, path.basename(cachePath)));
+    if (!published.isFile() || published.isSymbolicLink()) {
+      throw new Error("Optimize scan cache publication did not produce a regular file");
+    }
+  } catch {
+    // Non-fatal — cache write is best-effort.
+  } finally {
+    await handle?.close().catch(() => undefined);
+    if (temporaryPath) await fs.promises.unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 function insertSample(samples: OptimizeSampleFile[], filePath: string, size: number): void {

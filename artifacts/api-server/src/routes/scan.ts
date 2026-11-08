@@ -128,6 +128,10 @@ router.post("/scan", async (req: Request, res: Response) => {
       res.status(503).json(toLegacyJob(job));
       return;
     }
+    if (result.errorCode === "NAS_READ_ONLY") {
+      res.status(503).json(toLegacyJob(job));
+      return;
+    }
     if (result.errorCode === "CAPACITY_UNSAFE") {
       res.status(507).json(toLegacyJob(job));
       return;

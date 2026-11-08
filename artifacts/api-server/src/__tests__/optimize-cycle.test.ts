@@ -8,20 +8,24 @@
 import { describe, test, before, after } from "node:test";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { db, pool, appSettingsTable, conversionJobsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { acquireLibraryTestLock } from "./test-library-lock.ts";
+import {
+  removeOwnedTempDirectory,
+  requireDisposableAuditApiUrl,
+  runCleanupSteps,
+} from "./integration-test-safety.ts";
 
-const API_BASE = process.env["WILLARD_API_URL"]
-  ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "http://localhost:8080");
+const API_BASE = requireDisposableAuditApiUrl();
 const PASSWORD = "willard123";
 
 let cookie = "";
 let root = "";
+let rootParent = "";
 let jobId = 0;
 let originalSettings: { id: number; nasPath: string; optimizeProfile: string; rawConversionEnabled: boolean } | undefined;
 let releaseLibraryTestLock: (() => void) | undefined;
@@ -68,14 +72,10 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
     assert.ok(settings?.nasPath, "A configured library is required");
     originalSettings = settings;
 
-    const tempParents = [...new Set([os.tmpdir(), process.cwd()])];
-    const tempParent = tempParents
-      .map((candidate) => {
-        const stats = fs.statfsSync(candidate);
-        return { path: candidate, availableBytes: stats.bavail * stats.bsize };
-      })
-      .sort((a, b) => b.availableBytes - a.availableBytes)[0]?.path ?? os.tmpdir();
-    root = fs.mkdtempSync(path.join(tempParent, "willard-optimize-cycle-"));
+    const auditTempRoot = process.env["WILLARD_TEST_ROOT"]?.trim();
+    assert.ok(auditTempRoot, "The disposable audit runner must provide WILLARD_TEST_ROOT");
+    rootParent = fs.realpathSync(auditTempRoot);
+    root = fs.mkdtempSync(path.join(rootParent, "willard-optimize-cycle-"));
     fs.mkdirSync(path.join(root, "WillardAI"), { recursive: true });
     await createPng(path.join(root, "large.png"), 900, 700);
     await createPng(path.join(root, "tiny.png"), 1, 1);
@@ -94,23 +94,42 @@ describe("optimize scan and conversion cycle", { concurrency: false }, () => {
   });
 
   after(async () => {
-    try {
-      if (jobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
-      if (originalSettings) {
-        await db.update(appSettingsTable)
-          .set({
-            nasPath: originalSettings.nasPath,
-            optimizeProfile: originalSettings.optimizeProfile,
-            rawConversionEnabled: originalSettings.rawConversionEnabled,
-          })
-          .where(eq(appSettingsTable.id, originalSettings.id));
-      }
-      try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
-    } finally {
-      releaseLibraryTestLock?.();
-      releaseLibraryTestLock = undefined;
-      await pool.end();
+    const cleanup: Array<{ name: string; run: () => void | Promise<void> }> = [];
+    if (jobId) {
+      cleanup.push({
+        name: "conversion job record",
+        run: async () => {
+          await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
+        },
+      });
     }
+    if (originalSettings) {
+      cleanup.push({
+        name: "original library settings",
+        run: async () => {
+          await db.update(appSettingsTable)
+            .set({
+              nasPath: originalSettings!.nasPath,
+              optimizeProfile: originalSettings!.optimizeProfile,
+              rawConversionEnabled: originalSettings!.rawConversionEnabled,
+            })
+            .where(eq(appSettingsTable.id, originalSettings!.id));
+        },
+      });
+    }
+    if (root) {
+      cleanup.push({
+        name: "temporary media library",
+        run: () => removeOwnedTempDirectory(root, rootParent, "willard-optimize-cycle-"),
+      });
+    }
+    if (releaseLibraryTestLock) {
+      const release = releaseLibraryTestLock;
+      releaseLibraryTestLock = undefined;
+      cleanup.push({ name: "library test lock", run: release });
+    }
+    cleanup.push({ name: "database connection pool", run: () => pool.end() });
+    await runCleanupSteps("Optimize-cycle integration test", cleanup);
   });
 
   test("scans PNGs and reports the expected convertible group", async () => {

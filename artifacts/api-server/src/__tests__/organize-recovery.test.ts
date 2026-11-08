@@ -27,11 +27,13 @@ import {
   verifiedReplace,
   type FileMoveRecord,
 } from "../lib/organize-helpers.ts";
+import {
+  removeOwnedTempDirectory,
+  requireDisposableAuditApiUrl,
+  runCleanupSteps,
+} from "./integration-test-safety.ts";
 
-const API_BASE = process.env["WILLARD_API_URL"]
-  ?? (process.env["REPLIT_DEV_DOMAIN"]
-    ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
-    : "http://localhost:8080");
+const API_BASE = requireDisposableAuditApiUrl();
 const PASSWORD = "willard123";
 
 let nasPath = "";
@@ -102,11 +104,20 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
   });
 
   after(async () => {
-    for (const id of jobIds) {
-      await db.delete(organizationJobsTable).where(eq(organizationJobsTable.id, id));
+    const cleanup: Array<{ name: string; run: () => void | Promise<void> }> = jobIds.map((id) => ({
+      name: `organization recovery job ${id}`,
+      run: async () => {
+        await db.delete(organizationJobsTable).where(eq(organizationJobsTable.id, id));
+      },
+    }));
+    if (testRoot) {
+      cleanup.push({
+        name: "temporary organization recovery library",
+        run: () => removeOwnedTempDirectory(testRoot, nasPath, ".willard-organize-recovery-"),
+      });
     }
-    fs.rmSync(testRoot, { recursive: true, force: true });
-    await pool.end();
+    cleanup.push({ name: "database connection pool", run: () => pool.end() });
+    await runCleanupSteps("Organize recovery integration test", cleanup);
   });
 
   test("persists verified moves before an interrupted execute", async () => {

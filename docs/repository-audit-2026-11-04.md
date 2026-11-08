@@ -3940,8 +3940,26 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 ### High (P1): Optimize scan cache reads and writes bypass NAS symlink protection
 
 - **Affected workflow:** Optimize Center cache lookup and scan persistence; any API process using the configured NAS library.
-- **Status:** found; safe implementation planned; no partial path-only workaround applied yet.
+- **Status:** fixed in the recovered working tree; targeted regression tests and the disposable backend audit passed on November 8, 2026.
 - **Evidence/root cause:** `getWillardAIDir(nasPath)` only joins the configured NAS path with `WillardAI`. In `routes/optimize.ts`, `readScanCache` reads `getCachePath(nasPath)` directly with `fs.promises.readFile`; `writeScanCache` uses recursive `fs.promises.mkdir` and direct `fs.promises.writeFile`. Neither validates the `WillardAI/cache` directory or the final `optimize-scan.json` entry before following it. A symlinked cache directory can redirect both operations outside the library, and a symlinked cache file can cause the write to truncate its target. This is inconsistent with the existing `ensureDirectoryWithinRoot` policy.
 - **Cross-check:** `nas-storage-paths.test.ts` already proves that `ensureDirectoryWithinRoot` rejects a symlinked operational cache directory, and `library-engine/job-engine.ts` uses that helper for its startup cache. The Optimize Center cache call sites do not. The shared helper and its tests are already in the current PR diff; no new dependency or alternative storage system is needed.
-- **Safe implementation plan:** validate/create the cache directory through the existing root-checked helper; read only a regular non-symlink cache file through an opened handle with identity revalidation (and no-follow flags where supported); write to an exclusive private temporary file and atomically rename it into place so an existing symlink is replaced rather than followed; treat any unsafe path as a cache miss/write failure and continue scanning without exposing external file contents. Add regressions for a symlinked cache directory, a symlinked cache file, a replaced cache entry, malformed timestamps, and stale/future cache entries. Preserve best-effort cache semantics.
-- **Remaining risk:** until this is implemented, an attacker able to modify the NAS operational directory can redirect the Optimize cache read/write path. The final file is named `optimize-scan.json`, but a symlink can point it at another writable file. This finding is separate from the completed startup-history cache path hardening.
+- **Resolution:** cache directory creation now uses the root-checked helper; reads reject symlinked or replaced entries and invalid/future timestamps; writes use a private temporary file and atomic publication. Regressions cover symlinked directories and files, replacement races, version/profile mismatches, and timestamp validation. The cache remains best-effort and does not expose files outside the library.
+
+## November 8 — Saved audit recovery and validation
+
+### Recovery scope
+
+- Recovered the saved audit fixes into the existing audit branch as **unstaged working-tree changes**. The organization lease assertions were resolved without retaining conflict markers, and the test asserts the exact public response shape.
+- The branch and HEAD were left unchanged. HEAD was `49ca67610ba3d24b2d1f49b9564c60d74751647f`, with parent `1467380d09f3fa1741ef86a5e048272b3add6b02`; no `MERGE_HEAD` was present when recovery began.
+- No changes were staged, committed, reset, rebased, pushed, or applied to `main`. The earlier audit ledger contents were retained.
+- Recovered safeguards include explicit disposable-database/API requirements, safe ownership checks for temporary test directories, process-tree shutdown and cleanup verification, generated-export parsing that handles overloads and re-exports, current-schema verification at API startup, and integration-test cleanup that preserves unrelated user state.
+- Compressed TAR input is now written beside the extraction tree rather than inside it, so the temporary input cannot be mistaken for an extracted archive member during exact-file-set validation.
+
+### Validation
+
+- `pnpm run typecheck` passed.
+- API route parity and generated-export tests passed (6/6), and a repeat code-generation run produced identical hashes across the generated client and schema tree. The aggregate `pnpm run check:api-contracts` command reached its final generated-tree `git diff --exit-code` gate and exited nonzero because the intentional OpenAPI and generated summary changes are still unstaged; the route and export contract tests passed, and the generated output is stable.
+- Release contracts passed (88/88); UI accessibility contracts passed (24/24).
+- The disposable backend audit completed successfully. This included the compressed-TAR cleanup execution checks and dashboard-after-scan checks; the runner stopped its isolated API and PostgreSQL processes and removed its owned temporary directory. The standalone Optimize-cycle (2/2) and dashboard (3/3) workflows also pass through the disposable runner; dashboard media is created under its owned temporary root.
+- Media viewer E2E passed (1/1) after aligning the test with the card's accessible open button and mocking the app-shell health check.
+- `git diff --check` passed. All recovered changes remain unstaged for review; no commit was created.

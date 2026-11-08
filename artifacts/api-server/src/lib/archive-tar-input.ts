@@ -58,7 +58,14 @@ export async function withTarInput<T>(
   if (compression === "none") return callback(archivePath, {});
   if (!scratchDir) throw new StoragePolicyError("NAS storage is required for compressed archive decompression.");
 
-  const tarPath = path.join(scratchDir, ".willard-input-" + crypto.randomUUID() + ".tar");
+  // Keep the decompressed TAR beside, not inside, the extraction/staging tree.
+  // Archive inspection compares the extracted tree's exact file set; placing
+  // this intermediate under scratchDir makes the input TAR look like an
+  // unexpected extracted member during that verification.
+  const tarPath = path.join(
+    path.dirname(path.resolve(scratchDir)),
+    ".willard-input-" + crypto.randomUUID() + ".tar",
+  );
   const sevenZipPath = compression === "gzip" ? null : await getSevenZipPath();
   const child = sevenZipPath
     ? (() => {

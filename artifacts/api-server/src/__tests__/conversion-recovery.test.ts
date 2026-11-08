@@ -12,9 +12,9 @@ import { db, pool, appSettingsTable, conversionJobsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { recoverInterruptedConversionJobs, INTERRUPTED_CONVERSION_ERROR } from "../lib/conversion-recovery.ts";
 import { CONVERSION_JOB_LOCK_NAMESPACE } from "../lib/conversion-job-lock.ts";
+import { requireDisposableAuditApiUrl, runCleanupSteps } from "./integration-test-safety.ts";
 
-const API_BASE = process.env["WILLARD_API_URL"]
-  ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "http://localhost:8080");
+const API_BASE = requireDisposableAuditApiUrl();
 const PASSWORD = "willard123";
 let cookie = "";
 let jobId = 0;
@@ -72,8 +72,25 @@ describe("conversion restart recovery", { concurrency: false }, () => {
   });
 
   after(async () => {
-    if (jobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
-    if (activeJobId) await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, activeJobId));
+    const cleanup: Array<{ name: string; run: () => void | Promise<void> }> = [];
+    if (jobId) {
+      cleanup.push({
+        name: `conversion job ${jobId}`,
+        run: async () => {
+          await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
+        },
+      });
+    }
+    if (activeJobId) {
+      cleanup.push({
+        name: `active conversion job ${activeJobId}`,
+        run: async () => {
+          await db.delete(conversionJobsTable).where(eq(conversionJobsTable.id, activeJobId));
+        },
+      });
+    }
+    cleanup.push({ name: "database connection pool", run: () => pool.end() });
+    await runCleanupSteps("Conversion recovery integration test", cleanup);
   });
 
   test("marks interrupted job failed with retryable error", async () => {

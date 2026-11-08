@@ -189,7 +189,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /documentsRoot/);
   assert.match(launcher, /schema-ready\.json/);
   assert.match(launcher, /Get-SchemaFingerprint/);
-  assert.match(launcher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.doesNotMatch(launcher, /WILLARD_SCHEMA_READY/);
   assert.match(launcher, /last-update-check\.txt/);
   assert.match(launcher, /UpdateStage/);
   assert.match(launcher, /checksum verification/);
@@ -951,7 +951,7 @@ test("developer startup launches the API directly and fails when that process ex
   assert.match(developerLauncher, /\$env:PORT = "8080"/);
   assert.match(developerLauncher, /schema-ready\.json/);
   assert.match(developerLauncher, /Get-FileHash/);
-  assert.match(developerLauncher, /\$env:WILLARD_SCHEMA_READY = "1"/);
+  assert.doesNotMatch(developerLauncher, /WILLARD_SCHEMA_READY/);
   assert.match(developerLauncher, /dependencies-ready\.json/);
   assert.match(developerLauncher, /pnpm-lock\.yaml/);
   assert.match(developerLauncher, /"pnpm\.cmd", "pnpm\.exe"/);

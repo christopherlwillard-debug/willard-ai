@@ -22,3 +22,24 @@ export function isMissingRegularMediaFile(filePath: string): boolean {
     throw error;
   }
 }
+
+
+export type MissingMediaSoftDeleteResult = "marked_deleted" | "reappeared" | "record_changed";
+
+/**
+ * Recheck a previously missing path immediately before the catalog transition.
+ * Only ENOENT/ENOTDIR may authorize a reversible DELETED marker; any present,
+ * symlinked, non-regular, or unreadable path is left untouched.
+ *
+ * The callback must perform a conditional database update (id + library +
+ * relative path + active-row predicate). Keeping this transition reversible
+ * lets the normal scanner's unique-path upsert reactivate the same row if the
+ * source returns, without discarding its derived metadata.
+ */
+export async function softDeleteMissingMediaRecord(
+  filePath: string,
+  markDeleted: () => Promise<boolean>,
+): Promise<MissingMediaSoftDeleteResult> {
+  if (!isMissingRegularMediaFile(filePath)) return "reappeared";
+  return (await markDeleted()) ? "marked_deleted" : "record_changed";
+}

@@ -175,6 +175,40 @@ test("corrupt copies remove the partial destination and pause the manifest", asy
   assert.equal((await service.get(manifest.id)).state, "PAUSED");
 });
 
+test("copy revalidates an already-matching destination before redirecting database references", async () => {
+  const paths = fixture();
+  const source = path.join(paths.source, "WillardAI/cache/thumbnails/already-present.webp");
+  const destination = path.join(paths.destination, "WillardAI/cache/thumbnails/already-present.webp");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(source, "preview bytes");
+  fs.writeFileSync(destination, "preview bytes");
+  const database = fakeDatabase();
+  const service = createStorageMigrationService({ manifestDir: paths.manifests, connect: database.connect });
+  const manifest = await service.preview({
+    sourceRoot: paths.source,
+    destinationRoot: paths.destination,
+    referenceRows: [{
+      table: "media_files",
+      column: "thumbnail_path",
+      rowId: 91,
+      value: source,
+    }],
+  });
+  assert.equal(manifest.entries[0]?.state, "verified", "matching destination is pre-verified during preview");
+
+  // Simulate the source being updated after preview while the old destination
+  // remains intact. The migration must not redirect the DB reference to stale bytes.
+  fs.writeFileSync(source, "newer user data");
+  await assert.rejects(
+    () => service.copy(manifest.id),
+    /Source changed after migration preview; database references were not updated/,
+  );
+  assert.equal(fs.readFileSync(source, "utf8"), "newer user data");
+  assert.equal(fs.readFileSync(destination, "utf8"), "preview bytes");
+  assert.equal(database.updates.some((update) => update.text.startsWith("UPDATE media_files SET thumbnail_path")), false);
+  assert.equal((await service.get(manifest.id)).state, "PAUSED");
+});
+
 test("cleanup requires a separate confirmation and never removes protected conversion backups", async () => {
   const paths = fixture();
   const thumbnail = path.join(paths.source, "WillardAI/cache/thumbnails/keep.webp");

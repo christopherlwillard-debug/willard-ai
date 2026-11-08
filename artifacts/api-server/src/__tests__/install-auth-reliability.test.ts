@@ -167,3 +167,10 @@ test("late session-store saves after password reset cannot restore authorization
   assert.ok(authSource.includes("sess->>'credentialVersion' = $2"));
   assert.ok(authSource.includes("isSessionCredentialCurrent(sess.credentialVersion, settings.passwordHash)"));
 });
+
+test("API startup always verifies the connected schema and ignores launcher readiness markers", () => {
+  assert.match(indexSource, /const startupMigrations = bootstrapSessionTable\(\)/);
+  assert.doesNotMatch(indexSource, /WILLARD_SCHEMA_READY/);
+  assert.match(appSource, /verifyRequiredSchema\(client\)/);
+  assert.match(appSource, /Required database schema remains incomplete after migration/);
+});
