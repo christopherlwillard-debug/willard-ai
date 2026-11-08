@@ -395,6 +395,36 @@ test("rollbackMoves: replacement conflict reports manual recovery and preserves 
   assert.ok(logs.some(message => message.includes("ROLLBACK_REPLACEMENT_MANUAL")));
 });
 
+test("rollbackMoves: repeated replacement recovery preserves a competing destination and the prior backup", async () => {
+  const source = writeFile(path.join(mkTmp("replace-recovery-repeat"), "source", "incoming.txt"), "incoming-original");
+  const destination = writeFile(path.join(mkTmp("replace-recovery-repeat"), "library", "incoming.txt"), "prior-destination");
+  const backupPath = path.join(path.dirname(destination), ".prior-backup");
+  const sourceHash = await sha256File(source);
+  const previousHash = await sha256File(destination);
+  const intent: FileMoveRecord = {
+    from: source,
+    to: destination,
+    sourceHash,
+    destHash: sourceHash,
+    verified: false,
+    replacement: { backupPath, previousHash },
+  };
+
+  // Simulate interruption after the prior file moved, followed by an
+  // independent file appearing at the now-empty destination.
+  fs.renameSync(destination, backupPath);
+  writeFile(destination, "independent competing destination");
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const logs: string[] = [];
+    assert.equal(await rollbackMoves([intent], message => logs.push(message)), 0);
+    assert.ok(logs.some(message => message.includes("ROLLBACK_REPLACEMENT_MANUAL")));
+    assert.equal(fs.readFileSync(source, "utf8"), "incoming-original");
+    assert.equal(fs.readFileSync(destination, "utf8"), "independent competing destination");
+    assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-destination");
+  }
+});
+
 // ── 6. verifiedMove — unreadable source ──────────────────────────────────────
 
 test("verifiedMove: throws when source file does not exist", async () => {

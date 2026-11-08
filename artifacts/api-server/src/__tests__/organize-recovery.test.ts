@@ -251,6 +251,122 @@ describe("organize Recovery Center crash recovery", { concurrency: false }, () =
     assert.match(updated?.error ?? "", /manual intervention may be required/);
   });
 
+  test("POST rollback restores a replacement after interruption following the backup move", async () => {
+    const source = path.join(testRoot, "replace-backup-interrupted", "source", "incoming.txt");
+    const destination = path.join(testRoot, "replace-backup-interrupted", "destination", "incoming.txt");
+    const backupPath = path.join(path.dirname(destination), ".prior-destination-backup");
+    writeFile(source, "incoming-after-backup");
+    writeFile(destination, "prior-before-backup");
+    const sourceHash = await sha256File(source);
+    const previousHash = await sha256File(destination);
+    const intent: FileMoveRecord = {
+      from: source,
+      to: destination,
+      sourceHash,
+      destHash: sourceHash,
+      verified: false,
+      sourceRelPath: "incoming.txt",
+      replacement: { backupPath, previousHash },
+    };
+    const jobId = await createRecoveryJob(
+      path.dirname(source),
+      [{ relativePath: "incoming.txt", destination: path.dirname(destination) }],
+      [intent],
+    );
+
+    // Simulate process exit after the old destination was backed up but before
+    // the incoming file was published or the journal was verified.
+    fs.renameSync(destination, backupPath);
+    assert.equal(fs.readFileSync(source, "utf8"), "incoming-after-backup");
+    assert.equal(fs.existsSync(destination), false);
+    assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-before-backup");
+
+    const response = await post(`/organize/jobs/${jobId}/rollback`, {});
+    const body = await response.json() as {
+      ok: boolean;
+      rolledBack: number;
+      total: number;
+      partial: boolean;
+      logs: string[];
+    };
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.rolledBack, 1);
+    assert.equal(body.total, 1);
+    assert.equal(body.partial, false);
+    assert.ok(body.logs.some(log => log.startsWith("ROLLBACK_REPLACEMENT_OK:")));
+    assert.equal(fs.readFileSync(source, "utf8"), "incoming-after-backup");
+    assert.equal(fs.readFileSync(destination, "utf8"), "prior-before-backup");
+    assert.equal(fs.existsSync(backupPath), false);
+
+    const [updated] = await db
+      .select({ status: organizationJobsTable.status })
+      .from(organizationJobsTable)
+      .where(eq(organizationJobsTable.id, jobId));
+    assert.equal(updated?.status, "rolled_back");
+  });
+
+  test("POST rollback restores a replacement published before its verified checkpoint", async () => {
+    const source = path.join(testRoot, "replace-published-interrupted", "source", "incoming.txt");
+    const destination = path.join(testRoot, "replace-published-interrupted", "destination", "incoming.txt");
+    const backupPath = path.join(path.dirname(destination), ".prior-destination-backup");
+    writeFile(source, "incoming-published-before-checkpoint");
+    writeFile(destination, "prior-before-publication");
+    const sourceHash = await sha256File(source);
+    const previousHash = await sha256File(destination);
+    const intent: FileMoveRecord = {
+      from: source,
+      to: destination,
+      sourceHash,
+      destHash: sourceHash,
+      verified: false,
+      sourceRelPath: "incoming.txt",
+      replacement: { backupPath, previousHash },
+    };
+    const jobId = await createRecoveryJob(
+      path.dirname(source),
+      [{ relativePath: "incoming.txt", destination: path.dirname(destination) }],
+      [intent],
+    );
+
+    // The durable row still contains the pre-move intent although both
+    // filesystem operations completed before the process disappeared.
+    fs.renameSync(destination, backupPath);
+    fs.renameSync(source, destination);
+    const [persisted] = await db
+      .select({ fileMoves: organizationJobsTable.fileMoves })
+      .from(organizationJobsTable)
+      .where(eq(organizationJobsTable.id, jobId));
+    assert.equal((persisted?.fileMoves as FileMoveRecord[])[0]?.verified, false);
+    assert.equal(fs.existsSync(source), false);
+    assert.equal(fs.readFileSync(destination, "utf8"), "incoming-published-before-checkpoint");
+    assert.equal(fs.readFileSync(backupPath, "utf8"), "prior-before-publication");
+
+    const response = await post(`/organize/jobs/${jobId}/rollback`, {});
+    const body = await response.json() as {
+      ok: boolean;
+      rolledBack: number;
+      total: number;
+      partial: boolean;
+      logs: string[];
+    };
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.rolledBack, 1);
+    assert.equal(body.total, 1);
+    assert.equal(body.partial, false);
+    assert.ok(body.logs.some(log => log.startsWith("ROLLBACK_REPLACEMENT_OK:")));
+    assert.equal(fs.readFileSync(source, "utf8"), "incoming-published-before-checkpoint");
+    assert.equal(fs.readFileSync(destination, "utf8"), "prior-before-publication");
+    assert.equal(fs.existsSync(backupPath), false);
+
+    const [updated] = await db
+      .select({ status: organizationJobsTable.status })
+      .from(organizationJobsTable)
+      .where(eq(organizationJobsTable.id, jobId));
+    assert.equal(updated?.status, "rolled_back");
+  });
+
   test("GET resume SSE moves remaining files and persists existing plus new moves", async () => {
     const sourceDir = path.join(testRoot, "resume-source");
     const destination = path.join(testRoot, "resume-destination");
