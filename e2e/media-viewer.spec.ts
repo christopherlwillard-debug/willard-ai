@@ -9,7 +9,7 @@
  *   npx playwright test e2e/media-viewer.spec.ts
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 
 const TEST_PASSWORD = "willard123";
 
@@ -73,6 +73,7 @@ type BrowserDiagnostics = {
     contentType: string;
     payload?: unknown;
   }>>;
+  mockMatches: Record<string, { count: number; description: string }>;
   requestFailures: string[];
   consoleErrors: string[];
   pageErrors: string[];
@@ -124,6 +125,7 @@ function captureBrowserDiagnostics(page: Page): void {
   const diagnostics: BrowserDiagnostics = {
     requests: [],
     responses: [],
+    mockMatches: {},
     requestFailures: [],
     consoleErrors: [],
     pageErrors: [],
@@ -148,10 +150,13 @@ function captureBrowserDiagnostics(page: Page): void {
       url.pathname.endsWith("/api/healthz") ||
       url.pathname.endsWith("/api/media/files") ||
       /\/api\/media\/files\/\d+\/(detail|favorite|rename)$/.test(url.pathname);
+    const isJobEventStream = url.pathname.endsWith("/api/library/jobs/events");
     diagnostics.responses.push(
       (shouldSummarizePayload
         ? response.json().then((payload) => summarizePayload(url.pathname, payload)).catch(() => undefined)
-        : Promise.resolve(undefined)
+        : isJobEventStream
+          ? response.text().then((body) => body.slice(0, 400)).catch(() => undefined)
+          : Promise.resolve(undefined)
       ).then((payload) => ({
         method: request.method(),
         path: url.pathname,
@@ -174,12 +179,22 @@ function captureBrowserDiagnostics(page: Page): void {
   page.on("pageerror", (error) => diagnostics.pageErrors.push(error.message));
 }
 
+function recordMockMatch(page: Page, route: Route, description: string): void {
+  const diagnostics = diagnosticsByPage.get(page);
+  if (!diagnostics) return;
+  const url = new URL(route.request().url());
+  const key = `${route.request().method()} ${url.pathname}`;
+  const match = diagnostics.mockMatches[key] ??= { count: 0, description };
+  match.count++;
+}
+
 test.afterEach(async ({ page }, testInfo) => {
   const diagnostics = diagnosticsByPage.get(page);
   if (!diagnostics) return;
   const report = {
     requests: diagnostics.requests,
     responses: await Promise.all(diagnostics.responses),
+    mockMatches: diagnostics.mockMatches,
     requestFailures: diagnostics.requestFailures,
     consoleErrors: diagnostics.consoleErrors,
     pageErrors: diagnostics.pageErrors,
@@ -188,7 +203,60 @@ test.afterEach(async ({ page }, testInfo) => {
     body: Buffer.from(JSON.stringify(report, null, 2)),
     contentType: "application/json",
   });
-  console.log(`[media-viewer-browser-diagnostics] ${JSON.stringify(report)}`);
+  const requestCounts = report.requests.reduce<Record<string, number>>((counts, request) => {
+    const key = `${request.method} ${request.path}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+  const keyResponses = report.responses.filter((response) =>
+    response.path.endsWith("/api/healthz") ||
+    response.path.endsWith("/api/media/files") ||
+    response.path.endsWith("/api/library/jobs/events") ||
+    response.path.endsWith("/api/settings/logo") ||
+    /\/api\/media\/files\/\d+\/(detail|favorite|rename)$/.test(response.path),
+  );
+  console.log(`[media-viewer-browser-diagnostics] ${JSON.stringify({
+    requestCounts,
+    mockMatches: report.mockMatches,
+    keyResponses,
+    requestFailures: report.requestFailures,
+    consoleErrors: report.consoleErrors,
+    pageErrors: report.pageErrors,
+  })}`);
+
+  if (testInfo.status === testInfo.expectedStatus) {
+    const unexpectedHttpErrors = report.responses.filter((response) =>
+      response.status >= 400 &&
+      !(response.status === 404 && response.path.endsWith("/api/settings/logo")),
+    );
+    const eventStreamResponses = report.responses.filter((response) =>
+      response.path.endsWith("/api/library/jobs/events"),
+    );
+    const mediaListResponse = report.responses.find((response) =>
+      response.path.endsWith("/api/media/files"),
+    );
+
+    expect(diagnostics.mockMatches["GET /api/healthz"]?.count).toBeGreaterThan(0);
+    expect(diagnostics.mockMatches["GET /api/media/files"]?.count).toBeGreaterThan(0);
+    expect(diagnostics.mockMatches["POST /api/media/files/902/favorite"]?.count).toBeGreaterThan(0);
+    expect(mediaListResponse?.payload).toMatchObject({
+      fileCount: 2,
+      files: [
+        { id: 901, name: "sunset.jpg", mediaType: "photo", thumbnailPath: null },
+        { id: 902, name: "beach.jpg", mediaType: "photo", thumbnailPath: null },
+      ],
+      total: 2,
+      page: 1,
+      limit: 60,
+    });
+    expect(eventStreamResponses.length).toBeGreaterThan(0);
+    expect(eventStreamResponses.every(
+      (response) => response.status === 200 && response.contentType.includes("text/event-stream"),
+    )).toBe(true);
+    expect(unexpectedHttpErrors).toEqual([]);
+    expect(report.requestFailures).toEqual([]);
+    expect(report.pageErrors).toEqual([]);
+  }
 });
 
 async function loginThroughUI(page: Page): Promise<void> {
@@ -208,9 +276,10 @@ async function dismissDevelopmentBanner(page: Page): Promise<void> {
 async function mockLibrary(page: Page): Promise<void> {
   const files = [mediaFile(901, "sunset.jpg"), mediaFile(902, "beach.jpg")];
 
-  await page.route("**/api/healthz", (route) =>
-    route.fulfill({ status: 200, json: { ok: true } }),
-  );
+  await page.route("**/api/healthz", (route) => {
+    recordMockMatch(page, route, "200 JSON health response {ok:true}");
+    return route.fulfill({ status: 200, json: { ok: true } });
+  });
   await page.route("**/api/auth/status", (route) =>
     route.fulfill({ json: { setup: false, authenticated: true } }),
   );
@@ -232,9 +301,10 @@ async function mockLibrary(page: Page): Promise<void> {
   await page.route("**/api/collections", (route) =>
     route.fulfill({ json: { collections: [] } }),
   );
-  await page.route("**/api/media/files?*", (route) =>
-    route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } }),
-  );
+  await page.route("**/api/media/files?*", (route) => {
+    recordMockMatch(page, route, "200 JSON list with fixture ids 901 and 902");
+    return route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } });
+  });
   await page.route("**/api/library/jobs/active", (route) =>
     route.fulfill({ json: null }),
   );
@@ -244,24 +314,39 @@ async function mockLibrary(page: Page): Promise<void> {
   await page.route("**/api/library/jobs/history", (route) =>
     route.fulfill({ json: { jobs: [] } }),
   );
-  await page.route("**/api/library/jobs/events", (route) =>
-    route.fulfill({ json: { events: [] } }),
-  );
+  await page.route("**/api/library/jobs/events", (route) => {
+    recordMockMatch(page, route, "200 SSE jobs snapshot with no active jobs");
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: `retry: 30000\nevent: jobs\ndata: ${JSON.stringify({
+        streamId: "media-viewer-test",
+        sequence: 1,
+        jobs: [],
+        lastCompleted: null,
+      })}\n\n`,
+    });
+  });
   await page.route("**/api/library/seq", (route) =>
     route.fulfill({ json: { seq: 1, total: files.length } }),
   );
-  await page.route("**/api/media/thumbnail/*", (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: png1x1 }),
-  );
-  await page.route("**/api/media/file/*/stream", (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: png1x1 }),
-  );
-  await page.route("**/api/media/files/*/detail", (route) =>
-    route.fulfill({ json: { ai: { analyzed: false, description: null } } }),
-  );
-  await page.route("**/api/media/files/*/favorite", (route) =>
-    route.fulfill({ json: { ok: true } }),
-  );
+  await page.route("**/api/media/thumbnail/*", (route) => {
+    recordMockMatch(page, route, "200 PNG thumbnail fixture");
+    return route.fulfill({ status: 200, contentType: "image/png", body: png1x1 });
+  });
+  await page.route("**/api/media/file/*/stream", (route) => {
+    recordMockMatch(page, route, "200 PNG media-stream fixture");
+    return route.fulfill({ status: 200, contentType: "image/png", body: png1x1 });
+  });
+  await page.route("**/api/media/files/*/detail", (route) => {
+    recordMockMatch(page, route, "200 JSON detail fixture with unanalyzed AI state");
+    return route.fulfill({ json: { ai: { analyzed: false, description: null } } });
+  });
+  await page.route("**/api/media/files/*/favorite", (route) => {
+    recordMockMatch(page, route, "200 JSON favorite mutation response {ok:true}");
+    return route.fulfill({ json: { ok: true } });
+  });
   await page.route("**/api/media/files/*/rename", (route) =>
     route.fulfill({ json: { ok: true } }),
   );
@@ -282,6 +367,8 @@ test.describe("Media viewer", () => {
 
     const sunsetCard = page.getByRole("button", { name: "Open sunset.jpg" });
     await expect(sunsetCard).toBeVisible({ timeout: 20_000 });
+    await expect(sunsetCard.locator("img")).toHaveAttribute("alt", "");
+    await expect(sunsetCard.locator("img")).toHaveAttribute("aria-hidden", "true");
     await sunsetCard.click();
 
     const viewer = page.getByRole("dialog");
