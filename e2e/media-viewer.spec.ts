@@ -64,6 +64,133 @@ function mediaFile(id: number, name: string, favorite = false) {
   };
 }
 
+type BrowserDiagnostics = {
+  requests: Array<{ method: string; path: string; queryKeys: string[] }>;
+  responses: Array<Promise<{
+    method: string;
+    path: string;
+    status: number;
+    contentType: string;
+    payload?: unknown;
+  }>>;
+  requestFailures: string[];
+  consoleErrors: string[];
+  pageErrors: string[];
+};
+
+const diagnosticsByPage = new WeakMap<Page, BrowserDiagnostics>();
+
+function summarizePayload(pathname: string, payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const body = payload as Record<string, unknown>;
+  if (pathname.endsWith("/api/media/files")) {
+    const files = Array.isArray(body.files) ? body.files : [];
+    const fixtureFiles = files.every((item) => {
+      if (!item || typeof item !== "object") return false;
+      const file = item as Record<string, unknown>;
+      return file.id === 901 || file.id === 902;
+    });
+    return {
+      fileCount: files.length,
+      ...(fixtureFiles
+        ? {
+            files: files.map((item) => {
+              const file = item as Record<string, unknown>;
+              return {
+                id: file.id,
+                name: file.name,
+                mediaType: file.mediaType,
+                thumbnailPath: file.thumbnailPath,
+              };
+            }),
+          }
+        : { fixtureFiles: false }),
+      total: body.total,
+      page: body.page,
+      limit: body.limit,
+    };
+  }
+  if (pathname.endsWith("/api/healthz")) return { ok: body.ok };
+  if (/\/api\/media\/files\/\d+\/favorite$/.test(pathname)) return { ok: body.ok };
+  if (/\/api\/media\/files\/\d+\/detail$/.test(pathname)) {
+    const ai = body.ai && typeof body.ai === "object" ? body.ai as Record<string, unknown> : {};
+    return { ai: { analyzed: ai.analyzed, description: ai.description } };
+  }
+  if (/\/api\/media\/files\/\d+\/rename$/.test(pathname)) return { ok: body.ok };
+  return { keys: Object.keys(body).sort() };
+}
+
+function captureBrowserDiagnostics(page: Page): void {
+  const diagnostics: BrowserDiagnostics = {
+    requests: [],
+    responses: [],
+    requestFailures: [],
+    consoleErrors: [],
+    pageErrors: [],
+  };
+  diagnosticsByPage.set(page, diagnostics);
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (!url.pathname.includes("/api/")) return;
+    diagnostics.requests.push({
+      method: request.method(),
+      path: url.pathname,
+      queryKeys: [...url.searchParams.keys()].sort(),
+    });
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (!url.pathname.includes("/api/")) return;
+    const request = response.request();
+    const contentType = response.headers()["content-type"] ?? "";
+    const shouldSummarizePayload =
+      url.pathname.endsWith("/api/healthz") ||
+      url.pathname.endsWith("/api/media/files") ||
+      /\/api\/media\/files\/\d+\/(detail|favorite|rename)$/.test(url.pathname);
+    diagnostics.responses.push(
+      (shouldSummarizePayload
+        ? response.json().then((payload) => summarizePayload(url.pathname, payload)).catch(() => undefined)
+        : Promise.resolve(undefined)
+      ).then((payload) => ({
+        method: request.method(),
+        path: url.pathname,
+        status: response.status(),
+        contentType,
+        ...(payload === undefined ? {} : { payload }),
+      })),
+    );
+  });
+  page.on("requestfailed", (request) => {
+    const url = new URL(request.url());
+    if (!url.pathname.includes("/api/")) return;
+    diagnostics.requestFailures.push(
+      `${request.method()} ${url.pathname}: ${request.failure()?.errorText ?? "unknown failure"}`,
+    );
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") diagnostics.consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => diagnostics.pageErrors.push(error.message));
+}
+
+test.afterEach(async ({ page }, testInfo) => {
+  const diagnostics = diagnosticsByPage.get(page);
+  if (!diagnostics) return;
+  const report = {
+    requests: diagnostics.requests,
+    responses: await Promise.all(diagnostics.responses),
+    requestFailures: diagnostics.requestFailures,
+    consoleErrors: diagnostics.consoleErrors,
+    pageErrors: diagnostics.pageErrors,
+  };
+  await testInfo.attach("browser-network-console.json", {
+    body: Buffer.from(JSON.stringify(report, null, 2)),
+    contentType: "application/json",
+  });
+  console.log(`[media-viewer-browser-diagnostics] ${JSON.stringify(report)}`);
+});
+
 async function loginThroughUI(page: Page): Promise<void> {
   const password = page.locator("input[autocomplete='current-password']");
   await expect(password).toBeVisible({ timeout: 15_000 });
@@ -148,6 +275,7 @@ async function mockLibrary(page: Page): Promise<void> {
 
 test.describe("Media viewer", () => {
   test("supports navigation, info, favorites, rename validation, filmstrip, and safe delete cancel", async ({ page }) => {
+    captureBrowserDiagnostics(page);
     await mockLibrary(page);
     await page.goto("/media");
     await dismissDevelopmentBanner(page);
