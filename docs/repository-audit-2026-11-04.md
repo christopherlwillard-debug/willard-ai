@@ -3935,17 +3935,336 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 
 **Remaining risk:** the existing `ensureDirectoryWithinRoot` helper remains synchronous and is called during Optimize staging. It performs security-sensitive root/path checks and directory creation, so converting it to async requires a caller-wide migration and equivalent no-follow/race protections; do not replace it with a weaker `mkdir({ recursive: true })` workaround. Optimize read-only scan cancellation on client disconnect, conversion attempt-generation fencing, lock-loss process cancellation, and unique per-attempt staging remain open. Windows install/data separation and the stable external recovery bootstrap remain blocked.
 
-## November 6 — Optimize scan cache path-integrity finding
+## November 6 — Optimize scan cache path-integrity and freshness hardening
 
-### High (P1): Optimize scan cache reads and writes bypass NAS symlink protection
+### High (P1): Optimize scan cache reads and writes bypassed NAS symlink protection
 
 - **Affected workflow:** Optimize Center cache lookup and scan persistence; any API process using the configured NAS library.
-- **Status:** fixed in the recovered working tree; targeted regression tests and the disposable backend audit passed on November 8, 2026.
-- **Evidence/root cause:** `getWillardAIDir(nasPath)` only joins the configured NAS path with `WillardAI`. In `routes/optimize.ts`, `readScanCache` reads `getCachePath(nasPath)` directly with `fs.promises.readFile`; `writeScanCache` uses recursive `fs.promises.mkdir` and direct `fs.promises.writeFile`. Neither validates the `WillardAI/cache` directory or the final `optimize-scan.json` entry before following it. A symlinked cache directory can redirect both operations outside the library, and a symlinked cache file can cause the write to truncate its target. This is inconsistent with the existing `ensureDirectoryWithinRoot` policy.
-- **Cross-check:** `nas-storage-paths.test.ts` already proves that `ensureDirectoryWithinRoot` rejects a symlinked operational cache directory, and `library-engine/job-engine.ts` uses that helper for its startup cache. The Optimize Center cache call sites do not. The shared helper and its tests are already in the current PR diff; no new dependency or alternative storage system is needed.
-- **Resolution:** cache directory creation now uses the root-checked helper; reads reject symlinked or replaced entries and invalid/future timestamps; writes use a private temporary file and atomic publication. Regressions cover symlinked directories and files, replacement races, version/profile mismatches, and timestamp validation. The cache remains best-effort and does not expose files outside the library.
+- **Status:** **fixed; target-tested and Windows-smoke-tested** on exact code/test head `4096d1d15ef127e53685037cec5da576383263d3`.
+- **Evidence/root cause:** `getWillardAIDir(nasPath)` only joins the configured NAS path with `WillardAI`. The previous `readScanCache` read `getCachePath(nasPath)` directly, while `writeScanCache` recursively created the cache directory and wrote directly to the final filename. Neither checked the cache directory or final entry for symlinks. A symlinked directory could redirect both operations outside the library; a symlinked file could redirect a write into another writable file.
+- **Fix:** extracted shared cache helpers into `lib/optimize-scan.ts`. They validate the cache directory with the existing `ensureDirectoryWithinRoot` policy and use its canonical path; read only a regular file with `O_NOFOLLOW` where supported, an opened file handle, and before/opened/after identity checks; revalidate the cache directory around the read; and write through a unique exclusive mode-`0600` temporary file followed by same-directory atomic rename. The final path is checked after publication. Cache failures remain non-fatal and become cache misses or skipped writes.
+- **Regression coverage:** tests cover a valid cache hit, malformed/stale/future timestamps, old/future/missing versions, profile/raw-conversion mismatches, symlinked cache directory, symlinked cache file, and a deterministic regular-file replacement between initial `lstat` and `open`. The replacement test verifies a changed file identity is rejected.
+- **Implementation commits:** `73a2bfe7de52e4d9be083fdb84bca39163022a84` (cache helper, route wiring, initial regressions); `4096d1d15ef127e53685037cec5da576383263d3` (directory revalidation and replacement-race regression).
+- **Validation:** Fast Validation [#42340479418](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42340479418) passed on exact head `4096d1d15ef127e53685037cec5da576383263d3`. Linux job `128306831959` passed typecheck/generated contracts and the targeted backend batch: **377 total, 375 passed, 0 failed, 2 skipped**. All five new cache regressions passed on Linux. Windows job `128307128660` passed; the Optimize scan test step reported **21 total, 16 passed, 0 failed, 5 skipped**. The two symlink-specific cache tests are explicitly skipped on Windows; the regular-file replacement test passed there. Dependency Review [#42340479436](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42340479436) passed the production advisory gate; the separate installed dependency-graph audit was skipped.
+- **Full CI:** not run. Fast Validation is targeted Linux/PostgreSQL plus Windows smoke coverage, not a full-repository CI claim.
+- **Remaining risk:** the existing `ensureDirectoryWithinRoot` helper performs synchronous path checks and directory permission work, so a slow SMB/NAS path can still briefly block the event loop. The path-based checks reduce static symlink and replacement risks but do not provide a kernel-atomic, handle-relative parent-directory fence against an adversary racing a parent-directory swap between validation and the filesystem operation. Windows does not run the two symlink-creation tests. Preserve best-effort behavior and consider a stronger cross-platform no-follow directory abstraction in a separate storage-policy batch.
 
-## November 8 — Saved audit recovery and validation
+### Medium (P2): malformed and incompatible cache records were accepted
+
+- **Affected workflow:** Optimize scan reuse and conversion decisions derived from cached per-file analysis.
+- **Status:** **fixed; target-tested** in the same commits and exact validation above.
+- **Evidence/root cause:** invalid `scannedAt` values produce `NaN`; the prior `age > TTL` comparison then evaluates false. Future timestamps also produce a negative age and were accepted. The old version comparison rejected only older versions, so an unknown future cache format was accepted.
+- **Fix:** require the exact current cache version, a parseable timestamp, a timestamp not later than the current clock, and an age within the 24-hour TTL. Profile and raw-conversion mode checks remain enforced.
+- **Regression coverage:** malformed, stale, future-dated, older-version, future-version, and missing-version cache entries all return a cache miss.
+- **Commits:** `73a2bfe7de52e4d9be083fdb84bca39163022a84`; follow-up identity/revalidation tests in `4096d1d15ef127e53685037cec5da576383263d3`.
+- **Remaining risk:** cache JSON shape validation remains intentionally bounded to version, timestamp, profile, and raw-conversion compatibility; deeper validation of every cached decision field is a separate compatibility review.
+
+## November 6 — Health Center full-library inspection blocks the API event loop
+
+### High (P1): Health Center performs an unbounded synchronous NAS scan inside a request
+
+- **Affected workflow:** Health Center page load, media verification, thumbnail/cache inventory, empty-folder detection, and cleanup preflight.
+- **Status:** **found; architecture plan required; no partial synchronous-to-async rewrite applied.**
+- **Evidence/root cause:** `pages/health.tsx` calls `GET /media/health` on mount. `routes/media-health.ts` calls `inspectLibrary`, which checks NAS reachability synchronously, loads all active media rows, then loops through every row using synchronous path resolution and `isMissingRegularMediaFile` (`lstatSync`) and `isThumbnailFileValid` (`statSync`, `openSync`, `readSync`). It then calls `cacheInventory` (`readdirSync`/`statSync`) and recursively calls `walkDirectories` (`readdirSync`). The walker also accumulates a `files[]` array that the caller does not use; only empty-folder results are consumed.
+- **Impact:** a large library or slow SMB/NAS can block the single API event loop for the entire traversal, delaying unrelated requests and health checks. The full file-path array adds avoidable memory proportional to the number of files. Opening the Health Center page repeats the full scan; its verification buttons also call the same full `load()` path.
+- **Cleanup workflow:** `POST /media/cleanup` repeats `inspectLibrary` inline after starting an SSE response, then performs per-item synchronous `unlinkSync`/`rmdirSync` work and sequential thumbnail generation. It inserts a `library_jobs` row with `jobType: "HEALTH_CLEANUP"` and `profile: "HEALTH"`, but does not enqueue through `startLibraryJob`. Those strings are outside the current `JobType` (`SCAN`, `THUMBNAILS`, `REPAIR`, `VERIFY`, `OPTIMIZE`, `METADATA`) and `JobProfile` (`QUICK`, `FULL`, `HEALTH_SCAN`) contracts. The row is therefore not a worker-owned health job; startup recovery can only mark its RUNNING state failed after a restart.
+- **Additional data-integrity race — status: fixed; target validation pending.** The prior `orphanedRecords` path deleted the media row and derived records from the earlier inspection result without rechecking the source immediately before deletion. A file restored between inspection and cleanup could therefore remain on disk while its catalog row and derived metadata were permanently lost.
+- **Fix:** immediately before the database transition, `softDeleteMissingMediaRecord` re-runs the fail-closed `lstat` classification. If the file has reappeared, the record has changed, or the path is unreadable/symlinked/non-regular, cleanup skips the transition. A confirmed-missing record is conditionally updated under its id, NAS root, relative path, and active-row predicate to `lastScanAction: "DELETED"`; the media row and derived metadata are retained. The UI now labels the action as reversible. The existing scanner's unique-path upsert writes `excluded.last_scan_action`, so a later scan can reactivate the same row if the file returns.
+- **Regression coverage:** a temporary-file test reproduces a file reappearing after inspection and asserts the database callback is not called; additional tests cover a confirmed missing path and a row changed before the conditional update. A route contract asserts no media-row DELETE or derived-data purge occurs in this action and verifies the scanner's reactivation upsert.
+- **Commits:** helper `d58ebdaf767dd58751515bf9579795ae1659c222`; route `f7f4fdba1b591c4dd00c1e58c185f1cbc977955f`; tests `27b8970d1ed066b277e720bd7ea1930c6290f9df`; UI label `7e69dd313ee7e32837af85de0c3a173a2f34f0da`.
+- **Remaining risk:** the filesystem recheck and database update cannot be one atomic cross-resource transaction. The resulting state is reversible and preserves derived data; a file that reappears immediately after the recheck may be temporarily hidden until the next scan, but its catalog identity and metadata are not destroyed. The broader synchronous Health Center scan/cleanup architecture remains open.
+- **Safe implementation plan:** use the existing durable library-job engine and typed job/profile contracts rather than a second ad-hoc worker. Make inspection server-owned and restart-aware, use bounded asynchronous no-follow traversal and metadata checks, persist progress and a compact report, and let SSE disconnect only detach the observer. Remove the unused file-path accumulation. For orphan-index cleanup, revalidate `isMissingRegularMediaFile(resolveLibraryPath(...))` immediately before the state transition; if the file has reappeared or the path is unreadable, a symlink, or otherwise uncertain, skip it. Use the existing reversible soft-delete semantics by setting `lastScanAction: "DELETED"` under the `ACTIVE_MEDIA` guard; do not physically delete the `media_files` row or purge derived metadata based on a one-time missing observation. The active-media filter already hides DELETED rows, and the library scanner's unique-path upsert can reactivate the same row when the file returns. Reserve permanent purge for a durable grace period or explicit confirmation. Keep original NAS media immutable. The Health Center should load the last completed report and start/subscribe to a job explicitly rather than scanning the entire library on every page mount.
+- **Remaining risk:** current Health Center inspection and cleanup can stall the API on slow NAS, consume memory on large libraries, and act on stale missing-file observations. No production or NAS data was modified by this audit.
+
+### Medium (P2): Health Center metadata rebuild reports a queue action that is never queued
+
+- **Affected workflow:** Health Center's `rebuildMetadata` cleanup action.
+- **Status:** **fixed; Linux target-tested** on code commit `6c35eccd185614a4c636a7d28576ef7ef305a6c7`; full evidence is recorded in the November 7 metadata-worker section below.
+- **Evidence/root cause:** `POST /media/cleanup` handles `rebuildMetadata` by sending the progress text “Metadata rebuild is queued for the next library scan.” It does not call `startLibraryJob`, insert a METADATA worker job, or otherwise schedule work, then marks the cleanup record DONE. The UI exposes this action, so the message is a false success.
+- **Safe correction:** enqueue the existing `METADATA` job with the supported `HEALTH_SCAN` profile through the existing job engine, or remove/disable the action until that integration exists. Return the actual job ID/status and distinguish “queued” from “completed”.
+- **Remaining risk:** users can currently believe a metadata rebuild has been scheduled when no worker was started.
+
+### Medium (P2): Health Center SSE errors are treated as progress and selection is cleared
+
+- **Affected workflow:** Health Center cleanup progress, error reporting, and selection retention after partial or failed cleanup.
+- **Status:** **fixed; target-tested** on code commit `6ea997da9ff06715faaeaa5cb36aead617016626`.
+- **Evidence/root cause:** the server emits named `progress`, `done`, and `error` events. The previous `pages/health.tsx` parsed only the `data:` line and ignored the `event:` name and `done.ok`. A server `error` message was displayed as ordinary progress; when the stream closed, the UI cleared selected actions and reloaded regardless of whether a `done { ok: true }` event arrived. The cleanup job insert also occurred after `writeHead(200)` but before the route's `try`, so a database insert failure could escape the SSE error path after response headers had been sent.
+- **Fix:** added a typed Health Center SSE parser for named progress, completion, and error events; the page now displays named errors, rejects unsuccessful or missing completion events, and clears selected actions only after an explicit `done { ok: true }`. The server now creates its cleanup journal row inside the guarded route lifecycle and reports insertion failures through the SSE error event. A failure to persist the journal's FAILED state no longer masks the original error delivered to the client.
+- **Regression coverage:** new parser tests cover progress/done/error events, malformed payloads, unknown events, and count normalization. A page contract test asserts selections are not cleared before successful completion. The API health-scan test now asserts cleanup job creation is inside the SSE error boundary.
+- **Commit:** `6ea997da9ff06715faaeaa5cb36aead617016626`.
+- **Target validation:** Fast Validation [#42353383606](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353383606) passed both Linux job `128346310279` and Windows archive/updater smoke job `128346648095` on exact head `025b3b980845b31e80f0d1705056d25e96a311e5`. Linux included the frontend SSE parser and page recovery contracts plus targeted backend regressions (**383 total; 381 passed; 0 failed; 2 skipped**). Windows covered launcher parsing/concurrency, storage/NAS, media rename/conversion, Optimize responsiveness, 7-Zip/TAR compatibility, and updater preservation/rollback. Dependency Review [#42353383708](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353383708) passed the production advisory gate on the same exact head; the installed dependency-graph audit was skipped. Full CI was not run.
+- **Remaining risk:** this fixes the stream's outcome reporting, not the Health Center architecture. Full-library inspection and cleanup still perform synchronous NAS I/O in the request; cleanup is not yet a durable worker-owned job; the stale missing-file observation race and metadata-rebuild no-op remain open. No NAS or production database data was changed.
+
+## November 6 — Synchronous filesystem checks remain on media and archive request paths
+
+### Medium (P2): NAS-backed media requests still perform synchronous metadata and file reads
+
+- **Affected workflows:** media streaming, thumbnail delivery, archive preview, and media rename.
+- **Status:** **found; asynchronous no-follow migration pending.**
+- **Evidence/root cause:** `GET /media/file/:id/stream` in `routes/media.ts` calls `existsSync` and `statSync` on the source before streaming. `GET /media/:id/thumbnail` calls `isThumbnailFileValid`, which uses synchronous stat/open/read operations to validate the WebP header, including on cache hits. Archive preview in `routes/archives.ts` performs synchronous exists/stat checks. The media rename route also uses synchronous directory enumeration and filesystem operations for portable-name collision checks and rename.
+- **Impact:** these handlers are asynchronous at the Express boundary but their synchronous filesystem calls still block the API event loop. On SMB/NAS mounts, a slow metadata response can stall unrelated API requests.
+- **Safe correction:** reuse the existing storage-root policy but introduce async, no-follow file-handle validation with descriptor/path identity checks; migrate stream, thumbnail, archive preview, and rename call sites in coherent batches. Preserve range handling, content-type checks, authorization, and fail-closed behavior. Add event-loop-yield and replacement-race tests.
+- **Remaining risk:** no change made in this batch; media and archive requests can still block on slow NAS metadata operations.
+
+## November 7 — API startup now verifies the connected database schema
+
+### High (P1): launcher schema markers could bypass required migrations
+
+- **Affected workflows:** installed Windows startup, developer startup, API startup, database restore/repoint, and any deployment that previously set `WILLARD_SCHEMA_READY=1`.
+- **Status:** **fixed; PostgreSQL integration-tested; Windows archive/updater smoke passed; installed-product lifecycle remains separately blocked.**
+- **Evidence/root cause:** the installed and developer launchers fingerprinted local source files and could skip `setup-db.cjs` without checking the database currently selected by `DATABASE_URL`. Both set `WILLARD_SCHEMA_READY=1`, and `artifacts/api-server/src/index.ts` trusted that flag to skip `bootstrapSessionTable()`. The API therefore could start against a restored/repointed database with missing required schema.
+- **Observed database evidence (user-provided, read-only):** the inspected database reported `organization_jobs` exists, `lease_token` is missing, and `willard_schema_versions` contains only versions 1 and 2. Current `setup-db.cjs` declares schema version 3 and includes `ALTER TABLE organization_jobs ADD COLUMN IF NOT EXISTS lease_token text`. This confirms a real schema mismatch in the inspected database; it does not prove which event caused it.
+- **Fix:** `setup-db.cjs` now exports a read-only `verifyRequiredSchema(client)` contract. It checks all 25 required tables, critical columns including `organization_jobs.lease_token`, and that the maximum recorded schema version equals the application's current version (including fail-closed behavior for a future schema). `bootstrapSessionTable()` runs under the existing `withSchemaBootstrapLock`: verify first, invoke the existing idempotent `runRequiredSchema` only when incomplete, apply the existing backup-setting columns, and verify again. API startup always runs this gate and ignores `WILLARD_SCHEMA_READY`. Both Windows launchers no longer set that bypass flag; their local marker is only a setup optimization and is explicitly described as requiring API verification. Optional vector initialization remains after HTTP binding so it does not delay health readiness.
+- **Regression coverage:** unit tests cover missing `lease_token`, old schema history, and future schema history. A disposable PostgreSQL integration test creates the full required schema in an isolated random schema, resets its history to version 2, omits only the `lease_token` migration, verifies the mismatch, runs the real required migrations, and verifies version 3 plus the repaired column. Fast Validation now runs this integration test. The connected user database was not used or modified.
+- **Commits:** application fix `373958e8474cafb76ae329d9829e6f0fa879df88`; integration fixture `3c4ca61c510913bad50746f68274d1d9d49ec6a6`; fixture-history correction `f538288d6e5f4956b0c3f0f8e2ca4a7a9008fc7e`; final verifier assertion correction `025b3b980845b31e80f0d1705056d25e96a311e5`.
+- **Validation:** Fast Validation [#42353383606](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353383606) passed on exact head `025b3b980845b31e80f0d1705056d25e96a311e5`. Linux job `128346310279` passed workspace typecheck/generated contracts, API/UI/release/storage contracts, PostgreSQL integration checks, and targeted backend tests (**383 total; 381 passed; 0 failed; 2 skipped**), including the new version-2 schema repair test. Windows archive/updater smoke job `128346648095` also passed its PowerShell, launcher concurrency/process ownership, media rename/conversion, Optimize responsiveness, storage/NAS, conversion finalization, official 7-Zip symlink metadata, compressed TAR, updater journal, and updater preservation/rollback checks. Dependency Review [#42353383708](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353383708) passed the production advisory gate on the exact head; the installed dependency-graph audit was skipped.
+- **Validation-process note:** three intermediate Fast Validation runs failed only in the new integration test fixture/assertions: [#42353039019](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353039019) used an incomplete schema fixture; [#42353187345](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353187345) did not reset the version history to 2; [#42353348315](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353348315) expected the verifier to report the version while it correctly returned early on the missing column. The fixture was corrected to build a complete v2 schema and assert the history independently. The final exact-head run above passed.
+- **Remaining risk:** the inspected user database remains unchanged; it will be migrated by the application startup gate when this code is installed and started. Verification checks the complete required-table set and critical column contract, not every possible column individually. A schema newer than the running application fails closed rather than attempting a downgrade. Full CI has not been run.
+
+## November 6 — Windows installed-product prepared-phase recovery remains blocked
+
+### Critical (P1): recovery launcher is inside the install directory that the updater moves away
+
+- **Affected workflow:** Windows installed-product update interrupted after the old install directory is moved to its backup but before the candidate directory is installed.
+- **Status:** **blocked; architecture correction and current-head installed-product lifecycle validation required.**
+- **Current-head reproduction:** installed-product lifecycle run [#42353036558](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353036558), exercising application code commit `373958e8474cafb76ae329d9829e6f0fa879df88`, failed during `prepared-phase update recovery`. Its log reports `Installed launcher is missing before 'start': C:\\WillardLifecycle\\wl_life_11d719f5\\desktop\\WillardMediaCenter.ps1` at `scripts/windows/installer-lifecycle-smoke.ps1:108`, called from line 300. The earlier post-upgrade start and swapped-phase recovery phases succeeded. The prepared-phase fixture moves the live `InstallRoot` to its backup, then tries to invoke the launcher from the now-missing `InstallRoot`; the recovery function is inside that same moved directory, so it cannot run. This reproduces the root cause on current application code, not just the older historical head.
+- **Safe implementation plan:** add a small stable recovery bootstrap outside the mutable install directory, in a persistent application-data/program-data location. It must validate the journal version and all sibling path constraints before restoring the previous install, preserve the rollback backup on ambiguous state, and launch the in-install launcher only after the live directory is restored. Keep application data outside the install tree and coordinate legacy data migration with the installer. Do not patch the test to skip the missing-launcher state or delete the backup.
+- **Validation limitation:** Fast Validation [#42353383606](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353383606) passed both Linux and Windows archive/updater smoke jobs on exact head `025b3b980845b31e80f0d1705056d25e96a311e5`, but that smoke is not the installed-product lifecycle. The dedicated lifecycle workflow was triggered by the installer/setup changes and failed on application code commit `373958e8474cafb76ae329d9829e6f0fa879df88` at the prepared-phase recovery described above.
+- **Remaining risk:** an interruption in the prepared phase can leave the user with no launcher at the shortcut target and no in-place recovery entry point. Do not call PR #2 merge-ready until a stable external bootstrap and clean-machine installed-product lifecycle tests pass.
+
+
+## November 7 — Health Center metadata rebuild now starts the durable worker
+
+### Medium (P2): Health Center reported a metadata rebuild queue action without starting any work
+
+- **Affected workflow:** Health Center selective cleanup, metadata refresh, and the global Library Jobs surface.
+- **Status:** **fixed; Linux target-tested; Windows smoke validation in progress** on code/test commit `6c35eccd185614a4c636a7d28576ef7ef305a6c7`.
+- **Evidence/root cause:** the `rebuildMetadata` branch emitted “Metadata rebuild is queued for the next library scan” but did not call the existing library job engine, create a METADATA job, or otherwise schedule work. The route then marked its temporary `HEALTH_CLEANUP` row DONE and emitted `done { ok: true }`, so the UI presented a successful queue operation that never happened.
+- **Fix:** Health Center now calls the existing `startJob` API with `jobType: "METADATA"` and the supported `HEALTH_SCAN` profile. It first marks its temporary cleanup row DONE to release the library's partial unique active-job claim. It checks storage/capacity errors returned by the job engine. If the engine reports an existing active job, the route accepts it only when the durable row is a RUNNING METADATA job; it does not misreport a concurrent scan or paused/interrupted job as a successful metadata refresh. The actual metadata job ID is included in progress, completion, and cleanup summary data. The UI label now says “Rebuild outdated metadata now”.
+- **Regression coverage:** the API contract test verifies the METADATA/HEALTH_SCAN start call, storage/error handling, existing-job type/status check, and release of the temporary claim before starting the worker. The frontend contract test verifies the action label reflects immediate worker execution.
+- **Commit:** `6c35eccd185614a4c636a7d28576ef7ef305a6c7`.
+- **Validation:** Fast Validation [#42348768298](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42348768298) passed Linux validation job `128332191302`: typecheck/generated contracts, API and UI contracts, PostgreSQL integration checks, and targeted backend regressions **379 total; 377 passed; 0 failed; 2 skipped**. The new metadata-worker regression passed. Windows job `128332513330` is still running at `Verify developer updater preservation and rollback`; its preceding PowerShell, storage, Optimize, conversion, 7-Zip, TAR, and updater-journal steps passed. Dependency Review [#42348886497](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42348886497) passed the production advisory gate on the then-latest report/workflow head `e975c223da28998e5399ae40ca3cef5ffabb192a`; the installed dependency-graph audit was skipped. Full CI was not run.
+- **Remaining risk:** this corrects the metadata action only. Health Center's full-library inspection and cleanup still use synchronous NAS filesystem operations inside request handlers; the temporary `HEALTH_CLEANUP` row is not a restart-aware worker. The stale missing-file observation race and durable Health Center inspection/cleanup architecture remain open. No production database or NAS media was changed.
+
+
+## November 7 — Dependency Review no longer cancels an in-progress PR audit
+
+### Medium (P2): Dependency Review cancelled the previous head when the next PR commit arrived
+
+- **Affected workflow:** PR dependency advisory review and audit commit validation.
+- **Status:** **workflow corrected; Dependency Review target-tested** on workflow/report commit `e975c223da28998e5399ae40ca3cef5ffabb192a`.
+- **Evidence/root cause:** Dependency Review run [#42348768299](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42348768299), associated with code/test commit `6c35eccd185614a4c636a7d28576ef7ef305a6c7`, was cancelled when the following report-only commit `6976605017ad083bb724b824480820c61424bbbc` synchronized PR #2. The workflow's concurrency group had `cancel-in-progress: true`. Its pull-request path filter is evaluated against the PR diff, which already contains dependency manifest/lockfile changes, so later docs-only commits still trigger another dependency review and cancel the in-progress run.
+- **Fix:** changed Dependency Review concurrency to `cancel-in-progress: false`. A newer run may wait behind the active run instead of cancelling it. The latest head still receives its own review.
+- **Commit:** `e975c223da28998e5399ae40ca3cef5ffabb192a`.
+- **Validation:** Dependency Review [#42348886497](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42348886497) completed successfully on exact head `e975c223da28998e5399ae40ca3cef5ffabb192a`; the high/critical production advisory gate passed. The installed dependency-graph audit was skipped because this was a pull-request run.
+- **Remaining risk:** GitHub concurrency allows only one pending run per group, so rapid successive updates may replace an older pending run. The latest PR head remains the required validation target. Fast Validation already uses `cancel-in-progress: false` and preserves its in-progress Windows smoke job.
+
+
+## November 7 — Library job admission failures now return accurate HTTP errors
+
+### Medium (P2): NAS read-only and offline worker starts were returned as successful API responses
+
+- **Affected workflows:** new library scan, thumbnail backfill, full thumbnail rebuild, metadata reprocess, and the legacy `POST /scan` compatibility endpoint.
+- **Status:** **fixed; target validation pending** on code/test head `a9ac3c258b78fd4f14cabd7f48a94e3093d07e8e`.
+- **Evidence/root cause:** `startJob()` explicitly returns durable failed job records with `errorCode: "NAS_OFFLINE"`, `"NAS_READ_ONLY"`, or `"CAPACITY_UNSAFE"` when storage admission fails. The library scan route handled offline/capacity, but not read-only. The thumbnail and metadata routes handled capacity only, so offline/read-only outcomes could be returned with HTTP 200. The legacy scan adapter handled offline/capacity but omitted read-only and could return HTTP 202 for a failed job.
+- **Fix:** added one route-local admission-response mapper used by all four new library worker start endpoints. It maps offline and read-only storage to HTTP 503 with explicit codes/messages and unsafe capacity to HTTP 507. The legacy `POST /scan` adapter now returns HTTP 503 for read-only admission failure while preserving its compatibility response body.
+- **Regression coverage:** extended `library-consistency-contract.test.ts` to assert all four new job-start call sites use the common mapper and that both new and legacy endpoints explicitly cover offline, read-only, and capacity errors. Added that contract test to Fast Validation's targeted backend test command so it is actually executed in CI.
+- **Commits:** common route mapping `9e5e456978c758aa8b1d01fac7ea42286f494186`; legacy adapter `1b75bb5690fd4b0cf052720318d6cbe461ea7745`; regression test `97fcec9a1ee24d8ed71183aa6b05ae7258aaac2d`; CI test-list wiring `a9ac3c258b78fd4f14cabd7f48a94e3093d07e8e`.
+- **Validation:** Dependency Review [#42357310181](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357310181) passed the production advisory gate on exact code head `a9ac3c258b78fd4f14cabd7f48a94e3093d07e8e`; the installed dependency-graph audit was skipped. Fast Validation [#42357310237](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357310237) failed in the Linux typecheck step before any targeted tests or Windows smoke ran. The log identified TypeScript parser errors at the two new regression test files: `media-health-scan.test.ts(131,63)` and `library-consistency-contract.test.ts(74,69)`, both caused by over-escaped parentheses in regex literals. Workspace library typecheck and generated API contract checks had passed before the API-server test-file parse errors.
+- **Validation correction:** fixed the regex escaping in commits `e17feae5ffdc5657ec92868bfbc4b56b0fa8670f` and `61e1f7ed89eead8d46448c3231e90a06bbeae212`. Fast Validation [#42357524021](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357524021) is now running on exact corrected code/test head `61e1f7ed89eead8d46448c3231e90a06bbeae212`; its Linux job has started. Dependency Review [#42357524005](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357524005) is also running on that exact head. No passing test or typecheck result is claimed until the corrected run completes.
+- **Validation-process note:** Fast Validation runs [#42357136107](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357136107) and [#42357275831](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357275831) were cancelled while pending because GitHub concurrency keeps only one pending run per group; later pushes replaced the pending slot. Fast Validation [#42357408720](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357408720) on report head `dd1dbfc023637f55aba96d44dd70fa3a3b04474e` also failed at the same two parser errors because it included the pre-correction test files. These were validation/test-source errors, not application behavior failures; the test files were corrected and the exact-head rerun above is the current authority.
+- **Remaining risk:** this corrects API admission reporting; it does not resolve the separate thumbnail-rebuild ordering issue where cache invalidation currently occurs before durable worker admission. That issue requires a worker-owned pre-start preparation boundary to avoid deleting/replacing derivatives when a rebuild cannot claim a job, so it remains a separate investigation rather than a partial workaround.
+
+
+## November 7 — Organization lease-token contract test aligned with the implementation
+
+### Medium (P2): Fast Validation's organization lease test asserted the wrong declaration form
+
+- **Affected workflow:** organization analyze/execute/resume/rollback fencing and the targeted backend regression suite.
+- **Status:** **found; test correction committed; validation pending.**
+- **Evidence/root cause:** Fast Validation [#42357576042](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42357576042), run #1381 on exact head `5dfbd81c261f0c69e0667662f560fe881ff61b04`, completed workspace typecheck, generated contracts, UI/release/storage checks, PostgreSQL integration checks, and the other targeted regressions, but failed one assertion in `library-consistency-contract.test.ts:43`. The test expected `const executionLeaseToken = crypto.randomUUID()`; the production route intentionally declares the token as `let executionLeaseToken = ""` and assigns a fresh UUID inside the validated execution-claim path. Resume and rollback use the same declaration-then-assignment pattern. This was a stale source-shape assertion, not evidence that the runtime lease fence was missing. The Windows smoke job was skipped because the Linux validation job failed.
+- **Fix:** updated the contract test to assert the `let` declaration and subsequent `crypto.randomUUID()` assignment for execution, resume, and rollback tokens. Existing assertions continue to verify that each token is included in the database ownership predicates and that filesystem move/restore hooks recheck the lease.
+- **Validation:** the failed run's typecheck and all other tests in the targeted step passed; only this lease-token declaration assertion failed. A new exact-head Fast Validation run is required before marking the correction target-tested. No application source changed in this correction.
+- **Remaining risk:** the test correction does not change organization worker behavior. The separate durable pre-move intent-journal gap and replacement-policy backup risk remain open as documented above.
+
+
+### Validation follow-up — lease callback assertions also needed to match async fencing hooks
+
+- Fast Validation [#42361179865](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361179865), run #1382 on exact head `d0ae68d1f025ca88f0f79219830b22308e4cedb7`, passed typecheck/generated contracts, Expo configuration, desktop safety, release/storage contracts, official 7-Zip compatibility, and all four PostgreSQL integration steps. The targeted backend test step then failed a second assertion in the same contract test: it expected one-line `beforeMove: () => assertOrganizationLease` and `beforeRestore` callbacks, while the implementation correctly uses `async () => { await assertOrganizationLease(...); }` to await the durable lease check before each move and restore.
+- This is another stale test-shape assertion, not an application failure. The regression now asserts the actual async callback form and that the awaited lease check uses the execution token. The existing resume/rollback token predicates remain asserted.
+- **Status:** test correction committed; exact-head validation pending. The Windows smoke job was skipped because Linux targeted tests failed.
+
+
+### Validation follow-up — remaining organization lease assertions reconciled
+
+- Fast Validation [#42361340256](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361340256), run #1383 on exact head `38e520c0212b91568d81137bb72593f6a298583e`, passed typecheck/generated contracts, Expo configuration, desktop safety, release/storage contracts, official 7-Zip compatibility, and all four PostgreSQL integration steps. The targeted backend suite then failed the next stale source-shape assertion: the test expected an `updated ? publicOrganizationJob(updated) : updated` ternary, while the route now directly calls `res.json(publicOrganizationJob(updated))` after its ownership check. Source comparison also found a later helper assertion expected `beforeEachMove?.()`, while rollback correctly passes the current journal move as `beforeEachMove?.(mv)` before entering the per-file catch.
+- **Fix:** corrected both assertions to verify the actual sanitizer call and per-move awaited lease hook. No application source changed. The corrected patterns were checked against the current route/helper source before committing.
+- **Status:** test correction committed; exact-head Fast Validation pending. The Windows smoke job was skipped because the Linux targeted test step failed.
+
+
+## November 7 — Full thumbnail rebuild now invalidates cache only after worker admission
+
+### Medium (P2): thumbnail rebuild deleted usable derivatives before the library job was admitted
+
+- **Affected workflow:** Settings → Thumbnail Cache → Rebuild Cache; POST /api/library/thumbnails/rebuild; durable library-job admission and thumbnail generation.
+- **Status:** **fixed in source; regression committed; target validation pending** on current application/test head 38cbb0a184e0381dff93f90a4aacebe252fdc0aa.
+- **Evidence/root cause:** the rebuild route called clearThumbnailCache(nasPath) and reset every catalog thumbnail pointer before calling startJob(). The job engine performs NAS online/writable checks, capacity admission, capacity reservation, local/durable active-job checks, and the cross-process partial-unique RUNNING claim inside startJob(). If any admission step failed, or another job was already active, the route had already removed valid derivatives. startJob() also returns alreadyRunning: true with the existing job ID for any active library job; the rebuild route previously returned that as success even when the active job was not a thumbnail rebuild.
+- **Fix:** added the explicit rebuildThumbnails option to StartJobOptions, restricted it to THUMBNAILS jobs, and pass it only from the full rebuild route. The worker receives that flag and performs cache invalidation plus catalog-pointer reset only after the durable RUNNING row has been inserted, the worker has been registered, and the worker's initial NAS reachability/writability check has succeeded. Ordinary missing-thumbnail backfill does not set the flag and preserves reusable cache. The rebuild route now returns HTTP 409 when startJob() reports an already-running job rather than claiming a rebuild was accepted. The Settings UI now displays the server's actionable error message and no longer claims thumbnails were already cleared before the worker's storage checks.
+- **Regression coverage:** library-consistency-contract.test.ts asserts the rebuild route has no pre-admission cache/pointer mutation, only the rebuild endpoint sets the flag, ordinary backfill does not set it, the durable RUNNING insert precedes worker dispatch, NAS validation precedes cache invalidation, and an unrelated active job produces HTTP 409.
+- **Commits:** worker/option 1925ff07200d95570be0f0a4d733dafd11aac6a3; route 2bb96ce45c14cb8d8c42a868ae08c0322e7ea0dc; regression d92b9bb0fbf3465ce6ccac5552a47bb5d2d951ea; Settings feedback 38cbb0a184e0381dff93f90a4aacebe252fdc0aa.
+- **Validation:** the parent Fast Validation [#42361470271](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361470271) passed both Linux validation and Windows archive/updater smoke on exact pre-fix head  b64c9b3c93ab03fa779d760b2e22f0a5f16a5f30; Dependency Review [#42361470279](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42361470279) passed its production advisory gate. New Fast Validation [#42365415423](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42365415423) and Dependency Review [#42365415439](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42365415439) were queued on the updated code/test/UI head when this entry was written. No successful result is inferred from the parent run.
+- **Remaining risk:** clearThumbnailCache() is an existing best-effort helper that suppresses individual unlink failures; a full rebuild may therefore reuse a valid derivative that could not be removed. The separate explicit DELETE /api/library/thumbnails/cache action still performs an immediate cache clear and pointer reset outside a durable worker claim; its coordination with an already-running thumbnail worker needs a separate concurrency-safe design. The cache and database pointer reset also cannot be one cross-resource transaction. No production library, database, credentials, or media were touched.
+
+
+## November 7 — Thumbnail cache/catalog consistency and Health Center repair coverage
+
+### Fixed — P1/P2: thumbnail file publication and catalog pointer updates were not one serialized operation
+
+**Affected workflows:** on-demand media thumbnail generation, the durable THUMBNAILS worker, Health Center missing-thumbnail repair, and full cache clearing.
+
+**Evidence/root cause:** generateThumbnail held a per-destination lock while writing/publishing the WebP, but released it before callers updated media_files.thumbnail_path. The clear-only thumbnail job also uses that per-file lock before unlinking. A clear could therefore wait for publication, unlink the file, and then have a late caller commit a pointer to the deleted path. The old Health Center caller did not persist the canonical thumbnail pointer at all.
+
+**Fix:** generateThumbnail now accepts an asynchronous onReady callback and holds the same destination lock through the callback for both newly generated and reused thumbnails. The on-demand media route, background thumbnail worker, and Health Center repair path all persist the canonical path and generation timestamp inside that callback. The existing clear-only job and publisher continue to share the same lock; no second lock or queue was added.
+
+**Regression coverage:** added deterministic tests for new and reused thumbnails where cache clearing starts while the callback is blocked. Added a source contract requiring all three production callers to persist pointers inside the callback.
+
+**Status:** fixed; target-tested.
+- Code commits: fd97c977a7880b3aca997f7d38f2aed11da8b34e (publisher callback and generated API sync), 8f87fb7fff2af79410348ccc8926cfb878582ddb (test syntax/extension normalization correction), 9ffa31c1180227e9f78ce447b5bc9a102c852046 (Health Center caller).
+- Fast Validation [#42372236195](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372236195) passed both Linux and Windows jobs on exact code head 8f87fb7fff2af79410348ccc8926cfb878582ddb. Linux typecheck/generated contracts and targeted backend regressions passed: **400 total, 398 passed, 0 failed, 2 skipped**. Windows archive/updater smoke passed.
+- Fast Validation [#42372316367](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372316367) passed both jobs on exact code head 9ffa31c1180227e9f78ce447b5bc9a102c852046. Linux targeted regressions again passed **400 total, 398 passed, 0 failed, 2 skipped**; Windows archive/updater smoke passed.
+- The latest combined validation is Fast Validation [#42372668667](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372668667) on exact code head cc2023a40994980af9fbb625d57edafdbfa077e1: Linux passed **402 total, 400 passed, 0 failed, 2 skipped**, including both orphan-cleanup regressions and the thumbnail pointer contract. The Windows archive/updater smoke job was still running at the developer-updater preservation/rollback step when this entry was written; do not claim the complete run passed until that job finishes.
+- Dependency Review [#42372668753](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372668753) passed on exact head cc2023a40994980af9fbb625d57edafdbfa077e1; the production advisory gate passed and the separate installed dependency-graph audit was skipped.
+
+**Remaining risk:** the thumbnail quota/status path still uses synchronous directory/stat helpers in places; those remain part of the broader NAS event-loop review.
+
+### Fixed — P2: Health Center orphan-thumbnail cleanup bypassed publisher ownership
+
+**Affected workflow:** Health Center → Remove orphaned thumbnails.
+
+**Evidence/root cause:** the cleanup loop used unlinkSync directly on paths from an earlier inventory. It bypassed the thumbnail engine's per-file publisher lock and did not recheck whether the media row had become active since inspection. It could race a publisher or act on a stale orphan decision.
+
+**Fix:** added removeOrphanedThumbnail, which accepts only canonical numeric .webp files directly inside the verified thumbnail directory, acquires the same per-file lock as publishers, rechecks the active media row after acquiring the lock, verifies regular-file type and file identity, then unlinks asynchronously. Health Center now uses this helper and skips files that changed or are no longer orphaned.
+
+**Regression coverage:** added tests proving orphan cleanup waits for a publisher callback and rechecks catalog membership, deletes only a regular canonical file still confirmed orphaned, and rejects a path outside the thumbnail directory. The route contract prevents reintroduction of direct unlinkSync for these cache entries.
+
+**Status:** fixed; target-tested on Linux in Fast Validation #42372668667 (402 total, 400 passed, 0 failed, 2 skipped). The Windows smoke job for that run was still in progress at report time.
+- Commit: f4138f3fd50839956c449869f5d861a072c85621.
+- Remaining risk: the overall Health Center inventory/traversal is still synchronous and request-bound; this fix fences only the per-thumbnail deletion.
+
+### Fixed — P2: Health Center omitted PDF thumbnails
+
+**Affected workflow:** Health Center → Regenerate missing thumbnails / Full thumbnail rebuild.
+
+**Evidence/root cause:** HealthRow did not select the media extension, and both eligibility filters included only photos and videos. The normal thumbnail engine and durable library route support PDFs, so Health Center could report a completed repair while leaving PDF thumbnails untouched.
+
+**Fix:** select the extension and include pdf in both missing-thumbnail inventory and full-rebuild eligibility.
+
+**Status:** fixed; target-tested on Linux in Fast Validation #42372668667 (402 total, 400 passed, 0 failed, 2 skipped).
+- Commit: cc2023a40994980af9fbb625d57edafdbfa077e1.
+- Remaining risk: Health Center still performs the thumbnail loops inside its SSE request instead of handing the whole operation to a restart-aware durable worker.
+
+### Fixed — generated API contract drift after the thumbnail clear endpoint became a queued job
+
+**Affected workflow:** API client/Zod generation and Fast Validation's generated-contract gate.
+
+**Evidence/root cause:** OpenAPI changed the DELETE thumbnail-cache operation summary to “Queue thumbnail cache clearing”, but the generated React API client and Zod artifacts were not updated. Fast Validation #42371526828 (run #1392, head 6fb2a6692afd329ff91c68bd237920c18a42bbaa) failed at the generated-artifact diff check before API-server typecheck.
+
+**Fix:** synchronized the two generated outputs from the current OpenAPI contract in commit fd97c977a7880b3aca997f7d38f2aed11da8b34e. Fast Validation #42372236195 subsequently passed generated-contract validation on exact head 8f87fb7fff2af79410348ccc8926cfb878582ddb.
+
+**Validation process correction:** Fast Validation #42372158347 (run #1393, head fd97c977a7880b3aca997f7d38f2aed11da8b34e) then exposed over-escaped test regexes and a misplaced test-suite closing delimiter introduced in the first callback-test draft. These were corrected in 8f87fb7fff2af79410348ccc8926cfb878582ddb; #1394 passed both jobs. Fast Validation #42372553086 (run #1396) was superseded while pending by a newer branch push; it was not a test failure.
+
+### Newly prioritized Health Center follow-ups — found, not yet fixed
+
+1. **P2 — thumbnail regeneration errors are swallowed and the route still reports ok=true.** The per-item catch in media-health.ts currently treats failed generation as progress and the final cleanup row/SSE completion can still be marked successful. Add an explicit failure count, persist partial-failure status, and report it through the named SSE done event so the UI retains selections and explains what failed.
+2. **P2 — metadata worker handoff is hidden by the frontend.** The server includes metadataJobId in the completion payload, but health-cleanup-events.ts drops it and the Health Center page replaces the progress message with generic “Cleanup completed.” Preserve the job ID in the parsed event and tell the user that the metadata job is still running.
+3. **P1 — Health Center thumbnail actions are still request-bound.** Missing-thumbnail and full-rebuild loops call the generator from the SSE route rather than the durable library worker. The HEALTH_CLEANUP row is marked failed on restart by generic recovery; it is not resumed from a durable checkpoint. A safe correction needs one server-owned, checkpointed Health Center worker or a supported sequential job orchestration plan. SSE must remain an observer, not the owner. Do not start multiple incompatible library jobs at once or claim completion before each accepted worker job is durable.
+
+### Conversion worker fencing — current source inspection, design remains blocked
+
+**Evidence:** conversion-job-lock.ts holds a PostgreSQL advisory lock through a dedicated client but does not attach a lock-connection error/end handler that aborts the current attempt. runMediaToolAsync supports bounded timeout and shutdown ownership but no per-attempt AbortSignal; trackConversionRequest is not a job-attempt fence. This confirms the earlier finding that losing the lock connection does not itself stop the running child or fence subsequent staging writes.
+
+**Safe plan:** add a persisted per-attempt UUID and unique attempt staging directory; monitor the advisory-lock client and abort the attempt on connection loss; thread an attempt-scoped AbortSignal through all media-tool and conversion phases; recheck attempt ownership before every staging/finalization mutation; require the current attempt token for final publication; and add fault-injection tests for lock loss, late child exit, retry overlap, and stale finalization. Do not add a token-only workaround without process cancellation and isolated staging.
+
+**Status:** found; blocked pending the complete attempt-fencing design.
+
+### Archive and installer status carried forward
+
+- Archive source inspection confirms the existing path/link rejection, archive snapshot verification, atomic no-replace ZIP output, bounded TAR input, official 7-Zip compatibility, and symlink-metadata tests. The broader request-path synchronous extraction/tree-inspection work and explicit durable user cancellation for server-owned Organize extraction remain open.
+- Windows prepared-phase recovery remains **P1, blocked**. The last installed-product lifecycle failure remains run [#42353036558](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42353036558): after the install directory was moved to its backup, the launcher path under the original directory was missing. A stable bootstrap outside the replaceable install tree is still required. The safe lifecycle workflow supports manual dispatch, but no workflow-dispatch action is available through the current GitHub connector; it was not triggered by creating an artificial installer change.
+- Full CI has not been run. The release workflow was not run because it can publish/sign releases. Fast Validation and Dependency Review are not a substitute for full CI or installed-product lifecycle validation.
+
+### Branch/PR snapshot for this batch
+
+- Code head before this ledger update: cc2023a40994980af9fbb625d57edafdbfa077e1.
+- PR #2 remains open, draft, unmerged; base main remains 694a055aeb10a41ee8e98f5b776faef89cbd449d.
+- Comparison at this snapshot: 1,471 commits ahead, 1 behind; PR diff 200 files, 25,224 additions, 3,163 deletions.
+- No branch switch, main modification, merge, deployment, release publication, credential access/change, or production data mutation occurred.
+
+
+## November 7 — Final validation completion addendum
+
+Fast Validation [#42372668667](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42372668667) subsequently completed successfully on exact code head cc2023a40994980af9fbb625d57edafdbfa077e1. Both jobs passed:
+- Linux validation job 128404306807: typecheck/generated contracts, Expo configuration, desktop web-server safety, release/storage contracts, official 7-Zip policy and binary compatibility, PostgreSQL media-filter and conversion-lock/finalization/session-revocation integration, and targeted backend regressions. The targeted backend suite was **402 total, 400 passed, 0 failed, 2 skipped**.
+- Windows archive/updater smoke job 128404677973: all 25 steps passed, including launcher parsing and concurrency, developer process ownership, Windows organization capacity, media rename and subprocess responsiveness, storage migration/no-overwrite, NAS temporary-path cleanup, conversion finalization rollback, official Windows 7-Zip hash verification and symlink metadata, compressed TAR preview, updater journal, and developer updater preservation/rollback.
+
+The audit-ledger commit edfe76359cac8f139a00ad16679576d215e300c9 is documentation-only. Fast Validation [#42373190808](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42373190808) is running on that exact report head; no result is claimed yet. Dependency Review [#42373190848](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42373190848) passed on the exact report head; the installed dependency-graph audit was skipped.
+
+**Current PR snapshot:** branch head edfe76359cac8f139a00ad16679576d215e300c9; PR #2 open/draft/unmerged; base main 694a055aeb10a41ee8e98f5b776faef89cbd449d; 1,472 commits ahead and 1 behind; 200 changed files, 25,309 additions, 3,163 deletions. No changes to main or production data.
+
+
+## November 7 — Health Center partial outcomes and mobile authentication review
+
+### P2 — Health Center thumbnail/face-crop failures were hidden as successful cleanup
+
+- **Affected workflow:** Health Center selective cleanup, missing-thumbnail regeneration, orphaned face-crop cleanup, metadata-worker handoff, and cleanup job history.
+- **Root cause:** per-thumbnail exceptions were swallowed as progress; `purgeOrphanedDerivedData` returned crop deletion errors that were included in a summary but did not affect the final job status; the SSE completion always used `ok: true`; the frontend discarded `metadataJobId` and cleared selected actions after any completion.
+- **Correction:** count thumbnail and face-crop failures; persist `FAILED` plus an explicit partial-result summary/error when any item fails; send `ok: false, partial: true, failedItems, message,` and the optional metadata job ID; parse and validate those fields in the frontend; retain selected actions on partial completion; show an accessible status notice with the partial result or continuing metadata job ID.
+- **Commits:** implementation and route/parser/page/test batch `d062e56c891535a39ecea14077ecd413ebdaa951`; completion-event narrowing `31e75aa21c81e3b23d017902e3d134248f56fb95`; regression assertion corrections `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Status:** fixed; target-tested on exact code/test head `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Validation:** Fast Validation [#42374315721](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42374315721) passed both jobs. Linux job 128408675966 passed workspace typechecks/generated contracts and targeted regressions (403 total, 401 passed, 0 failed, 2 skipped); the new partial-failure route regression, 33 Health Center event/recovery tests, durable session-revocation test, and setup-authorization test passed. Windows job 128409014666 passed all 25 archive/updater smoke steps, including the final developer updater preservation/rollback test. Dependency Review [#42374315746](https://github.com/christopherlwillard-debug/willard-ai/actions/runs/42374315746) passed the production advisory gate; the installed dependency-graph audit was skipped.
+- **Remaining risk:** Health Center inspection and thumbnail work remain request-bound and are not restart-resumable. This fix reports partial outcomes accurately but does not convert the workflow into a checkpointed server-owned worker.
+
+### P2 — Health Center accepts an empty action set and reports a misleading progress denominator
+
+- **Affected workflow:** direct API callers and the Health Center progress bar.
+- **Evidence/root cause:** `POST /media/cleanup` filters unknown actions but does not reject an empty result before creating a `HEALTH_CLEANUP` row and sending HTTP 200/SSE. Its `total` is the sum of every inspected issue category, regardless of the selected actions; it also includes the library root in `emptyFolders` even though the execution loop skips that root. A single selected action can therefore show progress against unrelated work or reach 100% too early.
+- **Status:** found; not changed in this batch.
+- **Safe correction:** reject an empty/invalid action set with HTTP 400 before SSE headers or job insertion; calculate the initial denominator from only the selected action targets, using the same eligibility filters as the execution loops; account for discovered face-crop work when the derived-data cleanup returns. Add route and progress-contract regressions.
+- **Remaining risk:** until corrected, API clients can create no-op cleanup jobs and the displayed percentage is not a reliable measure of selected work.
+
+### P2 — Mobile authentication has first-run, status-error, and storage-failure dead ends
+
+- **Affected workflow:** first launch, sign-in, and logout in the Expo mobile app.
+- **Evidence/root cause:** `/auth/status` returns `setup: true` before the first administrator password exists, but mobile `AuthContext` only reads `authenticated`; `RootLayoutNav` consequently shows a login form even though `LoginScreen` only calls `/auth/login` and cannot perform first-run setup. The context also does not check `response.ok` before interpreting the status JSON. Its initial `AsyncStorage.getItem` occurs before the status-fetch try/finally, so a storage rejection can leave `loading` true indefinitely. The mobile logout path does not inspect the server response, even though the API returns HTTP 503 when durable session revocation cannot be confirmed.
+- **Status:** found; not changed in this batch.
+- **Safe correction:** expose setup-required and status-error states; provide a clear link/instruction to complete the token-protected first-run flow in the web app and a status retry; guarantee loading cleanup when local storage fails; surface a server logout/revocation failure instead of implying confirmed revocation. Preserve local sign-out behavior but clearly warn when remote revocation was not confirmed.
+- **Remaining risk:** mobile users can be misdirected into an impossible login flow, can be left on an indefinite splash screen by storage failure, and can receive no warning when the server cannot confirm logout.
+
+### P2 — Mobile session bearer cookie is persisted in AsyncStorage
+
+- **Affected workflow:** native mobile authentication persistence.
+- **Evidence/root cause:** `AuthContext` writes the session cookie (a bearer credential) to `@react-native-async-storage/async-storage`; the mobile package does not declare Expo SecureStore. AsyncStorage is app-private storage but is not the OS Keychain/Keystore secret store.
+- **Status:** found; no dependency or storage migration applied.
+- **Safe correction:** add a supported SecureStore dependency with a generated lockfile; migrate the existing cookie once from AsyncStorage to SecureStore and remove the legacy value only after a successful write; do not fall back to plaintext persistence if secure storage fails; keep browser/web cookie handling separate; add migration, read/write failure, and logout tests.
+- **Remaining risk:** native bearer session material remains in ordinary app storage until the migration is implemented and validated.
+
+### November 7 security status reconciliation
+
+- **Remote first-run administrator takeover:** the earlier public-setup finding is no longer open in the current source. `setup-authorization.ts` requires the operator-provisioned `WILLARD_SETUP_TOKEN` for hosted/LAN setup; the loopback exception requires explicit launcher-owned `WILLARD_LOCAL_SETUP=true`, no Replit marker, and `HOST=127.0.0.1`. The first-run token UI, generated API contract, helper tests, route/launcher contracts, and current Fast Validation setup-authorization regression are present. Status: target-tested; a live hosted reverse-proxy integration test and secret-provisioning verification remain outstanding.
+- **Late session-store upsert after logout/device revocation:** the earlier deletion-only finding is fixed in current source. `revoked_sessions` tombstones are written transactionally before session deletion, and the global API middleware checks the tombstone before dispatching protected routes. The real PostgreSQL late-upsert regression passed again in Fast Validation #1403. Status: integration-tested. Tombstones remain retained without automatic cleanup because no safe maximum in-flight request lifetime has been established.
+
+### Branch/PR and validation snapshot
+
+- **Code/test head:** `6296fc29f77cd4d382f323e7b888cb11919f292a`.
+- **Fast Validation:** #1403 passed Linux and Windows jobs on that exact head.
+- **Dependency Review:** #1166 passed on the same exact head; installed dependency-graph audit skipped.
+- **PR #2:** open, draft, unmerged; base `main` at `694a055aeb10a41ee8e98f5b776faef89cbd449d`; 1,477 commits ahead and 1 behind; 200 changed files, 25,430 additions, 3,168 deletions.
+- **Full CI:** not run. The available Fast Validation and Dependency Review workflows are not full CI. The separate installed-product Windows lifecycle workflow remains unresolved; its prior prepared-phase failure is not replaced by the Windows archive/updater smoke.
+- No branch switch, main modification, merge/close, deployment, release publication, credential access/change, or production data mutation occurred.
+
+## November 8 — Saved audit recovery and validation (historical snapshot)
+
+This entry records the earlier recovery checkpoint; its branch and working-tree status are historical and do not describe the current reconciliation.
 
 ### Recovery scope
 
@@ -3955,13 +4274,23 @@ The previously running Windows job has now completed. Both jobs in Fast Validati
 - Recovered safeguards include explicit disposable-database/API requirements, safe ownership checks for temporary test directories, process-tree shutdown and cleanup verification, generated-export parsing that handles overloads and re-exports, current-schema verification at API startup, and integration-test cleanup that preserves unrelated user state.
 - Compressed TAR input is now written beside the extraction tree rather than inside it, so the temporary input cannot be mistaken for an extracted archive member during exact-file-set validation.
 
-### Validation
+### Validation at that checkpoint
 
 - `pnpm run typecheck` passed.
-- API route parity and generated-export tests passed (6/6), and a repeat code-generation run produced identical hashes across the generated client and schema tree. The aggregate `pnpm run check:api-contracts` command reached its final generated-tree `git diff --exit-code` gate and exited nonzero because the intentional OpenAPI and generated summary changes are still unstaged; the route and export contract tests passed, and the generated output is stable.
+- API route parity and generated-export tests passed (6/6), and a repeat code-generation run produced identical hashes across the generated client and schema tree. The aggregate `pnpm run check:api-contracts` command reached its final generated-tree `git diff --exit-code` gate and exited nonzero because the intentional OpenAPI and generated summary changes were still unstaged; the route and export contract tests passed, and the generated output was stable.
 - Release contracts passed (88/88); UI accessibility contracts passed (24/24).
-- The disposable backend audit completed successfully. This included the compressed-TAR cleanup execution checks and dashboard-after-scan checks; the runner stopped its isolated API and PostgreSQL processes and removed its owned temporary directory. The standalone Optimize-cycle (2/2) and dashboard (3/3) workflows also pass through the disposable runner; dashboard media is created under its owned temporary root.
-- Browser diagnostics confirmed the media-list mock returned both fixture files and thumbnail requests succeeded. The cards render as accessible buttons; their thumbnail images intentionally use `alt=""` and `aria-hidden`, so the previous filename-alt locator was invalid. The test now targets the open button and checks that decorative-image contract.
-- The viewer's EventSource mock now returns a valid `text/event-stream` jobs snapshot instead of JSON. Media viewer E2E passed (1/1); the captured run had no failed requests or page errors, with only the intentional missing-logo 404 in the console.
-- The standalone Optimize-cycle (2/2) and dashboard (3/3) workflows both passed through the unchanged disposable-runner setup; dashboard media is created under its owned temporary root.
-- `git diff --check` passed. All recovered changes remain unstaged for review; no commit was created.
+- The disposable backend audit completed successfully, including compressed-TAR cleanup execution and dashboard-after-scan checks. The runner stopped its isolated API and PostgreSQL processes and removed its owned temporary directory. The standalone Optimize-cycle (2/2) and dashboard (3/3) workflows also passed through the disposable runner.
+- Browser diagnostics confirmed the media-list mock returned both fixture files and thumbnail requests succeeded. The cards render as accessible buttons; their thumbnail images intentionally use `alt=""` and `aria-hidden`, so the previous filename-alt locator was invalid. The test targets the open button and checks that decorative-image contract.
+- The viewer's EventSource mock returns a valid `text/event-stream` jobs snapshot instead of JSON. Media viewer E2E passed (1/1); that run had no failed requests or page errors, with only the intentional missing-logo 404 in the console.
+- `git diff --check` passed at that checkpoint; no commit had been created then.
+
+## November 8 — Local audit-branch reconciliation
+
+- **Inputs:** audit branch at `daed2d9b9add385f1e6d035fc7b759bb97c50a06`; fetched `origin/audit/full-repository-review-2026-11` at `bec6103d77a85473c0535cde5e69ef45690f1c72`. The local merge commit uses these as its first and second parents.
+- **History:** all 16 local-only commits and 62 incoming-only commits are preserved as ancestors of the local merge commit. No rebase, reset, cherry-pick, force-push, or main-branch update was performed.
+- **Conflict resolution:** retained the local read-only schema verifier without incoming whitespace-only indentation changes; kept the remote audit findings and validation ledger; preserved the local November 8 recovery and viewer-test record as a historical snapshot. The media-health contract uses the exact `orphanedDerivedData` route boundary.
+- **Validation:** workspace typecheck passed; API route/generated contracts passed; release contracts passed **88/88**; UI accessibility contracts passed **24/24**; disposable backend audit passed **88 test files / 598 tests, 0 failures**; targeted Optimize-cycle passed **2/2**; dashboard-after-scan passed **3/3**; media viewer E2E passed **1/1**.
+- **Isolation:** backend integration checks used the disposable PostgreSQL runner; it stopped its API/PostgreSQL processes and removed its owned temporary directory. No development or production database was used.
+- **Generated files:** API generation produced no generated-tree diff. No generated schema or runtime artifacts changed in this reconciliation.
+- **Historical artifacts:** the `.bak` route copy and four timestamped Optimize-cycle cache snapshots were inspected and preserved. They have no runtime references; the cache snapshots were added by test-related commits and the current test fixture is rooted under `WILLARD_TEST_ROOT`.
+- **Branch protection:** local `main` remained `5ce1269c9576482da7baa3df03f09a2274a8bf23`; `origin/main` remained `117ef63882285c99928d80595064cfca25d54006`. No push occurred.

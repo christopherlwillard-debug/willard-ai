@@ -172,7 +172,7 @@ test("Health Center orphan cleanup uses reversible conditional soft-delete and p
   const route = readFileSync(routePath, "utf8");
   const engine = readFileSync(enginePath, "utf8");
   const start = route.indexOf('if (actions.includes("orphanedRecords"))');
-  const end = route.indexOf('if (actions.includes("orphanedDerivedData")', start);
+  const end = route.indexOf('if (actions.includes("orphanedDerivedData"))', start);
   const cleanup = route.slice(start, end);
 
   assert.ok(start >= 0 && end > start);

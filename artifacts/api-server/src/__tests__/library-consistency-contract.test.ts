@@ -111,7 +111,6 @@ test("all library job-start routes fail HTTP admission when NAS is offline or re
   assert.match(legacyScan, /result\.errorCode === "NAS_READ_ONLY"/);
   assert.match(legacyScan, /result\.errorCode === "CAPACITY_UNSAFE"/);
 });
-
 test("full thumbnail rebuild invalidates cache only after durable job admission and NAS validation", () => {
   const library = source("routes/library.ts");
   const engine = source("lib/library-engine/job-engine.ts");
