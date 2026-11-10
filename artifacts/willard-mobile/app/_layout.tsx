@@ -25,9 +25,18 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
-  const { authenticated, loading } = useAuth();
+  const { authenticated, loading, setupRequired, statusError, refreshStatus, error } = useAuth();
   if (loading) return null;
-  if (!authenticated) return <LoginScreen />;
+  if (!authenticated) {
+    return (
+      <LoginScreen
+        setupRequired={setupRequired}
+        statusError={statusError}
+        notice={error}
+        onRetry={() => void refreshStatus()}
+      />
+    );
+  }
   return (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

@@ -1,10 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setCookieGetter } from "@workspace/api-client-react";
 import { fetch } from "expo/fetch";
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import * as SecureStore from "expo-secure-store";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform } from "react-native";
 
 import { API_BASE_URL } from "@/lib/api";
+import { clearStoredSession, migrateSessionCookie } from "./auth-session-storage";
+import { fetchMobileAuthStatus } from "./auth-status";
 
 const COOKIE_STORAGE_KEY = "willard.sessionCookie";
 
@@ -13,8 +16,11 @@ type AuthContextValue = {
   loading: boolean;
   cookie: string | null;
   error: string | null;
+  setupRequired: boolean;
+  statusError: string | null;
   login: (password: string) => Promise<boolean>;
   logout: () => Promise<void>;
+  refreshStatus: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -31,42 +37,94 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [cookie, setCookie] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  const applyAuthStatus = useCallback((result: Awaited<ReturnType<typeof fetchMobileAuthStatus>>) => {
+    if (!mounted.current) return;
+    setStatusError(result.kind === "error" ? result.message : null);
+    setSetupRequired(result.kind === "setup_required");
+    setAuthenticated(result.kind === "authenticated");
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    setLoading(true);
+    setStatusError(null);
+    try {
+      const result = await fetchMobileAuthStatus(
+        fetch,
+        `${API_BASE_URL}/api/auth/status`,
+        Platform.OS === "web" ? null : sessionCookie,
+      );
+      applyAuthStatus(result);
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [applyAuthStatus]);
 
   useEffect(() => {
+    mounted.current = true;
     setCookieGetter(() => Platform.OS === "web" ? null : sessionCookie);
-    let active = true;
-    (async () => {
-      const stored = await AsyncStorage.getItem(COOKIE_STORAGE_KEY);
-      if (stored) {
-        sessionCookie = stored;
-        if (active) setCookie(stored);
-      }
+    void (async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/auth/status`, {
-          credentials: "include",
-          headers: stored ? { Cookie: stored } : undefined,
-        });
-        const status = await response.json() as { authenticated?: boolean };
-        if (active) setAuthenticated(status.authenticated === true);
+        if (Platform.OS !== "web") {
+          const migration = await migrateSessionCookie(
+            {
+              getItemAsync: SecureStore.getItemAsync,
+              setItemAsync: (key, value) => SecureStore.setItemAsync(key, value, {
+                keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+              }),
+              deleteItemAsync: SecureStore.deleteItemAsync,
+            },
+            AsyncStorage,
+            COOKIE_STORAGE_KEY,
+          );
+          sessionCookie = migration.cookie;
+          setCookie(migration.cookie);
+          if (!migration.legacyRemoved) {
+            setError("Your session was secured, but an older stored copy could not be removed. Sign out and try again.");
+          }
+        }
       } catch {
-        if (active) setAuthenticated(false);
-      } finally {
-        if (active) setLoading(false);
+        sessionCookie = null;
+        setCookie(null);
+        setError("Saved session storage could not be read securely. Sign in again; Willard will not use the older stored copy.");
       }
-    })();
+
+      try {
+        const result = await fetchMobileAuthStatus(
+          fetch,
+          `${API_BASE_URL}/api/auth/status`,
+          Platform.OS === "web" ? null : sessionCookie,
+        );
+        applyAuthStatus(result);
+      } finally {
+        if (mounted.current) setLoading(false);
+      }
+    })().catch(() => {
+      applyAuthStatus({ kind: "error", message: "Willard could not verify your session. Check the connection and retry." });
+      if (mounted.current) setLoading(false);
+    });
+
     return () => {
-      active = false;
+      mounted.current = false;
       setCookieGetter(null);
     };
-  }, []);
+  }, [applyAuthStatus]);
 
   const value = useMemo<AuthContextValue>(() => ({
     authenticated,
     loading,
     cookie,
     error,
+    setupRequired,
+    statusError,
+    refreshStatus,
     login: async (password) => {
       setError(null);
+      if (setupRequired || statusError) return false;
+      let sessionSavedSecurely = false;
       try {
         const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
           method: "POST",
@@ -80,33 +138,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
         const nextCookie = cookieFromResponse(response);
-        if (nextCookie) {
+        if (Platform.OS !== "web") {
+          if (!nextCookie) {
+            setError("Willard did not issue a mobile session cookie. Sign-in was not saved.");
+            return false;
+          }
+          await SecureStore.setItemAsync(COOKIE_STORAGE_KEY, nextCookie, {
+            keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+          });
+          const verifiedCookie = await SecureStore.getItemAsync(COOKIE_STORAGE_KEY);
+          if (verifiedCookie !== nextCookie) {
+            throw new Error("Secure session storage did not retain the new session.");
+          }
+          sessionSavedSecurely = true;
           sessionCookie = nextCookie;
           setCookie(nextCookie);
-          await AsyncStorage.setItem(COOKIE_STORAGE_KEY, nextCookie);
+          try {
+            await AsyncStorage.removeItem(COOKIE_STORAGE_KEY);
+          } catch {
+            setError("Sign-in succeeded, but an older insecure session copy could not be removed. Sign out and retry.");
+          }
         }
         setAuthenticated(true);
         return true;
-      } catch {
-        setError("Unable to reach Willard AI. Check the server connection.");
+      } catch (loginError) {
+        setError(sessionSavedSecurely
+          ? "Sign-in succeeded, but Willard could not finish securing this device's saved session. Sign out and retry."
+          : "Unable to reach Willard AI or save the session securely. Check the connection and device security settings.");
         return false;
       }
     },
     logout: async () => {
+      let logoutError: string | null = null;
       try {
-        await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
           method: "POST",
           credentials: "include",
-          headers: sessionCookie ? { Cookie: sessionCookie } : undefined,
+          headers: Platform.OS !== "web" && sessionCookie ? { Cookie: sessionCookie } : undefined,
         });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({})) as { error?: string };
+          logoutError = typeof body.error === "string"
+            ? body.error
+            : "The server did not confirm sign-out. The local session will still be cleared.";
+        }
+      } catch {
+        logoutError = "The server could not confirm sign-out. The local session will still be cleared.";
       } finally {
         sessionCookie = null;
         setCookie(null);
         setAuthenticated(false);
-        await AsyncStorage.removeItem(COOKIE_STORAGE_KEY);
+        setSetupRequired(false);
+        try {
+          if (Platform.OS !== "web") {
+            await clearStoredSession(
+              {
+                getItemAsync: SecureStore.getItemAsync,
+                setItemAsync: (key, value) => SecureStore.setItemAsync(key, value),
+                deleteItemAsync: SecureStore.deleteItemAsync,
+              },
+              AsyncStorage,
+              COOKIE_STORAGE_KEY,
+            );
+          }
+        } catch {
+          logoutError = [logoutError, "The saved session could not be fully removed from this device."]
+            .filter(Boolean)
+            .join(" ");
+        }
+        setError(logoutError);
       }
     },
-  }), [authenticated, loading, cookie, error]);
+  }), [authenticated, loading, cookie, error, setupRequired, statusError, refreshStatus]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -5,7 +5,14 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 
-export function LoginScreen() {
+type LoginScreenProps = {
+  setupRequired?: boolean;
+  statusError?: string | null;
+  notice?: string | null;
+  onRetry?: () => void;
+};
+
+export function LoginScreen({ setupRequired = false, statusError = null, notice = null, onRetry }: LoginScreenProps) {
   const colors = useColors();
   const { login, error } = useAuth();
   const [password, setPassword] = useState("");
@@ -26,30 +33,50 @@ export function LoginScreen() {
         </View>
         <Text style={[styles.title, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>Willard AI</Text>
         <Text style={[styles.subtitle, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-          Sign in to access your library
+          {setupRequired ? "Complete first-time setup before signing in" : "Sign in to access your library"}
         </Text>
-        <TextInput
-          style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background, fontFamily: "Inter_400Regular" }]}
-          value={password}
-          onChangeText={setPassword}
-          placeholder="Password"
-          placeholderTextColor={colors.mutedForeground}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          onSubmitEditing={() => void submit()}
-          returnKeyType="go"
-          testID="mobile-login-password"
-        />
-        {error && <Text style={[styles.error, { color: colors.destructive }]}>{error}</Text>}
-        <Pressable
-          onPress={() => void submit()}
-          disabled={submitting || !password}
-          style={({ pressed }) => [styles.button, { backgroundColor: colors.primary, opacity: pressed || !password ? 0.65 : 1 }]}
-          testID="mobile-login-button"
-        >
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={[styles.buttonText, { fontFamily: "Inter_600SemiBold" }]}>Sign in</Text>}
-        </Pressable>
+        {setupRequired ? (
+          <>
+            <Text style={[styles.message, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+              Open Willard AI in its web app and finish the protected administrator setup. Then return here and check again.
+            </Text>
+            <Pressable onPress={onRetry} style={({ pressed }) => [styles.button, { backgroundColor: colors.primary, opacity: pressed ? 0.65 : 1 }]} testID="mobile-auth-status-retry">
+              <Text style={[styles.buttonText, { fontFamily: "Inter_600SemiBold" }]}>Check setup status</Text>
+            </Pressable>
+          </>
+        ) : statusError ? (
+          <>
+            <Text style={[styles.error, { color: colors.destructive }]}>{statusError}</Text>
+            <Pressable onPress={onRetry} style={({ pressed }) => [styles.button, { backgroundColor: colors.primary, opacity: pressed ? 0.65 : 1 }]} testID="mobile-auth-status-retry">
+              <Text style={[styles.buttonText, { fontFamily: "Inter_600SemiBold" }]}>Retry connection</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <TextInput
+              style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background, fontFamily: "Inter_400Regular" }]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Password"
+              placeholderTextColor={colors.mutedForeground}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              onSubmitEditing={() => void submit()}
+              returnKeyType="go"
+              testID="mobile-login-password"
+            />
+            {(notice || error) && <Text style={[styles.error, { color: colors.destructive }]}>{notice || error}</Text>}
+            <Pressable
+              onPress={() => void submit()}
+              disabled={submitting || !password}
+              style={({ pressed }) => [styles.button, { backgroundColor: colors.primary, opacity: pressed || !password ? 0.65 : 1 }]}
+              testID="mobile-login-button"
+            >
+              {submitting ? <ActivityIndicator color="#fff" /> : <Text style={[styles.buttonText, { fontFamily: "Inter_600SemiBold" }]}>Sign in</Text>}
+            </Pressable>
+          </>
+        )}
       </View>
     </View>
   );
@@ -61,6 +88,7 @@ const styles = StyleSheet.create({
   icon: { width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 18 },
   title: { fontSize: 28, letterSpacing: -0.5 },
   subtitle: { fontSize: 15, marginTop: 6, marginBottom: 24 },
+  message: { fontSize: 14, lineHeight: 21 },
   input: { height: 50, borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, fontSize: 16 },
   error: { fontSize: 13, marginTop: 10 },
   button: { height: 50, borderRadius: 10, alignItems: "center", justifyContent: "center", marginTop: 18 },

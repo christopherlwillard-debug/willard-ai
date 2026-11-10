@@ -43,13 +43,93 @@ function isPathWithinRoot(root, target) {
       !path.isAbsolute(relativePath));
 }
 
+function normalizeStaticRelativePath(input) {
+  if (typeof input !== "string" || input.includes("\0") || input.startsWith("\\\\") || input.startsWith("//")) {
+    return null;
+  }
+  const portable = input.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (/^[A-Za-z]:/.test(portable)) return null;
+  const normalized = path.posix.normalize(portable);
+  if (normalized === ".." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) return null;
+  return normalized === "." ? "" : normalized;
+}
+
+function descriptorPath(fd) {
+  return path.join("/proc/self/fd", String(fd));
+}
+
+function directoryOpenFlags() {
+  return fs.constants.O_RDONLY |
+    (fs.constants.O_DIRECTORY || 0) |
+    (fs.constants.O_NOFOLLOW || 0);
+}
+
+function openAbsoluteDirectoryWithoutLinks(absolutePath) {
+  const parsed = path.parse(absolutePath);
+  let currentFd = fs.openSync(parsed.root, directoryOpenFlags());
+  try {
+    const components = absolutePath.slice(parsed.root.length).split(path.sep).filter(Boolean);
+    for (const component of components) {
+      if (component === "." || component === ".." || component.includes(path.sep)) {
+        throw new Error("Unsafe static directory component.");
+      }
+      const nextFd = fs.openSync(path.join(descriptorPath(currentFd), component), directoryOpenFlags());
+      fs.closeSync(currentFd);
+      currentFd = nextFd;
+    }
+    return currentFd;
+  } catch (error) {
+    fs.closeSync(currentFd);
+    throw error;
+  }
+}
+
+function readStaticFileByHandle(root, relativePath, hooks = {}) {
+  const components = relativePath.split("/").filter(Boolean);
+  if (components.length === 0) return { status: "missing" };
+  let rootFd;
+  let parentFd;
+  let fileFd;
+  try {
+    rootFd = openAbsoluteDirectoryWithoutLinks(root);
+    hooks.afterRootOpened?.();
+    // Follow the trusted procfs descriptor link itself; O_NOFOLLOW is applied
+    // to each user-controlled child component opened beneath it.
+    parentFd = fs.openSync(
+      descriptorPath(rootFd),
+      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0),
+    );
+    for (const component of components.slice(0, -1)) {
+      const nextFd = fs.openSync(path.join(descriptorPath(parentFd), component), directoryOpenFlags());
+      fs.closeSync(parentFd);
+      parentFd = nextFd;
+    }
+    hooks.afterParentOpened?.();
+    fileFd = fs.openSync(
+      path.join(descriptorPath(parentFd), components[components.length - 1]),
+      fs.constants.O_RDONLY |
+        (fs.constants.O_NOFOLLOW || 0) |
+        (fs.constants.O_NONBLOCK || 0),
+    );
+    if (!fs.fstatSync(fileFd).isFile()) return { status: "missing" };
+    return { status: "ok", content: fs.readFileSync(fileFd) };
+  } catch (error) {
+    if (error && ["ELOOP", "ENOTDIR", "EXDEV"].includes(error.code)) return { status: "forbidden" };
+    return { status: "missing" };
+  } finally {
+    if (fileFd !== undefined) fs.closeSync(fileFd);
+    if (parentFd !== undefined) fs.closeSync(parentFd);
+    if (rootFd !== undefined) fs.closeSync(rootFd);
+  }
+}
+
 /**
  * Read only regular files whose canonical target remains under the static
  * build root. Open the canonical path with O_NOFOLLOW where the platform
  * supports it, then read through the descriptor so the final path component
  * cannot be swapped to a symlink after validation.
  */
-function readStaticFileWithinRoot(rootPath, relativePath) {
+function readStaticFileWithinRoot(rootPath, relativePath, hooks = {}) {
   let canonicalRoot;
   try {
     canonicalRoot = fs.realpathSync(rootPath);
@@ -57,9 +137,15 @@ function readStaticFileWithinRoot(rootPath, relativePath) {
     return { status: "missing" };
   }
 
-  const candidatePath = path.resolve(canonicalRoot, relativePath);
+  const normalizedRelative = normalizeStaticRelativePath(relativePath);
+  if (normalizedRelative === null) return { status: "forbidden" };
+  const candidatePath = path.resolve(canonicalRoot, normalizedRelative);
   if (!isPathWithinRoot(canonicalRoot, candidatePath)) {
     return { status: "forbidden" };
+  }
+
+  if (process.platform === "linux" && fs.existsSync("/proc/self/fd")) {
+    return readStaticFileByHandle(canonicalRoot, normalizedRelative, hooks);
   }
 
   let canonicalTarget;
@@ -140,7 +226,12 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 }
 
 function serveStaticFile(urlPath, res) {
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
+  const safePath = normalizeStaticRelativePath(urlPath);
+  if (safePath === null) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
   const file = readStaticFileWithinRoot(STATIC_ROOT, safePath);
   if (file.status === "forbidden") {
     res.writeHead(403);

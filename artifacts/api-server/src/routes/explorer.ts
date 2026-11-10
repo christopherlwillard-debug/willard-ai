@@ -8,6 +8,7 @@ import { getActiveNasPath } from "../lib/active-library.ts";
 import { and, eq, sql } from "drizzle-orm";
 import { resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { aggregateFolderSizes } from "../lib/explorer-folder-sizes";
+import { readDirectoryWithoutSymlinkTraversal } from "../lib/safe-directory-read.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { parseOptionalQueryString, RequestValidationError } from "../lib/request-validation.ts";
 
@@ -78,11 +79,18 @@ router.get("/explorer", async (req, res) => {
       return;
     }
 
-    let entries: fs.Dirent[];
+    let safeEntries: Awaited<ReturnType<typeof readDirectoryWithoutSymlinkTraversal>> = null;
+    let entries: fs.Dirent[] = [];
     try {
-      entries = fs.readdirSync(targetPath, { withFileTypes: true });
+      safeEntries = readDirectoryWithoutSymlinkTraversal(nasPath, targetPath);
+      if (safeEntries === null) {
+        // Windows does not expose handle-relative directory enumeration in
+        // Node's fs API. Keep the existing canonical checks for that runtime;
+        // Linux, including the hosted API, uses descriptor-relative reads.
+        entries = fs.readdirSync(targetPath, { withFileTypes: true });
+      }
     } catch {
-      res.status(404).json({ error: "Cannot read folder" });
+      res.status(403).json({ error: "Folder changed or could not be safely verified" });
       return;
     }
 
@@ -109,7 +117,33 @@ router.get("/explorer", async (req, res) => {
     });
     const folderSizes = aggregateFolderSizes(targetPath, validatedFolderSizes);
 
-    const result = await Promise.all(entries.map(async (entry) => {
+    const result = safeEntries
+      ? await Promise.all(safeEntries.entries.map(async (entry) => {
+        const fullPath = path.resolve(nasPath, relativePath, entry.name);
+        const archive = isArchive(entry.name);
+        let archiveFileCount: number | null = null;
+        if (archive && !entry.isDirectory) {
+          const activeNasPath = await getActiveNasPath();
+          const archiveRow = activeNasPath
+            ? await db.select({ containedFileCount: archivesTable.containedFileCount })
+              .from(archivesTable)
+              .where(and(archiveScope(activeNasPath), eq(archivesTable.path, fullPath)))
+              .limit(1)
+            : [];
+          archiveFileCount = archiveRow[0]?.containedFileCount ?? null;
+        }
+        return {
+          name: entry.name,
+          path: path.relative(nasPath, fullPath),
+          isDirectory: entry.isDirectory,
+          sizeBytes: entry.isDirectory ? folderSizes.get(entry.name) ?? 0 : entry.sizeBytes,
+          modifiedAt: entry.modifiedAt,
+          fileCount: entry.fileCount,
+          isArchive: archive,
+          archiveFileCount,
+        };
+      }))
+      : await Promise.all(entries.map(async (entry) => {
       let fullPath: string;
       try {
         fullPath = resolveWithinRoot(path.join(targetPath, entry.name), nasPath);
