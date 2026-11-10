@@ -35,6 +35,59 @@ const MIME_TYPES = {
   ".map": "application/json",
 };
 
+function isPathWithinRoot(root, target) {
+  const relativePath = path.relative(root, target);
+  return relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath));
+}
+
+/**
+ * Read only regular files whose canonical target remains under the static
+ * build root. Open the canonical path with O_NOFOLLOW where the platform
+ * supports it, then read through the descriptor so the final path component
+ * cannot be swapped to a symlink after validation.
+ */
+function readStaticFileWithinRoot(rootPath, relativePath) {
+  let canonicalRoot;
+  try {
+    canonicalRoot = fs.realpathSync(rootPath);
+  } catch {
+    return { status: "missing" };
+  }
+
+  const candidatePath = path.resolve(canonicalRoot, relativePath);
+  if (!isPathWithinRoot(canonicalRoot, candidatePath)) {
+    return { status: "forbidden" };
+  }
+
+  let canonicalTarget;
+  try {
+    canonicalTarget = fs.realpathSync(candidatePath);
+  } catch {
+    return { status: "missing" };
+  }
+  if (!isPathWithinRoot(canonicalRoot, canonicalTarget)) {
+    return { status: "forbidden" };
+  }
+
+  let fileDescriptor;
+  try {
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    fileDescriptor = fs.openSync(canonicalTarget, flags);
+    if (!fs.fstatSync(fileDescriptor).isFile()) {
+      return { status: "missing" };
+    }
+    return { status: "ok", content: fs.readFileSync(fileDescriptor) };
+  } catch (error) {
+    if (error && error.code === "ELOOP") return { status: "forbidden" };
+    return { status: "missing" };
+  } finally {
+    if (fileDescriptor !== undefined) fs.closeSync(fileDescriptor);
+  }
+}
+
 function getAppName() {
   try {
     const appJsonPath = path.resolve(__dirname, "..", "app.json");
@@ -46,14 +99,13 @@ function getAppName() {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = path.resolve(STATIC_ROOT, platform, "manifest.json");
-  if (path.relative(STATIC_ROOT, manifestPath).startsWith(`..${path.sep}`)) {
+  const manifest = readStaticFileWithinRoot(STATIC_ROOT, path.join(platform, "manifest.json"));
+  if (manifest.status === "forbidden") {
     res.writeHead(403, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "Forbidden" }));
     return;
   }
-
-  if (!fs.existsSync(manifestPath)) {
+  if (manifest.status !== "ok") {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(
       JSON.stringify({ error: `Manifest not found for platform: ${platform}` }),
@@ -61,13 +113,12 @@ function serveManifest(platform, res) {
     return;
   }
 
-  const manifest = fs.readFileSync(manifestPath, "utf-8");
   res.writeHead(200, {
     "content-type": "application/json",
     "expo-protocol-version": "1",
     "expo-sfv-version": "0",
   });
-  res.end(manifest);
+  res.end(manifest.content);
 }
 
 function serveLandingPage(req, res, landingPageTemplate, appName) {
@@ -90,26 +141,22 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 
 function serveStaticFile(urlPath, res) {
   const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
-  const filePath = path.resolve(STATIC_ROOT, safePath);
-
-  const relativePath = path.relative(STATIC_ROOT, filePath);
-  if (relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+  const file = readStaticFileWithinRoot(STATIC_ROOT, safePath);
+  if (file.status === "forbidden") {
     res.writeHead(403);
     res.end("Forbidden");
     return;
   }
-
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  if (file.status !== "ok") {
     res.writeHead(404);
     res.end("Not Found");
     return;
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = path.extname(safePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
-  const content = fs.readFileSync(filePath);
   res.writeHead(200, { "content-type": contentType });
-  res.end(content);
+  res.end(file.content);
 }
 
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, "utf-8");
@@ -144,6 +191,10 @@ const server = http.createServer((req, res) => {
 });
 
 const port = parseInt(process.env.PORT || "3000", 10);
-server.listen(port, "0.0.0.0", () => {
-  console.log(`Serving static Expo build on port ${port}`);
-});
+if (require.main === module) {
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Serving static Expo build on port ${port}`);
+  });
+}
+
+module.exports = { readStaticFileWithinRoot };

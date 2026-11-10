@@ -317,6 +317,7 @@ export async function finalizeConversionFiles(
 export async function recoverConversionFinalizationMoves(
   moves: FileMoveRecord[],
   nasPath: string,
+  assertOwnership?: () => void,
 ): Promise<{ complete: boolean; rollbackCount: number; unresolvedMoves: FileMoveRecord[] }> {
   const safeMoves: FileMoveRecord[] = [];
   const unresolvedMoves: FileMoveRecord[] = [];
@@ -341,12 +342,16 @@ export async function recoverConversionFinalizationMoves(
 
   let rollbackCount = 0;
   try {
-    rollbackCount = await rollbackMoves(safeMoves);
+    for (const move of [...safeMoves].reverse()) {
+      assertOwnership?.();
+      rollbackCount += await rollbackMoves([move]);
+    }
   } catch {
     // The verification pass below decides whether any source remains missing
     // or changed. Do not discard an entry merely because one rollback threw.
   }
 
+  assertOwnership?.();
   const unresolvedSafeMoves = await findUnrestoredMoves(safeMoves);
   unresolvedMoves.push(...unresolvedSafeMoves);
   if (rollbackCount !== safeMoves.length && unresolvedSafeMoves.length === 0) {

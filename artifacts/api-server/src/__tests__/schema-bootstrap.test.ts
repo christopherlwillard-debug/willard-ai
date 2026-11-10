@@ -68,6 +68,10 @@ test("required schema bootstrap is versioned and runs atomically", async () => {
     "existing installs must receive the organization worker fencing token",
   );
   assert.ok(
+    statements.some((sql) => /ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS active_attempt_id text/.test(sql)),
+    "existing installs must receive the conversion attempt fencing token",
+  );
+  assert.ok(
     statements.some((sql) => /archives_nas_size_idx/.test(sql)) &&
       statements.some((sql) => /archives_nas_modified_idx/.test(sql)) &&
       statements.some((sql) => /archives_nas_status_idx/.test(sql)),

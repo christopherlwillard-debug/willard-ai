@@ -31,8 +31,30 @@ async function mockShell(page: Page): Promise<void> {
   await page.route("**/api/settings", (route) =>
     route.fulfill({ json: { nasPath: "/test-media" } }),
   );
+  await page.route("**/api/settings/logo*", (route) =>
+    route.fulfill({ status: 404, body: "" }),
+  );
   await page.route("**/api/system/environment", (route) =>
     route.fulfill({ json: { isLocal: false } }),
+  );
+  await page.route("**/api/library/jobs/active", (route) =>
+    route.fulfill({ json: null }),
+  );
+  await page.route("**/api/library/jobs/history", (route) =>
+    route.fulfill({ json: { jobs: [] } }),
+  );
+  await page.route("**/api/library/jobs/events", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: `retry: 30000\nevent: jobs\ndata: ${JSON.stringify({
+        streamId: "routed-workflows-test",
+        sequence: 1,
+        jobs: [],
+        lastCompleted: null,
+      })}\n\n`,
+    }),
   );
 }
 
@@ -75,7 +97,7 @@ test.describe("routed workflow recovery", () => {
         },
       }),
     );
-    await page.route("**/api/organize/jobs?*", (route) =>
+    await page.route("**/api/organize/jobs*", (route) =>
       route.fulfill({ json: { jobs: [] } }),
     );
     await page.route("**/api/organize/recovery", (route) =>
@@ -92,6 +114,12 @@ test.describe("routed workflow recovery", () => {
     await mockAuth(page);
     await mockShell(page);
     let statusPolls = 0;
+    await page.route("**/api/optimize/scan*", (route) =>
+      route.fulfill({
+        status: 400,
+        json: { error: "NAS path is not configured or not accessible" },
+      }),
+    );
     await page.route("**/api/optimize/jobs", (route) => route.fulfill({
       json: [{
         id: 77, status: "failed", approvedExts: ["jpg"], backupDir: null,
@@ -178,7 +206,7 @@ test.describe("routed workflow recovery", () => {
     await page.route("**/api/media/file/*/stream*", (route) => route.fulfill({ status: 404 }));
 
     await page.goto(routePath("/media"));
-    await page.locator("img[alt='missing.jpg']").click();
+    await page.getByRole("button", { name: "Open missing.jpg" }).click();
     await expect(page.getByRole("dialog")).toHaveAttribute("aria-label", "Viewing missing.jpg");
     await expect(page.getByText("Could not load image")).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry loading" })).toBeVisible();

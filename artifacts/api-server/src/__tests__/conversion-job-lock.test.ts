@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -8,6 +9,8 @@ import {
   acquireConversionJobLock,
   acquireConversionFilesystemJobLock,
   CONVERSION_JOB_LOCK_NAMESPACE,
+  assertConversionJobLockOwned,
+  getConversionJobLockSignal,
   releaseConversionJobLock,
   type ConversionJobLockClient,
 } from "../lib/conversion-job-lock.ts";
@@ -19,20 +22,21 @@ function makeClient(
   const calls: Array<{ text: string; values?: any[] }> = [];
   let releaseCalls = 0;
   let releaseError: Error | boolean | undefined;
-  const client: ConversionJobLockClient = {
-    async query(text, values) {
-      calls.push({ text, values });
-      if (queryError) throw queryError;
-      const row = responses.shift();
-      return { rows: row ? [row] : [] };
-    },
-    release(error) {
-      releaseCalls++;
-      releaseError = error;
-    },
+  const emitter = new EventEmitter();
+  const client = emitter as unknown as ConversionJobLockClient;
+  client.query = async (text, values) => {
+    calls.push({ text, values });
+    if (queryError) throw queryError;
+    const row = responses.shift();
+    return { rows: row ? [row] : [] };
+  };
+  client.release = (error) => {
+    releaseCalls++;
+    releaseError = error;
   };
   return {
     client,
+    emit: emitter.emit.bind(emitter),
     calls,
     get releaseCalls() { return releaseCalls; },
     get releaseError() { return releaseError; },
@@ -70,6 +74,20 @@ test("a failed lock query discards the connection", async () => {
   assert.equal(fake.releaseError, failure);
 });
 
+test("a PostgreSQL lock connection error aborts and fences the worker", async () => {
+  const fake = makeClient([{ locked: true }]);
+  const lock = await acquireConversionJobLock(8, async () => fake.client);
+  assert.ok(lock);
+  const signal = getConversionJobLockSignal(lock);
+  assert.equal(signal.aborted, false);
+
+  fake.emit("error", new Error("socket lost"));
+  assert.equal(signal.aborted, true);
+  assert.throws(() => assertConversionJobLockOwned(lock), /connection failed: socket lost/);
+  await assert.rejects(releaseConversionJobLock(lock, 8), /connection failed: socket lost/);
+  assert.ok(fake.releaseError instanceof Error);
+});
+
 test("an unverified unlock discards the connection instead of pooling a held lock", async () => {
   const fake = makeClient([{ locked: true }, { unlocked: false }]);
   const lock = await acquireConversionJobLock(7, async () => fake.client);
@@ -100,7 +118,8 @@ test("a database lock takeover cannot claim NAS mutations while the former proce
     assert.ok(firstFilesystemLock);
 
     // Simulate PostgreSQL dropping the old session during a network partition.
-    firstDatabaseLock.release(true);
+    formerDatabaseOwner.emit("error", new Error("network partition"));
+    assert.throws(() => assertConversionJobLockOwned(firstDatabaseLock), /connection failed/);
     const replacementDatabaseOwner = makeClient([{ locked: true }, { unlocked: true }]);
     const secondDatabaseLock = await acquireConversionJobLock(83, async () => replacementDatabaseOwner.client);
     assert.ok(secondDatabaseLock, "the replacement process may own the PostgreSQL lock");
@@ -111,6 +130,7 @@ test("a database lock takeover cannot claim NAS mutations while the former proce
     );
 
     firstFilesystemLock.release();
+    await assert.rejects(releaseConversionJobLock(firstDatabaseLock!, 83), /connection failed/);
     const secondFilesystemLock = acquireConversionFilesystemJobLock(nasPath, 83);
     assert.ok(secondFilesystemLock, "the replacement may proceed after the old process releases NAS ownership");
     secondFilesystemLock.release();

@@ -89,10 +89,27 @@ test("media tool timeout is enforced and missing binaries stay actionable", asyn
   assert.match(missing, /Install FFmpeg/);
 });
 
+test("aborting a conversion media tool stops its child process", async () => {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const pending = runMediaToolAsync(
+    process.execPath,
+    ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000)"],
+    { timeoutMs: 10_000, signal: controller.signal },
+  );
+  const abortTimer = setTimeout(() => controller.abort(new Error("conversion lock lost")), 150);
+  try {
+    await assert.rejects(pending, /conversion lock lost|aborted/i);
+  } finally {
+    clearTimeout(abortTimer);
+  }
+  assert.ok(Date.now() - startedAt < 4_000, "lock loss must terminate a media tool promptly");
+});
+
 test("conversion and thumbnail routes await FFmpeg instead of running it synchronously", () => {
   assert.doesNotMatch(optimizeSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(optimizeSource, /runMediaToolAsync\(\s*"ffmpeg"/);
-  assert.match(optimizeSource, /convertError = await convertVideo\(fullPath, stagedPath\)/);
+  assert.match(optimizeSource, /convertError = await convertVideo\(fullPath, stagedPath, lockSignal\)/);
   assert.doesNotMatch(thumbnailSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(thumbnailSource, /await runMediaToolAsync\("ffmpeg"/);
   assert.match(thumbnailSource, /error = await generateVideoThumbnail/);

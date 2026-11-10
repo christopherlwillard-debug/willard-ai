@@ -32,8 +32,10 @@ import {
 import { rollbackMoves, type FileMoveRecord } from "../lib/organize-helpers.ts";
 import { getActiveAppSettings, getActiveLibraryContext } from "../lib/active-library.ts";
 import {
+  assertConversionJobLockOwned,
   acquireConversionJobLock,
   acquireConversionFilesystemJobLock,
+  getConversionJobLockSignal,
   releaseConversionJobLock,
   type ConversionFilesystemJobLock,
   type ConversionJobLockClient,
@@ -500,12 +502,12 @@ function buildExplainerText(ext: string, rule: FormatRule, profile: OptimizeProf
 
 // ── Image conversion via sharp ─────────────────────────────────────────────────
 
-async function runFfmpeg(args: string[], timeoutMs: number): Promise<string | null> {
+async function runFfmpeg(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
   try {
     await runMediaToolAsync(
       "ffmpeg",
       ["-nostdin", "-v", "error", ...args],
-      { timeoutMs, maxBufferBytes: 1024 * 1024 },
+      { timeoutMs, maxBufferBytes: 1024 * 1024, signal },
     );
     return null;
   } catch (error) {
@@ -520,6 +522,7 @@ async function convertImageAsync(
   destPath: string,
   targetExt: string,
   profile: OptimizeProfile,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const srcExt = path.extname(srcPath).toLowerCase().slice(1);
@@ -540,7 +543,7 @@ async function convertImageAsync(
           "-huffman", "optimal",    // Huffman optimization passes
           "-map_metadata", "0",     // preserve EXIF, ICC color profile, GPS, timestamps
           ffmpegTmp,
-        ], 300_000);
+        ], 300_000, signal);
         if (ffmpegError) return ffmpegError;
 
         // Step 2: post-process with sharp for progressive encoding and visual auto-rotation.
@@ -580,7 +583,7 @@ async function convertImageAsync(
         .toFile(destPath);
     } else {
       // Generic ffmpeg fallback for other image formats
-      const ffmpegError = await runFfmpeg(["-y", "-i", srcPath, destPath], 300_000);
+      const ffmpegError = await runFfmpeg(["-y", "-i", srcPath, destPath], 300_000, signal);
       if (ffmpegError) return ffmpegError;
     }
     return null;
@@ -590,13 +593,13 @@ async function convertImageAsync(
 }
 
 /** Convert a video to H.265 MP4 using ffmpeg. Returns null on success, error string on failure. */
-async function convertVideo(srcPath: string, destPath: string): Promise<string | null> {
+async function convertVideo(srcPath: string, destPath: string, signal?: AbortSignal): Promise<string | null> {
   return runFfmpeg([
     "-y", "-i", srcPath,
     "-c:v", "libx265", "-crf", "28", "-preset", "medium",
     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
     destPath,
-  ], 3_600_000);
+  ], 3_600_000, signal);
 }
 
 // ── Post-conversion verification ───────────────────────────────────────────────
@@ -620,7 +623,11 @@ async function verifyConvertedFile(
   isSameExt = true,
   originalBytes = 0,
   isRawSource = false,
+  signal?: AbortSignal,
 ): Promise<VerificationResult> {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Conversion attempt was aborted");
+  }
   const checks: VerificationCheck[] = [];
   const pass = (name: string, details: string) => checks.push({ name, passed: true, details });
   const fail = (name: string, details: string): VerificationResult => {
@@ -1280,9 +1287,29 @@ router.post("/optimize/jobs/:id/retry", async (req, res) => {
       });
       return;
     }
+    const oldResult = job.resultJson as { previousAttempts?: unknown[]; [key: string]: unknown } | null;
+    const previousAttempts = Array.isArray(oldResult?.previousAttempts)
+      ? [...oldResult.previousAttempts]
+      : [];
+    if (oldResult && (typeof oldResult.attemptId === "string" || typeof oldResult.stagingDir === "string")) {
+      const { previousAttempts: _previousAttempts, ...priorAttempt } = oldResult;
+      previousAttempts.push(priorAttempt);
+    }
     const [updated] = await db
       .update(conversionJobsTable)
-      .set({ status: "pending", error: null, cancelledAt: null, totalFiles: 0, processedFiles: 0, succeededFiles: 0, failedFiles: 0, skippedFiles: 0, resultJson: null, completedAt: null })
+      .set({
+        status: "pending",
+        activeAttemptId: null,
+        error: null,
+        cancelledAt: null,
+        totalFiles: 0,
+        processedFiles: 0,
+        succeededFiles: 0,
+        failedFiles: 0,
+        skippedFiles: 0,
+        resultJson: previousAttempts.length > 0 ? { previousAttempts } : null,
+        completedAt: null,
+      })
       .where(and(
         eq(conversionJobsTable.id, id),
         eq(conversionJobsTable.nasPath, job.nasPath),
@@ -1376,10 +1403,19 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
       res.status(409).json({ error: "Another conversion worker still owns the NAS files for this job." });
       return;
     }
+    const assertFinalizationOwnership = () => {
+      assertConversionJobLockOwned(jobLockClient!);
+      filesystemJobLock!.assertOwned();
+    };
     if (job.status !== "awaiting_action") {
       res.status(409).json({ error: `Job is not awaiting action (current status: ${job.status})` });
       return;
     }
+    if (!job.activeAttemptId) {
+      res.status(409).json({ error: "This conversion has no active attempt record and cannot be finalized safely." });
+      return;
+    }
+    const attemptId = job.activeAttemptId;
 
     let resultData = job.resultJson as {
       files: Array<{
@@ -1402,8 +1438,12 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     // A previous process may have stopped after persisting a move intent. Reconcile
     // that journal under the job lock before allowing another finalization attempt.
     if (Array.isArray(resultData.finalizationJournal) && resultData.finalizationJournal.length > 0) {
-      filesystemJobLock.assertOwned();
-      const recovery = await recoverConversionFinalizationMoves(resultData.finalizationJournal, nasPath);
+      assertFinalizationOwnership();
+      const recovery = await recoverConversionFinalizationMoves(
+        resultData.finalizationJournal,
+        nasPath,
+        assertFinalizationOwnership,
+      );
       const recoveryMessage = recovery.complete
         ? "An interrupted finalization was rolled back safely; you may retry."
         : "Interrupted finalization could not be fully rolled back. Remaining files are preserved for manual recovery.";
@@ -1418,6 +1458,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         .where(and(
           eq(conversionJobsTable.id, id),
           eq(conversionJobsTable.status, "awaiting_action"),
+          eq(conversionJobsTable.activeAttemptId, attemptId),
         ))
         .returning({ id: conversionJobsTable.id });
       if (!recoveryCheckpoint) {
@@ -1463,7 +1504,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
 
     const finalizationJournal: FileMoveRecord[] = [];
     const checkpointFinalizationMove = async (move: FileMoveRecord, completed: boolean): Promise<void> => {
-      filesystemJobLock!.assertOwned();
+      assertFinalizationOwnership();
       if (completed) {
         const index = finalizationJournal.findIndex((entry) => entry.from === move.from && entry.to === move.to);
         if (index < 0) throw new Error("Finalization completion has no persisted move intent");
@@ -1483,6 +1524,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         .where(and(
           eq(conversionJobsTable.id, id),
           eq(conversionJobsTable.status, "awaiting_action"),
+          eq(conversionJobsTable.activeAttemptId, attemptId),
         ))
         .returning({ id: conversionJobsTable.id });
       if (!checkpoint) {
@@ -1499,12 +1541,13 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
         trashBase,
         archiveBase,
         files: resultData.files,
-        assertOwnership: () => filesystemJobLock!.assertOwned(),
+        assertOwnership: assertFinalizationOwnership,
         onMoveIntent: (move) => checkpointFinalizationMove(move, false),
         onMoveComplete: (move) => checkpointFinalizationMove(move, true),
       });
     } catch (error) {
       if (error instanceof ConversionFinalizationError) {
+        assertFinalizationOwnership();
         const updatedResult = {
           ...resultData,
           action,
@@ -1518,6 +1561,7 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
           .where(and(
             eq(conversionJobsTable.id, id),
             eq(conversionJobsTable.status, "awaiting_action"),
+            eq(conversionJobsTable.activeAttemptId, attemptId),
           ));
         res.status(409).json({
           error: error.message,
@@ -1531,8 +1575,10 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     }
 
     const fileOutcomes = finalized.outcomes;
+    assertFinalizationOwnership();
     const [completedJob] = await db.update(conversionJobsTable).set({
       status: "done",
+      activeAttemptId: null,
       error: null,
       resultJson: {
         ...resultData,
@@ -1546,10 +1592,11 @@ async function finalizeHandlerImpl(req: any, res: any): Promise<void> {
     }).where(and(
       eq(conversionJobsTable.id, id),
       eq(conversionJobsTable.status, "awaiting_action"),
+      eq(conversionJobsTable.activeAttemptId, attemptId),
     )).returning({ id: conversionJobsTable.id });
 
     if (!completedJob) {
-      filesystemJobLock.assertOwned();
+      assertFinalizationOwnership();
       const restored = await rollbackMoves(finalized.moves);
       if (restored !== finalized.moves.length) {
         logger.error({
@@ -1680,6 +1727,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
   let jobLockClient: ConversionJobLockClient | null = null;
   let filesystemJobLock: ConversionFilesystemJobLock | null = null;
   let jobClaimed = false;
+  let updateAttempt: ((values: any) => Promise<void>) | null = null;
   try {
     jobLockClient = await acquireConversionJobLock(id, () => pool.connect());
     if (!jobLockClient) {
@@ -1706,11 +1754,72 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       send("error", { message: `Job already ${job.status}` }); res.end(); return;
     }
 
+    const currentAttemptId = crypto.randomUUID();
+    const lockSignal = getConversionJobLockSignal(jobLockClient);
+    const attemptStagingDir = path.join(
+      getWillardAIDir(job.nasPath),
+      "conversions",
+      String(id),
+      currentAttemptId,
+    );
+    assertWithinRoot(attemptStagingDir, job.nasPath);
+    const priorResult = job.resultJson as { previousAttempts?: unknown[] } | null;
+    const previousAttempts = Array.isArray(priorResult?.previousAttempts)
+      ? priorResult.previousAttempts
+      : [];
+    const initialResultJson = {
+      attemptId: currentAttemptId,
+      stagingDir: attemptStagingDir,
+      files: [],
+      totalSaved: 0,
+      previousAttempts,
+    };
+    const assertAttemptOwnership = () => {
+      assertConversionJobLockOwned(jobLockClient!);
+      if (lockSignal.aborted) {
+        throw lockSignal.reason instanceof Error ? lockSignal.reason : new Error("Conversion attempt was aborted");
+      }
+      filesystemJobLock!.assertOwned();
+    };
+    updateAttempt = async (values) => {
+      assertAttemptOwnership();
+      const [updated] = await db.update(conversionJobsTable)
+        .set(values)
+        .where(and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "running"),
+          eq(conversionJobsTable.activeAttemptId, currentAttemptId),
+        ))
+        .returning({ id: conversionJobsTable.id });
+      if (!updated) throw new Error("Conversion attempt lost its database ownership token");
+      assertAttemptOwnership();
+    };
+    const readCurrentAttempt = async () => {
+      assertAttemptOwnership();
+      const [current] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
+        .from(conversionJobsTable)
+        .where(and(
+          eq(conversionJobsTable.id, id),
+          eq(conversionJobsTable.status, "running"),
+          eq(conversionJobsTable.activeAttemptId, currentAttemptId),
+        ))
+        .limit(1);
+      if (!current) throw new Error("Conversion attempt is no longer current");
+      assertAttemptOwnership();
+      return current;
+    };
+
     // Multiple one-time tokens can be issued while a job is pending. Claim the
     // job with a database compare-and-swap before any worker starts scanning or
     // writing staging files; only one request can transition pending -> running.
     const [claimedJob] = await db.update(conversionJobsTable)
-      .set({ status: "running", cancelledAt: null, error: null })
+      .set({
+        status: "running",
+        activeAttemptId: currentAttemptId,
+        cancelledAt: null,
+        error: null,
+        resultJson: initialResultJson,
+      })
       .where(and(
         eq(conversionJobsTable.id, id),
         eq(conversionJobsTable.nasPath, job.nasPath),
@@ -1724,9 +1833,13 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     }
     jobClaimed = true;
     if (isShuttingDown()) {
-      await db.update(conversionJobsTable)
-        .set({ status: "cancelled", cancelledAt: new Date(), completedAt: new Date(), error: "Server shutdown before conversion processing began." })
-        .where(and(eq(conversionJobsTable.id, id), eq(conversionJobsTable.status, "running")));
+      await updateAttempt!({
+        status: "cancelled",
+        activeAttemptId: null,
+        cancelledAt: new Date(),
+        completedAt: new Date(),
+        error: "Server shutdown before conversion processing began.",
+      });
       send("status", { stage: "cancelled", message: "Conversion cancelled because the server is shutting down.", progress: 0 });
       res.end();
       return;
@@ -1758,14 +1871,16 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     await walkForConversion(path.resolve(nasPath), approvedExtSet, filesToConvert, SKIP_DIRS, skipDirs);
 
     const totalFiles = filesToConvert.length;
-    await db.update(conversionJobsTable).set({ totalFiles }).where(eq(conversionJobsTable.id, id));
+    await updateAttempt!({ totalFiles });
 
     if (totalFiles === 0) {
       send("status", { stage: "done", message: "No files found to convert", progress: 100 });
-      await db.update(conversionJobsTable).set({
+      await updateAttempt!({
         status: "done", processedFiles: 0, succeededFiles: 0, failedFiles: 0, skippedFiles: 0,
-        completedAt: new Date(), resultJson: { files: [] },
-      }).where(eq(conversionJobsTable.id, id));
+        activeAttemptId: null,
+        completedAt: new Date(),
+        resultJson: initialResultJson,
+      });
       send("summary", { totalFiles: 0, succeeded: 0, failed: 0, skipped: 0, results: [] });
       res.end();
       return;
@@ -1781,7 +1896,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     } catch (error) {
       const admission = error instanceof CapacityAdmissionError ? error.admission : null;
       const message = error instanceof Error ? error.message : "Conversion capacity admission failed";
-      await db.update(conversionJobsTable).set({ status: "failed", error: message }).where(eq(conversionJobsTable.id, id));
+      await updateAttempt!({ status: "failed", activeAttemptId: null, error: message });
       send("error", { code: "CAPACITY_UNSAFE", message, capacity: admission });
       res.end();
       return;
@@ -1790,11 +1905,8 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     send("status", { stage: "converting", message: `Found ${totalFiles} file${totalFiles !== 1 ? "s" : ""} to convert`, progress: 5, totalFiles });
 
     // Stage 2: Convert files to a protected staging area — originals are NEVER touched here.
-    const stagingDir = ensureDirectoryWithinRoot(
-      path.join(getWillardAIDir(nasPath), "conversions", String(id)),
-      nasPath,
-    );
-    filesystemJobLock.assertOwned();
+    assertAttemptOwnership();
+    const stagingDir = ensureDirectoryWithinRoot(attemptStagingDir, nasPath);
 
     let succeeded = 0, failed = 0, skipped = 0;
     const results: Array<{
@@ -1807,6 +1919,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       error?:         string;
         verification?:  VerificationResult;
     }> = [];
+    const persistAttemptProgress = async (values: any): Promise<void> => updateAttempt!(values);
 
     // A file may still exist when the user chose to keep both/archive originals.
     // Read the recorded per-file results so a later run does not convert it again.
@@ -1826,17 +1939,16 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
     }
 
     for (let i = 0; i < filesToConvert.length; i++) {
-      const [currentJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
-        .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+      const currentJob = await readCurrentAttempt();
       if (currentJob?.cancelledAt || isShuttingDown()) break;
       const { fullPath, ext } = filesToConvert[i];
-      filesystemJobLock.assertOwned();
+      assertAttemptOwnership();
 
       if (previouslyConverted.has(path.resolve(fullPath))) {
         skipped++;
         const skipReason = "Previously converted in an earlier conversion job";
         results.push({ filePath: fullPath, status: "skipped", error: skipReason });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
         continue;
       }
@@ -1854,7 +1966,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         skipped++;
         const skipReason = "Per-file analysis: already optimal";
         results.push({ filePath: fullPath, status: "skipped", error: skipReason });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
         continue;
       }
@@ -1870,7 +1982,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
           const message = error instanceof Error ? error.message : String(error);
           failed++;
           results.push({ filePath: fullPath, status: "failed", error: message });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, failedFiles: failed });
           send("file_done", { filePath: fullPath, status: "failed", error: message.slice(0, 300), processed: i + 1, total: totalFiles });
           continue;
         }
@@ -1878,7 +1990,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
           skipped++;
           const skipReason = "Per-file analysis: already optimal";
           results.push({ filePath: fullPath, status: "skipped", error: skipReason });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
           send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
           continue;
         }
@@ -1891,7 +2003,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         skipped++;
         const skipReason = perFileDecision.reasons[0] ?? "Per-file analysis: already optimal";
         results.push({ filePath: fullPath, status: "skipped", error: skipReason });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
         send("file_done", { filePath: fullPath, status: "skipped", error: skipReason, processed: i + 1, total: totalFiles });
         continue;
       }
@@ -1906,14 +2018,14 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
           const message = error instanceof Error ? error.message : String(error);
           failed++;
           results.push({ filePath: fullPath, status: "failed", error: message });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, failedFiles: failed });
           send("file_done", { filePath: fullPath, status: "failed", error: message.slice(0, 300), processed: i + 1, total: totalFiles });
           continue;
         }
         if (!pngDecision.convert) {
           skipped++;
           results.push({ filePath: fullPath, status: "skipped", error: pngDecision.reason });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
           send("file_done", { filePath: fullPath, status: "skipped", error: pngDecision.reason, processed: i + 1, total: totalFiles });
           continue;
         }
@@ -1925,7 +2037,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       if (!targetExt) {
         skipped++;
         results.push({ filePath: fullPath, status: "skipped", error: "No conversion target for this format" });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+        await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
         send("file_done", { filePath: fullPath, status: "skipped", error: "No conversion target", processed: i + 1, total: totalFiles });
         continue;
       }
@@ -1942,7 +2054,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         if (code === "ENOENT" || code === "ENOTDIR") {
           skipped++;
           results.push({ filePath: fullPath, status: "skipped", error: "File no longer exists" });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
           send("file_done", { filePath: fullPath, status: "skipped", error: "File no longer exists", processed: i + 1, total: totalFiles });
           continue;
         }
@@ -1960,40 +2072,41 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       const stagedDir  = path.join(stagingDir, path.dirname(relPath));
       const stagedPath = path.join(stagedDir, `${stem}.${targetExt}`);
 
-      filesystemJobLock.assertOwned();
+      assertAttemptOwnership();
       ensureDirectoryWithinRoot(stagedDir, nasPath);
 
       // ── Convert to staging area (original untouched) ─────────────────────────
       let convertError: string | null = null;
       if (category === "image") {
-        convertError = await convertImageAsync(fullPath, stagedPath, targetExt, profile);
+        convertError = await convertImageAsync(fullPath, stagedPath, targetExt, profile, lockSignal);
       } else if (category === "video") {
-        convertError = await convertVideo(fullPath, stagedPath);
+        convertError = await convertVideo(fullPath, stagedPath, lockSignal);
       } else {
         convertError = `Unsupported category for conversion: ${category}`;
       }
-      filesystemJobLock.assertOwned();
+      assertAttemptOwnership();
 
       if (convertError) {
         try {
-          filesystemJobLock.assertOwned();
+          assertAttemptOwnership();
           await fs.promises.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== "ENOENT") throw error;
           });
         } catch { /* best effort; never clean up without current filesystem ownership */ }
         failed++;
         results.push({ filePath: fullPath, status: "failed", error: convertError });
-        await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+        await persistAttemptProgress({ processedFiles: i + 1, failedFiles: failed });
         send("file_done", { filePath: fullPath, status: "failed", error: convertError.slice(0, 300), processed: i + 1, total: totalFiles });
         continue;
       }
 
       // ── Stage 3: Verify the converted file ───────────────────────────────────
       const isRawSrc = RAW_EXTS.has(ext);
-      const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes, isRawSrc);
+      const verification = await verifyConvertedFile(fullPath, stagedPath, category, isSameExt, originalBytes, isRawSrc, lockSignal);
+      assertAttemptOwnership();
       if (!verification.passed) {
         try {
-          filesystemJobLock.assertOwned();
+          assertAttemptOwnership();
           await fs.promises.unlink(stagedPath).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== "ENOENT") throw error;
           });
@@ -2002,12 +2115,12 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
         if (isRegression) {
           skipped++;
           results.push({ filePath: fullPath, status: "skipped", error: "Already optimized (output not smaller than original)", verification });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, skippedFiles: skipped }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, skippedFiles: skipped });
           send("file_done", { filePath: fullPath, status: "skipped", error: "Already optimized", processed: i + 1, total: totalFiles });
         } else {
           failed++;
           results.push({ filePath: fullPath, status: "failed", error: verification.failedCheck ?? "Verification failed", verification });
-          await db.update(conversionJobsTable).set({ processedFiles: i + 1, failedFiles: failed }).where(eq(conversionJobsTable.id, id));
+          await persistAttemptProgress({ processedFiles: i + 1, failedFiles: failed });
           send("file_done", { filePath: fullPath, status: "failed", error: verification.failedCheck ?? "Verification failed", processed: i + 1, total: totalFiles });
         }
         continue;
@@ -2022,7 +2135,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
       // ── Success: original is safe, staged file is verified ──────────────────
       succeeded++;
       results.push({ filePath: fullPath, stagedPath, status: "success", originalBytes, convertedBytes, isSameExt, verification });
-      await db.update(conversionJobsTable).set({ processedFiles: i + 1, succeededFiles: succeeded }).where(eq(conversionJobsTable.id, id));
+      await persistAttemptProgress({ processedFiles: i + 1, succeededFiles: succeeded });
       send("file_done", {
         filePath: fullPath,
         stagedPath,
@@ -2036,27 +2149,28 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
 
       // Cancellation is intentionally checked after the current file has fully
       // converted and verified, preserving all completed staged files.
-      const [afterFileJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
-        .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+      const afterFileJob = await readCurrentAttempt();
       if (afterFileJob?.cancelledAt || isShuttingDown()) break;
     }
 
     const totalSaved = results.reduce((s, r) => s + Math.max(0, (r.originalBytes ?? 0) - (r.convertedBytes ?? 0)), 0);
-    const [finishedJob] = await db.select({ cancelledAt: conversionJobsTable.cancelledAt })
-      .from(conversionJobsTable).where(eq(conversionJobsTable.id, id)).limit(1);
+    const finishedJob = await readCurrentAttempt();
     const wasCancelled = Boolean(finishedJob?.cancelledAt) || isShuttingDown();
     // A cancelled run may still have completed, verified staged outputs. Keep
     // those outputs actionable: finalize accepts awaiting_action jobs, while
     // cancelledAt and resultJson.cancelled preserve the user's cancellation.
     const needsFinalization = succeeded > 0;
     const nextStatus = needsFinalization ? "awaiting_action" : "cancelled";
-    const resultJson = { files: results, totalSaved, stagingDir, cancelled: wasCancelled };
+    const resultJson = { ...initialResultJson, files: results, totalSaved, cancelled: wasCancelled };
 
     // Stage 4: Await user action — originals are untouched; staged files ready for user decision.
-    await db.update(conversionJobsTable).set({
+    await updateAttempt!({
       status: nextStatus, processedFiles: results.length, succeededFiles: succeeded, failedFiles: failed,
-      skippedFiles: skipped, completedAt: new Date(), resultJson,
-    }).where(eq(conversionJobsTable.id, id));
+      skippedFiles: skipped,
+      activeAttemptId: nextStatus === "cancelled" ? null : currentAttemptId,
+      completedAt: new Date(),
+      resultJson,
+    });
 
     send("status", {
       stage: nextStatus,
@@ -2075,12 +2189,7 @@ router.get("/optimize/jobs/:id/execute", async (req, res) => {
   } catch (e: any) {
     if (jobClaimed) {
       try {
-        await db.update(conversionJobsTable)
-          .set({ status: "failed", error: e.message ?? "Unknown error" })
-          .where(and(
-            eq(conversionJobsTable.id, id),
-            eq(conversionJobsTable.status, "running"),
-          ));
+        await updateAttempt?.({ status: "failed", activeAttemptId: null, error: e.message ?? "Unknown error" });
       } catch { /* best effort */ }
     }
     send("error", { message: e.message ?? "Conversion failed" });

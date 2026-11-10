@@ -16,6 +16,10 @@ export const CONVERSION_JOB_LOCK_NAMESPACE = 1464427596; // "WILL"
 export interface ConversionJobLockClient {
   query: (text: string, values?: any[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
   release: (error?: Error | boolean) => void;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "end", listener: () => void): this;
+  off(event: "error", listener: (error: Error) => void): this;
+  off(event: "end", listener: () => void): this;
 }
 
 export type ConversionJobLockConnect = () => Promise<ConversionJobLockClient>;
@@ -30,6 +34,44 @@ interface FilesystemLockOwner {
   host: string;
   pid: number;
   token: string;
+}
+
+interface ConversionDatabaseLockState {
+  controller: AbortController;
+  onError: (error: Error) => void;
+  onEnd: () => void;
+}
+
+const databaseLockStates = new WeakMap<ConversionJobLockClient, ConversionDatabaseLockState>();
+
+function detachDatabaseLockState(client: ConversionJobLockClient): ConversionDatabaseLockState | undefined {
+  const state = databaseLockStates.get(client);
+  if (!state) return undefined;
+  client.off("error", state.onError);
+  client.off("end", state.onEnd);
+  databaseLockStates.delete(client);
+  return state;
+}
+
+function connectionLostError(state: ConversionDatabaseLockState): Error | null {
+  if (!state.controller.signal.aborted) return null;
+  const reason = state.controller.signal.reason;
+  return reason instanceof Error ? reason : new Error("Conversion database lock connection was lost");
+}
+
+/** Abort work immediately when PostgreSQL can no longer guarantee session-lock ownership. */
+export function getConversionJobLockSignal(client: ConversionJobLockClient): AbortSignal {
+  const state = databaseLockStates.get(client);
+  if (!state) throw new Error("Conversion database lock is not being monitored");
+  return state.controller.signal;
+}
+
+/** Fail closed before continuing work after the lock connection ends or errors. */
+export function assertConversionJobLockOwned(client: ConversionJobLockClient): void {
+  const state = databaseLockStates.get(client);
+  if (!state) throw new Error("Conversion database lock ownership is no longer available");
+  const lost = connectionLostError(state);
+  if (lost) throw lost;
 }
 
 function validateJobId(jobId: number): void {
@@ -166,17 +208,37 @@ export async function acquireConversionJobLock(
 ): Promise<ConversionJobLockClient | null> {
   validateJobId(jobId);
   const client = await connect();
+  const controller = new AbortController();
+  const state: ConversionDatabaseLockState = {
+    controller,
+    onError: (error) => {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error(`Conversion database lock connection failed: ${error.message}`));
+      }
+    },
+    onEnd: () => {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("Conversion database lock connection ended"));
+      }
+    },
+  };
+  databaseLockStates.set(client, state);
+  client.on("error", state.onError);
+  client.on("end", state.onEnd);
   try {
     const result = await client.query(
       "SELECT pg_try_advisory_lock($1::integer, $2::integer) AS locked",
       [CONVERSION_JOB_LOCK_NAMESPACE, jobId],
     );
+    assertConversionJobLockOwned(client);
     if (result.rows[0]?.["locked"] !== true) {
+      detachDatabaseLockState(client);
       client.release();
       return null;
     }
     return client;
   } catch (error) {
+    detachDatabaseLockState(client);
     client.release(error instanceof Error ? error : true);
     throw error;
   }
@@ -188,17 +250,22 @@ export async function releaseConversionJobLock(
   jobId: number,
 ): Promise<void> {
   validateJobId(jobId);
-  let releaseError: Error | undefined;
+  const state = databaseLockStates.get(client);
+  let releaseError = state ? connectionLostError(state) ?? undefined : new Error("Conversion database lock state is missing");
   try {
-    const result = await client.query(
-      "SELECT pg_advisory_unlock($1::integer, $2::integer) AS unlocked",
-      [CONVERSION_JOB_LOCK_NAMESPACE, jobId],
-    );
-    if (result.rows[0]?.["unlocked"] !== true) {
-      releaseError = new Error("Conversion job advisory lock was not held by its connection");
+    if (!releaseError) {
+      const result = await client.query(
+        "SELECT pg_advisory_unlock($1::integer, $2::integer) AS unlocked",
+        [CONVERSION_JOB_LOCK_NAMESPACE, jobId],
+      );
+      if (result.rows[0]?.["unlocked"] !== true) {
+        releaseError = new Error("Conversion job advisory lock was not held by its connection");
+      }
     }
   } catch (error) {
     releaseError = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    detachDatabaseLockState(client);
   }
   // A connection with an unverified session lock must never return to the pool.
   client.release(releaseError);

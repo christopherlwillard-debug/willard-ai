@@ -38,6 +38,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
       CREATE TABLE IF NOT EXISTS conversion_jobs (
         id serial PRIMARY KEY,
         status text NOT NULL DEFAULT 'pending',
+        active_attempt_id text,
         approved_exts jsonb NOT NULL,
         backup_dir text,
         nas_path text NOT NULL,
@@ -52,6 +53,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
         completed_at timestamp
       )
     `);
+    await pool.query("ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS active_attempt_id text");
     const settings = await db.select({ nasPath: appSettingsTable.nasPath }).from(appSettingsTable).limit(1);
     const nasPath = settings[0]?.nasPath;
     assert.ok(nasPath, "A configured test library is required");
@@ -61,6 +63,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
 
     const rows = await db.insert(conversionJobsTable).values({
       status: "running",
+      activeAttemptId: "interrupted-attempt",
       approvedExts: ["__recovery_test__"],
       backupDir: `${nasPath}/WillardAI/backups/recovery-test`,
       nasPath,
@@ -97,6 +100,7 @@ describe("conversion restart recovery", { concurrency: false }, () => {
     const row = await db.select().from(conversionJobsTable).where(eq(conversionJobsTable.id, jobId));
     assert.equal(row[0]?.status, "failed");
     assert.equal(row[0]?.error, INTERRUPTED_CONVERSION_ERROR);
+    assert.equal(row[0]?.activeAttemptId, null);
   });
 
   test("retry resets to pending and SSE execution reaches done", async () => {

@@ -41,6 +41,7 @@ export function formatMediaToolError(
 export interface MediaToolExecutionOptions {
   timeoutMs: number;
   maxBufferBytes?: number;
+  signal?: AbortSignal;
 }
 
 export interface MediaToolExecutionResult {
@@ -169,6 +170,11 @@ export function runMediaToolAsync(
   args: string[],
   options: MediaToolExecutionOptions,
 ): Promise<MediaToolExecutionResult> {
+  if (options.signal?.aborted) {
+    return Promise.reject(options.signal.reason instanceof Error
+      ? options.signal.reason
+      : Object.assign(new Error("Media tool execution was aborted"), { name: "AbortError", code: "ABORT_ERR" }));
+  }
   try {
     assertMediaProcessStartAllowed();
   } catch (error) {
@@ -178,10 +184,24 @@ export function runMediaToolAsync(
     let child: ChildProcess | null = null;
     let timeoutEscalationTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
+    let abortKillTimer: NodeJS.Timeout | null = null;
     const cleanup = () => {
       if (timeoutEscalationTimer) clearTimeout(timeoutEscalationTimer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (abortKillTimer) clearTimeout(abortKillTimer);
+      options.signal?.removeEventListener("abort", onAbort);
       if (child) activeMediaProcesses.delete(child);
+    };
+    const onAbort = () => {
+      abortKillTimer = setTimeout(() => {
+        if (!child?.pid || !isMediaProcessRunning(child)) return;
+        try {
+          child.kill("SIGKILL");
+        } catch (error) {
+          logger.warn({ err: error }, "Unable to force-stop an aborted media subprocess");
+        }
+      }, MEDIA_TOOL_TIMEOUT_KILL_GRACE_MS);
+      abortKillTimer.unref?.();
     };
     child = execFile(bin, args, {
       encoding: "utf8",
@@ -189,6 +209,7 @@ export function runMediaToolAsync(
       killSignal: "SIGTERM",
       maxBuffer: options.maxBufferBytes ?? 1024 * 1024,
       windowsHide: true,
+      signal: options.signal,
     }, (error, stdout, stderr) => {
       cleanup();
       if (error) {
@@ -206,6 +227,7 @@ export function runMediaToolAsync(
     activeMediaProcesses.add(child);
     child.once("close", cleanup);
     child.once("error", cleanup);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     // execFile sends SIGTERM at timeoutMs but waits for the child to close.
     // Escalate if a tool ignores that signal so a hung encoder cannot retain

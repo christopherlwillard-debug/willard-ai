@@ -4294,3 +4294,37 @@ This entry records the earlier recovery checkpoint; its branch and working-tree 
 - **Generated files:** API generation produced no generated-tree diff. No generated schema or runtime artifacts changed in this reconciliation.
 - **Historical artifacts:** the `.bak` route copy and four timestamped Optimize-cycle cache snapshots were inspected and preserved. They have no runtime references; the cache snapshots were added by test-related commits and the current test fixture is rooted under `WILLARD_TEST_ROOT`.
 - **Branch protection:** local `main` remained `5ce1269c9576482da7baa3df03f09a2274a8bf23`; `origin/main` remained `117ef63882285c99928d80595064cfca25d54006`. No push occurred.
+
+## November 9 — Conversion fencing, static-path checks, and browser-test remediation
+
+### P1 — Conversion retries could leave a stale worker writing into shared staging
+
+- **Root cause:** retries reused job-scoped staging and progress writes were not tied to a durable attempt generation. A worker that lost its PostgreSQL lock could continue updating files or finalizing the job.
+- **Correction:** add a persisted attempt token and per-attempt NAS staging path; fence database progress and finalization with the current token and live lock; abort media subprocesses when lock ownership is lost; make recovery and finalization rollback check ownership.
+- **Schema:** advance the bootstrap schema to version 4 and backfill existing actionable conversion jobs with a legacy attempt token.
+- **Status:** corrected in the current working tree; not committed. Windows process-tree behavior and real SMB disconnect recovery still need a Windows validation run.
+- **Validation:** conversion lock, recovery, cancellation/finalization, subprocess-abort, bootstrap, and PostgreSQL recovery tests passed; the full disposable backend audit passed 72 test-file runs (422 passed, 1 skipped, 0 failed); Optimize-cycle passed 2/2.
+
+### Static path findings and dependency advisories
+
+- The mobile static server now resolves the configured root and requested file canonically, rejects traversal and out-of-root symlinks, opens the canonical regular file with no-follow semantics where supported, and closes the descriptor safely. Its three path-safety tests pass.
+- The explorer directory reads already validate canonical library-root containment and have symlink-escape regression coverage. SAST still reports both explorer reads because its flow analysis does not follow those guards. A directory-component replacement race remains a residual risk; the code does not use a no-follow directory handle for enumeration.
+- SAST continues to report four HIGH path findings (two explorer, two static-server); these findings were reviewed and not suppressed. HoundDog reported no secrets.
+- The direct API build dependency is updated from esbuild 0.27.3 to 0.28.2; the API bundle builds. The lockfile still contains esbuild 0.27.3 through Vite, tsx, Orval, and Drizzle. The advisory targets esbuild's Windows `serve` API; this project uses its build/transform APIs, and a source search found no `esbuild.serve` call. The full dependency scan therefore still reports one LOW finding.
+- The scan also reports one MODERATE deepmerge 4.3.1 advisory. It is pulled in by Expo configuration tooling, and the advisory has no patched published release. No unsafe broad override or vendor patch was applied.
+
+### Routed browser test root causes
+
+- Initial browser diagnostics showed unmocked shell requests (`/api/library/jobs/active`, `/api/library/jobs/history`, and `/api/settings/logo`) receiving real 401s. The auth-expiry handler then correctly returned the UI to the login screen. The routed test helper now mocks these endpoints and a contract-shaped jobs event stream.
+- The Organize test mocked `/api/organize/jobs?*`, but the page requests `/api/organize/jobs` without a query string. Its route now matches both forms. The Optimize recovery test now mocks the scan endpoint with the API's expected unavailable-NAS 400 response instead of accidentally reaching the real API.
+- The failed-media test selected a decorative thumbnail image by filename even though the accessible card is a button and the image intentionally has empty alt text. It now opens the card through its accessible button name; the assertions remain unchanged.
+- **Validation:** `pnpm run test:routed` passed 5/5. Media-viewer E2E passed 1/1; its only console error was the expected missing-logo 404, with no failed requests or page errors.
+
+### Validation and remaining scope
+
+- Workspace typecheck, API build, API route/generated contracts, release contracts (88/88), UI accessibility contracts (24/24), storage conformance (21/21 plus Windows matrix 6/6), database backup/recovery (33/33), and `git diff --check` passed.
+- The disposable backend audit and its Optimize-cycle (2/2) and dashboard-after-scan (3/3) checks passed. The standalone mobile static-server path tests passed 3/3.
+- The dependency scan remains at 0 critical, 0 high, 1 moderate, and 1 low. The SAST findings above remain visible in the scanner results.
+- The routed-browser workflow launcher continued to reject restart because its prior workflow tasks were marked failed, although the same `pnpm run test:routed` command passed directly after the fixes.
+- The Expo/Metro workflow crashed at startup with `TypeError: eventsQueue is not iterable`; the static-server tests and mobile typecheck pass, but the Expo runtime was not verified.
+- This addendum does not close the other previously recorded open findings. In particular, prepared-phase Windows installer recovery still needs the stable-bootstrap/data-root work; archive and organization worker lifecycle/fencing findings remain open; the November 7 Health Center and mobile authentication/storage findings remain unchanged. No commit, push, branch change, deployment, release, or production-data mutation occurred.

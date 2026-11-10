@@ -1,6 +1,7 @@
 import { db, pool, conversionJobsTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import {
+  assertConversionJobLockOwned,
   acquireConversionFilesystemJobLock,
   acquireConversionJobLock,
   releaseConversionJobLock,
@@ -22,6 +23,7 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
   const runningJobs = await db.select({
     id: conversionJobsTable.id,
     nasPath: conversionJobsTable.nasPath,
+    activeAttemptId: conversionJobsTable.activeAttemptId,
   })
     .from(conversionJobsTable)
     .where(eq(conversionJobsTable.status, "running"));
@@ -43,11 +45,15 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
       continue;
     }
     try {
+      assertConversionJobLockOwned(lockClient);
       const [updated] = await db.update(conversionJobsTable)
-        .set({ status: "failed", error: INTERRUPTED_CONVERSION_ERROR })
+        .set({ status: "failed", activeAttemptId: null, error: INTERRUPTED_CONVERSION_ERROR })
         .where(and(
           eq(conversionJobsTable.id, job.id),
           eq(conversionJobsTable.status, "running"),
+          job.activeAttemptId
+            ? eq(conversionJobsTable.activeAttemptId, job.activeAttemptId)
+            : isNull(conversionJobsTable.activeAttemptId),
         ))
         .returning({ id: conversionJobsTable.id });
       if (updated) recovered++;
@@ -63,6 +69,7 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
   const pendingFinalizations = await db.select({
     id: conversionJobsTable.id,
     nasPath: conversionJobsTable.nasPath,
+    activeAttemptId: conversionJobsTable.activeAttemptId,
     resultJson: conversionJobsTable.resultJson,
   })
     .from(conversionJobsTable)
@@ -97,6 +104,9 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
           eq(conversionJobsTable.id, job.id),
           eq(conversionJobsTable.nasPath, job.nasPath),
           eq(conversionJobsTable.status, "awaiting_action"),
+          job.activeAttemptId
+            ? eq(conversionJobsTable.activeAttemptId, job.activeAttemptId)
+            : isNull(conversionJobsTable.activeAttemptId),
         ))
         .limit(1);
       const currentResult = current?.resultJson as {
@@ -106,9 +116,11 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
       const journal = currentResult?.finalizationJournal;
       if (!currentResult || !Array.isArray(journal) || journal.length === 0) continue;
 
+      assertConversionJobLockOwned(lockClient);
       const recovery = await recoverConversionFinalizationMoves(
         journal as FileMoveRecord[],
         job.nasPath,
+        () => assertConversionJobLockOwned(lockClient),
       );
       const message = recovery.complete
         ? "Interrupted finalization was rolled back during startup; retry is available."
@@ -119,12 +131,16 @@ export async function recoverInterruptedConversionJobs(): Promise<number> {
         finalizationRecoveryMoves: recovery.unresolvedMoves,
         finalizationError: message,
       };
+      assertConversionJobLockOwned(lockClient);
       const [updated] = await db.update(conversionJobsTable)
         .set({ resultJson: nextResult, error: message })
         .where(and(
           eq(conversionJobsTable.id, job.id),
           eq(conversionJobsTable.nasPath, job.nasPath),
           eq(conversionJobsTable.status, "awaiting_action"),
+          job.activeAttemptId
+            ? eq(conversionJobsTable.activeAttemptId, job.activeAttemptId)
+            : isNull(conversionJobsTable.activeAttemptId),
         ))
         .returning({ id: conversionJobsTable.id });
       if (updated && recovery.complete) recovered++;
