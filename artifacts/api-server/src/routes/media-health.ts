@@ -10,6 +10,10 @@ import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 import { startJob } from "../lib/library-engine";
+import {
+  readDirectoryWithoutSymlinkTraversal,
+  removeEmptyDirectoryWithoutSymlinkTraversal,
+} from "../lib/safe-directory-read.ts";
 
 const router = Router();
 const ACTIVE = activeMediaCondition;
@@ -40,22 +44,44 @@ type HealthReport = {
   };
 };
 
-function walkDirectories(root: string, skip: string): { empty: string[]; files: string[] } {
+type HealthDirectoryEntry = {
+  name: string;
+  isDirectory: boolean;
+  isFile: boolean;
+  sizeBytes?: number;
+};
+
+function readHealthDirectory(root: string, directory: string): HealthDirectoryEntry[] {
+  const safeListing = readDirectoryWithoutSymlinkTraversal(root, directory);
+  if (safeListing) {
+    return safeListing.entries.map((entry) => ({
+      name: entry.name,
+      isDirectory: entry.isDirectory,
+      isFile: entry.fileCount === null,
+      sizeBytes: entry.sizeBytes,
+    }));
+  }
+  return fs.readdirSync(directory, { withFileTypes: true }).map((entry) => ({
+    name: entry.name,
+    isDirectory: entry.isDirectory(),
+    isFile: entry.isFile(),
+  }));
+}
+
+function walkDirectories(root: string, skip: string): { empty: string[] } {
   const empty: string[] = [];
-  const files: string[] = [];
   const visit = (dir: string) => {
-    const entries: fs.Dirent[] = fs.readdirSync(dir, { withFileTypes: true });
-    const visible = entries.filter(e => e.name !== ".DS_Store");
+    const visible = readHealthDirectory(root, dir).filter((entry) => entry.name !== ".DS_Store");
     if (visible.length === 0) empty.push(dir);
     for (const entry of visible) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (path.resolve(full) !== path.resolve(skip)) visit(full);
-      } else if (entry.isFile()) files.push(full);
+      }
     }
   };
   visit(root);
-  return { empty, files };
+  return { empty };
 }
 
 function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]; unusedBytes: number } {
@@ -63,16 +89,21 @@ function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]
   const cacheRoot = path.join(getWillardAIDir(nasPath), "cache");
   const result = { orphaned: [] as string[], unused: [] as string[], unusedBytes: 0 };
   const visit = (dir: string, isThumb: boolean) => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    let entries: HealthDirectoryEntry[];
+    try { entries = readHealthDirectory(nasPath, dir); } catch { return; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) visit(full, isThumb || path.resolve(full) === path.resolve(thumbDir));
-      else if (entry.isFile()) {
+      if (entry.isDirectory) visit(full, isThumb || path.resolve(full) === path.resolve(thumbDir));
+      else if (entry.isFile) {
         if (isThumb) result.orphaned.push(full);
         else {
           result.unused.push(full);
-          try { result.unusedBytes += fs.statSync(full).size; } catch { /* best effort */ }
+          try {
+            result.unusedBytes += entry.sizeBytes ?? (() => {
+              const stat = fs.lstatSync(full);
+              return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
+            })();
+          } catch { /* best effort */ }
         }
       }
     }
@@ -329,7 +360,10 @@ router.post("/media/cleanup", async (req, res) => {
     }
     if (actions.includes("emptyFolders")) {
       for (const folder of emptyFolderTargets) {
-        try { fs.rmdirSync(resolveWithinRoot(folder, nasPath)); } catch { /* changed since scan */ }
+        try {
+          const removed = removeEmptyDirectoryWithoutSymlinkTraversal(nasPath, folder);
+          if (removed === null) fs.rmdirSync(resolveWithinRoot(folder, nasPath));
+        } catch { /* changed since scan or failed a no-follow check */ }
         done++; progress("Removing empty folders…");
       }
     }

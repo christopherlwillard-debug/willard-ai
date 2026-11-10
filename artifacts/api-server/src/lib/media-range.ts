@@ -53,9 +53,12 @@ export function sendRangeNotSatisfiable(res: Response, size: number): void {
 export function streamFileWithErrorHandling(
   res: Response,
   filePath: string,
-  options?: { start?: number; end?: number },
+  options?: { start?: number; end?: number; fd?: number },
 ): void {
-  const stream = fs.createReadStream(filePath, options);
+  const streamOptions = options?.fd === undefined
+    ? options
+    : { ...options, autoClose: true };
+  const stream = fs.createReadStream(filePath, streamOptions);
   stream.once("error", (error) => {
     handlePrivateMediaStreamError(res, error);
   });

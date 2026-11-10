@@ -49,7 +49,13 @@ test("media health checks library reachability and uses fail-closed missing-file
   const walkerEnd = source.indexOf("function cacheInventory", walkerStart);
   const walker = source.slice(walkerStart, walkerEnd);
   assert.ok(walkerStart >= 0 && walkerEnd > walkerStart);
+  assert.match(source, /readDirectoryWithoutSymlinkTraversal\(root, directory\)/);
+  assert.match(walker, /readHealthDirectory\(root, dir\)/);
   assert.doesNotMatch(walker, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
+  const cacheStart = source.indexOf("function cacheInventory");
+  const cacheEnd = source.indexOf("async function inspectLibrary", cacheStart);
+  assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
+  assert.match(source.slice(cacheStart, cacheEnd), /readHealthDirectory\(nasPath, dir\)/);
 });
 
 test("health cleanup reports durable job creation failures through its SSE error boundary", () => {
@@ -164,6 +170,7 @@ test("Health Center cleanup progress counts only selected work and excludes skip
   assert.match(cleanupRoute, /cleaned\.orphanRows - inspected\.report\.issues\.brokenMetadataReferences/);
   assert.match(cleanupRoute, /cleaned\.staleCropsRemoved \+ cleaned\.cropErrors\.length/);
   assert.doesNotMatch(cleanupRoute, /const total = Math\.max\(1, inspected\.missing\.length \+ inspected\.orphanThumbs\.length \+ inspected\.missingThumbs\.length \+ inspected\.emptyFolders\.length\)/);
+  assert.match(cleanupRoute, /removeEmptyDirectoryWithoutSymlinkTraversal\(nasPath, folder\)/);
 });
 
 test("Health Center orphan cleanup uses reversible conditional soft-delete and preserves derived data", () => {
@@ -182,4 +189,24 @@ test("Health Center orphan cleanup uses reversible conditional soft-delete and p
   assert.match(cleanup, /ACTIVE/);
   assert.doesNotMatch(cleanup, /db\.delete\(mediaFilesTable\)|purgeDerivedDataForMedia/);
   assert.match(engine, /lastScanAction:[\s\S]*excluded\.last_scan_action/);
+});
+
+test("Health Center routes stay behind the authenticated API session guard", () => {
+  const appPath = fileURLToPath(new URL("../app.ts", import.meta.url));
+  const app = readFileSync(appPath, "utf8");
+  const healthRoutePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const healthRoutes = readFileSync(healthRoutePath, "utf8");
+  const publicPathsStart = app.indexOf("const PUBLIC_PATHS = new Set([");
+  const publicPathsEnd = app.indexOf("]);", publicPathsStart);
+  const authGuardStart = app.indexOf('app.use("/api", async');
+  const protectedRouterMount = app.indexOf('app.use("/api", router)');
+  const unauthenticatedCheck = app.indexOf("if (!sess?.authenticated)", authGuardStart);
+
+  assert.ok(publicPathsStart >= 0 && publicPathsEnd > publicPathsStart);
+  assert.doesNotMatch(app.slice(publicPathsStart, publicPathsEnd), /media\/health|media\/cleanup/);
+  assert.ok(authGuardStart >= 0 && protectedRouterMount > authGuardStart);
+  assert.ok(unauthenticatedCheck > authGuardStart && unauthenticatedCheck < protectedRouterMount);
+  assert.match(app.slice(unauthenticatedCheck, protectedRouterMount), /res\.status\(401\)\.json/);
+  assert.match(healthRoutes, /router\.get\("\/media\/health"/);
+  assert.match(healthRoutes, /router\.post\("\/media\/cleanup"/);
 });

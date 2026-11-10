@@ -1,0 +1,111 @@
+diff --git a/build/src/start/server/metro/metroWatchTypeScriptFiles.js b/build/src/start/server/metro/metroWatchTypeScriptFiles.js
+index 3c4e29a3518d0600ab4f9b280aa3d196aa4468a6..a9ef8d3d5364a1ebee9409d022bba821e34ec650 100644
+--- a/build/src/start/server/metro/metroWatchTypeScriptFiles.js
++++ b/build/src/start/server/metro/metroWatchTypeScriptFiles.js
+@@ -21,6 +21,7 @@ function _interop_require_default(obj) {
+     };
+ }
+ const debug = require('debug')('expo:start:server:metro:metroWatchTypeScriptFiles');
++const _waitForMetroToObserveTypeScriptFile = require("./waitForMetroToObserveTypeScriptFile");
+ function metroWatchTypeScriptFiles({ metro, server, projectRoot, callback, tsconfig = false, throttle = false, eventTypes = [
+     'add',
+     'change',
+@@ -28,7 +29,8 @@ function metroWatchTypeScriptFiles({ metro, server, projectRoot, callback, tscon
+ ] }) {
+     const watcher = metro.getBundler().getBundler().getWatcher();
+     const tsconfigPath = _path().default.join(projectRoot, 'tsconfig.json');
+-    const listener = ({ eventsQueue })=>{
++    const listener = (changeEvent)=>{
++        const eventsQueue = _waitForMetroToObserveTypeScriptFile.getEventsQueue(changeEvent);
+         for (const event of eventsQueue){
+             var _event_metadata;
+             if (eventTypes.includes(event.type) && ((_event_metadata = event.metadata) == null ? void 0 : _event_metadata.type) !== 'd' && // We need to ignore node_modules because Metro will add all of the files in node_modules to the watcher.
+diff --git a/build/src/start/server/metro/waitForMetroToObserveTypeScriptFile.js b/build/src/start/server/metro/waitForMetroToObserveTypeScriptFile.js
+index 87cdf53ef15d6f4d72f4e310aea0a90bfaeda3c4..4060105abbe46bcc5e9afff900c2d1110b7c6d3b 100644
+--- a/build/src/start/server/metro/waitForMetroToObserveTypeScriptFile.js
++++ b/build/src/start/server/metro/waitForMetroToObserveTypeScriptFile.js
+@@ -9,6 +9,9 @@ function _export(target, all) {
+     });
+ }
+ _export(exports, {
++    getEventsQueue: function() {
++        return getEventsQueue;
++    },
+     observeAnyFileChanges: function() {
+         return observeAnyFileChanges;
+     },
+@@ -32,10 +35,52 @@ function _interop_require_default(obj) {
+     };
+ }
+ const debug = require('debug')('expo:start:server:metro:waitForTypescript');
++function getEventsQueue(changeEvent) {
++    if (Array.isArray(changeEvent == null ? void 0 : changeEvent.eventsQueue)) {
++        return changeEvent.eventsQueue;
++    }
++    const { changes, rootDir } = changeEvent ?? {};
++    if (changes == null || typeof rootDir !== 'string') {
++        return [];
++    }
++    const path = _path().default;
++    const events = [];
++    const toAbsolutePath = (canonicalPath) => path.isAbsolute(canonicalPath) ? canonicalPath : path.resolve(rootDir, canonicalPath);
++    const addDirectories = (directories, type) => {
++        for (const canonicalPath of directories ?? []){
++            events.push({
++                filePath: toAbsolutePath(canonicalPath),
++                metadata: {
++                    type: 'd'
++                },
++                type
++            });
++        }
++    };
++    const addFiles = (files, type) => {
++        for (const [canonicalPath, metadata] of files ?? []){
++            events.push({
++                filePath: toAbsolutePath(canonicalPath),
++                metadata: {
++                    ...metadata,
++                    type: (metadata == null ? void 0 : metadata.isSymlink) ? 'l' : 'f'
++                },
++                type
++            });
++        }
++    };
++    addDirectories(changes.addedDirectories, 'add');
++    addFiles(changes.addedFiles, 'add');
++    addFiles(changes.modifiedFiles, 'change');
++    addFiles(changes.removedFiles, 'delete');
++    addDirectories(changes.removedDirectories, 'delete');
++    return events;
++}
+ function waitForMetroToObserveTypeScriptFile(projectRoot, runner, callback) {
+     const watcher = runner.metro.getBundler().getBundler().getWatcher();
+     const tsconfigPath = _path().default.join(projectRoot, 'tsconfig.json');
+-    const listener = ({ eventsQueue })=>{
++    const listener = (changeEvent)=>{
++        const eventsQueue = getEventsQueue(changeEvent);
+         for (const event of eventsQueue){
+             var _event_metadata;
+             if (event.type === 'add' && ((_event_metadata = event.metadata) == null ? void 0 : _event_metadata.type) !== 'd' && // We need to ignore node_modules because Metro will add all of the files in node_modules to the watcher.
+@@ -63,7 +108,8 @@ function waitForMetroToObserveTypeScriptFile(projectRoot, runner, callback) {
+ }
+ function observeFileChanges(runner, files, callback) {
+     const watcher = runner.metro.getBundler().getBundler().getWatcher();
+-    const listener = ({ eventsQueue })=>{
++    const listener = (changeEvent)=>{
++        const eventsQueue = getEventsQueue(changeEvent);
+         for (const event of eventsQueue){
+             var // event.type === 'add' &&
+             _event_metadata;
+@@ -89,8 +135,8 @@ function observeFileChanges(runner, files, callback) {
+ }
+ function observeAnyFileChanges(runner, callback) {
+     const watcher = runner.metro.getBundler().getBundler().getWatcher();
+-    const listener = ({ eventsQueue })=>{
+-        callback(eventsQueue);
++    const listener = (changeEvent)=>{
++        callback(getEventsQueue(changeEvent));
+     };
+     watcher.addListener('change', listener);
+     const off = ()=>{

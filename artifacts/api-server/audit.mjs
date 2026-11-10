@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -94,15 +94,18 @@ function runTestFile(testFile) {
   console.log(`[backend-audit] START ${name}`);
 
   return new Promise((resolve, reject) => {
+    const testSource = readFileSync(testFile, "utf8");
+    const requiresModuleMockFlag = /\bmock\.module\s*\(/.test(testSource);
+    const nodeArguments = [
+      ...(requiresModuleMockFlag ? ["--experimental-test-module-mocks"] : []),
+      "--experimental-strip-types",
+      "--test",
+      "--test-concurrency=1",
+      testFile,
+    ];
     const child = spawn(
       process.execPath,
-      [
-        "--experimental-test-module-mocks",
-        "--experimental-strip-types",
-        "--test",
-        "--test-concurrency=1",
-        testFile,
-      ],
+      nodeArguments,
       {
         cwd: testWorkingDirectory,
         env: testEnvironment,

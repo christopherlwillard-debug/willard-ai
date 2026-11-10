@@ -80,6 +80,12 @@ jobs:
       - name: Smoke-test Expo CLI configuration after dependency overrides
         run: pnpm --filter @workspace/willard-mobile exec expo config --json > /dev/null
 
+      - name: Verify Expo Metro watcher compatibility
+        run: pnpm run test:expo-watcher-compat
+
+      - name: Verify Expo deepmerge prototype-key protection
+        run: pnpm run test:dependency-security
+
       - name: Validate desktop web server safety
         run: node --test desktop/web-server-safety.test.mjs
 

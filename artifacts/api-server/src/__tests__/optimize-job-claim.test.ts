@@ -103,7 +103,16 @@ const finalizerPath = fileURLToPath(new URL("../lib/conversion-finalize.ts", imp
 const finalizerSource = readFileSync(finalizerPath, "utf8");
 
 test("conversion staging and finalization paths stay inside the active NAS root", () => {
-  assert.match(executeSource, /ensureDirectoryWithinRoot\(\s*path\.join\(getWillardAIDir\(nasPath\), "conversions", String\(id\)\),\s*nasPath/);
+  const attemptStagingStart = executeSource.indexOf("const attemptStagingDir = path.join(");
+  const attemptStagingEnd = executeSource.indexOf("const priorResult", attemptStagingStart);
+  const attemptStaging = executeSource.slice(attemptStagingStart, attemptStagingEnd);
+  assert.ok(attemptStagingStart >= 0 && attemptStagingEnd > attemptStagingStart, "each attempt must get its own staging path");
+  assert.match(attemptStaging, /getWillardAIDir\(job\.nasPath\)/);
+  assert.match(attemptStaging, /"conversions"/);
+  assert.match(attemptStaging, /String\(id\)/);
+  assert.match(attemptStaging, /currentAttemptId/);
+  assert.match(executeSource, /assertWithinRoot\(attemptStagingDir,\s*job\.nasPath\)/);
+  assert.match(executeSource, /ensureDirectoryWithinRoot\(attemptStagingDir,\s*nasPath\)/);
   assert.match(executeSource, /ensureDirectoryWithinRoot\(stagedDir, nasPath\)/);
   assert.doesNotMatch(executeSource, /fs\.mkdirSync\(stagingDir/);
   assert.doesNotMatch(executeSource, /fs\.mkdirSync\(stagedDir/);
@@ -176,14 +185,21 @@ test("conversion execution, finalization, and restart recovery share a per-job a
 });
 
 
-test("conversion execution does not mark an unclaimed job failed when lock or preflight fails", () => {
+test("conversion execution only marks claimed attempts failed through the owned update", () => {
   assert.match(executeRoute, /let jobClaimed = false/);
   const claim = executeRoute.indexOf("jobClaimed = true");
   const catchStart = executeRoute.indexOf("} catch (e: any)");
   const catchBlock = executeRoute.slice(catchStart, executeRoute.indexOf("} finally", catchStart));
+  const updateAttemptStart = executeRoute.indexOf("updateAttempt = async (values) =>");
+  const updateAttemptEnd = executeRoute.indexOf("const readCurrentAttempt", updateAttemptStart);
+  const updateAttemptSource = executeRoute.slice(updateAttemptStart, updateAttemptEnd);
   assert.ok(claim >= 0 && catchStart > claim, "the claim flag must be set only after the atomic pending-to-running update");
+  assert.ok(updateAttemptStart >= 0 && updateAttemptEnd > updateAttemptStart, "attempt updates must be defined before conversion work");
   assert.match(catchBlock, /if \(jobClaimed\)/);
-  assert.match(catchBlock, /eq\(conversionJobsTable\.status, "running"\)/);
+  assert.match(catchBlock, /updateAttempt\?\.\(\{ status: "failed"/);
+  assert.match(updateAttemptSource, /eq\(conversionJobsTable\.id, id\)/);
+  assert.match(updateAttemptSource, /eq\(conversionJobsTable\.status, "running"\)/);
+  assert.match(updateAttemptSource, /eq\(conversionJobsTable\.activeAttemptId, currentAttemptId\)/);
 });
 
 
@@ -205,7 +221,7 @@ test("conversion finalization checkpoints pre-move intents and reconciles them b
   assert.match(finalizeSource, /onMoveIntent: \(move\) => checkpointFinalizationMove\(move, false\)/);
   assert.match(finalizeSource, /onMoveComplete: \(move\) => checkpointFinalizationMove\(move, true\)/);
   assert.match(finalizeSource, /finalizationJournal: \[\.\.\.finalizationJournal\]/);
-  assert.match(finalizeSource, /recoverConversionFinalizationMoves\(resultData\.finalizationJournal, nasPath\)/);
+  assert.match(finalizeSource, /recoverConversionFinalizationMoves\(\s*resultData\.finalizationJournal,\s*nasPath,\s*assertFinalizationOwnership,\s*\)/);
   assert.match(finalizeSource, /finalizationJournal: \[\]/);
   assert.match(recoverySource, /pendingFinalizations/);
   assert.match(recoverySource, /eq\(conversionJobsTable\.status, "awaiting_action"\)/);

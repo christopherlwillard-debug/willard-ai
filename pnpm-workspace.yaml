@@ -5,16 +5,6 @@ packages:
   - scripts
 
 autoInstallPeers: false
-forceLegacyDeploy: true
-
-supportedArchitectures:
-  os:
-    - linux
-    - win32
-    - darwin
-  cpu:
-    - x64
-    - arm64
 
 catalog:
   '@replit/vite-plugin-cartographer': ^0.5.21
@@ -40,6 +30,8 @@ catalog:
   wouter: ^3.3.5
   zod: ^4.6.6
 
+forceLegacyDeploy: true
+
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
@@ -53,38 +45,7 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
-  adm-zip: 0.6.1
-  body-parser: 2.4.0
-  proxy-addr: 2.0.8
-  multer: 2.5.0
-  shell-quote: 1.11.0
-  tar: 7.5.21
-  '@xmldom/xmldom': 0.9.12
-  undici: 6.29.1
-  postcss: 8.5.23
-  'nanoid@<3.3.18': 3.3.18
-  browserslist: 4.28.7
-  node-forge: 1.4.2
-  source-map-js: 1.2.2
-  compression: 1.8.2
-  decode-uri-component: 0.5.1
-  fast-copy: 4.1.0
-  fast-uri: 3.1.9
-  postcss-selector-parser: 6.1.5
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
-  'brace-expansion@<1.1.21': 1.1.21
-  'brace-expansion@>=2.0.0 <2.1.7': 2.1.7
-  'brace-expansion@>=4.0.0 <5.0.12': 5.0.12
-  ip-address: 10.7.4
-  js-yaml: 4.3.2
-  qs: 6.16.1
-  uuid: 11.1.1
-  glob: 14.0.2
-  minimatch: 11.0.1
-  metro@0.83.3: 0.83.8
-  metro@0.83.7: 0.83.8
-  sharp@0.34.5: 0.35.5
-  sharp: 0.35.5
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-arm64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-x64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-freebsd-ia32': '-'
@@ -104,7 +65,16 @@ overrides:
   '@tailwindcss/oxide>@tailwindcss/oxide-linux-arm64-musl': '-'
   '@tailwindcss/oxide>@tailwindcss/oxide-linux-x64-musl': '-'
   '@tailwindcss/oxide>@tailwindcss/oxide-win32-arm64-msvc': '-'
-  esbuild: 0.27.3
+  '@xmldom/xmldom': 0.9.12
+  adm-zip: 0.6.1
+  body-parser: 2.4.0
+  brace-expansion@<1.1.21: 1.1.21
+  brace-expansion@>=2.0.0 <2.1.7: 2.1.7
+  brace-expansion@>=4.0.0 <5.0.12: 5.0.12
+  browserslist: 4.28.7
+  compression: 1.8.2
+  decode-uri-component: 0.5.1
+  esbuild: 0.28.2
   esbuild>@esbuild/aix-ppc64: '-'
   esbuild>@esbuild/android-arm: '-'
   esbuild>@esbuild/android-arm64: '-'
@@ -129,6 +99,11 @@ overrides:
   esbuild>@esbuild/sunos-x64: '-'
   esbuild>@esbuild/win32-arm64: '-'
   esbuild>@esbuild/win32-ia32: '-'
+  fast-copy: 4.1.0
+  fast-uri: 3.1.9
+  glob: 14.0.2
+  ip-address: 10.7.4
+  js-yaml: 4.3.2
   lightningcss>lightningcss-android-arm64: '-'
   lightningcss>lightningcss-darwin-arm64: '-'
   lightningcss>lightningcss-darwin-x64: '-'
@@ -138,6 +113,16 @@ overrides:
   lightningcss>lightningcss-linux-arm64-musl: '-'
   lightningcss>lightningcss-linux-x64-musl: '-'
   lightningcss>lightningcss-win32-arm64-msvc: '-'
+  metro@0.83.3: 0.83.8
+  metro@0.83.7: 0.83.8
+  minimatch: 11.0.1
+  multer: 2.5.0
+  nanoid@<3.3.18: 3.3.18
+  node-forge: 1.4.2
+  postcss: 8.5.23
+  postcss-selector-parser: 6.1.5
+  proxy-addr: 2.0.8
+  qs: 6.16.1
   rollup>@rollup/rollup-android-arm-eabi: '-'
   rollup>@rollup/rollup-android-arm64: '-'
   rollup>@rollup/rollup-darwin-arm64: '-'
@@ -161,3 +146,18 @@ overrides:
   rollup>@rollup/rollup-win32-arm64-msvc: '-'
   rollup>@rollup/rollup-win32-ia32-msvc: '-'
   rollup>@rollup/rollup-win32-x64-gnu: '-'
+  sharp: 0.35.5
+  sharp@0.34.5: 0.35.5
+  shell-quote: 1.11.0
+  source-map-js: 1.2.2
+  tar: 7.5.21
+  undici: 6.29.1
+  uuid: 11.1.1
+
+patchedDependencies:
+  '@expo/cli@54.0.28': patches/@expo__cli@54.0.28.patch
+  deepmerge@4.3.1: patches/deepmerge@4.3.1.patch
+
+supportedArchitectures:
+  cpu: [x64, arm64]
+  os: [linux, win32, darwin]

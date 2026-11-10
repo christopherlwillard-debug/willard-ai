@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   formatMediaToolExecutionError,
@@ -91,19 +93,66 @@ test("media tool timeout is enforced and missing binaries stay actionable", asyn
 
 test("aborting a conversion media tool stops its child process", async () => {
   const controller = new AbortController();
-  const startedAt = Date.now();
+  const tempDirectory = mkdtempSync(path.join(tmpdir(), "willard-media-abort-"));
+  const pidFile = path.join(tempDirectory, "child.pid");
+  const childProgram = [
+    "process.on('SIGTERM', () => {});",
+    "require('node:fs').writeFileSync(process.argv[1], String(process.pid));",
+    "setInterval(() => {}, 1_000);",
+  ].join("");
   const pending = runMediaToolAsync(
     process.execPath,
-    ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000)"],
+    ["-e", childProgram, pidFile],
     { timeoutMs: 10_000, signal: controller.signal },
   );
-  const abortTimer = setTimeout(() => controller.abort(new Error("conversion lock lost")), 150);
   try {
-    await assert.rejects(pending, /conversion lock lost|aborted/i);
+    const startDeadline = Date.now() + 3_000;
+    while (!existsSync(pidFile) && Date.now() < startDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(existsSync(pidFile), "the child must start before testing cancellation");
+    const childPid = Number(readFileSync(pidFile, "utf8"));
+    assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "aborted child must record its PID");
+
+    const startedAt = Date.now();
+    controller.abort(new Error("conversion lock lost"));
+    await assert.rejects(pending, (error: NodeJS.ErrnoException) => {
+      assert.match(error.message, /conversion lock lost|aborted/i);
+      return true;
+    });
+    assert.ok(Date.now() - startedAt < 4_000, "lock loss must reject the request promptly");
+
+    if (process.platform !== "win32") {
+      const terminationDeadline = Date.now() + 4_000;
+      let exited = false;
+      while (Date.now() < terminationDeadline) {
+        try {
+          process.kill(childPid, 0);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+            exited = true;
+            break;
+          }
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!exited) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The child may exit between the liveness check and this cleanup.
+        }
+        assert.fail("aborted media subprocess remained alive after cancellation");
+      }
+    }
   } finally {
-    clearTimeout(abortTimer);
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("media cancellation test cleanup"));
+    }
+    await pending.catch(() => undefined);
+    rmSync(tempDirectory, { recursive: true, force: true });
   }
-  assert.ok(Date.now() - startedAt < 4_000, "lock loss must terminate a media tool promptly");
 });
 
 test("conversion and thumbnail routes await FFmpeg instead of running it synchronously", () => {

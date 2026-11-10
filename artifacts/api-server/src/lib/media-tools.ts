@@ -211,7 +211,9 @@ export function runMediaToolAsync(
       windowsHide: true,
       signal: options.signal,
     }, (error, stdout, stderr) => {
-      cleanup();
+      // Abort can invoke the execFile callback before the child closes. Keep
+      // the escalation timer and shutdown registration until close/error so a
+      // child that ignores SIGTERM is still force-stopped.
       if (error) {
         const failure = error as MediaToolExecutionError;
         failure.stdout = String(stdout ?? "");
@@ -226,7 +228,6 @@ export function runMediaToolAsync(
     });
     activeMediaProcesses.add(child);
     child.once("close", cleanup);
-    child.once("error", cleanup);
     options.signal?.addEventListener("abort", onAbort, { once: true });
 
     // execFile sends SIGTERM at timeoutMs but waits for the child to close.

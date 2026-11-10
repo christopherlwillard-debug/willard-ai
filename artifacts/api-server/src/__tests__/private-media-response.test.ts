@@ -63,7 +63,8 @@ test("branding logo stream failures are handled without an unhandled error", () 
     "../routes/settings.ts",
   );
   const routeSource = fs.readFileSync(routePath, "utf8");
-  assert.match(routeSource, /const stream = fs\.createReadStream\(settings\.logoPath\)/);
+  assert.match(routeSource, /openRegularFileWithoutSymlinkTraversal\(getBrandingDir\(\), settings\.logoPath\)/);
+  assert.match(routeSource, /const stream = openedFile\s*\? fs\.createReadStream\(settings\.logoPath, \{ fd: openedFile\.fd, autoClose: true \}\)\s*: fs\.createReadStream\(settings\.logoPath\)/);
   assert.match(routeSource, /stream\.on\("error", \(streamError\) =>/);
   assert.match(routeSource, /handlePrivateMediaStreamError\(res, streamError, "Logo file not found"\)/);
 });

@@ -4328,3 +4328,36 @@ This entry records the earlier recovery checkpoint; its branch and working-tree 
 - The routed-browser workflow launcher continued to reject restart because its prior workflow tasks were marked failed, although the same `pnpm run test:routed` command passed directly after the fixes.
 - The Expo/Metro workflow crashed at startup with `TypeError: eventsQueue is not iterable`; the static-server tests and mobile typecheck pass, but the Expo runtime was not verified.
 - This addendum does not close the other previously recorded open findings. In particular, prepared-phase Windows installer recovery still needs the stable-bootstrap/data-root work; archive and organization worker lifecycle/fencing findings remain open; the November 7 Health Center and mobile authentication/storage findings remain unchanged. No commit, push, branch change, deployment, release, or production-data mutation occurred.
+
+## November 10 — Remediation batch: path fencing, worker cleanup, and mobile runtime
+
+### P1 — Linux path reads are descriptor-fenced; Windows reparse races remain
+
+- The ledger uses descriptive P-level headings rather than stable numeric finding IDs; references below retain those headings rather than inventing IDs.
+- Added Linux descriptor-relative directory traversal and regular-file opening with `O_NOFOLLOW`. Health Center inventory and empty-folder removal, media originals and thumbnails, face crops, and branding-logo reads use the helpers. The API does not expose these routes without authentication.
+- Regression tests exercise traversal, final/parent symlink replacement, directory-entry replacement, and outside-root sentinel preservation. The media-serving contract now requires descriptor-backed Linux streams; the Windows fallback remains explicit.
+- The fresh SAST scan still reports eight HIGH path findings. The finding in `safe-directory-read.ts` and three mobile-server findings refer to Linux `/proc/self/fd` descriptor operations that the analyzer does not model. The Explorer's two Windows fallback reads and the mobile static-server's two non-Linux fallback reads remain path-based and raceable if a directory or reparse point changes between validation and open.
+- **Remaining blocker:** Node's current Windows `fs` API does not provide the required handle-relative, no-reparse-point traversal used here on Linux. Do not claim cross-platform symlink/reparse protection until a native Windows handle implementation or a documented fail-closed policy is validated on Windows, including mapped drives and UNC paths.
+
+### P1 — Installed update recovery and request-bound work are not fully closed
+
+- The Windows update journal still cannot guarantee recovery when the running launcher is inside the payload directory that the updater moves. If the process exits after that move, a fresh launch may have no launcher at the original path. No PowerShell runtime is available in this Linux workspace, so installed crash/relaunch behavior was not validated. Stable bootstrap work and Windows installer lifecycle testing remain required.
+- Fixed media-tool cancellation cleanup: an abort can reject the wrapper promise before the child process exits. The kill-escalation timer and shutdown registration now remain owned until the child's `close` event. A regression test runs a child that ignores SIGTERM and verifies it exits.
+- Existing conversion attempt fencing and per-attempt staging remain in place and their recovery tests pass. However, full Health Center scans and archive/organization extraction still include request-bound work without durable cancel/resume behavior across process restart; keep those lifecycle findings open.
+
+### P2 — Mobile auth, dependency mitigation, and Expo watcher compatibility
+
+- Mobile auth keeps the session in secure storage, does not fall back to an insecure bearer cookie when secure reads fail, and distinguishes setup/sign-in/service-error states. Secure-storage/auth tests pass 7/7; unauthorized fetch notification tests pass 2/2.
+- The dependency scan reports one MODERATE finding for `deepmerge@4.3.1` (GHSA-gcqx-w48m-w2h4 / CVE-2026-93753). GitHub lists versions `>=4.2.0 <=4.3.1` as affected and no patched release. Expo configuration tooling pulls it transitively. A local pnpm patch rejects `__proto__`, `constructor`, and `prototype` keys; regression tests pass 2/2, but the scanner finding remains open until upstream ships a fix or the parent dependency is safely replaced. The esbuild override remains at 0.28.2 and has no finding in this scan.
+- Expo CLI 54.0.28 expected Metro's older `eventsQueue` watcher payload while the installed Metro 0.83.8 emits `changes` aggregates. A compatibility adapter handles both formats. The five compatibility tests pass, the Expo workflow starts, and the Android JavaScript bundle exports successfully.
+
+### Validation, preserved artifacts, and branch state
+
+- Final disposable backend audit: **90 test files, 610 tests, 609 passed, 1 skipped, 0 failed**. The disposable PostgreSQL/API processes were stopped and their temporary directory was removed; no development or production database was used.
+- Workspace typecheck, API route parity (2/2), generated-export checks (4/4), generated-tree diff check, router audit, artifact-manifest check, release contracts (88/88), UI contracts (24/24), dependency-security tests (4/4), Expo watcher tests (5/5), mobile secure-storage tests (7/7), and routed browser tests (5/5) passed. The routed workflow launcher still reports its stale failed-task state even though the direct command passes.
+- Media viewer E2E passed **1/1**, with no failed requests or page errors; its sole console error is the expected missing-logo 404. Optimize-cycle passed 2/2 and dashboard-after-scan passed 3/3 within the disposable backend suite.
+- The HoundDog scan found 0 issues. The dependency scan found 0 critical/high, 1 moderate, 0 low; SAST found 8 HIGH path-flow findings described above. Targeted secret-pattern checks found no credential-like additions.
+- The tracked optimize-route `.bak` and all four tracked timestamped cache snapshots remain present. No runtime code references those snapshot paths; runtime code does use the same cache filename pattern. They were not deleted. No database schema change was made in this batch.
+- Current audit branch is `audit/full-repository-review-2026-11` at `fb9a17b52c39fc76d36fc48096ec131ff6d02550`, two commits ahead of `origin/audit/full-repository-review-2026-11` at `7d0fc7a54fde924ae0e9962ae08a5a5ce23dcf3f`. Changes remain unstaged; no commit or push was made.
+- Correction to the prior branch snapshot: local `main` is now at `517847e8d3941ae58a76d266aa0de9628b299f1f`, a one-parent commit dated November 10 03:18 UTC whose parent is the previously recorded `5ce1269c9576482da7baa3df03f09a2274a8bf23`. Its reflog entry predates this remediation run. `origin/main` remains `117ef63882285c99928d80595064cfca25d54006`. The audit branch and local `main` diverge at `1a971f7cd647b8c3688e115635a48839dcbf21af`; this batch did not move either ref or merge the local-main-only work.
+- This batch does not close the Windows update-bootstrap blocker, Windows reparse-point race, request-bound archive/Health Center lifecycle, or unpatched deepmerge advisory.

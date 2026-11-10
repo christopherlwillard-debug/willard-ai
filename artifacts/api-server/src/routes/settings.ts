@@ -10,6 +10,7 @@ import * as path from "path";
 import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReachableAsync, nasLogStream, normalizeNasPath } from "../lib/nas-storage";
 import { logger } from "../lib/logger";
 import { handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
+import { openRegularFileWithoutSymlinkTraversal } from "../lib/safe-directory-read.ts";
 import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
@@ -350,6 +351,13 @@ router.get("/settings/logo", async (_req, res) => {
       res.status(404).json({ error: "No logo set" });
       return;
     }
+    let openedFile: ReturnType<typeof openRegularFileWithoutSymlinkTraversal>;
+    try {
+      openedFile = openRegularFileWithoutSymlinkTraversal(getBrandingDir(), settings.logoPath);
+    } catch {
+      res.status(404).json({ error: "No logo set" });
+      return;
+    }
     const ext = path.extname(settings.logoPath).toLowerCase();
     const contentType =
       ext === ".png" ? "image/png" :
@@ -364,7 +372,9 @@ router.get("/settings/logo", async (_req, res) => {
       res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     }
     res.setHeader("Cache-Control", "no-cache");
-    const stream = fs.createReadStream(settings.logoPath);
+    const stream = openedFile
+      ? fs.createReadStream(settings.logoPath, { fd: openedFile.fd, autoClose: true })
+      : fs.createReadStream(settings.logoPath);
     stream.on("error", (streamError) => {
       logger.error({ err: streamError }, "Branding logo stream failed");
       handlePrivateMediaStreamError(res, streamError, "Logo file not found");

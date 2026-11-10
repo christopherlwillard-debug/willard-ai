@@ -29,6 +29,8 @@
 - [GitHub workflow push authentication](github-workflow-push.md) — workflow-file pushes need a classic PAT via askpass; use x-access-token as the username
 - [Windows launcher split](windows-launcher-split.md) — packaged desktop startup is separate from the developer launcher; optimize and test both paths
 - [Windows launcher path quoting](windows-launcher-path-quoting.md) — Start-Process arguments must quote paths because developer folders and installed roots commonly contain spaces
+- [Media child abort lifecycle](media-child-abort-lifecycle.md) — cancellation may reject before the OS child exits; retain kill escalation and shutdown tracking until `close`
+- [Expo Metro watcher compatibility](expo-metro-watcher-compat.md) — normalize Metro's newer `changes` payload because Expo CLI 54 expects the older `eventsQueue` shape
 - [Windows updater live locks](windows-updater-live-locks.md) — stage from the remote, then stop services before copying mutable state; never prepare from the live checkout
 - [Node module-mock tests](node-module-mock-tests.md) — Node tests using mock.module require --experimental-test-module-mocks alongside --experimental-strip-types
 - [Vectorless auth bootstrap](vectorless-auth-bootstrap.md) — keep required schema independent of pgvector and consume recovery keys with compare-and-set

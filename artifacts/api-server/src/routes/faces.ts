@@ -5,6 +5,7 @@ import { getActiveNasPath } from "../lib/active-library.ts";
 import { getFaceStatus, refreshPerson } from "../lib/face-recognition";
 import { logger } from "../lib/logger";
 import { getWillardAIDir, resolveWithinRoot } from "../lib/nas-storage";
+import { openRegularFileWithoutSymlinkTraversal } from "../lib/safe-directory-read.ts";
 import { isVectorAvailable } from "../lib/vector-capability";
 import { handlePrivateMediaStreamError, setPrivateMediaResponseHeaders } from "../lib/private-media-response.ts";
 import { parsePositiveIntegerParam, parsePositiveIntegerValue } from "../lib/request-validation.ts";
@@ -264,10 +265,17 @@ router.get("/faces/:faceId/crop", async (req: Request, res: Response) => {
     let safeCropPath: string;
     try { safeCropPath = resolveWithinRoot(cropPath, getWillardAIDir(nasPath)); }
     catch { return res.status(404).json({ error: "Crop not found" }); }
-    if (!cropPath || !fs.existsSync(safeCropPath)) return res.status(404).json({ error: "Crop not found" });
+    if (!cropPath) return res.status(404).json({ error: "Crop not found" });
+    let openedFile: ReturnType<typeof openRegularFileWithoutSymlinkTraversal>;
+    try {
+      openedFile = openRegularFileWithoutSymlinkTraversal(getWillardAIDir(nasPath), safeCropPath);
+      if (!openedFile && !fs.existsSync(safeCropPath)) return res.status(404).json({ error: "Crop not found" });
+    } catch { return res.status(404).json({ error: "Crop not found" }); }
     res.setHeader("Content-Type", "image/webp");
     setPrivateMediaResponseHeaders(res);
-    const stream = fs.createReadStream(safeCropPath);
+    const stream = openedFile
+      ? fs.createReadStream(safeCropPath, { fd: openedFile.fd, autoClose: true })
+      : fs.createReadStream(safeCropPath);
     stream.on("error", (streamError) => {
       logger.warn({ err: streamError, faceId }, "face crop stream failed");
       handlePrivateMediaStreamError(res, streamError);

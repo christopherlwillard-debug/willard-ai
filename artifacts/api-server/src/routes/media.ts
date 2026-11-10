@@ -12,6 +12,7 @@ import { purgeDerivedDataForMedia } from "../lib/derived-cleanup.ts";
 import { parseBoundedInteger, parseOptionalQueryString, parsePositiveIntegerParam, RequestValidationError } from "../lib/request-validation.ts";
 import { escapeLikePattern } from "../lib/sql-like.ts";
 import { parseSingleByteRange, sendRangeNotSatisfiable, streamFileWithErrorHandling } from "../lib/media-range.ts";
+import { openRegularFileWithoutSymlinkTraversal } from "../lib/safe-directory-read.ts";
 import { logger } from "../lib/logger.ts";
 import { getActiveNasPath } from "../lib/active-library.ts";
 import { setPrivateMediaResponseHeaders, setMediaStreamContentHeaders, handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
@@ -586,10 +587,20 @@ router.get("/media/timeline/items", async (req: Request, res: Response) => {
 
 // ── GET /api/media/thumbnail/:id — serve or generate thumbnail ───────────────
 
-function serveCachedThumb(res: Response, thumbPath: string, id: number): void {
+function serveCachedThumb(res: Response, thumbPath: string, id: number, nasPath: string): void {
+  let openedFile: ReturnType<typeof openRegularFileWithoutSymlinkTraversal>;
+  try {
+    openedFile = openRegularFileWithoutSymlinkTraversal(getWillardAIDir(nasPath), thumbPath);
+  } catch (error) {
+    logger.warn({ err: error, mediaId: id }, "thumbnail failed its no-follow path check");
+    res.status(404).json({ error: "Thumbnail not found" });
+    return;
+  }
   res.setHeader("Content-Type", "image/webp");
   setPrivateMediaResponseHeaders(res);
-  const stream = fs.createReadStream(thumbPath);
+  const stream = openedFile
+    ? fs.createReadStream(thumbPath, { fd: openedFile.fd, autoClose: true })
+    : fs.createReadStream(thumbPath);
   stream.on("error", (streamError) => {
     _thumbCache.delete(id);
     logger.warn({ err: streamError, mediaId: id }, "thumbnail stream failed");
@@ -622,7 +633,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   const cached = _thumbCache.get(id);
   if (cached?.nasPath === nasPath) {
     if (isThumbnailFileValid(cached.path)) {
-      serveCachedThumb(res, cached.path, id);
+      serveCachedThumb(res, cached.path, id, nasPath);
       return;
     }
     _thumbCache.delete(id);
@@ -650,7 +661,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
       const thumbPath = resolveWithinRoot(file.thumbnailPath, getWillardAIDir(nasPath));
        if (isThumbnailFileValid(thumbPath)) {
         _thumbCache.set(id, { nasPath, path: thumbPath });
-        serveCachedThumb(res, thumbPath, id);
+        serveCachedThumb(res, thumbPath, id, nasPath);
         return;
       }
     } catch {
@@ -668,7 +679,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
       .set({ thumbnailPath: safeThumbFile, thumbnailGeneratedAt: new Date() })
       .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
       .catch(() => {});
-    serveCachedThumb(res, safeThumbFile, id);
+    serveCachedThumb(res, safeThumbFile, id, nasPath);
     return;
   }
 
@@ -708,7 +719,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   }
 
   _thumbCache.set(id, { nasPath, path: safeResultPath });
-  serveCachedThumb(res, safeResultPath, id);
+  serveCachedThumb(res, safeResultPath, id, nasPath);
 });
 
 // ── GET /api/media/file/:id/stream — stream original file ────────────────────
@@ -742,14 +753,20 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Stored media path is outside the configured library" });
     return;
   }
-  if (!fs.existsSync(sourcePath)) {
-    res.status(404).json({ error: "Source file not found on NAS" });
-    return;
-  }
 
   let stat: fs.Stats;
+  let openedFile: ReturnType<typeof openRegularFileWithoutSymlinkTraversal> = null;
   try {
-    stat = fs.statSync(sourcePath);
+    openedFile = openRegularFileWithoutSymlinkTraversal(nasPath, file.relativePath);
+    if (openedFile) {
+      stat = openedFile.stat;
+    } else {
+      if (!fs.existsSync(sourcePath)) {
+        res.status(404).json({ error: "Source file not found on NAS" });
+        return;
+      }
+      stat = fs.statSync(sourcePath);
+    }
   } catch {
     res.status(404).json({ error: "Source file not found on NAS" });
     return;
@@ -760,6 +777,7 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
     ? null
     : parseSingleByteRange(requestedRange, stat.size);
   if (requestedRange !== undefined && range === null) {
+    if (openedFile) fs.closeSync(openedFile.fd);
     sendRangeNotSatisfiable(res, stat.size);
     return;
   }
@@ -772,10 +790,10 @@ router.get("/media/file/:id/stream", async (req: Request, res: Response) => {
     res.status(206);
     res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${stat.size}`);
     res.setHeader("Content-Length", chunkSize);
-    streamFileWithErrorHandling(res, sourcePath, range);
+    streamFileWithErrorHandling(res, sourcePath, { ...range, ...(openedFile ? { fd: openedFile.fd } : {}) });
   } else {
     res.setHeader("Content-Length", stat.size);
-    streamFileWithErrorHandling(res, sourcePath);
+    streamFileWithErrorHandling(res, sourcePath, openedFile ? { fd: openedFile.fd } : undefined);
   }
 });
 

@@ -10,6 +10,7 @@ import { setBaseUrl } from "@workspace/api-client-react";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
+import { Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -17,6 +18,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LoginScreen } from "@/components/LoginScreen";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { useColors } from "@/hooks/useColors";
 
 setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
 
@@ -26,6 +28,7 @@ const queryClient = new QueryClient();
 
 function RootLayoutNav() {
   const { authenticated, loading, setupRequired, statusError, refreshStatus, error } = useAuth();
+  const colors = useColors();
   if (loading) return null;
   if (!authenticated) {
     return (
@@ -38,9 +41,16 @@ function RootLayoutNav() {
     );
   }
   return (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-    </Stack>
+    <View style={{ flex: 1 }}>
+      <Stack screenOptions={{ headerBackTitle: "Back" }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      </Stack>
+      {error ? (
+        <View style={{ paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderColor: colors.border, backgroundColor: colors.card }}>
+          <Text accessibilityRole="alert" style={{ color: colors.destructive }}>{error}</Text>
+        </View>
+      ) : null}
+    </View>
   );
 }
 

@@ -13,6 +13,8 @@
     "test:database-backup": "node --test desktop/database-backup.test.mjs desktop/postgres-snapshot-process.test.mjs",
     "test:storage-conformance": "node --experimental-strip-types --test artifacts/api-server/src/__tests__/storage-policy.test.ts artifacts/api-server/src/__tests__/nas-storage-paths.test.ts && node --test scripts/windows/storage-conformance.test.mjs",
     "test:release-contracts": "node --test desktop/release-contract.test.mjs scripts/artifact-sources.test.mjs scripts/windows/release-payload.test.mjs scripts/windows/installer-config.test.mjs scripts/windows/storage-conformance.test.mjs",
+    "test:dependency-security": "node --test scripts/deepmerge-security.test.mjs && node --experimental-strip-types --test scripts/custom-fetch-auth.test.mjs",
+    "test:expo-watcher-compat": "node --test scripts/expo-metro-watch-compat.test.mjs",
     "test:ui-contracts": "node --test scripts/ui-accessibility.test.mjs",
     "test:routed": "node scripts/run-routed-workflows.mjs",
     "audit:backend": "node scripts/backend-audit-disposable.mjs"

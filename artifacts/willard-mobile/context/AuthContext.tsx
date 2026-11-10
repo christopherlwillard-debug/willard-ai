@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { setCookieGetter } from "@workspace/api-client-react";
+import { setCookieGetter, setUnauthorizedHandler } from "@workspace/api-client-react";
 import { fetch } from "expo/fetch";
 import * as SecureStore from "expo-secure-store";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -63,9 +63,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyAuthStatus]);
 
+  const handleUnauthorized = useCallback(() => {
+    if (!mounted.current) return;
+    sessionCookie = null;
+    setCookie(null);
+    setAuthenticated(false);
+    setSetupRequired(false);
+    setStatusError(null);
+    setError("Your session expired or was revoked. Sign in again.");
+    if (Platform.OS !== "web") {
+      void clearStoredSession(
+        {
+          getItemAsync: SecureStore.getItemAsync,
+          setItemAsync: (key, value) => SecureStore.setItemAsync(key, value),
+          deleteItemAsync: SecureStore.deleteItemAsync,
+        },
+        AsyncStorage,
+        COOKIE_STORAGE_KEY,
+      ).catch(() => {
+        if (mounted.current) {
+          setError("Your session expired. Sign in again; the saved session could not be fully removed from this device.");
+        }
+      });
+    }
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     setCookieGetter(() => Platform.OS === "web" ? null : sessionCookie);
+    setUnauthorizedHandler(handleUnauthorized);
     void (async () => {
       try {
         if (Platform.OS !== "web") {
@@ -110,8 +136,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted.current = false;
       setCookieGetter(null);
+      setUnauthorizedHandler(null);
     };
-  }, [applyAuthStatus]);
+  }, [applyAuthStatus, handleUnauthorized]);
 
   const value = useMemo<AuthContextValue>(() => ({
     authenticated,
