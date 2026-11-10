@@ -117,6 +117,7 @@ export async function validateRelease() {
     "desktop/loading.html",
     "desktop/release-contract.mjs",
     "api-runtime/dist/index.mjs",
+    "api-runtime/vendor/windows_safe_fs.node",
     "api-runtime/setup-db.cjs",
     "web/index.html",
     "web/willard-loading.mp4",

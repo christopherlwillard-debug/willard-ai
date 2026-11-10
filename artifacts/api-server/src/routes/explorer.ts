@@ -84,9 +84,8 @@ router.get("/explorer", async (req, res) => {
     try {
       safeEntries = readDirectoryWithoutSymlinkTraversal(nasPath, targetPath);
       if (safeEntries === null) {
-        // Windows does not expose handle-relative directory enumeration in
-        // Node's fs API. Keep the existing canonical checks for that runtime;
-        // Linux, including the hosted API, uses descriptor-relative reads.
+        // Linux and Windows use descriptor- or handle-bound listings. Keep
+        // this compatibility path only for platforms without either helper.
         entries = fs.readdirSync(targetPath, { withFileTypes: true });
       }
     } catch {

@@ -33,6 +33,10 @@ on:
       - "scripts/windows/validate-release.mjs"
       - "artifacts/api-server/build.mjs"
       - "artifacts/api-server/package.json"
+      - "artifacts/api-server/native/windows-safe-fs/**"
+      - "artifacts/api-server/src/lib/safe-directory-read.ts"
+      - "scripts/windows/build-safe-fs-addon.mjs"
+      - "scripts/windows/windows-safe-fs.test.mjs"
       - "artifacts/willard-ai/package.json"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -63,6 +67,10 @@ on:
       - "scripts/windows/validate-release.mjs"
       - "artifacts/api-server/build.mjs"
       - "artifacts/api-server/package.json"
+      - "artifacts/api-server/native/windows-safe-fs/**"
+      - "artifacts/api-server/src/lib/safe-directory-read.ts"
+      - "scripts/windows/build-safe-fs-addon.mjs"
+      - "scripts/windows/windows-safe-fs.test.mjs"
       - "artifacts/willard-ai/package.json"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -110,6 +118,14 @@ jobs:
 
       - name: Install the frozen workspace dependency graph
         run: pnpm install --frozen-lockfile
+
+      - name: Build and test native Windows filesystem access
+        shell: pwsh
+        run: |
+          pnpm --filter @workspace/api-server run build:safe-fs
+          if ($LASTEXITCODE -ne 0) { throw "The Windows safe-filesystem addon failed to build." }
+          node --test scripts/windows/windows-safe-fs.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "The Windows safe-filesystem tests failed." }
 
       - name: Install Inno Setup
         shell: pwsh

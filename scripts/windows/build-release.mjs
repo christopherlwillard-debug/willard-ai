@@ -172,6 +172,14 @@ async function assertPackagedSevenZip(apiOutput) {
   }
 }
 
+async function assertPackagedWindowsSafeFs(apiOutput) {
+  const filePath = path.join(apiOutput, "vendor", "windows_safe_fs.node");
+  const info = await lstat(filePath).catch(() => null);
+  if (!info?.isFile() || info.isSymbolicLink()) {
+    throw new Error("The Windows native safe-filesystem helper is missing from the API runtime.");
+  }
+}
+
 async function pruneBuildOnlyFiles(apiOutput) {
   for (const relative of [
     "src",
@@ -227,7 +235,12 @@ async function main() {
 
   await copy(path.join(root, "artifacts/willard-ai/dist/public"), path.join(output, "web"));
   await copy(path.join(root, "artifacts/api-server/dist"), path.join(output, "api-runtime/dist"));
+  await copy(
+    path.join(root, "artifacts/api-server/native/windows-safe-fs/build/Release/windows_safe_fs.node"),
+    path.join(apiOutput, "vendor", "windows_safe_fs.node"),
+  );
   await assertPackagedSevenZip(apiOutput);
+  await assertPackagedWindowsSafeFs(apiOutput);
   await copy(path.join(root, "setup-db.cjs"), path.join(output, "api-runtime/setup-db.cjs"));
   await copy(path.join(root, "desktop/release-contract.mjs"), path.join(output, "desktop/release-contract.mjs"));
   await copy(path.join(root, "desktop/desktop-web-server.mjs"), path.join(output, "desktop/desktop-web-server.mjs"));

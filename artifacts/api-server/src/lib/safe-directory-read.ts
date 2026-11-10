@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 
 const PROC_FD_ROOT = "/proc/self/fd";
@@ -16,11 +17,64 @@ export interface SafeDirectoryReadHooks {
   afterTargetOpened?: () => void;
   afterEntriesRead?: () => void;
   afterParentOpened?: () => void;
+  afterFileOpened?: () => void;
 }
 
 export interface SafeOpenedRegularFile {
   fd: number;
   stat: fs.Stats;
+}
+
+interface WindowsSafeFsAddon {
+  openRegularFile(root: string, target: string, afterOpen?: () => void): number;
+  readDirectory(
+    root: string,
+    target: string,
+    afterOpen?: () => void,
+  ): {
+    canonicalRoot: string;
+    entries: Array<{
+      name: string;
+      isDirectory: boolean;
+      sizeBytes: number;
+      modifiedAtMs: number;
+      fileCount: number | null;
+    }>;
+  };
+  removeEmptyDirectory(root: string, target: string, afterOpen?: () => void): boolean;
+}
+
+const moduleRequire = createRequire(import.meta.url);
+let cachedWindowsSafeFs: WindowsSafeFsAddon | undefined;
+
+function getWindowsSafeFs(): WindowsSafeFsAddon {
+  if (cachedWindowsSafeFs) return cachedWindowsSafeFs;
+
+  const candidates = [
+    process.env["WILLARD_WINDOWS_SAFE_FS_ADDON"],
+    path.resolve(process.cwd(), "vendor", "windows_safe_fs.node"),
+    path.resolve(process.cwd(), "native", "windows-safe-fs", "build", "Release", "windows_safe_fs.node"),
+    path.resolve(
+      process.cwd(),
+      "artifacts",
+      "api-server",
+      "native",
+      "windows-safe-fs",
+      "build",
+      "Release",
+      "windows_safe_fs.node",
+    ),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    cachedWindowsSafeFs = moduleRequire(candidate) as WindowsSafeFsAddon;
+    return cachedWindowsSafeFs;
+  }
+
+  throw new Error(
+    "Windows safe filesystem support is not built. Run the API server Windows safe-filesystem build before startup.",
+  );
 }
 
 function descriptorPath(fd: number): string {
@@ -90,6 +144,23 @@ export function readDirectoryWithoutSymlinkTraversal(
   requestedDirectory: string,
   hooks: SafeDirectoryReadHooks = {},
 ): { canonicalRoot: string; entries: SafeListedDirectoryEntry[] } | null {
+  if (process.platform === "win32") {
+    const native = getWindowsSafeFs().readDirectory(
+      configuredRoot,
+      path.resolve(requestedDirectory),
+      hooks.afterTargetOpened,
+    );
+    return {
+      canonicalRoot: native.canonicalRoot,
+      entries: native.entries.map((entry) => ({
+        name: entry.name,
+        isDirectory: entry.isDirectory,
+        sizeBytes: entry.sizeBytes,
+        modifiedAt: new Date(entry.modifiedAtMs).toISOString(),
+        fileCount: entry.fileCount,
+      })),
+    };
+  }
   if (process.platform !== "linux" || !fs.existsSync(PROC_FD_ROOT)) return null;
 
   const canonicalRoot = fs.realpathSync(configuredRoot);
@@ -172,6 +243,13 @@ export function removeEmptyDirectoryWithoutSymlinkTraversal(
   targetDirectory: string,
   hooks: SafeDirectoryReadHooks = {},
 ): boolean | null {
+  if (process.platform === "win32") {
+    return getWindowsSafeFs().removeEmptyDirectory(
+      configuredRoot,
+      path.resolve(targetDirectory),
+      hooks.afterTargetOpened,
+    );
+  }
   if (process.platform !== "linux" || !fs.existsSync(PROC_FD_ROOT)) return null;
 
   const relativePath = path.relative(path.resolve(configuredRoot), path.resolve(targetDirectory));
@@ -214,6 +292,24 @@ export function openRegularFileWithoutSymlinkTraversal(
   requestedPath: string,
   hooks: SafeDirectoryReadHooks = {},
 ): SafeOpenedRegularFile | null {
+  if (process.platform === "win32") {
+    const targetPath = path.isAbsolute(requestedPath)
+      ? path.resolve(requestedPath)
+      : path.resolve(configuredRoot, requestedPath.replace(/\\/g, path.sep));
+    const fd = getWindowsSafeFs().openRegularFile(
+      configuredRoot,
+      targetPath,
+      hooks.afterFileOpened,
+    );
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new Error("Requested path is not a regular file.");
+      return { fd, stat };
+    } catch (error) {
+      fs.closeSync(fd);
+      throw error;
+    }
+  }
   if (process.platform !== "linux" || !fs.existsSync(PROC_FD_ROOT)) return null;
   const lexicalRoot = path.resolve(configuredRoot);
   const canonicalRoot = fs.realpathSync(configuredRoot);
