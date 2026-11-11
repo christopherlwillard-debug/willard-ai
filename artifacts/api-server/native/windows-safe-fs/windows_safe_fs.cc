@@ -63,15 +63,6 @@ struct DirectoryEntry {
   double modifiedAtMs;
 };
 
-std::string narrowAscii(const std::wstring& value) {
-  std::string result;
-  result.reserve(value.size());
-  for (wchar_t character : value) {
-    result.push_back(character >= 0 && character <= 0x7f ? static_cast<char>(character) : '?');
-  }
-  return result;
-}
-
 std::wstring valueToWide(napi_env env, napi_value value) {
   size_t length = 0;
   napi_status status = napi_get_value_string_utf16(env, value, nullptr, 0, &length);
@@ -194,14 +185,6 @@ FILE_STANDARD_INFO standardInfo(HANDLE handle) {
   return info;
 }
 
-FILE_BASIC_INFO basicInfo(HANDLE handle) {
-  FILE_BASIC_INFO info{};
-  if (!GetFileInformationByHandleEx(handle, FileBasicInfo, &info, sizeof(info))) {
-    throwLastError("Reading file timestamps");
-  }
-  return info;
-}
-
 void rejectReparsePoint(HANDLE handle) {
   FILE_ATTRIBUTE_TAG_INFO info{};
   if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &info, sizeof(info))) {
@@ -310,7 +293,10 @@ void enumerateDirectory(HANDLE directory, Callback callback) {
         DirectoryEntry item{
           name,
           (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
-          entry->EndOfFile.QuadPart < 0 ? 0 : static_cast<uint64_t>(entry->EndOfFile.QuadPart),
+          (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+              entry->EndOfFile.QuadPart < 0
+            ? 0
+            : static_cast<uint64_t>(entry->EndOfFile.QuadPart),
           fileTimeToUnixMs(entry->LastWriteTime)
         };
         callback(item);

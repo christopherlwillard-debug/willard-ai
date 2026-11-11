@@ -3,3 +3,6 @@
 
 # No need to store the pnpm store twice.
 .local
+
+# Windows-only native addon build output.
+artifacts/api-server/native/windows-safe-fs/build/

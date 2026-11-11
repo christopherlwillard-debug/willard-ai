@@ -41,6 +41,17 @@ if (process.platform !== "win32") {
     assert.throws(() => safeFs.openRegularFile(library, outsideFile));
   });
 
+  test("does not list or open content through a junction beneath the library", (t) => {
+    const { library, outside } = fixture(t);
+    const junction = path.join(library, "outside-link");
+    fs.writeFileSync(path.join(outside, "secret.txt"), "outside-data");
+    fs.symlinkSync(outside, junction, "junction");
+
+    assert.deepEqual(safeFs.readDirectory(library, library).entries, []);
+    assert.throws(() => safeFs.readDirectory(library, junction));
+    assert.throws(() => safeFs.openRegularFile(library, path.join(junction, "secret.txt")));
+  });
+
   test("keeps a verified file handle safe when its parent path is replaced", (t) => {
     const { library, outside } = fixture(t);
     const parent = path.join(library, "photos");

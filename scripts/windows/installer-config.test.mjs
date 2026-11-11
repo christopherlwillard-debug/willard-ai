@@ -1792,6 +1792,8 @@ test("audit installer lifecycle validation is isolated from release publishing",
   assert.doesNotMatch(pullRequestTrigger, /^\s+- synchronize\s*$/m,
     "subsequent commits use the branch push trigger's per-commit path filter");
   assert.ok(auditInstallerLifecycleWorkflow.includes("scripts/windows/installer-config.test.mjs"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("scripts/windows/windows-safe-fs.test.mjs"));
+  assert.ok(auditInstallerLifecycleWorkflow.includes("Build and test native Windows filesystem access"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("  push:"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("      - audit/full-repository-review-2026-11"));
   assert.ok(auditInstallerLifecycleWorkflow.includes("github.event.pull_request.head.ref"));

@@ -63,6 +63,20 @@ test("Windows release stages official 7-Zip at the API resolver path", async () 
   assert.match(resolverSource, /"\.\.\/vendor\/7zip", packagedName/);
 });
 
+test("Windows release stages the native handle-safe filesystem helper", async () => {
+  const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
+  const validationSource = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
+  const packageSource = await readFile(
+    new URL("../../artifacts/api-server/package.json", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(packageSource, /"build:safe-fs": "node \.\.\/\.\.\/scripts\/windows\/build-safe-fs-addon\.mjs"/);
+  assert.match(buildSource, /native\/windows-safe-fs\/build\/Release\/windows_safe_fs\.node/);
+  assert.match(buildSource, /await assertPackagedWindowsSafeFs\(apiOutput\)/);
+  assert.match(validationSource, /api-runtime\/vendor\/windows_safe_fs\.node/);
+});
+
 test("release scripts only accept canonical staging and reject symlinked build paths", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-release-root-"));
   try {

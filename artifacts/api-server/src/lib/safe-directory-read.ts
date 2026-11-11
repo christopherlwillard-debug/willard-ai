@@ -67,8 +67,9 @@ function getWindowsSafeFs(): WindowsSafeFsAddon {
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    cachedWindowsSafeFs = moduleRequire(candidate) as WindowsSafeFsAddon;
+    const resolvedCandidate = path.resolve(candidate);
+    if (!fs.existsSync(resolvedCandidate)) continue;
+    cachedWindowsSafeFs = moduleRequire(resolvedCandidate) as WindowsSafeFsAddon;
     return cachedWindowsSafeFs;
   }
 
@@ -133,11 +134,10 @@ function openRelativeDirectoryWithoutLinks(rootFd: number, relativePath: string)
 }
 
 /**
- * Enumerate one directory through open directory descriptors. On Linux, every
- * path component is opened relative to the already-open parent and with
- * O_NOFOLLOW, so swapping a NAS directory for a symlink cannot redirect a
- * later enumeration outside the configured root. Returns null on platforms
- * without procfs descriptor paths; callers must use their platform policy.
+ * Enumerate one directory through held filesystem handles. Linux uses
+ * descriptor-relative opens with O_NOFOLLOW; Windows uses the native addon to
+ * enumerate an already-validated directory handle. Returns null only where
+ * neither handle-based implementation is available.
  */
 export function readDirectoryWithoutSymlinkTraversal(
   configuredRoot: string,
@@ -234,9 +234,9 @@ export function readDirectoryWithoutSymlinkTraversal(
 }
 
 /**
- * Remove an empty directory relative to an already-open, no-follow parent.
- * Returns null when handle-relative operations are unavailable on this
- * platform; callers must apply their platform-specific policy in that case.
+ * Remove an empty directory without following a path that changed after
+ * validation. Linux uses an opened parent descriptor; Windows deletes through
+ * the verified directory handle. Returns null on unsupported platforms.
  */
 export function removeEmptyDirectoryWithoutSymlinkTraversal(
   configuredRoot: string,
@@ -283,9 +283,9 @@ export function removeEmptyDirectoryWithoutSymlinkTraversal(
 }
 
 /**
- * Open one regular file beneath an already-authorized root. Parent directories
- * and the final file are opened from held descriptors with O_NOFOLLOW, so a
- * symlink replacement cannot redirect the read outside the root.
+ * Open one regular file beneath an already-authorized root. Linux opens each
+ * component relative to held descriptors with O_NOFOLLOW; Windows returns a
+ * file descriptor backed by a verified native handle.
  */
 export function openRegularFileWithoutSymlinkTraversal(
   configuredRoot: string,
