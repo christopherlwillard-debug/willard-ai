@@ -1482,6 +1482,39 @@ test("manual Windows installer validation can skip release publication", () => {
   );
 });
 
+test("manual Windows validation uploads a short-lived test installer", () => {
+  const validationUploadStart = workflow.indexOf(
+    "Upload validation-only installer",
+  );
+  const releaseUploadStart = workflow.indexOf(
+    "Upload validated release artifacts",
+    validationUploadStart,
+  );
+  assert.ok(validationUploadStart >= 0, "Validation-only upload step must exist.");
+  assert.ok(
+    releaseUploadStart > validationUploadStart,
+    "Validation artifact upload must be separate from release publication.",
+  );
+  const validationUpload = workflow.slice(
+    validationUploadStart,
+    releaseUploadStart,
+  );
+  assert.match(
+    validationUpload,
+    /if:\s*\$\{\{\s*github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*inputs\.validate_only\s*==\s*true\s*\}\}/,
+  );
+  assert.match(
+    validationUpload,
+    /uses:\s*actions\/upload-artifact@[0-9a-f]{40}/,
+  );
+  assert.match(validationUpload, /retention-days:\s*7/);
+  assert.match(
+    validationUpload,
+    /WillardMediaCenter-\$\{\{\s*env\.WILLARD_VERSION\s*\}\}-Setup\.exe/,
+  );
+  assert.doesNotMatch(validationUpload, /softprops\/action-gh-release/);
+});
+
 
 test("packaged updater enforces its signed minimum Windows requirement before downloading", () => {
   const signatureCheck = launcher.indexOf('"--verify"');

@@ -449,6 +449,16 @@ jobs:
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\installer-lifecycle-smoke.ps1
 
+      - name: Upload validation-only installer
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_only == true }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: willard-validation-installer-${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: build/installer/WillardMediaCenter-${{ env.WILLARD_VERSION }}-Setup.exe
+
       - name: Upload validated release artifacts
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
