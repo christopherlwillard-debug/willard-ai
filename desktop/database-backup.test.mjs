@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -607,7 +607,10 @@ test(
       });
       const discoveredBackups = JSON.parse(discovered.stdout);
       assert.equal(discoveredBackups.length, 1);
-      assert.equal(discoveredBackups[0].backupDir, backupDir);
+      assert.equal(
+        await realpath(discoveredBackups[0].backupDir),
+        await realpath(backupDir),
+      );
       assert.equal(discoveredBackups[0].verified, true);
       const sourceIdentityPath = path.join(nasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);
       const reattachedIdentityPath = path.join(reattachedNasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);

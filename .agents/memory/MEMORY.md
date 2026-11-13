@@ -56,3 +56,4 @@
 - [Library recovery consistency](library-recovery-consistency.md) — bind dump and facts to one DB snapshot, then verify every cataloged original before path activation
 - [Windows PowerShell standard-user compatibility](windows-powershell-standard-user-compatibility.md) — packaged launchers need explicit .NET assemblies and safe special-folder fallbacks under disposable profiles
 - [Desktop loading readiness](desktop-loading-readiness.md) — the native launcher must own readiness and explicitly open the web app after closing its file-based loading window
+- [Windows addon file descriptors](windows-addon-fd-boundary.md) — use libuv conversion for handles passed from native addons to Node's filesystem APIs

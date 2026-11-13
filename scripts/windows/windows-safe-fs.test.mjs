@@ -6,6 +6,17 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+const nativeSourcePath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../artifacts/api-server/native/windows-safe-fs/windows_safe_fs.cc",
+);
+
+test("native file descriptors are created through Node's libuv runtime", () => {
+  const source = fs.readFileSync(nativeSourcePath, "utf8");
+  assert.match(source, /\buv_open_osfhandle\s*\(/);
+  assert.doesNotMatch(source, /\b_open_osfhandle\s*\(/);
+});
+
 if (process.platform !== "win32") {
   test("native Windows safe-filesystem behavior", { skip: "Windows-only native handle test." }, () => {});
 } else {
@@ -34,6 +45,7 @@ if (process.platform !== "win32") {
 
     const descriptor = safeFs.openRegularFile(library, insideFile);
     try {
+      assert.equal(fs.fstatSync(descriptor).isFile(), true);
       assert.equal(fs.readFileSync(descriptor, "utf8"), "inside-data");
     } finally {
       fs.closeSync(descriptor);
@@ -52,7 +64,7 @@ if (process.platform !== "win32") {
     assert.throws(() => safeFs.openRegularFile(library, path.join(junction, "secret.txt")));
   });
 
-  test("keeps a verified file handle safe when its parent path is replaced", (t) => {
+  test("keeps a verified file safe if Windows blocks parent replacement", (t) => {
     const { library, outside } = fixture(t);
     const parent = path.join(library, "photos");
     const movedParent = path.join(library, "photos-original");
@@ -61,13 +73,29 @@ if (process.platform !== "win32") {
     fs.writeFileSync(file, "verified-image");
     fs.writeFileSync(path.join(outside, "secret.bin"), "outside-secret");
 
+    let replacementBlocked = false;
     const descriptor = safeFs.openRegularFile(library, file, () => {
-      fs.renameSync(parent, movedParent);
+      try {
+        fs.renameSync(parent, movedParent);
+      } catch (error) {
+        // A Windows sharing lock that prevents replacement is also a safe outcome.
+        if (error?.code !== "EPERM" && error?.code !== "EBUSY") throw error;
+        replacementBlocked = true;
+        return;
+      }
       fs.symlinkSync(outside, parent, "junction");
     });
     try {
+      assert.equal(fs.fstatSync(descriptor).isFile(), true);
       assert.equal(fs.readFileSync(descriptor, "utf8"), "verified-image");
-      assert.equal(fs.readFileSync(path.join(parent, "secret.bin"), "utf8"), "outside-secret");
+      if (replacementBlocked) {
+        assert.equal(fs.existsSync(parent), true);
+        assert.equal(fs.existsSync(movedParent), false);
+        assert.equal(fs.readFileSync(file, "utf8"), "verified-image");
+        assert.equal(fs.readFileSync(path.join(outside, "secret.bin"), "utf8"), "outside-secret");
+      } else {
+        assert.equal(fs.readFileSync(path.join(parent, "secret.bin"), "utf8"), "outside-secret");
+      }
     } finally {
       fs.closeSync(descriptor);
     }

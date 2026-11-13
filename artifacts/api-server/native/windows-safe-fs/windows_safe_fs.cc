@@ -2,6 +2,7 @@
 #define NAPI_VERSION 8
 
 #include <node_api.h>
+#include <uv.h>
 
 #ifdef _WIN32
 
@@ -370,16 +371,16 @@ napi_value openRegularFile(napi_env env, napi_callback_info info) {
     );
     callOptionalHook(env, args, 2);
 
-    int descriptor = _open_osfhandle(
-      reinterpret_cast<intptr_t>(file.get()),
-      _O_RDONLY | _O_BINARY
-    );
+    // Node and this addon may have separate CRT descriptor tables on Windows.
+    int descriptor = uv_open_osfhandle(file.get());
     if (descriptor < 0) throw std::runtime_error("Unable to convert the verified Windows file handle.");
     file.release();
 
     napi_value result;
     if (napi_create_int32(env, descriptor, &result) != napi_ok) {
-      _close(descriptor);
+      uv_fs_t closeRequest;
+      uv_fs_close(uv_default_loop(), &closeRequest, descriptor, nullptr);
+      uv_fs_req_cleanup(&closeRequest);
       throw std::runtime_error("Unable to return the verified Windows file handle.");
     }
     return result;
