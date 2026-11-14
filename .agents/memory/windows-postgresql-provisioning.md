@@ -28,3 +28,9 @@ directory.
 
 **How to apply:** Set the child process working directory based on whether the
 test belongs to the API package or the workspace E2E suite.
+
+Disposable Windows PostgreSQL clusters should be initialized with UTF-8 encoding.
+
+**Why:** Hosted Windows defaults can create a WIN1252 database, which rejects UTF-8-only characters stored in conversion-result JSON.
+
+**How to apply:** Pass `--encoding=UTF8` to `initdb` for test clusters and verify `SHOW server_encoding` before running the audit. Do not change encoding on a user's existing database as part of this test fix.

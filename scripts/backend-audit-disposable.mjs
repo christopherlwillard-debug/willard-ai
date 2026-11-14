@@ -212,6 +212,7 @@ try {
     "--pgdata", databaseDirectory,
     "--auth-local=trust",
     "--auth-host=trust",
+    "--encoding=UTF8",
     "--no-instructions",
   ]);
   runSync(pgCtl, [
@@ -228,6 +229,15 @@ try {
     "--username", databaseUser,
     databaseName,
   ]);
+  const encodingResult = runSync(psql, [
+    "--dbname", databaseUrl,
+    "--tuples-only",
+    "--no-align",
+    "--command", "SHOW server_encoding",
+  ], { stdio: "pipe" });
+  if (encodingResult.stdout.trim() !== "UTF8") {
+    throw new Error("Disposable backend-audit PostgreSQL must use UTF8 encoding.");
+  }
 
   runSync(process.execPath, [path.join(workspaceRoot, "setup-db.cjs")], {
     env: { ...process.env, DATABASE_URL: databaseUrl },
