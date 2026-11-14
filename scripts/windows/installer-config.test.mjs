@@ -768,6 +768,14 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent", "shortcut"\)/);
   assert.match(installedLifecycleSmoke, /Invoke-InstalledLauncher "concurrent"/);
   assert.match(installedLifecycleSmoke, /function Invoke-InstalledShortcut/);
+  assert.match(
+    installedLifecycleSmoke,
+    /Start-Process -FilePath \$Shortcut \| Out-Null/,
+  );
+  assert.doesNotMatch(
+    installedLifecycleSmoke,
+    /Start-Process -FilePath \$Shortcut -Wait/,
+  );
   assert.match(installedLifecycleSmoke, /incomplete-folder recovery/);
   assert.match(installedLifecycleSmoke, /backup-protection\\automation-credential\.dpapi/);
   assert.match(installedLifecycleSmoke, /Persistent \.env configuration changed/);

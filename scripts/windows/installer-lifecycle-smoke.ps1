@@ -267,9 +267,10 @@ if ($Mode -eq "concurrent") {
   if ([string]::IsNullOrWhiteSpace($Shortcut) -or -not (Test-Path -LiteralPath $Shortcut -PathType Leaf)) {
     throw "Installed desktop shortcut is missing: $Shortcut"
   }
-  $shortcutProcess = Start-Process -FilePath $Shortcut -Wait -PassThru
-  $shortcutProcess.Refresh()
-  $launcherExitCode = $shortcutProcess.ExitCode
+  # The installed shortcut starts long-lived services and opens the browser.
+  # Do not wait for its process tree; the caller verifies readiness over HTTP.
+  Start-Process -FilePath $Shortcut | Out-Null
+  $launcherExitCode = 0
 } elseif ($Mode -eq "stop") {
   & $Launcher -InstallRoot $InstallRoot -Stop
   $launcherExitCode = if ($?) { 0 } else { 1 }
