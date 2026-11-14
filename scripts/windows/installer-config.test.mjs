@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile as readFileRaw } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,10 @@ const {
   getDatabaseName,
   quoteIdentifier,
 } = require("../../setup-db.cjs");
+const readFile = async (...args) => {
+  const content = await readFileRaw(...args);
+  return typeof content === "string" ? content.replace(/\r\n/g, "\n") : content;
+};
 const config = await readFile(
   new URL("../../installer/WillardMediaCenter.iss", import.meta.url),
   "utf8",
