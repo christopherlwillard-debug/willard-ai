@@ -37,6 +37,7 @@ if (
 }
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "willard-backend-audit-"));
 const databaseDirectory = path.join(tempRoot, "postgres");
+const postgresLogPath = path.join(tempRoot, "postgres.log");
 const libraryDirectory = path.join(tempRoot, "library");
 const localDataDirectory = path.join(tempRoot, "local-data");
 
@@ -215,7 +216,7 @@ try {
   ]);
   runSync(pgCtl, [
     "--pgdata", databaseDirectory,
-    "--log", path.join(tempRoot, "postgres.log"),
+    "--log", postgresLogPath,
     "--options", `-h 127.0.0.1 -p ${postgresPort} -k ${tempRoot}`,
     "--wait",
     "start",
@@ -327,6 +328,16 @@ try {
       postgresStopped = false;
       cleanupErrors.push(new Error("Could not verify that disposable PostgreSQL stopped cleanly.", { cause: error }));
     }
+  }
+  if (testExitCode !== 0) {
+    await tryCleanup("PostgreSQL diagnostics", async () => {
+      if (!existsSync(postgresLogPath)) return;
+      const lines = readFileSync(postgresLogPath, "utf8").trim().split(/\r?\n/);
+      if (lines.length > 0 && lines[0]) {
+        console.error("[backend-audit] Disposable PostgreSQL log tail:");
+        console.error(lines.slice(-80).join("\n"));
+      }
+    }, cleanupErrors);
   }
   if (postgresStopped && auditStopped && apiStopped) {
     await tryCleanup("Disposable audit files", () => removeAuditTempRoot(tempRoot), cleanupErrors);
