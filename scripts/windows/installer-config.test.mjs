@@ -767,6 +767,8 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
   assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent", "shortcut"\)/);
   assert.match(installedLifecycleSmoke, /Invoke-InstalledLauncher "concurrent"/);
+  assert.match(installedLifecycleSmoke, /alreadyRunningMessage =/);
+  assert.match(installedLifecycleSmoke, /Willard Media Center is already running/);
   assert.match(installedLifecycleSmoke, /function Invoke-InstalledShortcut/);
   assert.match(
     installedLifecycleSmoke,
