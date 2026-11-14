@@ -156,6 +156,7 @@ overrides:
 
 patchedDependencies:
   '@expo/cli@54.0.28': patches/@expo__cli@54.0.28.patch
+  deepmerge@4.3.1: patches/deepmerge@4.3.1.patch
 
 supportedArchitectures:
   cpu: [x64, arm64]

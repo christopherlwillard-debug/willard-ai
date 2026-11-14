@@ -7,6 +7,8 @@ const expoCliRequire = createRequire(mobileRequire.resolve("@expo/cli"));
 const expoConfigRequire = createRequire(expoCliRequire.resolve("@expo/config"));
 const deepmerge = expoConfigRequire("deepmerge");
 
+// pnpm audit reports GHSA-gcqx-w48m-w2h4 from the published version even when
+// patchedDependencies is applied, so these tests verify the mitigation at runtime.
 test("Expo's deepmerge rejects prototype-mutating keys for normal and null-prototype targets", () => {
   for (const target of [{}, Object.create(null)]) {
     for (const key of ["__proto__", "constructor", "prototype"]) {
