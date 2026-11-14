@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { findExecutable } from "./find-executable.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const apiDirectory = path.join(workspaceRoot, "artifacts", "api-server");
@@ -35,14 +36,6 @@ if (
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "willard-backend-audit-"));
 const databaseDirectory = path.join(tempRoot, "postgres");
 const libraryDirectory = path.join(tempRoot, "library");
-
-function findExecutable(name) {
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
-    const candidate = path.join(directory, name);
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(`Required local test executable was not found: ${name}`);
-}
 
 function runSync(command, args, options = {}) {
   const result = spawnSync(command, args, {
