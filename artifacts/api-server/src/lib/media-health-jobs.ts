@@ -35,9 +35,9 @@ const store: MediaHealthJobStore = {
         '{healthJob}',
         COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
           jsonb_build_object(
-            'workerToken', ${token},
-            'phase', ${progress.phase},
-            'message', ${progress.message}
+            'workerToken', ${token}::text,
+            'phase', ${progress.phase}::text,
+            'message', ${progress.message}::text
           ),
         true
       )`,
@@ -57,7 +57,7 @@ const store: MediaHealthJobStore = {
         COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
         '{healthJob}',
         COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
-          jsonb_build_object('workerToken', ${token}, 'phase', 'complete'),
+          jsonb_build_object('workerToken', ${token}::text, 'phase', 'complete'),
         true
       )`,
     }).where(mediaHealthJobOwnershipCondition(jobId, token))
@@ -75,7 +75,7 @@ const store: MediaHealthJobStore = {
         COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
         '{healthJob}',
         COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
-          jsonb_build_object('workerToken', ${token}, 'phase', 'failed'),
+          jsonb_build_object('workerToken', ${token}::text, 'phase', 'failed'),
         true
       )`,
     }).where(mediaHealthJobOwnershipCondition(jobId, token))
@@ -92,7 +92,7 @@ const store: MediaHealthJobStore = {
         COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
         '{healthJob}',
         COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
-          jsonb_build_object('workerToken', ${token}, 'phase', 'paused'),
+          jsonb_build_object('workerToken', ${token}::text, 'phase', 'paused'),
         true
       )`,
     }).where(mediaHealthJobOwnershipCondition(jobId, token))

@@ -162,11 +162,15 @@ test("thumbnail catalog pointer persistence is serialized with cache clearing", 
   assert.match(thumbnail, /publishThumbnail\(tempPath, destPath\);\s*await onReady\?\.\(\{ destPath, reused: false \}\)/);
   assert.match(media, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
   assert.match(engine, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
-  assert.match(health, /generateThumbnail\([\s\S]*?async \(\{ destPath \}\) => \{[\s\S]*?db\.update\(mediaFilesTable\)/);
+  assert.ok(
+    health.includes('jobType: "THUMBNAILS"') &&
+    health.includes('jobType: followUp.jobType as "THUMBNAILS" | "METADATA"') &&
+    health.includes("followUpJobId: child.jobId"),
+    "Health Center must persist a follow-up library job instead of running thumbnail generation inside the request",
+  );
+  assert.doesNotMatch(health, /generateThumbnail\(/, "Health Center delegates thumbnail work to the shared durable library worker");
   assert.match(health, /const needsThumb = row\.mediaType === "photo" \|\| row\.mediaType === "video" \|\| row\.extension === "pdf"/);
-  assert.match(health, /const isThumbnailEligible = \(row: HealthRow\) => row\.mediaType === "photo" \|\| row\.mediaType === "video" \|\| row\.extension === "pdf"/);
-  assert.match(health, /inspected\.rows\.filter\(isThumbnailEligible\)/);
-  assert.match(health, /inspected\.missingThumbs\.filter\(isThumbnailEligible\)/);
+  assert.match(health, /if \(needsThumb\) \{[\s\S]*?isHealthThumbnailValid\(thumb\)[\s\S]*?missingThumbs\.push\(row\)/);
   assert.match(health, /removeOrphanedThumbnail\(nasPath, file, async \(\) => \{[\s\S]*?db\.select\(\{ id: mediaFilesTable\.id \}\)/);
   assert.doesNotMatch(health, /fs\.unlinkSync\(resolveWithinRoot\(file, getWillardAIDir\(nasPath\)\)\)/);
 });
