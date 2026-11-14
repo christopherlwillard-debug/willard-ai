@@ -260,8 +260,8 @@ if ($Mode -eq "concurrent") {
     (Get-Content ($firstOut + ".err") -Raw -ErrorAction SilentlyContinue)
   $secondOutput = (Get-Content $secondOut -Raw -ErrorAction SilentlyContinue) +
     (Get-Content ($secondOut + ".err") -Raw -ErrorAction SilentlyContinue)
-  $alreadyRunningMessage = '\\[OK\\] Willard Media Center is already running\\.'
-  if ($firstOutput -notmatch $alreadyRunningMessage -or $secondOutput -notmatch $alreadyRunningMessage) {
+  $alreadyRunningMessage = "[OK] Willard Media Center is already running."
+  if (-not $firstOutput.Contains($alreadyRunningMessage) -or -not $secondOutput.Contains($alreadyRunningMessage)) {
     throw ("Concurrent launcher did not confirm existing services (exit codes: first=$($first.ExitCode), second=$($second.ExitCode)):`n" +
       $firstOutput + $secondOutput)
   }
