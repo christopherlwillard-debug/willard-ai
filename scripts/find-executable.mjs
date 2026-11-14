@@ -10,7 +10,7 @@ export function findExecutable(
   } = {},
 ) {
   const pathApi = platform === "win32" ? path.win32 : path;
-  const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
+  const pathDelimiter = platform === "win32" ? ";" : ":";
   const executableNames = platform === "win32" && !name.toLowerCase().endsWith(".exe")
     ? [name, `${name}.exe`]
     : [name];
