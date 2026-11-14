@@ -38,6 +38,7 @@ if (
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "willard-backend-audit-"));
 const databaseDirectory = path.join(tempRoot, "postgres");
 const libraryDirectory = path.join(tempRoot, "library");
+const localDataDirectory = path.join(tempRoot, "local-data");
 
 function runSync(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -195,6 +196,7 @@ let testExitCode = 1;
 
 try {
   mkdirSync(libraryDirectory, { recursive: true });
+  mkdirSync(localDataDirectory, { recursive: true });
   const initdb = findExecutable("initdb");
   pgCtl = findExecutable("pg_ctl");
   const createdb = findExecutable("createdb");
@@ -240,6 +242,8 @@ try {
     PORT: String(apiPort),
     SESSION_SECRET: randomBytes(32).toString("hex"),
     WILLARD_LOCAL_SETUP: "true",
+    WILLARD_LOCAL_DATA_ROOT: localDataDirectory,
+    WILLARD_LOCAL_CAPACITY_FLOOR_BYTES: "0",
     WILLARD_NAS_SAFETY_MARGIN_BYTES: "0",
   };
   delete apiEnvironment.REPL_ID;

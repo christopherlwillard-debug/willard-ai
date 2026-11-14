@@ -27,6 +27,12 @@ Developer launchers on Windows must resolve `pnpm.cmd` or `pnpm.exe` explicitly 
 
 **How to apply:** Use the executable wrapper for launcher-owned installs, builds, and long-lived web processes; keep readiness failures paired with the relevant log tail.
 
+Node child processes should not invoke `pnpm` directly on Windows with `shell: false`; prefer the package manager JavaScript entrypoint from `npm_execpath`, with a shell fallback only for fixed arguments.
+
+**Why:** Node's direct executable lookup does not resolve the Windows `.cmd` shim, so a child process can fail with `spawnSync pnpm ENOENT` even though PowerShell can run `pnpm`.
+
+**How to apply:** When a Node script launches pnpm on Windows, use `process.execPath` plus a validated JavaScript `npm_execpath`; only fall back to shell resolution when the command and arguments are controlled.
+
 Whole-version updates must prepare and validate a candidate directory, journal the sibling-directory swap, and retain the prior directory until post-start health succeeds.
 
 **Why:** Git-only resets and copy-over installs can leave ignored dependencies, generated output, or partially copied files mismatched with the source revision.
