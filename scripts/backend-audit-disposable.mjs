@@ -242,6 +242,16 @@ try {
   runSync(process.execPath, [path.join(workspaceRoot, "setup-db.cjs")], {
     env: { ...process.env, DATABASE_URL: databaseUrl },
   });
+  const escapedLibraryPath = libraryDirectory.replaceAll("'", "''");
+  // Seed the disposable library before the API starts. Media routes cache the
+  // active path; updating it later through SQL can leave a cached null in the
+  // test server because this bypasses the settings route's cache invalidation.
+  runSync(psql, [
+    "--dbname", databaseUrl,
+    "--set=ON_ERROR_STOP=1",
+    "--command",
+    `INSERT INTO app_settings (nas_path) VALUES ('${escapedLibraryPath}') ON CONFLICT DO NOTHING; UPDATE app_settings SET nas_path = '${escapedLibraryPath}'`,
+  ]);
   runPnpmSync(["--filter", "@workspace/api-server", "run", "build"]);
 
   const apiUrl = `http://127.0.0.1:${apiPort}`;
@@ -275,13 +285,6 @@ try {
     throw new Error(`Could not initialize the isolated test administrator (HTTP ${setupResponse.status}).`);
   }
   await setupResponse.arrayBuffer();
-
-  const escapedLibraryPath = libraryDirectory.replaceAll("'", "''");
-  runSync(psql, [
-    "--dbname", databaseUrl,
-    "--set=ON_ERROR_STOP=1",
-    "--command", `UPDATE app_settings SET nas_path = '${escapedLibraryPath}'`,
-  ]);
 
   const auditEnvironment = {
     ...process.env,

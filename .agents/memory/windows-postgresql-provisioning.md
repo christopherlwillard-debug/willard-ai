@@ -34,3 +34,14 @@ Disposable Windows PostgreSQL clusters should be initialized with UTF-8 encoding
 **Why:** Hosted Windows defaults can create a WIN1252 database, which rejects UTF-8-only characters stored in conversion-result JSON.
 
 **How to apply:** Pass `--encoding=UTF8` to `initdb` for test clusters and verify `SHOW server_encoding` before running the audit. Do not change encoding on a user's existing database as part of this test fix.
+
+The disposable backend audit must configure `app_settings.nas_path` before
+starting the API server. Media routes cache the active path for 60 seconds, and
+direct SQL changes after startup bypass the settings route's cache invalidation.
+
+**Why:** Windows integration tests can otherwise receive a false `409 No
+library configured` even though the disposable database row has since been
+updated with a valid path.
+
+**How to apply:** Seed the temporary library path before launching the API in
+the audit runner; do not mutate it after startup through SQL.

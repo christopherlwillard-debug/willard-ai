@@ -83,7 +83,7 @@ describe("media tags API", { concurrency: false }, () => {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tags: [` ${trip.toUpperCase()} `, trip.toUpperCase(), summer] }),
     });
-    assert.equal(update.status, 200);
+    assert.equal(update.status, 200, await update.clone().text());
     const updateBody = await update.json() as { tags: string[] };
     assert.deepEqual(updateBody.tags, [trip, summer]);
 
