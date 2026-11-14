@@ -11,7 +11,7 @@ import { bootstrapWillardAIDir, getNasDirStatus, checkNasReachable, checkNasReac
 import { logger } from "../lib/logger";
 import { handlePrivateMediaStreamError } from "../lib/private-media-response.ts";
 import { openRegularFileWithoutSymlinkTraversal } from "../lib/safe-directory-read.ts";
-import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy";
+import { AI_CONSENT_VERSION, AI_PROVIDER_NAME, hasCurrentAiConsent } from "../lib/ai-privacy";
 import { recordActivity } from "../lib/library-activity";
 import { cancelJobsForLibrary } from "../lib/library-engine/job-engine";
 import { invalidateNasPathCache } from "./media";
@@ -159,10 +159,11 @@ router.put("/settings", async (req, res) => {
 
     const nextAiEnrichmentEnabled = body.aiEnrichmentEnabled ?? existing.aiEnrichmentEnabled;
     const nextAiLocalOnly = body.aiLocalOnly ?? existing.aiLocalOnly;
-    if (nextAiEnrichmentEnabled === true && nextAiLocalOnly === false &&
-        !existing.aiConsentAt && body.aiConsentAcknowledged !== true) {
+    const cloudAiRequested = nextAiEnrichmentEnabled === true && nextAiLocalOnly === false;
+    const hasCurrentConsent = hasCurrentAiConsent(existing);
+    if (cloudAiRequested && !hasCurrentConsent && body.aiConsentAcknowledged !== true) {
       res.status(422).json({
-        error: "Confirm the AI provider and retention disclosure before enabling cloud AI.",
+        error: "Confirm the current AI provider and retention disclosure before enabling cloud AI.",
         code: "AI_CONSENT_REQUIRED",
       });
       return;
@@ -170,7 +171,7 @@ router.put("/settings", async (req, res) => {
     if (aiExcludedFolders !== undefined) rest.aiExcludedFolders = aiExcludedFolders;
     if (aiExcludedExtensions !== undefined) rest.aiExcludedExtensions = aiExcludedExtensions;
     delete (rest as Record<string, unknown>).aiConsentAcknowledged;
-    if (nextAiEnrichmentEnabled === true && nextAiLocalOnly === false && !existing.aiConsentAt) {
+    if (cloudAiRequested && !hasCurrentConsent) {
       extra["aiConsentAt"] = new Date();
       extra["aiConsentProvider"] = AI_PROVIDER_NAME;
       extra["aiConsentVersion"] = AI_CONSENT_VERSION;

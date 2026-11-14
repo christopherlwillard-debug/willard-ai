@@ -23,6 +23,19 @@ export function isMissingRegularMediaFile(filePath: string): boolean {
   }
 }
 
+export async function isMissingRegularMediaFileAsync(filePath: string): Promise<boolean> {
+  try {
+    const info = await fs.promises.lstat(filePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error("Media path is not a regular non-symlink file; refusing orphan cleanup.");
+    }
+    return false;
+  } catch (error) {
+    if (isMissingFilesystemEntry(error)) return true;
+    throw error;
+  }
+}
+
 
 export type MissingMediaSoftDeleteResult = "marked_deleted" | "reappeared" | "record_changed";
 

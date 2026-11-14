@@ -13,7 +13,8 @@ AppId={{C8A6D0E6-8B1D-4AC0-9DB6-8E9B0D2A65EF}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Willard Media Center
+DefaultDirName={localappdata}\Programs\Willard Media Center
+UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 OutputBaseFilename=WillardMediaCenter-{#MyAppVersion}-Setup
 OutputDir=..\build\installer
@@ -47,6 +48,7 @@ Type: files; Name: "{app}\payload-manifest.json"
 
 [Files]
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#ReleaseDir}\desktop\WillardBootstrap.ps1"; DestDir: "{localappdata}\Willard Media Center"; DestName: "WillardBootstrap.ps1"; Flags: ignoreversion
 
 [Dirs]
 Name: "{localappdata}\Willard Media Center"
@@ -54,11 +56,11 @@ Name: "{localappdata}\Willard Media Center\logs"
 Name: "{localappdata}\Willard Media Center\updates"
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\desktop\WillardMediaCenter.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\icons\willard.ico"; Comment: "Start your local Willard Media Center"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\desktop\WillardMediaCenter.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\icons\willard.ico"; Tasks: desktopicon; Comment: "Start your local Willard Media Center"
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{localappdata}\Willard Media Center\WillardBootstrap.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{localappdata}\Willard Media Center"; IconFilename: "{app}\icons\willard.ico"; Comment: "Start your local Willard Media Center"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{localappdata}\Willard Media Center\WillardBootstrap.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{localappdata}\Willard Media Center"; IconFilename: "{app}\icons\willard.ico"; Tasks: desktopicon; Comment: "Start your local Willard Media Center"
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\desktop\WillardMediaCenter.ps1"""; WorkingDir: "{app}"; Description: "Launch Willard Media Center"; Flags: postinstall nowait skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{localappdata}\Willard Media Center\WillardBootstrap.ps1"" -InstallRoot ""{app}"""; WorkingDir: "{localappdata}\Willard Media Center"; Description: "Launch Willard Media Center"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\desktop"
@@ -75,6 +77,9 @@ var
 begin
   Result := '';
   Launcher := ExpandConstant('{app}\desktop\WillardMediaCenter.ps1');
+  if not FileExists(Launcher) then begin
+    Launcher := ExpandConstant('{localappdata}\Willard Media Center\desktop\WillardMediaCenter.ps1');
+  end;
   if not FileExists(Launcher) then begin
     if RequireLauncher then begin
       Result := 'Willard Media Center cannot verify that its services are stopped because the installed shutdown helper is missing. Reinstall or repair the same installation to restore its launcher, then retry. The existing installation was left unchanged.';
@@ -98,6 +103,9 @@ var
   ExistingRuntime: String;
 begin
   ExistingRuntime := ExpandConstant('{app}\runtime\node.exe');
+  if not FileExists(ExistingRuntime) then begin
+    ExistingRuntime := ExpandConstant('{localappdata}\Willard Media Center\runtime\node.exe');
+  end;
   Result := StopWillardServices(FileExists(ExistingRuntime));
 end;
 

@@ -55,13 +55,35 @@ export function isMediaExcluded(
   ) || exclusions.extensions.includes(extension);
 }
 
-export function canSendToAiProvider(settings: Pick<AiPrivacySettings, "aiEnrichmentEnabled" | "aiLocalOnly">): boolean {
-  return settings.aiEnrichmentEnabled && !settings.aiLocalOnly;
+export function hasCurrentAiConsent(
+  settings: Pick<AiPrivacySettings, "aiConsentAt" | "aiConsentProvider" | "aiConsentVersion">,
+): boolean {
+  if (
+    !settings.aiConsentAt ||
+    settings.aiConsentProvider !== AI_PROVIDER_NAME ||
+    settings.aiConsentVersion !== AI_CONSENT_VERSION
+  ) {
+    return false;
+  }
+  const consentTime = settings.aiConsentAt instanceof Date
+    ? settings.aiConsentAt.getTime()
+    : Date.parse(settings.aiConsentAt);
+  return Number.isFinite(consentTime) && consentTime > 0 && consentTime <= Date.now() + 5 * 60 * 1000;
 }
 
-export function aiProviderBlockedReason(settings: Pick<AiPrivacySettings, "aiEnrichmentEnabled" | "aiLocalOnly">): string {
+type AiProviderGateSettings = Pick<
+  AiPrivacySettings,
+  "aiEnrichmentEnabled" | "aiLocalOnly" | "aiConsentAt" | "aiConsentProvider" | "aiConsentVersion"
+>;
+
+export function canSendToAiProvider(settings: AiProviderGateSettings): boolean {
+  return settings.aiEnrichmentEnabled && !settings.aiLocalOnly && hasCurrentAiConsent(settings);
+}
+
+export function aiProviderBlockedReason(settings: AiProviderGateSettings): string {
   if (!settings.aiEnrichmentEnabled) return "AI features are disabled. Enable AI in Settings before sending media or library data to the provider.";
   if (settings.aiLocalOnly) return "AI is set to local-only mode. Turn off local-only mode in Settings before using the cloud provider.";
+  if (!hasCurrentAiConsent(settings)) return "Cloud AI needs current consent for this provider and disclosure version. Review and confirm the current AI disclosure in Settings.";
   return "";
 }
 

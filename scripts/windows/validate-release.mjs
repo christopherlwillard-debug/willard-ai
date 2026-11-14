@@ -107,6 +107,7 @@ export async function validateRelease() {
     "version.json",
     "payload-manifest.json",
     "runtime/node.exe",
+    "desktop/WillardBootstrap.ps1",
     "desktop/WillardMediaCenter.ps1",
     "desktop/launcher-instance-lock.ps1",
     "Start Willard Media Center.bat",
@@ -137,6 +138,12 @@ export async function validateRelease() {
   }
 
   const launcher = await readFile(path.join(releaseDir, "desktop", "WillardMediaCenter.ps1"), "utf8");
+  const bootstrap = await readFile(path.join(releaseDir, "desktop", "WillardBootstrap.ps1"), "utf8");
+  for (const requiredReference of ["swap-journal.json", "previous-", "candidate-"]) {
+    if (!bootstrap.includes(requiredReference)) {
+      throw new Error(`Packaged recovery bootstrap does not reference required recovery data: ${requiredReference}`);
+    }
+  }
   for (const requiredReference of [
     "runtime\\node.exe",
     "api-runtime\\dist\\index.mjs",

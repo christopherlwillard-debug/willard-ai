@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AI_CONSENT_VERSION,
+  AI_PROVIDER_NAME,
   aiProviderBlockedReason,
   canSendToAiProvider,
+  hasCurrentAiConsent,
   isMediaExcluded,
   normalizeAiExclusions,
 } from "../lib/ai-privacy.ts";
@@ -28,10 +31,22 @@ test("excludes folders recursively and matches extensions case-insensitively", (
   assert.equal(isMediaExcluded("Family/document.PDF", "document.PDF", settings), true);
 });
 
-test("provider access requires both explicit enablement and cloud mode", () => {
-  assert.equal(canSendToAiProvider({ aiEnrichmentEnabled: false, aiLocalOnly: false }), false);
-  assert.equal(canSendToAiProvider({ aiEnrichmentEnabled: true, aiLocalOnly: true }), false);
-  assert.equal(canSendToAiProvider({ aiEnrichmentEnabled: true, aiLocalOnly: false }), true);
-  assert.match(aiProviderBlockedReason({ aiEnrichmentEnabled: false, aiLocalOnly: false }), /disabled/i);
-  assert.match(aiProviderBlockedReason({ aiEnrichmentEnabled: true, aiLocalOnly: true }), /local-only/i);
+test("provider access requires enablement, cloud mode, and current provider consent", () => {
+  const currentConsent = {
+    aiConsentAt: new Date(),
+    aiConsentProvider: AI_PROVIDER_NAME,
+    aiConsentVersion: AI_CONSENT_VERSION,
+  };
+  const enabledCloud = { aiEnrichmentEnabled: true, aiLocalOnly: false, ...currentConsent };
+
+  assert.equal(canSendToAiProvider({ ...enabledCloud, aiEnrichmentEnabled: false }), false);
+  assert.equal(canSendToAiProvider({ ...enabledCloud, aiLocalOnly: true }), false);
+  assert.equal(canSendToAiProvider({ ...enabledCloud, aiConsentVersion: "older" }), false);
+  assert.equal(canSendToAiProvider({ ...enabledCloud, aiConsentProvider: "different provider" }), false);
+  assert.equal(canSendToAiProvider({ ...enabledCloud, aiConsentAt: null }), false);
+  assert.equal(canSendToAiProvider(enabledCloud), true);
+  assert.equal(hasCurrentAiConsent(enabledCloud), true);
+  assert.match(aiProviderBlockedReason({ ...enabledCloud, aiConsentVersion: "older" }), /current consent/i);
+  assert.match(aiProviderBlockedReason({ ...enabledCloud, aiEnrichmentEnabled: false }), /disabled/i);
+  assert.match(aiProviderBlockedReason({ ...enabledCloud, aiLocalOnly: true }), /local-only/i);
 });

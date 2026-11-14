@@ -3,7 +3,7 @@ import test from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isMissingFilesystemEntry, isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
+import { isMissingFilesystemEntry, isMissingRegularMediaFile, isMissingRegularMediaFileAsync, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
@@ -24,6 +24,16 @@ test("media health distinguishes missing regular files from directories", (t) =>
   assert.throws(() => isMissingRegularMediaFile(root), /not a regular/);
 });
 
+test("async media health distinguishes missing files from directories without sync filesystem calls", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-media-health-async-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "photo.jpg");
+  fs.writeFileSync(file, "photo");
+  assert.equal(await isMissingRegularMediaFileAsync(file), false);
+  assert.equal(await isMissingRegularMediaFileAsync(path.join(root, "missing.jpg")), true);
+  await assert.rejects(isMissingRegularMediaFileAsync(root), /not a regular/);
+});
+
 test("media health refuses symlink media paths rather than following them", (t) => {
   if (process.platform === "win32") {
     t.skip("Symlink creation may require elevated Windows privileges.");
@@ -41,21 +51,30 @@ test("media health refuses symlink media paths rather than following them", (t) 
 test("media health checks library reachability and uses fail-closed missing-file classification", () => {
   const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
   const source = readFileSync(routePath, "utf8");
-  assert.match(source, /checkNasReachable\(nasPath\)/);
+  assert.match(source, /checkNasReachableAsync\(nasPath\)/);
   assert.match(source, /if \(!reachability\.online\)/);
-  assert.match(source, /isMissingRegularMediaFile\(source\)/);
+  assert.match(source, /isMissingRegularMediaFileAsync\(source\)/);
   assert.doesNotMatch(source, /if \(!fs\.existsSync\(source\)\) missing\.push\(row\)/);
   const walkerStart = source.indexOf("function walkDirectories");
   const walkerEnd = source.indexOf("function cacheInventory", walkerStart);
   const walker = source.slice(walkerStart, walkerEnd);
   assert.ok(walkerStart >= 0 && walkerEnd > walkerStart);
-  assert.match(source, /readDirectoryWithoutSymlinkTraversal\(root, directory\)/);
+  assert.match(source, /fs\.promises\.opendir\(directoryPath\)/);
   assert.match(walker, /readHealthDirectory\(root, dir\)/);
   assert.doesNotMatch(walker, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
   const cacheStart = source.indexOf("function cacheInventory");
   const cacheEnd = source.indexOf("async function inspectLibrary", cacheStart);
   assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
   assert.match(source.slice(cacheStart, cacheEnd), /readHealthDirectory\(nasPath, dir\)/);
+});
+
+test("Health Center directory enumeration and catalog reads are asynchronous and paged", () => {
+  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
+  const source = readFileSync(routePath, "utf8");
+  assert.match(source, /fs\.promises\.opendir/);
+  assert.match(source, /HEALTH_PAGE_SIZE/);
+  assert.match(source, /\.orderBy\(asc\(mediaFilesTable\.id\)\)/);
+  assert.doesNotMatch(source, /readdirSync|statSync|lstatSync/);
 });
 
 test("health cleanup reports durable job creation failures through its SSE error boundary", () => {

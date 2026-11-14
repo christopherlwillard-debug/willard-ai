@@ -2,16 +2,15 @@ import { Router } from "express";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
-import { checkNasReachable, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
-import { isMissingRegularMediaFile, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
+import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
+import { isMissingRegularMediaFileAsync, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 import { startJob } from "../lib/library-engine";
 import {
-  readDirectoryWithoutSymlinkTraversal,
   removeEmptyDirectoryWithoutSymlinkTraversal,
 } from "../lib/safe-directory-read.ts";
 
@@ -51,107 +50,151 @@ type HealthDirectoryEntry = {
   sizeBytes?: number;
 };
 
-function readHealthDirectory(root: string, directory: string): HealthDirectoryEntry[] {
-  const safeListing = readDirectoryWithoutSymlinkTraversal(root, directory);
-  if (safeListing) {
-    return safeListing.entries.map((entry) => ({
-      name: entry.name,
-      isDirectory: entry.isDirectory,
-      isFile: entry.fileCount === null,
-      sizeBytes: entry.sizeBytes,
-    }));
+const HEALTH_PAGE_SIZE = 500;
+const MAX_HEALTH_CLEANUP_TARGETS = 250_000;
+
+async function readHealthDirectory(root: string, directory: string): Promise<HealthDirectoryEntry[]> {
+  const rootPath = path.resolve(root);
+  const directoryPath = path.resolve(directory);
+  if (directoryPath !== rootPath && !directoryPath.startsWith(rootPath + path.sep)) {
+    throw new Error("Health scan refused to walk outside the configured library.");
   }
-  return fs.readdirSync(directory, { withFileTypes: true }).map((entry) => ({
-    name: entry.name,
-    isDirectory: entry.isDirectory(),
-    isFile: entry.isFile(),
-  }));
+  const directoryStat = await fs.promises.lstat(directoryPath);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    throw new Error("Health scan refused a symlink or non-directory path.");
+  }
+  const entries: HealthDirectoryEntry[] = [];
+  const handle = await fs.promises.opendir(directoryPath);
+  for await (const entry of handle) {
+    if (entry.name === ".DS_Store" || entry.isSymbolicLink()) continue;
+    const fullPath = path.join(directoryPath, entry.name);
+    if (entry.isDirectory()) {
+      entries.push({ name: entry.name, isDirectory: true, isFile: false });
+    } else if (entry.isFile()) {
+      const fileStat = await fs.promises.lstat(fullPath);
+      if (!fileStat.isSymbolicLink() && fileStat.isFile()) {
+        entries.push({ name: entry.name, isDirectory: false, isFile: true, sizeBytes: fileStat.size });
+      }
+    }
+  }
+  return entries;
 }
 
-function walkDirectories(root: string, skip: string): { empty: string[] } {
+async function walkDirectories(root: string, skip: string): Promise<{ empty: string[] }> {
   const empty: string[] = [];
-  const visit = (dir: string) => {
-    const visible = readHealthDirectory(root, dir).filter((entry) => entry.name !== ".DS_Store");
+  const pending = [root];
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    const visible = await readHealthDirectory(root, dir);
     if (visible.length === 0) empty.push(dir);
     for (const entry of visible) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory) {
-        if (path.resolve(full) !== path.resolve(skip)) visit(full);
+      if (entry.isDirectory && path.resolve(full) !== path.resolve(skip)) {
+        pending.push(full);
       }
     }
-  };
-  visit(root);
+  }
   return { empty };
 }
 
-function cacheInventory(nasPath: string): { orphaned: string[]; unused: string[]; unusedBytes: number } {
+async function cacheInventory(nasPath: string): Promise<{ orphaned: string[]; unused: string[]; unusedBytes: number }> {
   const thumbDir = getThumbnailDir(nasPath);
   const cacheRoot = path.join(getWillardAIDir(nasPath), "cache");
   const result = { orphaned: [] as string[], unused: [] as string[], unusedBytes: 0 };
-  const visit = (dir: string, isThumb: boolean) => {
+  const pending: Array<{ dir: string; isThumb: boolean }> = [{ dir: cacheRoot, isThumb: false }];
+  while (pending.length > 0) {
+    const { dir, isThumb } = pending.pop()!;
     let entries: HealthDirectoryEntry[];
-    try { entries = readHealthDirectory(nasPath, dir); } catch { return; }
+    try { entries = await readHealthDirectory(nasPath, dir); } catch { continue; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory) visit(full, isThumb || path.resolve(full) === path.resolve(thumbDir));
+      if (entry.isDirectory) pending.push({ dir: full, isThumb: isThumb || path.resolve(full) === path.resolve(thumbDir) });
       else if (entry.isFile) {
         if (isThumb) result.orphaned.push(full);
         else {
           result.unused.push(full);
-          try {
-            result.unusedBytes += entry.sizeBytes ?? (() => {
-              const stat = fs.lstatSync(full);
-              return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
-            })();
-          } catch { /* best effort */ }
+          result.unusedBytes += entry.sizeBytes ?? 0;
         }
       }
     }
-  };
-  visit(cacheRoot, false);
+  }
   return result;
 }
 
+async function isHealthThumbnailValid(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.promises.lstat(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 32) return false;
+    const handle = await fs.promises.open(filePath, "r");
+    try {
+      const header = Buffer.alloc(12);
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      return bytesRead >= 12 &&
+        header.subarray(0, 4).toString("ascii") === "RIFF" &&
+        header.subarray(8, 12).toString("ascii") === "WEBP" &&
+        header.readUInt32LE(4) + 8 <= stat.size;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; rows: HealthRow[]; missing: HealthRow[]; missingThumbs: HealthRow[]; orphanThumbs: string[]; emptyFolders: string[] }> {
-  const reachability = checkNasReachable(nasPath);
+  const reachability = await checkNasReachableAsync(nasPath);
   if (!reachability.online) {
     throw new Error(`Library is not safely readable: ${reachability.message}`);
   }
 
-  const rows = await db.select({
-    id: mediaFilesTable.id,
-    relativePath: mediaFilesTable.relativePath,
-    thumbnailPath: mediaFilesTable.thumbnailPath,
-    mediaType: mediaFilesTable.mediaType,
-    extension: mediaFilesTable.extension,
-    sizeBytes: mediaFilesTable.sizeBytes,
-    lastScanAction: mediaFilesTable.lastScanAction,
-  }).from(mediaFilesTable).where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE));
-
+  const rows: HealthRow[] = [];
   const missing: HealthRow[] = [];
   const missingThumbs: HealthRow[] = [];
   const validIds = new Set<number>();
-  for (const row of rows) {
-    validIds.add(row.id);
-    const source = resolveLibraryPath(nasPath, row.relativePath);
-    if (isMissingRegularMediaFile(source)) missing.push(row);
-    const needsThumb = row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
-    if (needsThumb) {
-      try {
-        const thumb = row.thumbnailPath
-          ? resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath))
-          : path.join(getThumbnailDir(nasPath), thumbnailFilename(row.id));
-        if (!isThumbnailFileValid(thumb)) missingThumbs.push(row);
-      } catch { missingThumbs.push(row); }
+  let indexedFiles = 0;
+  let afterId = 0;
+  while (true) {
+    const page = await db.select({
+      id: mediaFilesTable.id,
+      relativePath: mediaFilesTable.relativePath,
+      thumbnailPath: mediaFilesTable.thumbnailPath,
+      mediaType: mediaFilesTable.mediaType,
+      extension: mediaFilesTable.extension,
+      sizeBytes: mediaFilesTable.sizeBytes,
+      lastScanAction: mediaFilesTable.lastScanAction,
+    }).from(mediaFilesTable)
+      .where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE, gt(mediaFilesTable.id, afterId)))
+      .orderBy(asc(mediaFilesTable.id))
+      .limit(HEALTH_PAGE_SIZE);
+    if (page.length === 0) break;
+    indexedFiles += page.length;
+    if (indexedFiles > MAX_HEALTH_CLEANUP_TARGETS) {
+      throw new Error(`Health scan is limited to ${MAX_HEALTH_CLEANUP_TARGETS.toLocaleString()} indexed files per run; no cleanup action was started.`);
     }
+    rows.push(...page);
+    for (const row of page) {
+      validIds.add(row.id);
+      const source = resolveLibraryPath(nasPath, row.relativePath);
+      if (await isMissingRegularMediaFileAsync(source)) missing.push(row);
+      const needsThumb = row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
+      if (needsThumb) {
+        try {
+          const thumb = row.thumbnailPath
+            ? resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath))
+            : path.join(getThumbnailDir(nasPath), thumbnailFilename(row.id));
+          if (!await isHealthThumbnailValid(thumb)) missingThumbs.push(row);
+        } catch { missingThumbs.push(row); }
+      }
+    }
+    afterId = page[page.length - 1]!.id;
   }
 
-  const cache = cacheInventory(nasPath);
+  const cache = await cacheInventory(nasPath);
   const orphanThumbs = cache.orphaned.filter(file => {
     const id = Number(path.basename(file, path.extname(file)));
     return path.extname(file).toLowerCase() === ".webp" && (!Number.isInteger(id) || !validIds.has(id));
   });
-  const folders = walkDirectories(nasPath, getWillardAIDir(nasPath));
+  const folders = await walkDirectories(nasPath, getWillardAIDir(nasPath));
   const [metadataRows, orphanFaceRows, orphanStateRows] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` })
     .from(mediaAiTable)

@@ -1888,7 +1888,7 @@ test("installed lifecycle launcher invocation fails fast when the packaged launc
   const pathCheck = helper.indexOf("Test-Path -LiteralPath $launcher -PathType Leaf");
   const invocation = helper.indexOf("Invoke-AsLifecycleUser");
   assert.ok(pathCheck >= 0 && invocation > pathCheck, "the parent must check the packaged launcher before spawning PowerShell");
-  assert.match(helper, /Installed launcher is missing before/);
+  assert.match(helper, /Stable installed bootstrap is missing before/);
 
   const runnerStart = installedLifecycleSmoke.indexOf("$runnerContents = @'");
   const runnerEnd = installedLifecycleSmoke.indexOf("\n'@", runnerStart);

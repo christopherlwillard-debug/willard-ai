@@ -141,3 +141,15 @@ test("Windows release stages every local helper imported by its desktop runtime 
     }
   }
 });
+
+test("Windows release stages the stable update recovery bootstrap", async () => {
+  const buildSource = await readFile(new URL("./build-release.mjs", import.meta.url), "utf8");
+  const validationSource = await readFile(new URL("./validate-release.mjs", import.meta.url), "utf8");
+  assert.match(buildSource, /desktop\/WillardBootstrap\.ps1/);
+  assert.match(validationSource, /desktop\/WillardBootstrap\.ps1/);
+  const installer = await readFile(new URL("../../installer/WillardMediaCenter.iss", import.meta.url), "utf8");
+  assert.match(installer, /DefaultDirName=\{localappdata\}\\Programs\\Willard Media Center/);
+  assert.match(installer, /UsePreviousAppDir=no/);
+  assert.match(installer, /WillardBootstrap\.ps1/);
+  assert.doesNotMatch(installer, /DefaultDirName=\{localappdata\}\\Willard Media Center/);
+});

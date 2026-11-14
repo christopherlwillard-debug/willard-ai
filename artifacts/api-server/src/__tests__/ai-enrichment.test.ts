@@ -6,6 +6,7 @@ import path from "node:path";
 import AdmZip from "adm-zip";
 import { extractDocumentText } from "../lib/document-text.ts";
 import { setVectorAvailable } from "../lib/vector-capability.ts";
+import { AI_CONSENT_VERSION, AI_PROVIDER_NAME } from "../lib/ai-privacy.ts";
 
 function fixture(name: string, entries: Record<string, string>): string {
   const filePath = path.join(os.tmpdir(), `willard-${name}-${process.pid}.${name}`);
@@ -146,8 +147,8 @@ test("saves descriptions, tags, OCR, and document metadata without pgvector", as
       aiExcludedFolders: [],
       aiExcludedExtensions: [],
       aiConsentAt: new Date(),
-      aiConsentProvider: "test",
-      aiConsentVersion: "test",
+      aiConsentProvider: AI_PROVIDER_NAME,
+      aiConsentVersion: AI_CONSENT_VERSION,
     });
     const insert = enrichmentQueries[0];
     assert.ok(insert);
@@ -199,8 +200,8 @@ test("preserves embedding writes when pgvector is available", async () => {
       aiExcludedFolders: [],
       aiExcludedExtensions: [],
       aiConsentAt: new Date(),
-      aiConsentProvider: "test",
-      aiConsentVersion: "test",
+      aiConsentProvider: AI_PROVIDER_NAME,
+      aiConsentVersion: AI_CONSENT_VERSION,
     });
     const insert = enrichmentQueries[0];
     assert.ok(insert);
@@ -228,14 +229,17 @@ const privacy = (overrides: Partial<{
   aiLocalOnly: boolean;
   aiExcludedFolders: string[];
   aiExcludedExtensions: string[];
+  aiConsentAt: Date | string | null;
+  aiConsentProvider: string | null;
+  aiConsentVersion: string | null;
 }> = {}) => ({
   aiEnrichmentEnabled: true,
   aiLocalOnly: false,
   aiExcludedFolders: [],
   aiExcludedExtensions: [],
   aiConsentAt: new Date(),
-  aiConsentProvider: "test",
-  aiConsentVersion: "test",
+  aiConsentProvider: AI_PROVIDER_NAME,
+  aiConsentVersion: AI_CONSENT_VERSION,
   ...overrides,
 });
 
@@ -284,6 +288,20 @@ test("does not call the provider for local-only or excluded media", async () => 
     await enrichOne(testFile(sourcePath, "tax.pdf"), privacy({ aiExcludedExtensions: ["pdf"] }));
     assert.equal(providerCalls, 0);
     assert.equal(enrichmentQueries.length, 1);
+  } finally {
+    fs.rmSync(sourcePath, { recursive: true, force: true });
+  }
+});
+
+test("does not call the provider when cloud consent is stale", async () => {
+  const { enrichOne } = await import("../lib/ai-enrichment.ts");
+  const sourcePath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-enrichment-stale-consent-"));
+  enrichmentQueries.length = 0;
+  providerCalls = 0;
+  try {
+    await enrichOne(testFile(sourcePath), privacy({ aiConsentVersion: "older-disclosure" }));
+    assert.equal(providerCalls, 0);
+    assert.equal(enrichmentQueries.length, 0);
   } finally {
     fs.rmSync(sourcePath, { recursive: true, force: true });
   }

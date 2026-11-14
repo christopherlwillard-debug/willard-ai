@@ -238,6 +238,15 @@ describe("Dashboard after scan", { concurrency: false }, async () => {
       (s) => !["RUNNING", "PAUSED", "INTERRUPTED_BY_RESTART"].includes(s.status),
       { timeoutMs: 90_000, intervalMs: 2_000, description: "scan to finish" },
     );
+    await pollUntil<DashboardResponse>(
+      async () => {
+        const r = await apiGet("/dashboard");
+        assert.strictEqual(r.status, 200, "Dashboard should remain available while background jobs drain");
+        return r.json() as Promise<DashboardResponse>;
+      },
+      (dashboard) => !dashboard.isScanning,
+      { timeoutMs: 90_000, intervalMs: 1_000, description: "all library jobs to finish" },
+    );
   });
 
   after(async () => {

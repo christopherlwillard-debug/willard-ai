@@ -144,7 +144,7 @@ overrides:
   minimatch: 11.0.1
   multer: 2.5.0
   nanoid@<3.3.18: 3.3.18
-  node-forge: 1.4.2
+  node-forge: 1.4.3
   postcss: 8.5.23
   postcss-selector-parser: 6.1.5
   proxy-addr: 2.0.8
@@ -184,9 +184,6 @@ patchedDependencies:
   '@expo/cli@54.0.28':
     hash: 000c64c36545d17ab9402dc420efd93150e6d5744476662be7efe2a9739fc22a
     path: patches/@expo__cli@54.0.28.patch
-  deepmerge@4.3.1:
-    hash: 925b37dc4eb6d7f1527025ed9210fe4640c4ffcb83f981f8d6c5b7ecdc4b5129
-    path: patches/deepmerge@4.3.1.patch
 
 importers:
 
@@ -5229,8 +5226,8 @@ packages:
       encoding:
         optional: true
 
-  node-forge@1.4.2:
-    resolution: {integrity: sha512-rRtAR5XLJ8gCKd9du4qrKAsgCG1ObGP4gLeNJMa4vYSeq4bmBMOJk5IHkrviBV0q7uoAJlVd8HEQYQSVUb4FGQ==}
+  node-forge@1.4.3:
+    resolution: {integrity: sha512-P6wzfh6t70avmV8FrVEAd/36sOPJQ+hkaJVX1Laap9J/77m7M0eyozDvc8SwnDf4P7MP94gwbAAo0rg3YVXT+g==}
     engines: {node: '>= 6.13.0'}
 
   node-gyp@13.0.2:
@@ -7366,7 +7363,7 @@ snapshots:
       glob: 14.0.2
       lan-network: 0.2.1
       minimatch: 11.0.1
-      node-forge: 1.4.2
+      node-forge: 1.4.3
       npm-package-arg: 11.0.3
       ora: 3.4.0
       picomatch: 4.0.4
@@ -7403,7 +7400,7 @@ snapshots:
 
   '@expo/code-signing-certificates@0.0.6':
     dependencies:
-      node-forge: 1.4.2
+      node-forge: 1.4.3
 
   '@expo/config-plugins@54.0.4':
     dependencies:
@@ -7451,7 +7448,7 @@ snapshots:
       '@expo/config-plugins': 54.0.6
       '@expo/config-types': 54.0.10
       '@expo/json-file': 10.2.0
-      deepmerge: 4.3.1(patch_hash=925b37dc4eb6d7f1527025ed9210fe4640c4ffcb83f981f8d6c5b7ecdc4b5129)
+      deepmerge: 4.3.1
       getenv: 2.0.0
       glob: 14.0.2
       require-from-string: 2.0.2
@@ -7469,7 +7466,7 @@ snapshots:
       '@expo/config-plugins': 54.0.6
       '@expo/config-types': 54.0.10
       '@expo/json-file': 10.2.0
-      deepmerge: 4.3.1(patch_hash=925b37dc4eb6d7f1527025ed9210fe4640c4ffcb83f981f8d6c5b7ecdc4b5129)
+      deepmerge: 4.3.1
       getenv: 2.0.0
       glob: 14.0.2
       require-from-string: 2.0.2
@@ -10226,7 +10223,7 @@ snapshots:
 
   deep-extend@0.6.0: {}
 
-  deepmerge@4.3.1(patch_hash=925b37dc4eb6d7f1527025ed9210fe4640c4ffcb83f981f8d6c5b7ecdc4b5129): {}
+  deepmerge@4.3.1: {}
 
   defaults@1.0.4:
     dependencies:
@@ -11723,7 +11720,7 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
-  node-forge@1.4.2: {}
+  node-forge@1.4.3: {}
 
   node-gyp@13.0.2:
     dependencies:

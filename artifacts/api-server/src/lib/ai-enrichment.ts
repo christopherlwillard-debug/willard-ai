@@ -12,6 +12,7 @@ import { reserveCapacity, releaseCapacity, CapacityAdmissionError } from "./capa
 import {
   getAiPrivacySettings,
   isMediaExcluded,
+  canSendToAiProvider,
   normalizeAiExclusions,
   type AiPrivacySettings,
 } from "./ai-privacy.ts";
@@ -328,6 +329,9 @@ export async function enrichOne(file: PendingFile, privacy?: AiPrivacySettings):
   const effectivePrivacy = privacy ?? await getAiPrivacySettings();
   if (!effectivePrivacy.aiEnrichmentEnabled ||
       isMediaExcluded(file.relativePath, file.name, effectivePrivacy)) {
+    return;
+  }
+  if (!effectivePrivacy.aiLocalOnly && !canSendToAiProvider(effectivePrivacy)) {
     return;
   }
 

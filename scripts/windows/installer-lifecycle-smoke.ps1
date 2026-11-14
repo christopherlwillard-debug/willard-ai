@@ -103,11 +103,11 @@ function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
 }
 
 function Invoke-InstalledLauncher($mode, $label) {
-  $launcher = Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"
+  $launcher = Join-Path $script:DataRoot "WillardBootstrap.ps1"
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
-    throw "Installed launcher is missing before '$mode': $launcher"
+    throw "Stable installed bootstrap is missing before '$mode': $launcher"
   }
-  $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -Mode $mode"
+  $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -InstallRoot `"$InstallRoot`" -Mode $mode"
   return Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") $argumentLine $label
 }
 
@@ -180,6 +180,7 @@ try {
   $runnerContents = @'
 param(
   [Parameter(Mandatory = $true)][string]$Launcher,
+  [Parameter(Mandatory = $true)][string]$InstallRoot,
   [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure", "concurrent")][string]$Mode
 )
 $ErrorActionPreference = "Stop"
@@ -195,8 +196,10 @@ if ($Mode -eq "concurrent") {
   $powershell = Join-Path $PSHOME "powershell.exe"
   $firstOut = Join-Path $env:TEMP "willard-concurrent-first-$PID.out.log"
   $secondOut = Join-Path $env:TEMP "willard-concurrent-second-$PID.out.log"
-  $first = Start-Process -FilePath $powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`"" -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $firstOut -RedirectStandardError ($firstOut + ".err") -PassThru
-  $second = Start-Process -FilePath $powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`"" -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $secondOut -RedirectStandardError ($secondOut + ".err") -PassThru
+  $firstArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$Launcher`" -InstallRoot `"$InstallRoot`""
+  $secondArgs = $firstArgs
+  $first = Start-Process -FilePath $powershell -ArgumentList $firstArgs -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $firstOut -RedirectStandardError ($firstOut + ".err") -PassThru
+  $second = Start-Process -FilePath $powershell -ArgumentList $secondArgs -WorkingDirectory (Split-Path -Parent $Launcher) -RedirectStandardOutput $secondOut -RedirectStandardError ($secondOut + ".err") -PassThru
   if (-not $first.WaitForExit(180000) -or -not $second.WaitForExit(180000)) {
     Stop-Process -Id $first.Id, $second.Id -Force -ErrorAction SilentlyContinue
     throw "Concurrent launcher processes did not exit within 180 seconds."
@@ -211,10 +214,10 @@ if ($Mode -eq "concurrent") {
   }
   $launcherExitCode = 0
 } elseif ($Mode -eq "stop") {
-  & $Launcher -Stop
+  & $Launcher -InstallRoot $InstallRoot -Stop
   $launcherExitCode = if ($?) { 0 } else { 1 }
 } else {
-  & $Launcher
+  & $Launcher -InstallRoot $InstallRoot
   $launcherExitCode = if ($?) { 0 } else { 1 }
 }
 exit $launcherExitCode
@@ -228,6 +231,7 @@ exit $launcherExitCode
   $installResult = Invoke-AsLifecycleUser $firstInstallerForUser "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$firstInstallLog`" /DIR=`"$InstallRoot`"" "first-install"
   Assert-True ($installResult.exitCode -eq 0) ("Setup.exe first install failed with exit code $($installResult.exitCode):`n" + $installResult.output + "`n" + (Read-Text $firstInstallLog))
   Assert-True (Test-Path (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1")) "First install did not include the native launcher."
+  Assert-True (Test-Path (Join-Path $script:DataRoot "WillardBootstrap.ps1")) "First install did not install the stable bootstrap outside the replaceable app folder."
   $desktopShortcut = Join-Path $userProfile "Desktop\Willard Media Center.lnk"
   $startMenuRoot = Join-Path $userProfile "AppData\Roaming\Microsoft\Windows\Start Menu\Programs"
   Assert-True (Test-Path $desktopShortcut) "First install did not create the standard-user desktop shortcut."
