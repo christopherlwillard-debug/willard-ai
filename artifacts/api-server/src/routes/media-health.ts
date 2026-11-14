@@ -257,14 +257,28 @@ async function inspectLibrary(
 function publicHealthJob(job: typeof libraryJobsTable.$inferSelect) {
   const diagnostics = (job.diagnostics ?? {}) as Record<string, unknown>;
   const worker = (diagnostics.healthJob ?? {}) as Record<string, unknown>;
+  const lastProgress = worker.lastProgress && typeof worker.lastProgress === "object"
+    ? worker.lastProgress as Record<string, unknown>
+    : null;
+  const restartInterrupted = worker.retryAvailable === true && worker.restartInterrupted === true;
   return {
     id: job.id,
     jobType: job.jobType,
     status: job.status,
     processed: job.processedFiles,
     total: job.totalFiles,
-    phase: typeof worker.phase === "string" ? worker.phase : null,
-    message: typeof worker.message === "string" ? worker.message : null,
+    phase: restartInterrupted
+      ? "interrupted"
+      : typeof lastProgress?.phase === "string"
+      ? lastProgress.phase
+      : typeof worker.phase === "string" ? worker.phase : null,
+    message: restartInterrupted && typeof job.error === "string"
+      ? job.error
+      : typeof lastProgress?.message === "string"
+      ? lastProgress.message
+      : typeof worker.message === "string" ? worker.message : null,
+    actions: Array.isArray(worker.actions) ? worker.actions : [],
+    retryAvailable: restartInterrupted,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     summary: job.summary,
@@ -351,6 +365,7 @@ router.get("/media/health", async (_req, res) => {
       issues: { missingFiles: 0, orphanedIndexRecords: 0, missingThumbnails: 0, orphanedThumbnails: 0, emptyFolders: 0, brokenMetadataReferences: 0, unusedCacheBytes: 0, unusedCacheFiles: 0 },
       error: "No library is configured",
       activeJob: null,
+      recoverableCleanup: null,
     });
 
     const [latest] = await db.select({
@@ -364,6 +379,16 @@ router.get("/media/health", async (_req, res) => {
     const report = summary.healthReport as HealthReport | undefined;
     const indexedFiles = Number(summary.indexedFiles ?? 0);
     const active = await findActiveLibraryJob(library.nasPath);
+    const [recoverableCleanup] = await db.select().from(libraryJobsTable)
+      .where(and(
+        eq(libraryJobsTable.nasPath, library.nasPath),
+        eq(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+        inArray(libraryJobsTable.status, ["FAILED", "INTERRUPTED_BY_RESTART"]),
+        sql`${libraryJobsTable.diagnostics}->'healthJob'->>'retryAvailable' = 'true'`,
+        sql`${libraryJobsTable.diagnostics}->'healthJob'->>'restartInterrupted' = 'true'`,
+      ))
+      .orderBy(desc(libraryJobsTable.createdAt), desc(libraryJobsTable.id))
+      .limit(1);
 
     return res.json({
       ...(report ?? {
@@ -376,6 +401,7 @@ router.get("/media/health", async (_req, res) => {
       indexedFiles,
       hasReport: Boolean(report),
       activeJob: active ? publicHealthJob(active) : null,
+      recoverableCleanup: recoverableCleanup ? publicHealthJob(recoverableCleanup) : null,
     });
   } catch {
     return res.status(500).json({ error: "Health status could not be loaded" });
@@ -608,30 +634,22 @@ async function runHealthCleanup(
     };
 }
 
-router.post("/media/cleanup", async (req, res) => {
-  const parsed = parseHealthCleanupActions(req.body?.actions);
-  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
-  const actions = parsed.actions;
+async function startHealthCleanupJob(nasPath: string, actions: string[]) {
   const thumbnailRequested = actions.includes("fullThumbnailRebuild") || actions.includes("missingThumbnails");
   const metadataRequested = actions.includes("rebuildMetadata");
-  const library = await getActiveLibraryContext();
-  if (!library) return res.status(409).json({ error: "No library is configured" });
-
-  let started: Awaited<ReturnType<typeof startHealthJob>>;
-  try {
-    started = await startHealthJob(
-      library.nasPath,
-      "HEALTH_CLEANUP",
-      actions,
-      (jobId, token, context) => runHealthCleanup(jobId, token, library.nasPath, actions, context),
-      async (jobId, token, outcome) => {
+  return startHealthJob(
+    nasPath,
+    "HEALTH_CLEANUP",
+    actions,
+    (jobId, token, context) => runHealthCleanup(jobId, token, nasPath, actions, context),
+    async (jobId, token, outcome) => {
       const followUp = outcome.summary.followUpRequest as { jobType?: string; rebuildThumbnails?: boolean } | undefined;
       if (!followUp?.jobType) return;
       try {
         const child = await startJob({
           jobType: followUp.jobType as "THUMBNAILS" | "METADATA",
           profile: "HEALTH_SCAN",
-          nasPath: library.nasPath,
+          nasPath,
           ...(followUp.jobType === "THUMBNAILS" ? { rebuildThumbnails: followUp.rebuildThumbnails === true } : {}),
         });
         if (child.errorCode) throw new Error(child.errorMessage ?? "The follow-up library job could not start.");
@@ -656,8 +674,19 @@ router.post("/media/cleanup", async (req, res) => {
           followUpError: error instanceof Error ? error.message : "The follow-up library job could not start.",
         });
       }
-      },
-    );
+    },
+  );
+}
+
+router.post("/media/cleanup", async (req, res) => {
+  const parsed = parseHealthCleanupActions(req.body?.actions);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  const library = await getActiveLibraryContext();
+  if (!library) return res.status(409).json({ error: "No library is configured" });
+
+  let started: Awaited<ReturnType<typeof startHealthCleanupJob>>;
+  try {
+    started = await startHealthCleanupJob(library.nasPath, parsed.actions);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cleanup could not start";
     return res.status(503).json({ error: message });
@@ -670,6 +699,61 @@ router.post("/media/cleanup", async (req, res) => {
     return res.status(409).json({ error: "Another library job is running.", job: publicHealthJob(started.job) });
   }
   return res.status(202).json({ job: publicHealthJob(started.job), alreadyRunning: false });
+});
+
+router.post("/media/cleanup/jobs/:jobId/retry", async (req, res) => {
+  const id = Number(req.params.jobId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "A valid cleanup job id is required" });
+  }
+  const library = await getActiveLibraryContext();
+  if (!library) return res.status(409).json({ error: "No library is configured" });
+
+  const [job] = await db.select().from(libraryJobsTable)
+    .where(and(
+      eq(libraryJobsTable.id, id),
+      eq(libraryJobsTable.nasPath, library.nasPath),
+      eq(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+      inArray(libraryJobsTable.status, ["FAILED", "INTERRUPTED_BY_RESTART"]),
+    ))
+    .limit(1);
+  const diagnostics = (job?.diagnostics ?? {}) as Record<string, unknown>;
+  const healthJob = (diagnostics.healthJob ?? {}) as Record<string, unknown>;
+  if (!job || healthJob.retryAvailable !== true || healthJob.restartInterrupted !== true) {
+    return res.status(409).json({ error: "This cleanup was not interrupted by a server restart and cannot be retried from its saved actions." });
+  }
+  const parsed = parseHealthCleanupActions(healthJob.actions);
+  if (!parsed.ok) {
+    return res.status(409).json({ error: "Saved cleanup actions are invalid. Start a new cleanup after reviewing the library." });
+  }
+
+  let started: Awaited<ReturnType<typeof startHealthCleanupJob>>;
+  try {
+    started = await startHealthCleanupJob(library.nasPath, parsed.actions);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Cleanup could not be retried";
+    return res.status(503).json({ error: message });
+  }
+  if ("busy" in started) {
+    return res.status(503).json({ error: "The bounded Health Center worker is busy; try again shortly." });
+  }
+  if (!started.started && started.job.jobType !== "HEALTH_CLEANUP") {
+    return res.status(409).json({ error: "Another library job is running.", job: publicHealthJob(started.job) });
+  }
+  if (started.started) {
+    await db.update(libraryJobsTable).set({
+      diagnostics: sql`jsonb_set(
+        COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
+        '{healthJob,retryAvailable}',
+        'false'::jsonb,
+        true
+      )`,
+    }).where(and(
+      eq(libraryJobsTable.id, job.id),
+      sql`${libraryJobsTable.diagnostics}->'healthJob'->>'retryAvailable' = 'true'`,
+    ));
+  }
+  return res.status(202).json({ job: publicHealthJob(started.job), alreadyRunning: !started.started });
 });
 
 export default router;

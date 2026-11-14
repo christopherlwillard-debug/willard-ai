@@ -8,6 +8,8 @@ export type HealthJobSnapshot = {
   message: string | null;
   summary: Record<string, unknown> | null;
   error: string | null;
+  actions?: string[];
+  retryAvailable?: boolean;
 };
 
 export function shouldPollHealthJob(job: HealthJobSnapshot): boolean {

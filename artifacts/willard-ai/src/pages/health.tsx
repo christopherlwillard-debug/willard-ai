@@ -19,6 +19,7 @@ type Report = {
   indexedFiles?: number;
   hasReport?: boolean;
   activeJob?: HealthJob | null;
+  recoverableCleanup?: HealthJob | null;
   status: "healthy" | "attention" | "action_required";
   issues: Record<string, number>;
   error?: string;
@@ -89,13 +90,16 @@ export default function Health() {
       const nextReport = body as Report;
       setReport(nextReport);
       setError("");
-      const job = nextReport.activeJob ?? null;
+      const runningJob = nextReport.activeJob ?? null;
+      const job = runningJob ?? nextReport.recoverableCleanup ?? null;
       setActiveJob(job);
-      if (job) {
-        setTrackedJobId(job.id);
+      if (runningJob) {
+        setTrackedJobId(runningJob.id);
         setRunning(true);
       } else if (!nextReport.hasReport) {
-        void startScan();
+        setTrackedJobId(null);
+        setRunning(false);
+        if (!nextReport.recoverableCleanup) void startScan();
       } else {
         setRunning(false);
         setTrackedJobId(null);
@@ -219,6 +223,25 @@ export default function Health() {
     }
   };
 
+  const retryCleanup = async () => {
+    if (!activeJob?.retryAvailable) return;
+    setRunning(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch(apiUrl(`/media/cleanup/jobs/${activeJob.id}/retry`), { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Cleanup could not be retried");
+      const job = body.job as HealthJob;
+      setCleanupStartedByThisPage(body.alreadyRunning === true ? null : job.id);
+      setActiveJob(job);
+      setTrackedJobId(job.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Cleanup could not be retried");
+      setRunning(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -249,9 +272,16 @@ export default function Health() {
 
       {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
       {notice && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
-      {activeJob && running && <div role="status" aria-live="polite" className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-        <div className="flex items-center gap-2 text-sm font-medium"><Loader2 className="h-4 w-4 animate-spin text-primary" />{activeJob.message ?? `Running ${activeJob.jobType.toLowerCase().replaceAll("_", " ")}…`}</div>
+      {activeJob && (running || activeJob.retryAvailable) && <div role={running ? "status" : "alert"} aria-live="polite" className={`rounded-lg border p-4 ${activeJob.retryAvailable && !running ? "border-amber-500/30 bg-amber-500/10" : "border-primary/30 bg-primary/5"}`}>
+        <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          {running
+            ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            : <AlertTriangle className="h-4 w-4 text-amber-400" />}
+          <span>{activeJob.message ?? `Running ${activeJob.jobType.toLowerCase().replaceAll("_", " ")}…`}</span>
+          {activeJob.retryAvailable && <Button size="sm" variant="outline" className="ml-auto" onClick={() => void retryCleanup()} disabled={running}>Retry cleanup</Button>}
+        </div>
         <p className="mt-1 text-xs text-muted-foreground">Task #{activeJob.id} · {activeJob.phase ?? activeJob.status.toLowerCase()}</p>
+        {activeJob.retryAvailable && <p className="mt-2 text-xs text-muted-foreground">Retry rechecks the library and skips changes that are already complete. Selected actions: {(activeJob.actions ?? []).map(action => actions.find(([key]) => key === action)?.[1] ?? action).join(", ") || "none"}.</p>}
         {activeJob.total !== null && <div className="mt-2">
           <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, (activeJob.processed / Math.max(activeJob.total, 1)) * 100)}%` }} /></div>
           <p className="mt-1 text-xs text-muted-foreground">{activeJob.processed.toLocaleString()} / {activeJob.total.toLocaleString()}</p>

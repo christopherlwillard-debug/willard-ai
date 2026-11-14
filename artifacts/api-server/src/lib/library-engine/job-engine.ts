@@ -3408,13 +3408,47 @@ export async function recoverInterruptedJobs(): Promise<void> {
     }
   } catch { /* scan_jobs may not exist on a fresh install — non-fatal */ }
 
-  // Jobs that were actively RUNNING when the server stopped → FAILED (crashed)
+  // Interrupted Health Center cleanups retain their actions and latest progress.
+  // They are offered for explicit retry because startup cannot safely infer
+  // which filesystem mutations finished immediately before the interruption.
+  const cleanupRestartMessage =
+    "Cleanup was interrupted by a server restart. Some safe changes may already be complete; retry to recheck the library before continuing.";
+  const { rowCount: interruptedCleanupCount } = await db.update(libraryJobsTable).set({
+    status: "FAILED",
+    cancellationReason: "ERROR",
+    error: cleanupRestartMessage,
+    finishedAt: new Date(),
+    diagnostics: sql`jsonb_set(
+      COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
+      '{healthJob}',
+      COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
+        jsonb_build_object(
+          'restartInterrupted', true,
+          'retryAvailable', true,
+          'phase', 'interrupted'
+        ),
+      true
+    )`,
+  }).where(and(
+    eq(libraryJobsTable.status, "RUNNING"),
+    eq(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+  ));
+
+  if (interruptedCleanupCount && interruptedCleanupCount > 0) {
+    logger.warn({ operation: "restart_recovery", interruptedCleanupCount },
+      "Marked Health Center cleanups interrupted and available for safe retry");
+  }
+
+  // Other jobs that were actively RUNNING when the server stopped → FAILED.
   const { rowCount: failedCount } = await db.update(libraryJobsTable).set({
     status:             "FAILED",
     cancellationReason: "ERROR",
     error:              "Interrupted by server restart",
     finishedAt:         new Date(),
-  }).where(eq(libraryJobsTable.status, "RUNNING"));
+  }).where(and(
+    eq(libraryJobsTable.status, "RUNNING"),
+    ne(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+  ));
 
   if (failedCount && failedCount > 0) {
     logger.warn({ operation: "restart_recovery", failedCount },
@@ -3424,10 +3458,40 @@ export async function recoverInterruptedJobs(): Promise<void> {
   // Jobs that were PAUSED when the server stopped → INTERRUPTED_BY_RESTART.
   // This prevents old paused scans from silently resuming after a restart.
   // The user must explicitly choose to resume or discard each one from the UI.
+  const interruptedCleanupMessage =
+    "Cleanup was interrupted by a server restart. Some safe changes may already be complete; retry to recheck the library before continuing.";
+  const { rowCount: pausedCleanupCount } = await db.update(libraryJobsTable).set({
+    status: "INTERRUPTED_BY_RESTART",
+    finishedAt: new Date(),
+    error: interruptedCleanupMessage,
+    diagnostics: sql`jsonb_set(
+      COALESCE(${libraryJobsTable.diagnostics}, '{}'::jsonb),
+      '{healthJob}',
+      COALESCE(${libraryJobsTable.diagnostics}->'healthJob', '{}'::jsonb) ||
+        jsonb_build_object(
+          'restartInterrupted', true,
+          'retryAvailable', true,
+          'phase', 'interrupted'
+        ),
+      true
+    )`,
+  }).where(and(
+    eq(libraryJobsTable.status, "PAUSED"),
+    eq(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+  ));
+
+  if (pausedCleanupCount && pausedCleanupCount > 0) {
+    logger.warn({ operation: "restart_recovery", pausedCleanupCount },
+      "Marked paused Health Center cleanups interrupted and available for safe retry");
+  }
+
   const { rowCount: interruptedCount } = await db.update(libraryJobsTable).set({
     status:     "INTERRUPTED_BY_RESTART",
     finishedAt: new Date(),
-  }).where(eq(libraryJobsTable.status, "PAUSED"));
+  }).where(and(
+    eq(libraryJobsTable.status, "PAUSED"),
+    ne(libraryJobsTable.jobType, "HEALTH_CLEANUP"),
+  ));
 
   if (interruptedCount && interruptedCount > 0) {
     logger.warn({ operation: "restart_recovery", interruptedCount },

@@ -37,7 +37,8 @@ const store: MediaHealthJobStore = {
           jsonb_build_object(
             'workerToken', ${token}::text,
             'phase', ${progress.phase}::text,
-            'message', ${progress.message}::text
+            'message', ${progress.message}::text,
+            'lastProgress', ${JSON.stringify(progress)}::jsonb
           ),
         true
       )`,
