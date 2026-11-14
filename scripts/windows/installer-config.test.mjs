@@ -765,8 +765,14 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
   assert.match(installedLifecycleSmoke, /startup-failure\.log/);
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
-  assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent"\)/);
+  assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent", "shortcut"\)/);
   assert.match(installedLifecycleSmoke, /Invoke-InstalledLauncher "concurrent"/);
+  assert.match(installedLifecycleSmoke, /function Invoke-InstalledShortcut/);
+  assert.match(installedLifecycleSmoke, /incomplete-folder recovery/);
+  assert.match(installedLifecycleSmoke, /backup-protection\\automation-credential\.dpapi/);
+  assert.match(installedLifecycleSmoke, /Persistent \.env configuration changed/);
+  assert.match(installedLifecycleSmoke, /preserve update state/);
+  assert.match(installedLifecycleSmoke, /legacy-path migration/);
   assert.match(installedLifecycleSmoke, /Concurrent installed launches started duplicate/);
   assert.match(installedLifecycleSmoke, /Upgrade removed or duplicated the Start Menu shortcut/);
   assert.match(installedLifecycleSmoke, /Uninstall left the Start Menu shortcut behind/);

@@ -17,6 +17,7 @@ $Password = ConvertTo-SecureString "WillardLifecycle!1" -AsPlainText -Force
 $Credential = [pscredential]::new(".\$UserName", $Password)
 $Database = "willard_lifecycle_$([guid]::NewGuid().ToString("N").Substring(0, 8))"
 $InstallRoot = Join-Path $env:SystemDrive "WillardLifecycle\$UserName"
+$script:InstallParent = Split-Path -Parent $InstallRoot
 $MediaRoot = Join-Path $TempRoot "external-media"
 $RecoveryExport = Join-Path $TempRoot "Willard-Library-Recovery.willard-recovery.json"
 $Runner = Join-Path $TempRoot "run-installed-launcher.ps1"
@@ -27,6 +28,8 @@ $script:UserTemp = Join-Path $script:UserLocalAppData "Temp"
 $script:DataRoot = $null
 $script:LifecyclePassed = $false
 $script:LifecycleStage = "initialization"
+$script:EnvHash = $null
+$script:BackupCredentialHash = $null
 $LifecycleProcessTimeoutSeconds = 180
 $script:ParentEnvironment = @{}
 foreach ($name in @("USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP")) {
@@ -107,7 +110,24 @@ function Invoke-InstalledLauncher($mode, $label) {
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
     throw "Stable installed bootstrap is missing before '$mode': $launcher"
   }
-  $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -InstallRoot `"$InstallRoot`" -Mode $mode"
+  $desktopShortcut = Join-Path $script:UserProfile "Desktop\Willard Media Center.lnk"
+  $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -InstallRoot `"$InstallRoot`" -Shortcut `"$desktopShortcut`" -Mode $mode"
+  return Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") $argumentLine $label
+}
+
+function Invoke-InstalledShortcut($label) {
+  $desktopShortcut = Join-Path $script:UserProfile "Desktop\Willard Media Center.lnk"
+  if (-not (Test-Path -LiteralPath $desktopShortcut -PathType Leaf)) {
+    throw "Installed desktop shortcut is missing: $desktopShortcut"
+  }
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($desktopShortcut)
+  Assert-True ([IO.Path]::GetFullPath($shortcut.TargetPath) -ieq [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"))) `
+    "Desktop shortcut does not target Windows PowerShell."
+  Assert-True ($shortcut.Arguments -like "*WillardBootstrap.ps1*" -and $shortcut.Arguments -like "*-InstallRoot `"$InstallRoot`"*") `
+    "Desktop shortcut does not invoke the stable bootstrap with its install root."
+  $launcher = Join-Path $script:DataRoot "WillardBootstrap.ps1"
+  $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Launcher `"$launcher`" -InstallRoot `"$InstallRoot`" -Shortcut `"$desktopShortcut`" -Mode shortcut"
   return Invoke-AsLifecycleUser (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") $argumentLine $label
 }
 
@@ -120,6 +140,22 @@ function Stop-InstalledWillard {
 function Assert-ExternalState {
   Assert-True ((Read-Text (Join-Path $MediaRoot "family-media.marker")) -match "original media") "External media marker changed."
   Assert-True ((Read-Text (Join-Path $script:DataRoot "settings.marker")) -match "preserve settings") "External settings marker changed."
+  Assert-True ((Read-Text (Join-Path $script:DataRoot "logs\persistence.marker")) -match "preserve logs") "Persistent logs were overwritten."
+  Assert-True ((Read-Text (Join-Path $script:DataRoot "updates\user-state.marker")) -match "preserve update state") "Persistent update state was overwritten."
+  Assert-True ((Read-Text (Join-Path $script:DataRoot "desktop\legacy-payload.marker")) -match "legacy payload") "The prior data-root payload was unexpectedly removed."
+  $envPath = Join-Path $script:DataRoot ".env"
+  Assert-True (Test-Path -LiteralPath $envPath -PathType Leaf) "Persistent .env configuration was removed."
+  if ($script:EnvHash) {
+    Assert-True ((Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash -eq $script:EnvHash) "Persistent .env configuration changed."
+  }
+  $credentialPath = Join-Path $script:DataRoot "backup-protection\automation-credential.dpapi"
+  Assert-True (Test-Path -LiteralPath $credentialPath -PathType Leaf) "Protected backup credentials were removed."
+  $credentialHash = (Get-FileHash -LiteralPath $credentialPath -Algorithm SHA256).Hash
+  if ($script:BackupCredentialHash) {
+    Assert-True ($credentialHash -eq $script:BackupCredentialHash) "Protected backup credentials changed."
+  } else {
+    $script:BackupCredentialHash = $credentialHash
+  }
   $marker = & $Psql -h localhost -U postgres -d $Database -Atc "SELECT marker FROM willard_lifecycle_marker LIMIT 1"
   Assert-True ($LASTEXITCODE -eq 0 -and ([string]$marker).Trim() -eq "preserve database") "External PostgreSQL marker changed."
 }
@@ -175,13 +211,27 @@ try {
     "SESSION_SECRET=installer-lifecycle-session-secret"
   ) | Set-Content (Join-Path $script:DataRoot ".env") -Encoding UTF8
   Set-Content (Join-Path $script:DataRoot "settings.marker") "preserve settings" -Encoding UTF8
+  $script:EnvHash = (Get-FileHash -LiteralPath (Join-Path $script:DataRoot ".env") -Algorithm SHA256).Hash
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:DataRoot "desktop"), (Join-Path $script:DataRoot "logs"), (Join-Path $script:DataRoot "updates") | Out-Null
+  Set-Content (Join-Path $script:DataRoot "desktop\legacy-payload.marker") "legacy payload" -Encoding UTF8
+  Set-Content (Join-Path $script:DataRoot "logs\persistence.marker") "preserve logs" -Encoding UTF8
+  Set-Content (Join-Path $script:DataRoot "updates\user-state.marker") "preserve update state" -Encoding UTF8
+  $desktopShortcut = Join-Path $userProfile "Desktop\Willard Media Center.lnk"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $desktopShortcut) | Out-Null
+  $legacyLauncher = Join-Path $script:DataRoot "desktop\WillardMediaCenter.ps1"
+  Set-Content -LiteralPath $legacyLauncher "exit 0" -Encoding ASCII
+  $legacyLink = (New-Object -ComObject WScript.Shell).CreateShortcut($desktopShortcut)
+  $legacyLink.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $legacyLink.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$legacyLauncher`""
+  $legacyLink.Save()
 
   $recoveryExportLiteral = $RecoveryExport.Replace("'", "''")
   $runnerContents = @'
 param(
   [Parameter(Mandatory = $true)][string]$Launcher,
   [Parameter(Mandatory = $true)][string]$InstallRoot,
-  [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure", "concurrent")][string]$Mode
+  [Parameter(Mandatory = $true)][ValidateSet("start", "stop", "failure", "concurrent", "shortcut")][string]$Mode,
+  [string]$Shortcut
 )
 $ErrorActionPreference = "Stop"
 if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
@@ -213,6 +263,13 @@ if ($Mode -eq "concurrent") {
       (Get-Content ($secondOut + ".err") -Raw -ErrorAction SilentlyContinue))
   }
   $launcherExitCode = 0
+} elseif ($Mode -eq "shortcut") {
+  if ([string]::IsNullOrWhiteSpace($Shortcut) -or -not (Test-Path -LiteralPath $Shortcut -PathType Leaf)) {
+    throw "Installed desktop shortcut is missing: $Shortcut"
+  }
+  $shortcutProcess = Start-Process -FilePath $Shortcut -Wait -PassThru
+  $shortcutProcess.Refresh()
+  $launcherExitCode = $shortcutProcess.ExitCode
 } elseif ($Mode -eq "stop") {
   & $Launcher -InstallRoot $InstallRoot -Stop
   $launcherExitCode = if ($?) { 0 } else { 1 }
@@ -239,8 +296,8 @@ exit $launcherExitCode
     "First install did not create the standard-user Start Menu shortcut."
 
   Write-LifecycleStage "first start"
-  $startResult = Invoke-InstalledLauncher "start" "first-start"
-  Assert-True ($startResult.exitCode -eq 0) ("Installed launcher failed after first install:`n" + $startResult.output)
+  $startResult = Invoke-InstalledShortcut "first-start-via-upgraded-legacy-shortcut"
+  Assert-True ($startResult.exitCode -eq 0) ("Installed shortcut failed after legacy-path migration:`n" + $startResult.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Wait-Http "http://127.0.0.1:5000" { param($content) $content -match "<html|<!doctype html" }
 
@@ -336,12 +393,42 @@ exit $launcherExitCode
     updatedAt = (Get-Date).ToString("o")
   } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
 
-  $preparedRecovery = Invoke-InstalledLauncher "start" "prepared-phase-update-recovery"
+  $preparedRecovery = Invoke-InstalledShortcut "prepared-phase-shortcut-recovery"
   Assert-True ($preparedRecovery.exitCode -eq 0) ("Installed launcher did not recover a prepared-phase interruption:`n" + $preparedRecovery.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
   Assert-True (Test-Path (Join-Path $InstallRoot "prepared-backup-only.marker")) "The prior installation was not restored from the prepared journal."
   Assert-True (-not (Test-Path $preparedCandidate)) "The interrupted prepared candidate was not removed."
   Assert-True (-not (Test-Path $journalPath)) "Prepared-phase update journal was not cleared."
+  Assert-ExternalState
+  Stop-InstalledWillard
+
+  Write-LifecycleStage "incomplete-folder recovery"
+  $incompleteBackup = Join-Path $installParent ("." + $installLeaf + ".previous-incomplete-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $incompleteCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
+  Set-Content (Join-Path $InstallRoot "incomplete-backup-only.marker") "restore complete backup" -Encoding UTF8
+  Move-Item -LiteralPath $InstallRoot -Destination $incompleteBackup -ErrorAction Stop
+  Copy-Item -LiteralPath $incompleteBackup -Destination $incompleteCandidate -Recurse -Force
+  Set-Content (Join-Path $incompleteCandidate "candidate-only.marker") "do not activate candidate" -Encoding UTF8
+  New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+  Set-Content (Join-Path $InstallRoot "partial-install.marker") "preserve incomplete payload" -Encoding UTF8
+  @{
+    version = 1
+    phase = "swapped"
+    installRoot = $InstallRoot
+    candidate = $incompleteCandidate
+    backup = $incompleteBackup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+
+  $incompleteRecovery = Invoke-InstalledShortcut "incomplete-folder-shortcut-recovery"
+  Assert-True ($incompleteRecovery.exitCode -eq 0) ("Installed shortcut did not recover the incomplete app folder:`n" + $incompleteRecovery.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
+  Assert-True (Test-Path (Join-Path $InstallRoot "incomplete-backup-only.marker")) "The complete prior app was not restored from the incomplete-folder backup."
+  Assert-True (-not (Test-Path (Join-Path $InstallRoot "partial-install.marker"))) "The incomplete app folder remained active."
+  $quarantinedInstall = @(Get-ChildItem -LiteralPath $installParent -Directory -Filter ".$installLeaf.incomplete-*" -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "partial-install.marker") })
+  Assert-True ($quarantinedInstall.Count -eq 1) "The incomplete payload was not preserved in a recovery quarantine."
+  Assert-True (-not (Test-Path $journalPath)) "Incomplete-folder recovery journal was not cleared."
   Assert-ExternalState
   Stop-InstalledWillard
 
@@ -398,8 +485,9 @@ exit $launcherExitCode
     try { & $Dropdb -h localhost -U postgres --if-exists $Database | Out-Null } catch {}
   }
   try { Remove-LocalUser -Name $UserName -ErrorAction SilentlyContinue } catch {}
-  Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
   if ($script:LifecyclePassed) {
+    Remove-Item $script:InstallParent -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $script:UserProfile -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
   } else {
     Write-Host "Lifecycle diagnostics preserved at $TempRoot" -ForegroundColor Yellow

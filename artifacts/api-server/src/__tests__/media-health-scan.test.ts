@@ -4,8 +4,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isMissingFilesystemEntry, isMissingRegularMediaFile, isMissingRegularMediaFileAsync, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
-import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { walkHealthDirectories } from "../lib/media-health-filesystem.ts";
+import { parseHealthCleanupActions } from "../lib/media-health-actions.ts";
 
 test("media health treats only ENOENT and ENOTDIR as confirmed missing paths", () => {
   assert.equal(isMissingFilesystemEntry({ code: "ENOENT" }), true);
@@ -48,65 +48,6 @@ test("media health refuses symlink media paths rather than following them", (t) 
   assert.throws(() => isMissingRegularMediaFile(link), /not a regular/);
 });
 
-test("media health checks library reachability and uses fail-closed missing-file classification", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  assert.match(source, /checkNasReachableAsync\(nasPath\)/);
-  assert.match(source, /if \(!reachability\.online\)/);
-  assert.match(source, /isMissingRegularMediaFileAsync\(source\)/);
-  assert.doesNotMatch(source, /if \(!fs\.existsSync\(source\)\) missing\.push\(row\)/);
-  const walkerStart = source.indexOf("function walkDirectories");
-  const walkerEnd = source.indexOf("function cacheInventory", walkerStart);
-  const walker = source.slice(walkerStart, walkerEnd);
-  assert.ok(walkerStart >= 0 && walkerEnd > walkerStart);
-  assert.match(source, /fs\.promises\.opendir\(directoryPath\)/);
-  assert.match(walker, /readHealthDirectory\(root, dir\)/);
-  assert.doesNotMatch(walker, /try \{ entries = fs\.readdirSync\(dir, \{ withFileTypes: true \}\); \} catch \{ return; \}/);
-  const cacheStart = source.indexOf("function cacheInventory");
-  const cacheEnd = source.indexOf("async function inspectLibrary", cacheStart);
-  assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
-  assert.match(source.slice(cacheStart, cacheEnd), /readHealthDirectory\(nasPath, dir\)/);
-});
-
-test("Health Center directory enumeration and catalog reads are asynchronous and paged", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  assert.match(source, /fs\.promises\.opendir/);
-  assert.match(source, /HEALTH_PAGE_SIZE/);
-  assert.match(source, /\.orderBy\(asc\(mediaFilesTable\.id\)\)/);
-  assert.doesNotMatch(source, /readdirSync|statSync|lstatSync/);
-});
-
-test("health cleanup reports durable job creation failures through its SSE error boundary", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
-  const guardedStart = cleanupRoute.indexOf("try {");
-  const jobInsert = cleanupRoute.indexOf("await db.insert(libraryJobsTable)");
-  assert.ok(guardedStart >= 0 && jobInsert > guardedStart);
-  assert.match(cleanupRoute, /let jobId: number \| null = null/);
-  assert.match(cleanupRoute, /if \(jobId !== null\)/);
-});
-
-
-test("Health Center metadata rebuild starts the durable METADATA worker instead of reporting a no-op", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
-
-  assert.ok(source.includes('import { startJob } from "../lib/library-engine";'));
-  assert.ok(cleanupRoute.includes('jobType: "METADATA"'));
-  assert.ok(cleanupRoute.includes('profile: "HEALTH_SCAN"'));
-  assert.ok(cleanupRoute.includes("metadataJob.errorCode"));
-  assert.ok(cleanupRoute.includes('existing?.jobType !== "METADATA" || existing.status !== "RUNNING"'));
-  assert.ok(cleanupRoute.includes("Metadata refresh job #"));
-  assert.ok(!cleanupRoute.includes("Metadata rebuild is queued for the next library scan."));
-
-  const releasedTemporaryClaim = cleanupRoute.indexOf('status: "DONE"');
-  const metadataStart = cleanupRoute.indexOf("const metadataJob = await startJob");
-  assert.ok(releasedTemporaryClaim >= 0 && metadataStart > releasedTemporaryClaim);
-});
-
 test("missing-media cleanup rechecks the source and skips a file restored after inspection", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-health-restored-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -143,89 +84,58 @@ test("missing-media cleanup marks only a still-missing active record and preserv
   assert.equal(changed, "record_changed");
 });
 
-test("Health Center reports thumbnail and face-crop failures as partial cleanup instead of success", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
-
-  assert.match(cleanupRoute, /let failedItems = 0/);
-  assert.match(cleanupRoute, /faceCropFailures = cleaned\.cropErrors\.length/);
-  assert.match(cleanupRoute, /failedItems \+= faceCropFailures/);
-  assert.match(cleanupRoute, /thumbnailFailures\+\+/);
-  assert.match(cleanupRoute, /status: partial \? "FAILED" : "DONE"/);
-  assert.match(cleanupRoute, /ok: !partial/);
-  assert.match(cleanupRoute, /partial,/);
-  assert.match(cleanupRoute, /failedItems,/);
-  assert.match(cleanupRoute, /metadataJobId !== null \? \{ metadataJobId \} : \{\}/);
+test("Health Center action parsing rejects invalid and conflicting work before scheduling", () => {
+  assert.deepEqual(parseHealthCleanupActions([]), {
+    ok: false,
+    error: "actions must be a non-empty array containing only supported cleanup actions",
+  });
+  assert.equal(parseHealthCleanupActions(["not-an-action"]).ok, false);
+  assert.equal(parseHealthCleanupActions(["rebuildMetadata", "missingThumbnails"]).ok, false);
+  assert.deepEqual(parseHealthCleanupActions(["orphanedRecords", "orphanedRecords"]), {
+    ok: true,
+    actions: ["orphanedRecords"],
+  });
+  assert.deepEqual(parseHealthCleanupActions(["fullThumbnailRebuild", "orphanedThumbnails"]), {
+    ok: true,
+    actions: ["fullThumbnailRebuild", "orphanedThumbnails"],
+  });
 });
 
-test("Health Center rejects empty or unsupported cleanup actions before opening an event stream or creating a job", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+test("Health Center walks real directories asynchronously and reports bounded progress", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-health-walk-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nested = path.join(root, "nested");
+  const empty = path.join(nested, "empty");
+  fs.mkdirSync(empty, { recursive: true });
+  fs.writeFileSync(path.join(nested, "media.jpg"), "media");
+  const progress: number[] = [];
 
-  const validationEnd = cleanupRoute.indexOf('const nasPath =');
-  const streamStart = cleanupRoute.indexOf('res.writeHead(200');
-  const jobInsert = cleanupRoute.indexOf("await db.insert(libraryJobsTable)");
-  assert.ok(validationEnd > 0 && streamStart > validationEnd && jobInsert > streamStart);
-  const validation = cleanupRoute.slice(0, validationEnd);
-  assert.match(validation, /!Array\.isArray\(requested\)/);
-  assert.match(validation, /requested\.length === 0/);
-  assert.match(validation, /requested\.some\(/);
-  assert.match(validation, /return res\.status\(400\)\.json/);
-  assert.match(validation, /const actions = \[\.\.\.new Set\(requested as string\[\]\)\]/);
+  const result = await walkHealthDirectories(root, path.join(root, "excluded"), async (update) => {
+    progress.push(update.processed);
+  }, {
+    maxEntriesPerDirectory: 10,
+    maxEntriesPerTree: 10,
+    reportEveryDirectories: 1,
+  });
+
+  assert.equal(result.visitedDirectories, 3);
+  assert.equal(result.visitedEntries, 3);
+  assert.deepEqual(result.empty, [empty]);
+  assert.deepEqual(progress, [1, 2, 3]);
 });
 
-test("Health Center cleanup progress counts only selected work and excludes skipped folders", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const source = readFileSync(routePath, "utf8");
-  const cleanupRoute = source.slice(source.indexOf('router.post("/media/cleanup"'));
+test("Health Center bounds a directory before accumulating an unbounded entry array", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "willard-health-limit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "one"), "1");
+  fs.writeFileSync(path.join(root, "two"), "2");
 
-  assert.match(cleanupRoute, /actions\.includes\("orphanedRecords"\) \? inspected\.missing\.length : 0/);
-  assert.match(cleanupRoute, /actions\.includes\("orphanedThumbnails"\) \? inspected\.orphanThumbs\.length : 0/);
-  assert.match(cleanupRoute, /thumbnailTargets\.length/);
-  assert.match(cleanupRoute, /actions\.includes\("emptyFolders"\) \? emptyFolderTargets\.length : 0/);
-  assert.match(cleanupRoute, /emptyFolderTargets = inspected\.emptyFolders\.filter/);
-  assert.match(cleanupRoute, /cleaned\.orphanRows - inspected\.report\.issues\.brokenMetadataReferences/);
-  assert.match(cleanupRoute, /cleaned\.staleCropsRemoved \+ cleaned\.cropErrors\.length/);
-  assert.doesNotMatch(cleanupRoute, /const total = Math\.max\(1, inspected\.missing\.length \+ inspected\.orphanThumbs\.length \+ inspected\.missingThumbs\.length \+ inspected\.emptyFolders\.length\)/);
-  assert.match(cleanupRoute, /removeEmptyDirectoryWithoutSymlinkTraversal\(nasPath, folder\)/);
-});
-
-test("Health Center orphan cleanup uses reversible conditional soft-delete and preserves derived data", () => {
-  const routePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const enginePath = fileURLToPath(new URL("../lib/library-engine/job-engine.ts", import.meta.url));
-  const route = readFileSync(routePath, "utf8");
-  const engine = readFileSync(enginePath, "utf8");
-  const start = route.indexOf('if (actions.includes("orphanedRecords"))');
-  const end = route.indexOf('if (actions.includes("orphanedDerivedData"))', start);
-  const cleanup = route.slice(start, end);
-
-  assert.ok(start >= 0 && end > start);
-  assert.match(cleanup, /softDeleteMissingMediaRecord\(source/);
-  assert.match(cleanup, /lastScanAction: "DELETED"/);
-  assert.match(cleanup, /eq\(mediaFilesTable\.relativePath, row\.relativePath\)/);
-  assert.match(cleanup, /ACTIVE/);
-  assert.doesNotMatch(cleanup, /db\.delete\(mediaFilesTable\)|purgeDerivedDataForMedia/);
-  assert.match(engine, /lastScanAction:[\s\S]*excluded\.last_scan_action/);
-});
-
-test("Health Center routes stay behind the authenticated API session guard", () => {
-  const appPath = fileURLToPath(new URL("../app.ts", import.meta.url));
-  const app = readFileSync(appPath, "utf8");
-  const healthRoutePath = fileURLToPath(new URL("../routes/media-health.ts", import.meta.url));
-  const healthRoutes = readFileSync(healthRoutePath, "utf8");
-  const publicPathsStart = app.indexOf("const PUBLIC_PATHS = new Set([");
-  const publicPathsEnd = app.indexOf("]);", publicPathsStart);
-  const authGuardStart = app.indexOf('app.use("/api", async');
-  const protectedRouterMount = app.indexOf('app.use("/api", router)');
-  const unauthenticatedCheck = app.indexOf("if (!sess?.authenticated)", authGuardStart);
-
-  assert.ok(publicPathsStart >= 0 && publicPathsEnd > publicPathsStart);
-  assert.doesNotMatch(app.slice(publicPathsStart, publicPathsEnd), /media\/health|media\/cleanup/);
-  assert.ok(authGuardStart >= 0 && protectedRouterMount > authGuardStart);
-  assert.ok(unauthenticatedCheck > authGuardStart && unauthenticatedCheck < protectedRouterMount);
-  assert.match(app.slice(unauthenticatedCheck, protectedRouterMount), /res\.status\(401\)\.json/);
-  assert.match(healthRoutes, /router\.get\("\/media\/health"/);
-  assert.match(healthRoutes, /router\.post\("\/media\/cleanup"/);
+  await assert.rejects(
+    walkHealthDirectories(root, path.join(root, "excluded"), undefined, {
+      maxEntriesPerDirectory: 1,
+      maxEntriesPerTree: 10,
+      reportEveryDirectories: 1,
+    }),
+    /limited to 1 entries in one directory/,
+  );
 });

@@ -10,6 +10,7 @@ import { stopThumbnailReconciliation } from "./library-engine/index.ts";
 import { logger } from "./logger.ts";
 import { markShuttingDown } from "./shutdown-state.ts";
 import { stopActiveConversionJobs } from "./conversion-runtime.ts";
+import { stopMediaHealthWorkers } from "./media-health-jobs.ts";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -63,6 +64,7 @@ export interface ShutdownDependencies {
   stopFaceRecognition: () => Promise<void>;
   stopThumbnailReconciliation: () => Promise<void>;
   stopLibraryJobs: () => Promise<void>;
+  stopMediaHealthWorkers: () => Promise<void>;
   stopActiveConversionJobs: () => Promise<void>;
   closeHttpServer: (server: Server | null) => Promise<void>;
   closePool: () => Promise<void>;
@@ -76,6 +78,7 @@ const defaultShutdownDependencies: ShutdownDependencies = {
   stopFaceRecognition,
   stopThumbnailReconciliation,
   stopLibraryJobs,
+  stopMediaHealthWorkers,
   stopActiveConversionJobs,
   closeHttpServer,
   closePool,
@@ -103,6 +106,7 @@ export function createShutdownCoordinator(
         bounded("face recognition", dependencies.stopFaceRecognition(), timeoutMs),
         bounded("thumbnail reconciliation", dependencies.stopThumbnailReconciliation(), timeoutMs),
         bounded("conversion jobs", dependencies.stopActiveConversionJobs(), timeoutMs),
+        bounded("Health Center jobs", dependencies.stopMediaHealthWorkers(), timeoutMs),
       ]);
 
       // Library scans persist their pause checkpoint. Organization jobs use

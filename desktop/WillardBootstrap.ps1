@@ -24,7 +24,7 @@ function Test-ExpectedSibling([string]$Value, [string]$Pattern) {
   return (Split-Path -Leaf $full) -match $Pattern
 }
 
-function Recover-MissingInstall {
+function Recover-IncompleteInstall {
   if (-not (Test-Path -LiteralPath $JournalPath -PathType Leaf)) {
     return
   }
@@ -47,15 +47,24 @@ function Recover-MissingInstall {
     throw "The Willard update journal contains unexpected paths. No files were changed; preserve '$JournalPath' and its adjacent directories."
   }
 
-  if (Test-Path -LiteralPath $InstallRoot) { return }
+  $installedLauncher = Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"
+  if (Test-Path -LiteralPath $installedLauncher -PathType Leaf) { return }
   if (-not (Test-Path -LiteralPath ([string]$journal.backup) -PathType Container)) {
-    throw "The Willard app folder is missing and its previous-version backup is unavailable. Preserve '$JournalPath' and any candidate or backup folders."
+    throw "The Willard app folder is missing or incomplete and its previous-version backup is unavailable. Preserve '$JournalPath' and any candidate or backup folders."
   }
   if (-not (Test-Path -LiteralPath (Join-Path ([string]$journal.backup) "desktop\WillardMediaCenter.ps1") -PathType Leaf)) {
     throw "The previous Willard app backup is incomplete. No files were moved; preserve '$JournalPath' and the backup folder."
   }
 
   New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+  if (Test-Path -LiteralPath $InstallRoot) {
+    $incompleteLeaf = ".$InstallLeaf.incomplete-$([guid]::NewGuid().ToString())"
+    $incompletePath = Join-Path $Parent $incompleteLeaf
+    if (Test-Path -LiteralPath $incompletePath) {
+      throw "A recovery quarantine path already exists. No files were moved; preserve '$JournalPath' and the installation folders."
+    }
+    Move-Item -LiteralPath $InstallRoot -Destination $incompletePath -ErrorAction Stop
+  }
   $journal.phase = "prepared"
   $journal.updatedAt = (Get-Date).ToString("o")
   $journalTemp = "$JournalPath.$([guid]::NewGuid().ToString('N')).tmp"
@@ -66,7 +75,7 @@ function Recover-MissingInstall {
 }
 
 try {
-  Recover-MissingInstall
+  Recover-IncompleteInstall
 
   $launcher = Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1"
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {

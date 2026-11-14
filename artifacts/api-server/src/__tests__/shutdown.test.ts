@@ -21,6 +21,7 @@ function dependencies(events: string[], options: { hangingStep?: string } = {}) 
     stopFaceRecognition: step("face"),
     stopThumbnailReconciliation: step("reconcile"),
     stopLibraryJobs: step("jobs"),
+    stopMediaHealthWorkers: step("health"),
     stopActiveConversionJobs: step("conversions"),
     closeHttpServer: async () => { events.push("http"); },
     closePool: async () => { events.push("pool"); },
@@ -55,6 +56,7 @@ test("shutdown is idempotent and closes resources in dependency order", async ()
   assert.strictEqual(events.at(-2), "http");
   assert.strictEqual(events.at(-1), "pool");
   assert.ok(events.indexOf("jobs:done") < events.indexOf("http"));
+  assert.ok(events.indexOf("health:done") < events.indexOf("http"));
   assert.ok(events.indexOf("conversions:done") < events.indexOf("http"));
   assert.ok(events.indexOf("monitor:done") < events.indexOf("jobs:start"));
   assert.ok(events.indexOf("reconcile:done") < events.indexOf("jobs:start"));

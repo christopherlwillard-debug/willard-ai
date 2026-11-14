@@ -1,21 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { AlertTriangle, CheckCircle2, FolderCheck, HardDrive, Loader2, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FolderCheck, Loader2, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { apiUrl } from "@/lib/api";
-import { parseHealthCleanupEvent, type HealthCleanupEvent } from "@/lib/health-cleanup-events";
+import {
+  getFollowUpHealthJobId,
+  shouldClearCleanupActions,
+  shouldPollHealthJob,
+  type HealthJobSnapshot,
+} from "@/lib/health-job-state";
 
 type Report = {
-  checkedAt: string;
+  checkedAt: string | null;
   libraryPath: string | null;
   libraryKey?: string | null;
   indexedFiles?: number;
+  hasReport?: boolean;
+  activeJob?: HealthJob | null;
   status: "healthy" | "attention" | "action_required";
   issues: Record<string, number>;
   error?: string;
 };
+
+type HealthJob = HealthJobSnapshot;
 
 const checks = [
   ["missingFiles", "Missing files", "Indexed files that no longer exist on the NAS"],
@@ -42,83 +51,172 @@ export default function Health() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<{ processed: number; total: number; message: string } | null>(null);
+  const [activeJob, setActiveJob] = useState<HealthJob | null>(null);
+  const [trackedJobId, setTrackedJobId] = useState<number | null>(null);
+  const [cleanupStartedByThisPage, setCleanupStartedByThisPage] = useState<number | null>(null);
+  const [followUpParentJobId, setFollowUpParentJobId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const startScan = useCallback(async (preserveNotice = false) => {
+    setRunning(true);
+    setError("");
+    if (!preserveNotice) setNotice("");
     try {
-      const response = await fetch(apiUrl("/media/health"));
-      if (!response.ok) throw new Error("Health scan failed");
-      setReport(await response.json());
-      setError("");
-    } catch (e) { setError(e instanceof Error ? e.message : "Health scan failed"); }
-    finally { setLoading(false); }
+      const response = await fetch(apiUrl("/media/health/scan"), { method: "POST" });
+      const body = await response.json();
+      if (!response.ok && body.job?.id) {
+        setActiveJob(body.job as HealthJob);
+        setTrackedJobId(body.job.id);
+        return;
+      }
+      if (!response.ok) throw new Error(body.error ?? "Health verification could not start");
+      const job = body.job as HealthJob;
+      setActiveJob(job);
+      setTrackedJobId(job.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Health verification could not start");
+      setRunning(false);
+    }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  const loadStatus = useCallback(async (initial = false) => {
+    if (initial) setLoading(true);
+    try {
+      const response = await fetch(apiUrl("/media/health"));
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Health status could not be loaded");
+      const nextReport = body as Report;
+      setReport(nextReport);
+      setError("");
+      const job = nextReport.activeJob ?? null;
+      setActiveJob(job);
+      if (job) {
+        setTrackedJobId(job.id);
+        setRunning(true);
+      } else if (!nextReport.hasReport) {
+        void startScan();
+      } else {
+        setRunning(false);
+        setTrackedJobId(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Health status could not be loaded");
+    } finally {
+      if (initial) setLoading(false);
+    }
+  }, [startScan]);
+
+  useEffect(() => { void loadStatus(true); }, [loadStatus]);
+
+  useEffect(() => {
+    if (trackedJobId === null) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(apiUrl(`/media/health/jobs/${trackedJobId}`));
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "Could not reconnect to the library task");
+        const job = body.job as HealthJob;
+        if (cancelled) return;
+        setActiveJob(job);
+        const summary = job.summary ?? {};
+        if (job.jobType === "HEALTH_CLEANUP" && job.status === "FAILED" && job.error) {
+          setNotice(job.error);
+        }
+        if (shouldPollHealthJob(job)) {
+          setRunning(true);
+          timer = setTimeout(poll, 1500);
+          return;
+        }
+
+        const followUpJobId = getFollowUpHealthJobId(job);
+        if (followUpJobId !== null) {
+          if (
+            job.jobType === "HEALTH_CLEANUP" &&
+            shouldClearCleanupActions(job) &&
+            cleanupStartedByThisPage === job.id
+          ) {
+            setFollowUpParentJobId(job.id);
+          }
+          setTrackedJobId(followUpJobId);
+          return;
+        }
+
+        setRunning(false);
+        setTrackedJobId(null);
+        if (job.jobType === "HEALTH_CLEANUP") {
+          if (shouldClearCleanupActions(job)) {
+            if (cleanupStartedByThisPage === job.id && typeof summary.followUpRequest === "undefined") {
+              setSelected([]);
+              setNotice(typeof summary.message === "string" ? summary.message : "Cleanup completed.");
+            }
+          } else if (job.status !== "FAILED") {
+            setError(job.error ?? `Cleanup ended with status ${job.status}.`);
+          } else {
+            setNotice(job.error ?? "Cleanup finished with items needing attention. Review the results before retrying.");
+          }
+          if (typeof summary.followUpError === "string") setError(summary.followUpError);
+          await loadStatus();
+          void startScan(true);
+        } else if (job.jobType === "HEALTH_SCAN") {
+          if (job.status === "DONE") await loadStatus();
+          else setError(job.error ?? "Health verification did not complete.");
+        } else {
+          if (job.status === "DONE") {
+            if (followUpParentJobId === cleanupStartedByThisPage) {
+              setSelected([]);
+              setFollowUpParentJobId(null);
+              setNotice("Cleanup and its follow-up task completed.");
+            } else {
+              setNotice("The library follow-up task completed.");
+            }
+          } else {
+            setError(job.error ?? "The library follow-up task did not complete.");
+            setFollowUpParentJobId(null);
+          }
+          void startScan(true);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Could not reconnect to the library task");
+        timer = setTimeout(poll, 2500);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [trackedJobId, cleanupStartedByThisPage, followUpParentJobId, loadStatus, startScan]);
 
   const issueCount = useMemo(() => Object.entries(report?.issues ?? {}).reduce((sum, [key, value]) => sum + (key === "unusedCacheBytes" ? 0 : value), 0), [report]);
   const statusLabel = report?.status === "healthy" ? "Library Healthy" : report?.status === "action_required" ? "Action Required" : "Attention Needed";
   const statusColor = report?.status === "healthy" ? "text-emerald-400" : report?.status === "action_required" ? "text-red-400" : "text-amber-400";
 
   const runCleanup = async () => {
-    setRunning(true); setProgress({ processed: 0, total: 1, message: "Checking media index…" }); setError(""); setNotice("");
+    setRunning(true); setError(""); setNotice("");
     try {
       const response = await fetch(apiUrl("/media/cleanup"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected }),
       });
-      if (!response.ok || !response.body) throw new Error("Cleanup could not start");
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let completed = false;
-      const completions: Extract<HealthCleanupEvent, { type: "done" }>[] = [];
-      const handleEvent = (block: string) => {
-        const event = parseHealthCleanupEvent(block);
-        if (!event) return;
-        if (event.type === "progress") {
-          setProgress({ processed: event.processed, total: event.total, message: event.message });
-          return;
-        }
-        if (event.type === "error") throw new Error(event.message);
-        if (!event.ok && !event.partial) throw new Error(event.message ?? "Cleanup did not complete successfully.");
-        completed = true;
-        completions.push(event);
-        setProgress({
-          processed: event.processed ?? 0,
-          total: event.total ?? 1,
-          message: event.message ?? (event.metadataJobId !== undefined
-            ? `Cleanup completed. Metadata job #${event.metadataJobId} is running.`
-            : event.partial
-              ? `Cleanup finished with ${event.failedItems ?? "some"} item(s) needing attention.`
-              : "Cleanup completed."),
-        });
-      };
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split(/\r?\n\r?\n/);
-        buffer = events.pop() ?? "";
-        for (const event of events) handleEvent(event);
+      const body = await response.json();
+      if (!response.ok && body.job?.id) {
+        setCleanupStartedByThisPage(null);
+        setActiveJob(body.job as HealthJob);
+        setTrackedJobId(body.job.id);
+        return;
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) handleEvent(buffer);
-      const completion = completions[0] ?? null;
-      if (!completed || !completion) throw new Error("Cleanup ended before the server confirmed completion.");
-      if (completion.ok) {
-        setSelected([]);
-        if (completion.metadataJobId !== undefined) {
-          setNotice(completion.message ?? `Cleanup completed. Metadata job #${completion.metadataJobId} is running.`);
-        }
-      } else if (completion.partial) {
-        setNotice(completion.message ?? `Cleanup finished with ${completion.failedItems ?? "some"} item(s) needing attention. Review and retry the selected actions.`);
-      }
-      await load();
-    } catch (e) { setError(e instanceof Error ? e.message : "Cleanup failed"); }
-    finally { setRunning(false); }
+      if (!response.ok) throw new Error(body.error ?? "Cleanup could not start");
+      const job = body.job as HealthJob;
+      setCleanupStartedByThisPage(body.alreadyRunning === true ? null : job.id);
+      setActiveJob(job);
+      setTrackedJobId(job.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Cleanup failed");
+      setRunning(false);
+    }
   };
 
   return (
@@ -129,14 +227,14 @@ export default function Health() {
           <h1 className="text-3xl font-bold tracking-tight mt-1">Health Center</h1>
           <p className="text-muted-foreground mt-1">Review index, cache, metadata, and folder integrity without touching original media.</p>
         </div>
-        <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" /> Verify now</Button>
+         <Button variant="outline" onClick={() => void startScan()} disabled={loading || running}><RefreshCw className="mr-2 h-4 w-4" /> Verify now</Button>
       </div>
 
       <Card className="border-border">
         <CardContent className="flex flex-wrap items-center gap-4 py-5">
           {report?.status === "healthy" ? <CheckCircle2 className="h-10 w-10 text-emerald-400" /> : <AlertTriangle className={`h-10 w-10 ${statusColor}`} />}
           <div className="flex-1 min-w-[220px]">
-            <p className={`text-xl font-semibold ${statusColor}`}>{loading ? "Checking library…" : statusLabel}</p>
+            <p className={`text-xl font-semibold ${statusColor}`}>{loading ? "Loading health status…" : running && activeJob?.jobType === "HEALTH_SCAN" ? "Verifying library…" : statusLabel}</p>
              <p className="text-sm text-muted-foreground">
                {report?.libraryPath ?? "No library configured"}
                {report?.libraryPath ? ` · ${(report.indexedFiles ?? 0).toLocaleString()} indexed files` : ""}
@@ -151,6 +249,14 @@ export default function Health() {
 
       {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
       {notice && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
+      {activeJob && running && <div role="status" aria-live="polite" className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+        <div className="flex items-center gap-2 text-sm font-medium"><Loader2 className="h-4 w-4 animate-spin text-primary" />{activeJob.message ?? `Running ${activeJob.jobType.toLowerCase().replaceAll("_", " ")}…`}</div>
+        <p className="mt-1 text-xs text-muted-foreground">Task #{activeJob.id} · {activeJob.phase ?? activeJob.status.toLowerCase()}</p>
+        {activeJob.total !== null && <div className="mt-2">
+          <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, (activeJob.processed / Math.max(activeJob.total, 1)) * 100)}%` }} /></div>
+          <p className="mt-1 text-xs text-muted-foreground">{activeJob.processed.toLocaleString()} / {activeJob.total.toLocaleString()}</p>
+        </div>}
+      </div>}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {checks.map(([key, label, description]) => (
@@ -166,16 +272,15 @@ export default function Health() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-primary" /> Selective cleanup</CardTitle><p className="text-sm text-muted-foreground">Only checked maintenance actions will run. Original NAS media is never deleted.</p></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-primary" /> Selective cleanup</CardTitle><p className="text-sm text-muted-foreground">Only checked maintenance actions will run. Original NAS media is never deleted. Run a thumbnail rebuild or metadata refresh separately; other actions can be combined.</p></CardHeader>
         <CardContent className="space-y-3">
           {actions.map(([key, label]) => <label key={key} className="flex items-center gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-muted/40"><input type="checkbox" checked={selected.includes(key)} disabled={running} onChange={(e) => setSelected(current => e.target.checked ? [...current, key] : current.filter(item => item !== key))} /><span className="text-sm">{label}</span></label>)}
-          {progress && running && <div className="rounded-md bg-muted/40 p-3"><div className="flex items-center gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin text-primary" />{progress.message}</div><div className="mt-2 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, (progress.processed / Math.max(progress.total, 1)) * 100)}%` }} /></div><p className="mt-1 text-xs text-muted-foreground">{progress.processed} / {progress.total}</p></div>}
           <Button onClick={() => void runCleanup()} disabled={running || selected.length === 0}><Trash2 className="mr-2 h-4 w-4" /> {running ? "Running cleanup…" : "Run Cleanup"}</Button>
         </CardContent>
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {[["Verify Media Index", "Recheck indexed paths against the NAS"], ["Verify Thumbnail Cache", "Compare cache files with active media"], ["Verify Metadata", "Find derived records without media"], ["Verify Folder Structure", "Find empty folders under the library"]].map(([title, description]) => <Button key={title} variant="outline" className="h-auto justify-start py-3" onClick={() => void load()}><FolderCheck className="mr-3 h-4 w-4 text-primary" /><span className="text-left"><span className="block">{title}</span><span className="block text-xs font-normal text-muted-foreground">{description}</span></span></Button>)}
+        {[["Verify Media Index", "Recheck indexed paths against the NAS"], ["Verify Thumbnail Cache", "Compare cache files with active media"], ["Verify Metadata", "Find derived records without media"], ["Verify Folder Structure", "Find empty folders under the library"]].map(([title, description]) => <Button key={title} variant="outline" className="h-auto justify-start py-3" disabled={running} onClick={() => void startScan()}><FolderCheck className="mr-3 h-4 w-4 text-primary" /><span className="text-left"><span className="block">{title}</span><span className="block text-xs font-normal text-muted-foreground">{description}</span></span></Button>)}
       </div>
       <p className="text-xs text-muted-foreground">Need to change the library location? <Link href="/settings" className="text-primary hover:underline">Open Settings</Link>.</p>
     </div>

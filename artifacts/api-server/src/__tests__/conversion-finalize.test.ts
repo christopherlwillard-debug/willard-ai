@@ -279,6 +279,60 @@ test("finalization does not move files after filesystem ownership is lost", asyn
   }
 });
 
+test("a recovered conversion attempt fences an old worker that resumes after the new attempt commits", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const oldStaging = path.join(f.root, "WillardAI", "conversions", "attempt-old");
+    const newStaging = path.join(f.root, "WillardAI", "conversions", "attempt-new");
+    const oldStaged = write(path.join(oldStaging, "photos", "portrait.jpg"), "stale conversion");
+    const newStaged = write(path.join(newStaging, "photos", "portrait.jpg"), "current conversion");
+    let owner = "old";
+    let announceIntent!: () => void;
+    let resumeOld!: () => void;
+    const intentReady = new Promise<void>((resolve) => { announceIntent = resolve; });
+    const oldMayResume = new Promise<void>((resolve) => { resumeOld = resolve; });
+    let oldCommitCount = 0;
+    let newCommitCount = 0;
+
+    const oldWorker = finalizeConversionFiles({
+      ...input(f, "replace", [{ filePath: original, stagedPath: oldStaged, status: "success" }]),
+      stagingDir: oldStaging,
+      onMoveIntent: async () => {
+        announceIntent();
+        await oldMayResume;
+      },
+      assertOwnership: () => {
+        if (owner !== "old") throw new Error("old conversion attempt lost its lease");
+      },
+      onMoveComplete: () => { oldCommitCount++; },
+    });
+
+    await intentReady;
+    owner = "new";
+    const currentAttempt = await finalizeConversionFiles({
+      ...input(f, "replace", [{ filePath: original, stagedPath: newStaged, status: "success" }]),
+      stagingDir: newStaging,
+      assertOwnership: () => {
+        if (owner !== "new") throw new Error("new conversion attempt lost its lease");
+      },
+      onMoveComplete: () => { newCommitCount++; },
+    });
+    assert.equal(newCommitCount, 2, "the new attempt checkpoints both backup and published output");
+
+    resumeOld();
+    await assert.rejects(oldWorker, (error: unknown) =>
+      error instanceof ConversionFinalizationError && /old conversion attempt lost its lease/.test(error.message),
+    );
+    assert.equal(oldCommitCount, 0, "the stale worker must not commit a filesystem checkpoint");
+    assert.equal(fs.readFileSync(path.join(f.root, "photos", "portrait.jpg"), "utf8"), "current conversion");
+    assert.equal(fs.readFileSync(path.join(newStaging, ".originals", "photos", "portrait.png"), "utf8"), "original bytes");
+    assert.equal(fs.readFileSync(oldStaged, "utf8"), "stale conversion");
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("startup recovery restores an original moved after its durable intent checkpoint", async () => {
   const f = fixture();
   try {

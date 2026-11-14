@@ -1,15 +1,30 @@
 import { Router } from "express";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { db, mediaFilesTable, mediaAiTable, libraryJobsTable } from "@workspace/db";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { getThumbnailDir, thumbnailFilename, removeOrphanedThumbnail } from "../lib/thumbnail-engine";
 import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { isMissingRegularMediaFileAsync, softDeleteMissingMediaRecord } from "../lib/media-health-scan.ts";
+import {
+  readHealthDirectory,
+  walkHealthDirectories,
+  type HealthDirectoryEntry,
+} from "../lib/media-health-filesystem.ts";
 import { activeMediaCondition } from "../lib/media-scope.ts";
 import { getActiveLibraryContext } from "../lib/active-library.ts";
 import { purgeOrphanedDerivedData } from "../lib/derived-cleanup.ts";
 import { startJob } from "../lib/library-engine";
+import { isShuttingDown } from "../lib/shutdown-state.ts";
+import { parseHealthCleanupActions } from "../lib/media-health-actions.ts";
+import {
+  appendMediaHealthJobSummary,
+  canStartMediaHealthWorker,
+  mediaHealthJobOwnershipCondition,
+  scheduleMediaHealthWorker,
+} from "../lib/media-health-jobs.ts";
+import type { MediaHealthProgress, MediaHealthWorkerContext } from "../lib/media-health-worker.ts";
 import {
   removeEmptyDirectoryWithoutSymlinkTraversal,
 } from "../lib/safe-directory-read.ts";
@@ -43,69 +58,39 @@ type HealthReport = {
   };
 };
 
-type HealthDirectoryEntry = {
-  name: string;
-  isDirectory: boolean;
-  isFile: boolean;
-  sizeBytes?: number;
-};
-
 const HEALTH_PAGE_SIZE = 500;
 const MAX_HEALTH_CLEANUP_TARGETS = 250_000;
+const HEALTH_JOB_TYPES = ["HEALTH_SCAN", "HEALTH_CLEANUP"] as const;
 
-async function readHealthDirectory(root: string, directory: string): Promise<HealthDirectoryEntry[]> {
-  const rootPath = path.resolve(root);
-  const directoryPath = path.resolve(directory);
-  if (directoryPath !== rootPath && !directoryPath.startsWith(rootPath + path.sep)) {
-    throw new Error("Health scan refused to walk outside the configured library.");
-  }
-  const directoryStat = await fs.promises.lstat(directoryPath);
-  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
-    throw new Error("Health scan refused a symlink or non-directory path.");
-  }
-  const entries: HealthDirectoryEntry[] = [];
-  const handle = await fs.promises.opendir(directoryPath);
-  for await (const entry of handle) {
-    if (entry.name === ".DS_Store" || entry.isSymbolicLink()) continue;
-    const fullPath = path.join(directoryPath, entry.name);
-    if (entry.isDirectory()) {
-      entries.push({ name: entry.name, isDirectory: true, isFile: false });
-    } else if (entry.isFile()) {
-      const fileStat = await fs.promises.lstat(fullPath);
-      if (!fileStat.isSymbolicLink() && fileStat.isFile()) {
-        entries.push({ name: entry.name, isDirectory: false, isFile: true, sizeBytes: fileStat.size });
-      }
-    }
-  }
-  return entries;
+type HealthTreeBudget = { visitedEntries: number };
+type HealthProgressReporter = (progress: MediaHealthProgress) => Promise<void>;
+
+async function walkDirectories(
+  root: string,
+  skip: string,
+  reportProgress?: HealthProgressReporter,
+): Promise<{ empty: string[] }> {
+  const result = await walkHealthDirectories(root, skip, reportProgress);
+  return { empty: result.empty };
 }
 
-async function walkDirectories(root: string, skip: string): Promise<{ empty: string[] }> {
-  const empty: string[] = [];
-  const pending = [root];
-  while (pending.length > 0) {
-    const dir = pending.pop()!;
-    const visible = await readHealthDirectory(root, dir);
-    if (visible.length === 0) empty.push(dir);
-    for (const entry of visible) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory && path.resolve(full) !== path.resolve(skip)) {
-        pending.push(full);
-      }
-    }
-  }
-  return { empty };
-}
-
-async function cacheInventory(nasPath: string): Promise<{ orphaned: string[]; unused: string[]; unusedBytes: number }> {
+async function cacheInventory(
+  nasPath: string,
+  reportProgress?: HealthProgressReporter,
+): Promise<{ orphaned: string[]; unused: string[]; unusedBytes: number }> {
   const thumbDir = getThumbnailDir(nasPath);
   const cacheRoot = path.join(getWillardAIDir(nasPath), "cache");
   const result = { orphaned: [] as string[], unused: [] as string[], unusedBytes: 0 };
   const pending: Array<{ dir: string; isThumb: boolean }> = [{ dir: cacheRoot, isThumb: false }];
+  const budget: HealthTreeBudget = { visitedEntries: 0 };
+  let visitedDirectories = 0;
   while (pending.length > 0) {
     const { dir, isThumb } = pending.pop()!;
     let entries: HealthDirectoryEntry[];
-    try { entries = await readHealthDirectory(nasPath, dir); } catch { continue; }
+    try { entries = await readHealthDirectory(nasPath, dir, budget); } catch (error) {
+      if (error instanceof Error && /limited to/.test(error.message)) throw error;
+      continue;
+    }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory) pending.push({ dir: full, isThumb: isThumb || path.resolve(full) === path.resolve(thumbDir) });
@@ -116,6 +101,16 @@ async function cacheInventory(nasPath: string): Promise<{ orphaned: string[]; un
           result.unusedBytes += entry.sizeBytes ?? 0;
         }
       }
+    }
+    visitedDirectories++;
+    if (reportProgress && visitedDirectories % 100 === 0) {
+      await reportProgress({
+        phase: "cache",
+        processed: visitedDirectories,
+        total: null,
+        message: `Checked ${visitedDirectories.toLocaleString()} cache folders…`,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
   return result;
@@ -141,10 +136,21 @@ async function isHealthThumbnailValid(filePath: string): Promise<boolean> {
   }
 }
 
-async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; rows: HealthRow[]; missing: HealthRow[]; missingThumbs: HealthRow[]; orphanThumbs: string[]; emptyFolders: string[] }> {
+async function inspectLibrary(
+  nasPath: string,
+  reportProgress?: HealthProgressReporter,
+): Promise<{ report: HealthReport; rows: HealthRow[]; missing: HealthRow[]; missingThumbs: HealthRow[]; orphanThumbs: string[]; emptyFolders: string[] }> {
   const reachability = await checkNasReachableAsync(nasPath);
   if (!reachability.online) {
     throw new Error(`Library is not safely readable: ${reachability.message}`);
+  }
+
+  const [indexedCount] = await db.select({
+    total: sql<number>`count(*)::int`,
+  }).from(mediaFilesTable).where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE));
+  const totalIndexed = Number(indexedCount?.total ?? 0);
+  if (totalIndexed > MAX_HEALTH_CLEANUP_TARGETS) {
+    throw new Error(`Health scan is limited to ${MAX_HEALTH_CLEANUP_TARGETS.toLocaleString()} indexed files per run; no cleanup action was started.`);
   }
 
   const rows: HealthRow[] = [];
@@ -187,14 +193,23 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
       }
     }
     afterId = page[page.length - 1]!.id;
+    if (reportProgress) {
+      await reportProgress({
+        phase: "catalog",
+        processed: indexedFiles,
+        total: totalIndexed,
+        message: `Checked ${indexedFiles.toLocaleString()} of ${totalIndexed.toLocaleString()} indexed files…`,
+      });
+    }
+      await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  const cache = await cacheInventory(nasPath);
+  const cache = await cacheInventory(nasPath, reportProgress);
   const orphanThumbs = cache.orphaned.filter(file => {
     const id = Number(path.basename(file, path.extname(file)));
     return path.extname(file).toLowerCase() === ".webp" && (!Number.isInteger(id) || !validIds.has(id));
   });
-  const folders = await walkDirectories(nasPath, getWillardAIDir(nasPath));
+  const folders = await walkDirectories(nasPath, getWillardAIDir(nasPath), reportProgress);
   const [metadataRows, orphanFaceRows, orphanStateRows] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` })
     .from(mediaAiTable)
@@ -239,53 +254,203 @@ async function inspectLibrary(nasPath: string): Promise<{ report: HealthReport; 
   };
 }
 
+function publicHealthJob(job: typeof libraryJobsTable.$inferSelect) {
+  const diagnostics = (job.diagnostics ?? {}) as Record<string, unknown>;
+  const worker = (diagnostics.healthJob ?? {}) as Record<string, unknown>;
+  return {
+    id: job.id,
+    jobType: job.jobType,
+    status: job.status,
+    processed: job.processedFiles,
+    total: job.totalFiles,
+    phase: typeof worker.phase === "string" ? worker.phase : null,
+    message: typeof worker.message === "string" ? worker.message : null,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    summary: job.summary,
+    error: job.error,
+  };
+}
+
+async function findActiveLibraryJob(nasPath: string) {
+  const [job] = await db.select().from(libraryJobsTable)
+    .where(and(eq(libraryJobsTable.nasPath, nasPath), eq(libraryJobsTable.status, "RUNNING")))
+    .orderBy(desc(libraryJobsTable.createdAt), desc(libraryJobsTable.id))
+    .limit(1);
+  return job ?? null;
+}
+
+async function startHealthJob(
+  nasPath: string,
+  jobType: "HEALTH_SCAN" | "HEALTH_CLEANUP",
+  actions: string[],
+  runner: (jobId: number, token: string, context: MediaHealthWorkerContext) => Promise<{ summary: Record<string, unknown>; status?: "DONE" | "FAILED"; error?: string }>,
+  afterComplete?: (jobId: number, token: string, outcome: { summary: Record<string, unknown>; status?: "DONE" | "FAILED"; error?: string }) => Promise<void>,
+): Promise<{ job: typeof libraryJobsTable.$inferSelect; started: boolean } | { busy: true }> {
+  if (isShuttingDown()) return { busy: true };
+  const existing = await findActiveLibraryJob(nasPath);
+  if (existing) return { job: existing, started: false };
+  if (!canStartMediaHealthWorker()) return { busy: true };
+
+  const token = randomUUID();
+  try {
+    const [job] = await db.insert(libraryJobsTable).values({
+      jobType,
+      profile: "HEALTH",
+      priority: "HIGH",
+      status: "RUNNING",
+      nasPath,
+      startedAt: new Date(),
+      processedFiles: 0,
+      diagnostics: {
+        healthJob: {
+          workerToken: token,
+          phase: "queued",
+          message: "Health task queued",
+          actions,
+        },
+      },
+    }).returning();
+    if (!job) throw new Error("Health job could not be recorded.");
+
+    const scheduled = scheduleMediaHealthWorker(
+      job.id,
+      token,
+      (context) => runner(job.id, token, context),
+      afterComplete,
+    );
+    if (!scheduled) {
+      await db.update(libraryJobsTable).set({
+        status: "FAILED",
+        finishedAt: new Date(),
+        error: "The bounded Health Center worker is busy; start this task again shortly.",
+      }).where(mediaHealthJobOwnershipCondition(job.id, token));
+      return { busy: true };
+    }
+    return { job, started: true };
+  } catch (error) {
+    const candidate = error as { code?: string; constraint?: string } | null;
+    if (candidate?.code === "23505" && candidate.constraint === "library_jobs_active_nas_unique") {
+      const winner = await findActiveLibraryJob(nasPath);
+      if (winner) return { job: winner, started: false };
+    }
+    throw error;
+  }
+}
+
 router.get("/media/health", async (_req, res) => {
   try {
     const library = await getActiveLibraryContext();
     if (!library) return res.json({
-      checkedAt: new Date().toISOString(), libraryPath: null, libraryKey: null, indexedFiles: 0, status: "attention",
+      checkedAt: null,
+      libraryPath: null,
+      libraryKey: null,
+      indexedFiles: 0,
+      hasReport: false,
+      status: "attention",
       issues: { missingFiles: 0, orphanedIndexRecords: 0, missingThumbnails: 0, orphanedThumbnails: 0, emptyFolders: 0, brokenMetadataReferences: 0, unusedCacheBytes: 0, unusedCacheFiles: 0 },
       error: "No library is configured",
+      activeJob: null,
     });
-    const inspected = await inspectLibrary(library.nasPath);
-    return res.json({ ...inspected.report, libraryKey: library.libraryKey, indexedFiles: inspected.rows.length });
-  } catch { return res.status(500).json({ error: "Health scan failed" }); }
+
+    const [latest] = await db.select({
+      summary: libraryJobsTable.summary,
+    }).from(libraryJobsTable).where(and(
+      eq(libraryJobsTable.nasPath, library.nasPath),
+      inArray(libraryJobsTable.jobType, [...HEALTH_JOB_TYPES]),
+      eq(libraryJobsTable.status, "DONE"),
+    )).orderBy(desc(libraryJobsTable.createdAt), desc(libraryJobsTable.id)).limit(1);
+    const summary = (latest?.summary ?? {}) as Record<string, unknown>;
+    const report = summary.healthReport as HealthReport | undefined;
+    const indexedFiles = Number(summary.indexedFiles ?? 0);
+    const active = await findActiveLibraryJob(library.nasPath);
+
+    return res.json({
+      ...(report ?? {
+        checkedAt: null,
+        libraryPath: library.nasPath,
+        status: "attention" as const,
+        issues: { missingFiles: 0, orphanedIndexRecords: 0, missingThumbnails: 0, orphanedThumbnails: 0, emptyFolders: 0, brokenMetadataReferences: 0, unusedCacheBytes: 0, unusedCacheFiles: 0 },
+      }),
+      libraryKey: library.libraryKey,
+      indexedFiles,
+      hasReport: Boolean(report),
+      activeJob: active ? publicHealthJob(active) : null,
+    });
+  } catch {
+    return res.status(500).json({ error: "Health status could not be loaded" });
+  }
 });
 
-router.post("/media/cleanup", async (req, res) => {
-  const requested: unknown = req.body?.actions;
-  const allowed = new Set(["orphanedRecords", "orphanedDerivedData", "orphanedThumbnails", "missingThumbnails", "emptyFolders", "rebuildMetadata", "fullThumbnailRebuild"]);
-  if (
-    !Array.isArray(requested) ||
-    requested.length === 0 ||
-    requested.some((action: unknown) => typeof action !== "string" || !allowed.has(action))
-  ) {
-    return res.status(400).json({ error: "actions must be a non-empty array containing only supported cleanup actions" });
-  }
-  const actions = [...new Set(requested as string[])];
-  const nasPath = (await getActiveLibraryContext())?.nasPath ?? null;
-  if (!nasPath) return res.status(409).json({ error: "No library is configured" });
+router.get("/media/health/jobs/active", async (_req, res) => {
+  const library = await getActiveLibraryContext();
+  if (!library) return res.json({ job: null });
+  const job = await findActiveLibraryJob(library.nasPath);
+  return res.json({ job: job ? publicHealthJob(job) : null });
+});
 
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  let jobId: number | null = null;
-  let metadataJobId: number | null = null;
+router.get("/media/health/jobs/:jobId", async (req, res) => {
+  const id = Number(req.params.jobId);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: "A valid job id is required" });
+  const library = await getActiveLibraryContext();
+  if (!library) return res.status(404).json({ error: "No library is configured" });
+  const [job] = await db.select().from(libraryJobsTable)
+    .where(and(eq(libraryJobsTable.id, id), eq(libraryJobsTable.nasPath, library.nasPath)))
+    .limit(1);
+  if (!job) return res.status(404).json({ error: "Health job was not found for the active library" });
+  return res.json({ job: publicHealthJob(job) });
+});
+
+router.post("/media/health/scan", async (_req, res) => {
+  const library = await getActiveLibraryContext();
+  if (!library) return res.status(409).json({ error: "No library is configured" });
+  let started: Awaited<ReturnType<typeof startHealthJob>>;
+  try {
+    started = await startHealthJob(
+      library.nasPath,
+      "HEALTH_SCAN",
+      [],
+      async (_jobId, _token, context) => {
+        const inspected = await inspectLibrary(library.nasPath, (progress) => context.reportProgress(progress));
+        return {
+          summary: {
+            healthReport: inspected.report,
+            indexedFiles: inspected.rows.length,
+          },
+        };
+      },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Health scan could not start";
+    return res.status(503).json({ error: message });
+  }
+  if ("busy" in started) return res.status(503).json({ error: "The bounded Health Center worker is busy; try again shortly." });
+  if (!started.started && !HEALTH_JOB_TYPES.includes(started.job.jobType as typeof HEALTH_JOB_TYPES[number])) {
+    return res.status(409).json({ error: "Another library job is running.", job: publicHealthJob(started.job) });
+  }
+  return res.status(202).json({ job: publicHealthJob(started.job), alreadyRunning: !started.started });
+});
+
+async function runHealthCleanup(
+  jobId: number,
+  token: string,
+  nasPath: string,
+  actions: string[],
+  context: MediaHealthWorkerContext,
+) {
   let failedItems = 0;
   let thumbnailFailures = 0;
   let faceCropFailures = 0;
-  try {
-    const [job] = await db.insert(libraryJobsTable).values({
-      jobType: "HEALTH_CLEANUP", profile: "HEALTH", priority: "HIGH", status: "RUNNING", nasPath,
-    }).returning({ id: libraryJobsTable.id });
-    jobId = job.id;
-    const inspected = await inspectLibrary(nasPath);
-    let done = 0;
-    const isThumbnailEligible = (row: HealthRow) => row.mediaType === "photo" || row.mediaType === "video" || row.extension === "pdf";
-    const thumbnailTargets = actions.includes("fullThumbnailRebuild")
-      ? inspected.rows.filter(isThumbnailEligible)
-      : actions.includes("missingThumbnails")
-        ? inspected.missingThumbs.filter(isThumbnailEligible)
-        : [];
+  await context.reportProgress({
+    phase: "inspect",
+    processed: 0,
+    total: null,
+    message: "Checking the library before cleanup…",
+  });
+  const inspected = await inspectLibrary(nasPath, (progress) => context.reportProgress(progress));
+  let done = 0;
+  const thumbnailRequested = actions.includes("fullThumbnailRebuild") || actions.includes("missingThumbnails");
+  const metadataRequested = actions.includes("rebuildMetadata");
     const emptyFolderTargets = inspected.emptyFolders.filter(folder =>
       path.resolve(folder) !== path.resolve(nasPath) &&
       !path.resolve(folder).startsWith(path.resolve(getWillardAIDir(nasPath)) + path.sep)
@@ -294,17 +459,23 @@ router.post("/media/cleanup", async (req, res) => {
       (actions.includes("orphanedRecords") ? inspected.missing.length : 0) +
       (actions.includes("orphanedDerivedData") ? inspected.report.issues.brokenMetadataReferences : 0) +
       (actions.includes("orphanedThumbnails") ? inspected.orphanThumbs.length : 0) +
-      thumbnailTargets.length +
       (actions.includes("emptyFolders") ? emptyFolderTargets.length : 0) +
-      (actions.includes("rebuildMetadata") ? 1 : 0);
+      (thumbnailRequested || metadataRequested ? 1 : 0);
     total = Math.max(1, total);
-    const progress = (message: string) => send("progress", { processed: done, total, message });
+    let lastProgressAt = -1;
+    const progress = async (message: string, force = false) => {
+      if (!force && done - lastProgressAt < 10 && done < total) return;
+      lastProgressAt = done;
+      await context.reportProgress({ phase: "cleanup", processed: done, total, message });
+    };
     let derivedCleanup: Record<string, unknown> | undefined;
 
     if (actions.includes("orphanedRecords")) {
       for (const row of inspected.missing) {
+        await context.assertOwned();
         const source = resolveLibraryPath(nasPath, row.relativePath);
         const result = await softDeleteMissingMediaRecord(source, async () => {
+          await context.assertOwned();
           const [updated] = await db.update(mediaFilesTable)
             .set({ lastScanAction: "DELETED", lastScannedAt: new Date() })
             .where(and(
@@ -312,21 +483,23 @@ router.post("/media/cleanup", async (req, res) => {
               eq(mediaFilesTable.nasPath, nasPath),
               eq(mediaFilesTable.relativePath, row.relativePath),
               ACTIVE,
+              mediaHealthJobOwnershipCondition(jobId, token)!,
             ))
             .returning({ id: mediaFilesTable.id });
           return Boolean(updated);
         });
         done++;
         if (result === "marked_deleted") {
-          progress("Marked a confirmed-missing file as removed from the library…");
+          await progress("Marked a confirmed-missing file as removed from the library…");
         } else if (result === "reappeared") {
-          progress("Skipped a file that reappeared during cleanup…");
+          await progress("Skipped a file that reappeared during cleanup…");
         } else {
-          progress("Skipped a media record that changed during cleanup…");
+          await progress("Skipped a media record that changed during cleanup…");
         }
       }
     }
     if (actions.includes("orphanedDerivedData")) {
+      await context.assertOwned();
       const cleaned = await purgeOrphanedDerivedData(nasPath);
       faceCropFailures = cleaned.cropErrors.length;
       failedItems += faceCropFailures;
@@ -343,10 +516,11 @@ router.post("/media/cleanup", async (req, res) => {
         peopleRows: cleaned.peopleRows,
         cropErrors: cleaned.cropErrors.length,
       };
-      progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops${faceCropFailures > 0 ? `; ${faceCropFailures} face crop(s) could not be removed` : ""}…`);
+      await progress(`Removed ${cleaned.orphanRows} orphaned derived rows and ${cleaned.staleCropsRemoved} stale face crops${faceCropFailures > 0 ? `; ${faceCropFailures} face crop(s) could not be removed` : ""}…`, true);
     }
     if (actions.includes("orphanedThumbnails")) {
       for (const file of inspected.orphanThumbs) {
+        await context.assertOwned();
         let removed = false;
         const filename = path.basename(file);
         const mediaFileId = Number(path.basename(filename, path.extname(filename)));
@@ -355,6 +529,7 @@ router.post("/media/cleanup", async (req, res) => {
             filename === thumbnailFilename(mediaFileId)) {
           try {
             removed = await removeOrphanedThumbnail(nasPath, file, async () => {
+              await context.assertOwned();
               const [activeRow] = await db.select({ id: mediaFilesTable.id })
                 .from(mediaFilesTable)
                 .where(and(
@@ -368,79 +543,26 @@ router.post("/media/cleanup", async (req, res) => {
           } catch { /* changed or became unsafe since inspection */ }
         }
         done++;
-        progress(removed ? "Removed an orphaned thumbnail…" : "Skipped a thumbnail that changed or is no longer orphaned…");
+        await progress(removed ? "Removed an orphaned thumbnail…" : "Skipped a thumbnail that changed or is no longer orphaned…");
       }
     }
     if (actions.includes("missingThumbnails") || actions.includes("fullThumbnailRebuild")) {
-      for (const row of thumbnailTargets) {
-        try {
-          const source = resolveLibraryPath(nasPath, row.relativePath);
-          const result = await generateThumbnail(
-            row.id,
-            source,
-            path.extname(row.relativePath).slice(1),
-            nasPath,
-            undefined,
-            async ({ destPath }) => {
-              const safeThumbnailPath = resolveWithinRoot(destPath, getWillardAIDir(nasPath));
-              await db.update(mediaFilesTable).set({
-                thumbnailPath: safeThumbnailPath,
-                thumbnailGeneratedAt: new Date(),
-              }).where(and(
-                eq(mediaFilesTable.id, row.id),
-                eq(mediaFilesTable.nasPath, nasPath),
-                ACTIVE,
-              ));
-            },
-          );
-          if (result.error) throw new Error(result.error);
-        } catch {
-          failedItems++;
-          thumbnailFailures++;
-        }
-        done++; progress("Regenerating thumbnails…");
-      }
+      done++;
+      await progress("Thumbnail regeneration will run as a capacity-checked library job.", true);
     }
     if (actions.includes("emptyFolders")) {
       for (const folder of emptyFolderTargets) {
+        await context.assertOwned();
         try {
-          const removed = removeEmptyDirectoryWithoutSymlinkTraversal(nasPath, folder);
-          if (removed === null) fs.rmdirSync(resolveWithinRoot(folder, nasPath));
+          removeEmptyDirectoryWithoutSymlinkTraversal(nasPath, folder);
         } catch { /* changed since scan or failed a no-follow check */ }
-        done++; progress("Removing empty folders…");
+        done++;
+        await progress("Removing empty folders…");
       }
     }
     if (actions.includes("rebuildMetadata")) {
-      // Release the temporary Health Center claim before the shared job engine
-      // attempts to claim this library for its durable METADATA worker.
-      await db.update(libraryJobsTable).set({
-        status: "DONE",
-        processedFiles: done,
-        totalFiles: total,
-        finishedAt: new Date(),
-        summary: { actions, ...(derivedCleanup ? { derivedCleanup } : {}) },
-      }).where(eq(libraryJobsTable.id, job.id));
-
-      const metadataJob = await startJob({
-        jobType: "METADATA",
-        profile: "HEALTH_SCAN",
-        nasPath,
-      });
-      if (metadataJob.errorCode) {
-        throw new Error(metadataJob.errorMessage ?? "Metadata refresh could not start (" + metadataJob.errorCode + ")");
-      }
-      if (metadataJob.alreadyRunning) {
-        const [existing] = await db.select({
-          jobType: libraryJobsTable.jobType,
-          status: libraryJobsTable.status,
-        }).from(libraryJobsTable).where(eq(libraryJobsTable.id, metadataJob.jobId)).limit(1);
-        if (existing?.jobType !== "METADATA" || existing.status !== "RUNNING") {
-          throw new Error("Another library job is already active; metadata refresh was not started.");
-        }
-      }
-      metadataJobId = metadataJob.jobId;
       done++;
-      progress("Metadata refresh job #" + metadataJobId + " is running.");
+      await progress("Metadata refresh will run as a separate library job.", true);
     }
     const partial = failedItems > 0;
     const failureDetails = [
@@ -448,42 +570,106 @@ router.post("/media/cleanup", async (req, res) => {
       faceCropFailures > 0 ? `${faceCropFailures} face crop(s) could not be removed` : null,
     ].filter((detail): detail is string => Boolean(detail));
     const completionMessage = partial
-      ? `Cleanup finished with ${failedItems} item(s) needing attention${failureDetails.length > 0 ? `: ${failureDetails.join("; ")}` : ""}.${metadataJobId !== null ? ` Metadata job #${metadataJobId} is running.` : ""}`
-      : metadataJobId !== null
-        ? `Cleanup completed. Metadata job #${metadataJobId} is running.`
-        : "Cleanup completed.";
-    await db.update(libraryJobsTable).set({
-      status: partial ? "FAILED" : "DONE",
-      processedFiles: done,
-      totalFiles: total,
-      finishedAt: new Date(),
-      error: partial ? completionMessage : null,
+      ? `Cleanup finished with ${failedItems} item(s) needing attention${failureDetails.length > 0 ? `: ${failureDetails.join("; ")}` : ""}.`
+      : "Cleanup completed.";
+    const followUpRequest = thumbnailRequested
+      ? {
+          jobType: "THUMBNAILS",
+          rebuildThumbnails: actions.includes("fullThumbnailRebuild"),
+        }
+      : metadataRequested
+        ? { jobType: "METADATA" }
+        : null;
+
+    await context.reportProgress({
+      phase: "complete",
+      processed: done,
+      total,
+      message: completionMessage,
+    });
+    return {
+      status: partial ? "FAILED" as const : "DONE" as const,
+      error: partial ? completionMessage : undefined,
       summary: {
         actions,
         failedItems,
         thumbnailFailures,
         faceCropFailures,
         ...(derivedCleanup ? { derivedCleanup } : {}),
-        ...(metadataJobId !== null ? { metadataJobId } : {}),
+        healthReport: inspected.report,
+        indexedFiles: inspected.rows.length,
+        reportStale: true,
+        ...(followUpRequest ? {
+          followUpPending: true,
+          followUpRequest,
+        } : {}),
+        message: completionMessage,
       },
-    }).where(eq(libraryJobsTable.id, job.id));
-    send("done", {
-      ok: !partial,
-      partial,
-      failedItems,
-      message: completionMessage,
-      processed: done,
-      total,
-      ...(metadataJobId !== null ? { metadataJobId } : {}),
-    });
-  } catch (error) {
-    if (jobId !== null) {
+    };
+}
+
+router.post("/media/cleanup", async (req, res) => {
+  const parsed = parseHealthCleanupActions(req.body?.actions);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  const actions = parsed.actions;
+  const thumbnailRequested = actions.includes("fullThumbnailRebuild") || actions.includes("missingThumbnails");
+  const metadataRequested = actions.includes("rebuildMetadata");
+  const library = await getActiveLibraryContext();
+  if (!library) return res.status(409).json({ error: "No library is configured" });
+
+  let started: Awaited<ReturnType<typeof startHealthJob>>;
+  try {
+    started = await startHealthJob(
+      library.nasPath,
+      "HEALTH_CLEANUP",
+      actions,
+      (jobId, token, context) => runHealthCleanup(jobId, token, library.nasPath, actions, context),
+      async (jobId, token, outcome) => {
+      const followUp = outcome.summary.followUpRequest as { jobType?: string; rebuildThumbnails?: boolean } | undefined;
+      if (!followUp?.jobType) return;
       try {
-        await db.update(libraryJobsTable).set({ status: "FAILED", error: String(error), finishedAt: new Date() }).where(eq(libraryJobsTable.id, jobId));
-      } catch { /* Preserve the original cleanup failure for the connected client. */ }
+        const child = await startJob({
+          jobType: followUp.jobType as "THUMBNAILS" | "METADATA",
+          profile: "HEALTH_SCAN",
+          nasPath: library.nasPath,
+          ...(followUp.jobType === "THUMBNAILS" ? { rebuildThumbnails: followUp.rebuildThumbnails === true } : {}),
+        });
+        if (child.errorCode) throw new Error(child.errorMessage ?? "The follow-up library job could not start.");
+        if (child.alreadyRunning) {
+          const [existing] = await db.select({
+            jobType: libraryJobsTable.jobType,
+            status: libraryJobsTable.status,
+          }).from(libraryJobsTable).where(eq(libraryJobsTable.id, child.jobId)).limit(1);
+          if (existing?.jobType !== followUp.jobType || existing.status !== "RUNNING") {
+            throw new Error("Another library job is active; the requested follow-up was not started.");
+          }
+        }
+        await appendMediaHealthJobSummary(jobId, token, {
+          followUpPending: false,
+          followUpJobId: child.jobId,
+          followUpJobType: followUp.jobType,
+          followUpMessage: `${followUp.jobType === "METADATA" ? "Metadata refresh" : "Thumbnail rebuild"} job #${child.jobId} is running.`,
+        });
+      } catch (error) {
+        await appendMediaHealthJobSummary(jobId, token, {
+          followUpPending: false,
+          followUpError: error instanceof Error ? error.message : "The follow-up library job could not start.",
+        });
+      }
+      },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Cleanup could not start";
+    return res.status(503).json({ error: message });
+  }
+  if ("busy" in started) return res.status(503).json({ error: "The bounded Health Center worker is busy; try again shortly." });
+  if (!started.started) {
+    if (started.job.jobType === "HEALTH_CLEANUP") {
+      return res.status(202).json({ job: publicHealthJob(started.job), alreadyRunning: true });
     }
-    send("error", { message: metadataJobId === null ? "Cleanup failed safely; original media was not removed." : "Cleanup failed after metadata refresh job #" + metadataJobId + " started; review Library Jobs before retrying." });
-  } finally { return res.end(); }
+    return res.status(409).json({ error: "Another library job is running.", job: publicHealthJob(started.job) });
+  }
+  return res.status(202).json({ job: publicHealthJob(started.job), alreadyRunning: false });
 });
 
 export default router;
