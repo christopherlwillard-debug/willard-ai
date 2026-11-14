@@ -16,11 +16,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { findExecutable } from "./find-executable.mjs";
+import { resolvePnpmInvocation } from "./resolve-pnpm-invocation.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const apiDirectory = path.join(workspaceRoot, "artifacts", "api-server");
 const testArgument = process.argv[2];
 const auditTestFilter = testArgument === "--test" ? process.argv[3] : undefined;
+const pnpmInvocation = resolvePnpmInvocation();
 if (
   (testArgument !== undefined && testArgument !== "--test")
   || (testArgument === "--test" && (
@@ -43,6 +45,7 @@ function runSync(command, args, options = {}) {
     env: options.env ?? process.env,
     encoding: "utf8",
     stdio: options.stdio ?? "inherit",
+    shell: options.shell ?? false,
     windowsHide: true,
   });
   if (result.error) throw result.error;
@@ -50,6 +53,22 @@ function runSync(command, args, options = {}) {
     throw new Error(`${path.basename(command)} failed with exit code ${result.status ?? 1}.`);
   }
   return result;
+}
+
+function runPnpmSync(args, options = {}) {
+  return runSync(
+    pnpmInvocation.command,
+    [...pnpmInvocation.argsPrefix, ...args],
+    { ...options, shell: pnpmInvocation.shell },
+  );
+}
+
+function spawnPnpm(args, options = {}) {
+  return spawn(
+    pnpmInvocation.command,
+    [...pnpmInvocation.argsPrefix, ...args],
+    { ...options, shell: pnpmInvocation.shell },
+  );
 }
 
 async function allocatePort() {
@@ -210,7 +229,7 @@ try {
   runSync(process.execPath, [path.join(workspaceRoot, "setup-db.cjs")], {
     env: { ...process.env, DATABASE_URL: databaseUrl },
   });
-  runSync("pnpm", ["--filter", "@workspace/api-server", "run", "build"]);
+  runPnpmSync(["--filter", "@workspace/api-server", "run", "build"]);
 
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   apiLogFd = openSync(path.join(tempRoot, "api-server.log"), "a");
@@ -258,11 +277,10 @@ try {
   };
   delete auditEnvironment.WILLARD_AUDIT_TEST_FILTER;
   if (auditTestFilter) auditEnvironment.WILLARD_AUDIT_TEST_FILTER = auditTestFilter;
-  const audit = spawn("pnpm", ["--filter", "@workspace/api-server", "run", "audit"], {
+  const audit = spawnPnpm(["--filter", "@workspace/api-server", "run", "audit"], {
     cwd: workspaceRoot,
     env: auditEnvironment,
     stdio: "inherit",
-    windowsHide: true,
   });
   auditProcess = audit;
   const { code, signal } = await waitForChildExit(audit);
