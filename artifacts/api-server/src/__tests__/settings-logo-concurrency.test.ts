@@ -4,9 +4,14 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function readSource(...relativePath: string[]) {
+  return fs.readFileSync(path.join(sourceDir, ...relativePath), "utf8").replace(/\r\n/g, "\n");
+}
+
 test("branding logo replacement and deletion use compare-and-set on the previous path", () => {
-  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const route = fs.readFileSync(path.join(sourceDir, "routes", "settings.ts"), "utf8");
+  const route = readSource("routes", "settings.ts");
 
   assert.match(route, /settings\.logoPath \? eq\(appSettingsTable\.logoPath, settings\.logoPath\) : isNull\(appSettingsTable\.logoPath\)/);
   assert.match(route, /Branding logo changed during upload/);
@@ -24,8 +29,7 @@ test("branding logo replacement and deletion use compare-and-set on the previous
 
 
 test("branding storage refuses symlinked data or branding roots", () => {
-  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const route = fs.readFileSync(path.join(sourceDir, "routes", "settings.ts"), "utf8");
+  const route = readSource("routes", "settings.ts");
   assert.match(route, /function ensureBrandingDirectory\(\)/);
   assert.match(route, /fs\.lstatSync\(directory\)/);
   assert.match(route, /stat\.isSymbolicLink\(\) \|\| !stat\.isDirectory\(\)/);
@@ -34,8 +38,7 @@ test("branding storage refuses symlinked data or branding roots", () => {
 
 
 test("NAS log stream switches only after the new library path is persisted", () => {
-  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const route = fs.readFileSync(path.join(sourceDir, "routes", "settings.ts"), "utf8");
+  const route = readSource("routes", "settings.ts");
   const persistence = route.indexOf(".update(appSettingsTable)");
   const streamSwitch = route.indexOf("nasLogStream.setNasPath(normalizedNasPath)");
   assert.ok(persistence >= 0 && streamSwitch > persistence);
@@ -45,8 +48,7 @@ test("NAS log stream switches only after the new library path is persisted", () 
 
 
 test("NAS log stream detaches the previous library when switching to a new path fails", () => {
-  const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const source = fs.readFileSync(path.join(sourceDir, "lib", "nas-storage.ts"), "utf8");
+  const source = readSource("lib", "nas-storage.ts");
   const start = source.indexOf("async setNasPath(nasPath: string)");
   const end = source.indexOf("\n  override _write", start);
   assert.ok(start >= 0 && end > start);
