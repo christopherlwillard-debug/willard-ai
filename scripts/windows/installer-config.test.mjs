@@ -1704,6 +1704,21 @@ test("installed lifecycle reports the failing phase and restores the parent envi
   assert.match(cleanup, /\n  }\s*foreach \(\$entry in \$script:ParentEnvironment\.GetEnumerator\(\)\)/);
 });
 
+test("installed lifecycle bounds failure logs and allows enough time for uninstall cleanup", () => {
+  assert.match(
+    installedLifecycleSmoke,
+    /function Invoke-AsLifecycleUser\([^)]*\$timeoutSeconds = \$LifecycleProcessTimeoutSeconds\)/,
+  );
+  assert.match(installedLifecycleSmoke, /uninstall-setup\.log/);
+  assert.match(
+    installedLifecycleSmoke,
+    /Invoke-AsLifecycleUser \$uninstaller \$uninstallArguments "uninstall" 600/,
+  );
+  assert.match(installedLifecycleSmoke, /Get-Content -LiteralPath \$_.FullName -Tail 80/);
+  assert.match(installedLifecycleSmoke, /\$logText\.Length -gt 16000/);
+  assert.doesNotMatch(installedLifecycleSmoke, /Get-Content \$_.FullName -Raw/);
+});
+
 test("launcher retains the previous release if service shutdown cannot be verified", () => {
   const startupCatchStart = launcher.indexOf("\n} catch {\n  $startupError = $_");
   assert.ok(startupCatchStart >= 0, "The startup failure handler must preserve the original error.");

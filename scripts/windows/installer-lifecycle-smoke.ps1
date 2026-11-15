@@ -88,15 +88,15 @@ function Wait-PortClosed($port, $timeoutSeconds = 30) {
   throw "Willard still accepts connections on port $port after uninstall."
 }
 
-function Invoke-AsLifecycleUser($filePath, $argumentLine, $label) {
+function Invoke-AsLifecycleUser($filePath, $argumentLine, $label, $timeoutSeconds = $LifecycleProcessTimeoutSeconds) {
   $stdout = Join-Path $TempRoot "$label.out.log"
   $stderr = Join-Path $TempRoot "$label.err.log"
   $process = Start-Process -FilePath $filePath -ArgumentList $argumentLine `
     -Credential $Credential -LoadUserProfile -WorkingDirectory $TempRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-  if (-not $process.WaitForExit($LifecycleProcessTimeoutSeconds * 1000)) {
+  if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "$label timed out after $LifecycleProcessTimeoutSeconds seconds."
+    throw "$label timed out after $timeoutSeconds seconds."
   }
   $process.Refresh()
   return @{
@@ -462,7 +462,9 @@ exit $launcherExitCode
   Write-LifecycleStage "uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
   Assert-True (Test-Path $uninstaller) "Installed copy did not contain Inno Setup uninstaller."
-  $uninstallResult = Invoke-AsLifecycleUser $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" "uninstall"
+  $uninstallLog = Join-Path $TempRoot "uninstall-setup.log"
+  $uninstallArguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$uninstallLog`""
+  $uninstallResult = Invoke-AsLifecycleUser $uninstaller $uninstallArguments "uninstall" 600
   Assert-True ($uninstallResult.exitCode -eq 0) ("Setup.exe uninstall failed:`n" + $uninstallResult.output)
   Wait-PortClosed 8080
   Wait-PortClosed 5000
@@ -498,9 +500,16 @@ exit $launcherExitCode
     if (Test-Path $TempRoot) {
       Get-ChildItem $TempRoot -Recurse -File -ErrorAction SilentlyContinue |
         ForEach-Object {
-          Write-Host "Lifecycle file: $($_.FullName)"
+          Write-Host ("Lifecycle file: {0} ({1:N0} bytes)" -f $_.FullName, $_.Length)
           if ($_.Extension -eq ".log") {
-            Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+            $logTail = @(Get-Content -LiteralPath $_.FullName -Tail 80 -ErrorAction SilentlyContinue)
+            $logText = $logTail -join [Environment]::NewLine
+            if ($logText.Length -gt 16000) {
+              $logText = $logText.Substring($logText.Length - 16000)
+            }
+            if (-not [string]::IsNullOrWhiteSpace($logText)) {
+              Write-Host ("Log tail (up to 80 lines, capped at 16 KB):`n" + $logText)
+            }
           }
         }
     }
