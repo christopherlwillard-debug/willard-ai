@@ -27,6 +27,7 @@
 - [Canonical catalog scope](canonical-catalog-scope.md) — media_files plus active nas_path is authoritative; legacy reconciliation is insert-only and reports conflicts
 - [Place grid rounding parity](place-grid-rounding.md) — normalize JavaScript negative zero so exact southern/western half-cell keys match PostgreSQL
 - [GitHub workflow push authentication](github-workflow-push.md) — workflow-file pushes need a classic PAT via askpass; use x-access-token as the username
+- [GitHub Actions proxy status](github-actions-proxy-status.md) — use the authenticated Replit proxy for run polling when `gh run watch` is rate-limited
 - [Windows launcher split](windows-launcher-split.md) — packaged desktop startup is separate from the developer launcher; optimize and test both paths
 - [Windows launcher path quoting](windows-launcher-path-quoting.md) — Start-Process arguments must quote paths because developer folders and installed roots commonly contain spaces
 - [Media child abort lifecycle](media-child-abort-lifecycle.md) — cancellation may reject before the OS child exits; retain kill escalation and shutdown tracking until `close`
