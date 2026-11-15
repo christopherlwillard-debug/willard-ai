@@ -52,7 +52,9 @@ test("renders photo search results with thumbnails and photo icons", async ({ pa
 
   const card = page.getByTestId("card-result-701");
   await expect(card).toBeVisible();
-  await expect(card.locator("img[alt='sunset.jpg']")).toBeVisible();
+  const thumbnail = card.locator('img[alt=""][aria-hidden="true"]');
+  await expect(thumbnail).toBeVisible();
+  await expect(thumbnail).toHaveAttribute("src", /\/api\/media\/thumbnail\/701$/);
   await expect(card.locator("svg").first()).toBeVisible();
   await expect.poll(() => thumbnailRequests).toBeGreaterThan(0);
 });
