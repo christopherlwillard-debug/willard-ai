@@ -1,3 +1,8 @@
+param(
+  [ValidateSet("lzma2", "lzma2/fast")]
+  [string]$Compression = "lzma2"
+)
+
 # Compile the staged Windows payload and treat every Inno Setup warning as a release failure.
 $ErrorActionPreference = "Stop"
 
@@ -12,7 +17,7 @@ if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?
   throw "WILLARD_VERSION must be a valid MAJOR.MINOR.PATCH semantic version."
 }
 
-$output = @(& $Inno "/DMyAppVersion=$Version" $Script 2>&1)
+$output = @(& $Inno "/DMyAppVersion=$Version" "/DMyAppCompression=$Compression" $Script 2>&1)
 $exitCode = $LASTEXITCODE
 $output | ForEach-Object { Write-Host $_ }
 if ($exitCode -ne 0) { throw "Inno Setup compilation failed with exit code $exitCode." }

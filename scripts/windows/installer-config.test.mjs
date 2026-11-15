@@ -353,6 +353,15 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(workflow, /make-release\.ps1/);
   assert.match(workflow, /WILLARD_NODE_RUNTIME/);
   assert.match(installerCompiler, /MyAppVersion=\$Version/);
+  assert.match(installerCompiler, /\[ValidateSet\("lzma2", "lzma2\/fast"\)\]/);
+  assert.match(installerCompiler, /\[string\]\$Compression = "lzma2"/);
+  assert.match(installerCompiler, /MyAppCompression=\$Compression/);
+  assert.match(config, /#define MyAppCompression "lzma2"/);
+  assert.match(config, /^Compression=\{#MyAppCompression\}$/m);
+  assert.match(
+    installedLifecycleSmoke,
+    /compile-installer\.ps1"\) -Compression "lzma2\/fast"/,
+  );
   assert.match(installerCompiler, /\$ExpectedPublisher = "Willard Media Center"/);
   assert.match(installerCompiler, /VersionInfo/);
   assert.match(installerCompiler, /\$installerPublisher = \(\[string\]\$versionInfo\.CompanyName\)\.Trim\(\)/);
@@ -727,6 +736,7 @@ test("Windows release gate proves the installed lifecycle with external data", (
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PATH/);
   assert.match(installedLifecycleSmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
   const compileIndex = workflow.indexOf("Compile the Windows installer");
+  const trustIndex = workflow.indexOf("Record installer trust metadata");
   const lifecycleIndex = workflow.indexOf(
     "Verify installed Windows lifecycle with external PostgreSQL",
   );
@@ -737,6 +747,15 @@ test("Windows release gate proves the installed lifecycle with external data", (
     compileIndex >= 0 &&
       lifecycleIndex > compileIndex &&
       lifecycleIndex < publishIndex,
+  );
+  assert.ok(
+    trustIndex > compileIndex && trustIndex < lifecycleIndex,
+    "The signed installer trust check must pass before the installed lifecycle runs.",
+  );
+  assert.match(workflow, /Get-AuthenticodeSignature -FilePath \$setup/);
+  assert.match(
+    workflow,
+    /WILLARD_REQUIRE_WINDOWS_SIGNING: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true \}\}/,
   );
   assert.match(workflow, /installer-lifecycle-smoke\.ps1/);
   assert.match(workflow, /Bootstrap disposable backend-audit database schema/);
@@ -762,12 +781,18 @@ test("Windows release gate proves the installed lifecycle with external data", (
   );
   assert.match(installedLifecycleSmoke, /compile-installer\.ps1/);
   assert.match(installedLifecycleSmoke, /phase = "swapped"/);
+  assert.match(installedLifecycleSmoke, /phase = "backup-created"/);
   assert.match(installedLifecycleSmoke, /candidate-only\.marker/);
   assert.match(installedLifecycleSmoke, /startup-failure\.log/);
+  assert.match(installedLifecycleSmoke, /missing-backup manual recovery diagnostics/);
+  assert.match(installedLifecycleSmoke, /Preserve\.\*journal/);
   assert.match(installedLifecycleSmoke, /unins000\.exe/);
   assert.match(installedLifecycleSmoke, /ValidateSet\("start", "stop", "failure", "concurrent", "shortcut"\)/);
   assert.match(installedLifecycleSmoke, /Invoke-InstalledLauncher "concurrent"/);
-  assert.match(installedLifecycleSmoke, /alreadyRunningMessage = "\[OK\] Willard Media Center is already running\."/);
+  assert.match(
+    installedLifecycleSmoke,
+    /alreadyRunningMessage = "\[OK\] Willard Media Center is already running\."/,
+  );
   assert.match(installedLifecycleSmoke, /\.Contains\(\$alreadyRunningMessage\)/);
   assert.match(installedLifecycleSmoke, /function Invoke-InstalledShortcut/);
   assert.match(
@@ -1947,5 +1972,6 @@ test("packaged interrupted-update lifecycle fixtures use the accepted sibling pa
   assert.match(installedLifecycleSmoke, /"\.candidate-" \+ \[guid\]::NewGuid\(\)\.ToString\(\)/);
   assert.match(installedLifecycleSmoke, /"\.previous-lifecycle-" \+ \(Get-Date -Format "yyyyMMddHHmmss"\)/);
   assert.match(installedLifecycleSmoke, /"\.previous-prepared-" \+ \(Get-Date -Format "yyyyMMddHHmmss"\)/);
+  assert.match(installedLifecycleSmoke, /"\.previous-backup-created-" \+ \(Get-Date -Format "yyyyMMddHHmmss"\)/);
   assert.doesNotMatch(installedLifecycleSmoke, /\$InstallRoot \+ "\.(?:lifecycle|prepared)-(?:backup|candidate)"/);
 });;

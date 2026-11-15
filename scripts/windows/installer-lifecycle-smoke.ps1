@@ -63,7 +63,8 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
 }
 
 function Get-PortListeners($port) {
-  return @(Get-CimInstance -Namespace "root/StandardCimv2" -ClassName "MSFT_NetTCPConnection" -Filter "LocalPort = $port AND State = 2" -ErrorAction Stop)
+  return @(Get-CimInstance -Namespace "root/StandardCimv2" -ClassName "MSFT_NetTCPConnection" `
+    -Filter "LocalPort = $port AND State = 2" -ErrorAction Stop)
 }
 
 function Wait-PortClosed($port, $timeoutSeconds = 90) {
@@ -355,7 +356,9 @@ exit $launcherExitCode
   Write-LifecycleStage "upgrade compile and install"
   $upgradeVersion = "0.1.$([int]$env:GITHUB_RUN_NUMBER + 1)"
   $env:WILLARD_VERSION = $upgradeVersion
-  & (Join-Path $Root "scripts\windows\compile-installer.ps1")
+  # Compression changes packaging time, not upgrade behavior; keep the second
+  # isolated test installer fast while release builds retain their default.
+  & (Join-Path $Root "scripts\windows\compile-installer.ps1") -Compression "lzma2/fast"
   $upgradeInstaller = Join-Path $Root "build\installer\WillardMediaCenter-$upgradeVersion-Setup.exe"
   Assert-True (Test-Path $upgradeInstaller) "The newer upgrade Setup.exe was not compiled."
   $upgradeInstallLog = Join-Path $TempRoot "upgrade-install-setup.log"
@@ -437,6 +440,33 @@ exit $launcherExitCode
   Assert-ExternalState
   Stop-InstalledWillard
 
+  Write-LifecycleStage "backup-created-phase update recovery"
+  $backupCreatedBackup = Join-Path $installParent ("." + $installLeaf + ".previous-backup-created-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $backupCreatedCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
+  Copy-Item $InstallRoot $backupCreatedCandidate -Recurse -Force
+  Set-Content (Join-Path $backupCreatedCandidate "candidate-only.marker") "discard backup-created candidate" -Encoding UTF8
+  Set-Content (Join-Path $InstallRoot "backup-created-backup-only.marker") "restore backup-created prior version" -Encoding UTF8
+  Move-Item -LiteralPath $InstallRoot -Destination $backupCreatedBackup -ErrorAction Stop
+  @{
+    version = 1
+    phase = "backup-created"
+    installRoot = $InstallRoot
+    candidate = $backupCreatedCandidate
+    backup = $backupCreatedBackup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+
+  $backupCreatedRecovery = Invoke-InstalledShortcut "backup-created-phase-shortcut-recovery"
+  Assert-True ($backupCreatedRecovery.exitCode -eq 0) ("Installed launcher did not recover a backup-created-phase interruption:`n" + $backupCreatedRecovery.output)
+  Wait-Http "http://127.0.0.1:8080/api/healthz" { param($content) $content -match '"status"\s*:\s*"ok"' }
+  Assert-True (Test-Path (Join-Path $InstallRoot "backup-created-backup-only.marker")) "The prior installation was not restored from the backup-created journal."
+  Assert-True (-not (Test-Path (Join-Path $InstallRoot "candidate-only.marker"))) "The interrupted backup-created candidate remained active."
+  Assert-True (-not (Test-Path $backupCreatedCandidate)) "The interrupted backup-created candidate was not removed."
+  Assert-True (-not (Test-Path $backupCreatedBackup)) "The backup-created rollback directory was not moved back into place."
+  Assert-True (-not (Test-Path $journalPath)) "Backup-created update journal was not cleared."
+  Assert-ExternalState
+  Stop-InstalledWillard
+
   Write-LifecycleStage "incomplete-folder recovery"
   $incompleteBackup = Join-Path $installParent ("." + $installLeaf + ".previous-incomplete-" + (Get-Date -Format "yyyyMMddHHmmss"))
   $incompleteCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
@@ -466,6 +496,34 @@ exit $launcherExitCode
   Assert-True (-not (Test-Path $journalPath)) "Incomplete-folder recovery journal was not cleared."
   Assert-ExternalState
   Stop-InstalledWillard
+
+  Write-LifecycleStage "missing-backup manual recovery diagnostics"
+  $manualRecoveryBackup = Join-Path $installParent ("." + $installLeaf + ".previous-manual-recovery-" + (Get-Date -Format "yyyyMMddHHmmss"))
+  $manualRecoveryCandidate = Join-Path $installParent ("." + $installLeaf + ".candidate-" + [guid]::NewGuid().ToString())
+  New-Item -ItemType Directory -Force -Path $manualRecoveryCandidate | Out-Null
+  Set-Content (Join-Path $manualRecoveryCandidate "candidate-only.marker") "preserve for manual recovery" -Encoding UTF8
+  @{
+    version = 1
+    phase = "swapped"
+    installRoot = $InstallRoot
+    candidate = $manualRecoveryCandidate
+    backup = $manualRecoveryBackup
+    updatedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content $journalPath -Encoding UTF8
+
+  $manualRecovery = Invoke-InstalledLauncher "failure" "missing-update-backup"
+  Assert-True ($manualRecovery.exitCode -ne 0) "The installed launcher accepted an interrupted swap with no rollback backup."
+  $manualRecoveryLog = Read-Text (Join-Path $script:DataRoot "logs\startup-failure.log")
+  Assert-True ($manualRecoveryLog -match "backup is missing" -and $manualRecoveryLog -match "Preserve.*journal") `
+    "Manual update recovery diagnostics did not explain the missing backup and which files to preserve."
+  Assert-True (Test-Path -LiteralPath $journalPath -PathType Leaf) "Manual-recovery diagnostics deleted the update journal."
+  Assert-True (Test-Path -LiteralPath (Join-Path $manualRecoveryCandidate "candidate-only.marker") -PathType Leaf) `
+    "Manual-recovery diagnostics deleted the candidate needed for recovery."
+  Assert-True (Test-Path -LiteralPath (Join-Path $InstallRoot "desktop\WillardMediaCenter.ps1") -PathType Leaf) `
+    "Manual-recovery diagnostics changed the installed app payload."
+  Assert-ExternalState
+  Remove-Item -LiteralPath $manualRecoveryCandidate -Recurse -Force
+  Remove-Item -LiteralPath $journalPath -Force
 
   # A database failure must persist diagnostics and return control without a
   # modal dialog in this noninteractive test run.

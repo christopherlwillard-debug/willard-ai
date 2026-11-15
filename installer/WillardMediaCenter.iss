@@ -6,6 +6,9 @@
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
+#ifndef MyAppCompression
+  #define MyAppCompression "lzma2"
+#endif
 #define ReleaseDir "..\build\windows"
 
 [Setup]
@@ -18,7 +21,7 @@ UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 OutputBaseFilename=WillardMediaCenter-{#MyAppVersion}-Setup
 OutputDir=..\build\installer
-Compression=lzma2
+Compression={#MyAppCompression}
 SolidCompression=yes
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\icons\willard.ico
