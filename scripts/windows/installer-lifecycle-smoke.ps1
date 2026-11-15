@@ -62,7 +62,7 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
   throw "Timed out waiting for $url"
 }
 
-function Wait-PortClosed($port, $timeoutSeconds = 30) {
+function Wait-PortClosed($port, $timeoutSeconds = 60) {
   $until = (Get-Date).AddSeconds($timeoutSeconds)
   while ((Get-Date) -lt $until) {
     $client = New-Object System.Net.Sockets.TcpClient
@@ -91,7 +91,10 @@ function Wait-PortClosed($port, $timeoutSeconds = 30) {
 function Get-PortListenerDiagnostics($port) {
   $details = @()
   try {
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop)
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) {
+      $details += "No TCP listener was reported for port $port."
+    }
     foreach ($listener in $listeners) {
       $processId = [int]$listener.OwningProcess
       $owner = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
