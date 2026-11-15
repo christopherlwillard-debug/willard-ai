@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { AlertTriangle, CheckCircle2, FolderCheck, Loader2, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,14 +58,21 @@ export default function Health() {
   const [followUpParentJobId, setFollowUpParentJobId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const libraryKeyRef = useRef<string | null>(null);
+  const reloadStatusRef = useRef<(() => Promise<Report | null>) | null>(null);
 
   const startScan = useCallback(async (preserveNotice = false) => {
+    const libraryKeyAtStart = libraryKeyRef.current;
     setRunning(true);
     setError("");
     if (!preserveNotice) setNotice("");
     try {
       const response = await fetch(apiUrl("/media/health/scan"), { method: "POST" });
       const body = await response.json();
+      if (libraryKeyRef.current !== libraryKeyAtStart) {
+        await reloadStatusRef.current?.();
+        return;
+      }
       if (!response.ok && body.job?.id) {
         setActiveJob(body.job as HealthJob);
         setTrackedJobId(body.job.id);
@@ -88,8 +95,17 @@ export default function Health() {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Health status could not be loaded");
       const nextReport = body as Report;
+      const nextLibraryKey = nextReport.libraryKey ?? null;
+      const libraryChanged = libraryKeyRef.current !== null && libraryKeyRef.current !== nextLibraryKey;
+      libraryKeyRef.current = nextLibraryKey;
+      if (libraryChanged) {
+        setSelected([]);
+        setCleanupStartedByThisPage(null);
+        setFollowUpParentJobId(null);
+        setNotice("");
+      }
       setReport(nextReport);
-      setError("");
+      setError(libraryChanged ? "The library location changed. The Health Center has been refreshed; review the current library before continuing." : "");
       const runningJob = nextReport.activeJob ?? null;
       const job = runningJob ?? nextReport.recoverableCleanup ?? null;
       setActiveJob(job);
@@ -104,26 +120,40 @@ export default function Health() {
         setRunning(false);
         setTrackedJobId(null);
       }
+      return nextReport;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Health status could not be loaded");
+      return null;
     } finally {
       if (initial) setLoading(false);
     }
   }, [startScan]);
+  reloadStatusRef.current = () => loadStatus();
 
   useEffect(() => { void loadStatus(true); }, [loadStatus]);
 
   useEffect(() => {
     if (trackedJobId === null) return;
+    const pollLibraryKey = libraryKeyRef.current;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
         const response = await fetch(apiUrl(`/media/health/jobs/${trackedJobId}`));
         const body = await response.json();
+        if (cancelled || libraryKeyRef.current !== pollLibraryKey) return;
+        if (response.status === 404) {
+          setReport(null);
+          setActiveJob(null);
+          setTrackedJobId(null);
+          setRunning(false);
+          setSelected([]);
+          await loadStatus();
+          return;
+        }
         if (!response.ok) throw new Error(body.error ?? "Could not reconnect to the library task");
         const job = body.job as HealthJob;
-        if (cancelled) return;
+        if (cancelled || libraryKeyRef.current !== pollLibraryKey) return;
         setActiveJob(job);
         const summary = job.summary ?? {};
         if (job.jobType === "HEALTH_CLEANUP" && job.status === "FAILED" && job.error) {
@@ -183,7 +213,7 @@ export default function Health() {
           void startScan(true);
         }
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled || libraryKeyRef.current !== pollLibraryKey) return;
         setError(e instanceof Error ? e.message : "Could not reconnect to the library task");
         timer = setTimeout(poll, 2500);
       }
@@ -200,10 +230,24 @@ export default function Health() {
   const statusColor = report?.status === "healthy" ? "text-emerald-400" : report?.status === "action_required" ? "text-red-400" : "text-amber-400";
 
   const runCleanup = async () => {
+    const displayedLibraryKey = report?.libraryKey;
+    if (!displayedLibraryKey) {
+      setError("The current library could not be confirmed. Refresh the Health Center before starting cleanup.");
+      return;
+    }
     setRunning(true); setError(""); setNotice("");
     try {
+      const currentReport = await loadStatus();
+      if (!currentReport || currentReport.libraryKey !== displayedLibraryKey) {
+        setError("The library location changed. The selected cleanup was not started; review the current library and select actions again.");
+        return;
+      }
+      if (currentReport.activeJob || !currentReport.hasReport) {
+        setError("A library task is already running. Wait for it to finish before starting cleanup.");
+        return;
+      }
       const response = await fetch(apiUrl("/media/cleanup"), {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions: selected, libraryKey: displayedLibraryKey }),
       });
       const body = await response.json();
       if (!response.ok && body.job?.id) {
@@ -225,10 +269,24 @@ export default function Health() {
 
   const retryCleanup = async () => {
     if (!activeJob?.retryAvailable) return;
+    const displayedLibraryKey = report?.libraryKey;
+    if (!displayedLibraryKey) {
+      setError("The current library could not be confirmed. Refresh the Health Center before retrying cleanup.");
+      return;
+    }
     setRunning(true);
     setError("");
     setNotice("");
     try {
+      const currentReport = await loadStatus();
+      if (
+        !currentReport ||
+        currentReport.libraryKey !== displayedLibraryKey ||
+        currentReport.recoverableCleanup?.id !== activeJob.id
+      ) {
+        setError("The library location or cleanup changed. The saved actions were not retried; review the current library first.");
+        return;
+      }
       const response = await fetch(apiUrl(`/media/cleanup/jobs/${activeJob.id}/retry`), { method: "POST" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Cleanup could not be retried");

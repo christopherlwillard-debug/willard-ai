@@ -44,6 +44,7 @@ function report(activeJob: HealthJob | null = null) {
   return {
     checkedAt: "2026-11-14T12:00:00.000Z",
     libraryPath: "/test-media",
+    libraryKey: "test-library-key",
     indexedFiles: 20,
     hasReport: true,
     activeJob,
@@ -326,6 +327,103 @@ test.describe("Health Center durable jobs", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("shows only the new library report and job after a path change and reload", async ({ page }) => {
+    await mockSignedInShell(page);
+    let currentLibrary = {
+      path: "/old-library",
+      key: "old-library-key",
+      job: job(501, "HEALTH_SCAN", "RUNNING", {
+        processed: 4,
+        total: 20,
+        message: "Scanning the old library",
+      }),
+    };
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    await page.route("**/api/media/health", (route) =>
+      route.fulfill({
+        json: {
+          ...report(currentLibrary.job),
+          libraryPath: currentLibrary.path,
+          libraryKey: currentLibrary.key,
+          issues: { ...report().issues, missingThumbnails: currentLibrary.path === "/old-library" ? 7 : 2 },
+        },
+      }),
+    );
+    await page.route("**/api/media/health/jobs/*", (route) => {
+      const id = Number(new URL(route.request().url()).pathname.split("/").at(-1));
+      const currentJob = id === currentLibrary.job.id
+        ? currentLibrary.job
+        : job(id, "HEALTH_SCAN", "RUNNING", { message: "Unexpected stale job request" });
+      return route.fulfill({ json: { job: currentJob } });
+    });
+    const unexpected = await blockUnexpectedApiRequests(page, [
+      /^GET \/api\/media\/health$/,
+      /^GET \/api\/media\/health\/jobs\/\d+$/,
+    ]);
+
+    await openHealthCenter(page);
+    await expect(page.getByText("/old-library")).toBeVisible();
+    await expect(page.getByText("Task #501")).toBeVisible();
+
+    currentLibrary = {
+      path: "/new-library",
+      key: "new-library-key",
+      job: job(502, "HEALTH_SCAN", "RUNNING", {
+        processed: 3,
+        total: 12,
+        message: "Scanning the current library",
+      }),
+    };
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Health Center" })).toBeVisible();
+    await expect(page.getByText("/new-library")).toBeVisible();
+    await expect(page.getByText("Task #502")).toBeVisible();
+    await expect(page.getByText("Task #501")).toHaveCount(0);
+    await expect(page.getByText("3 / 12")).toBeVisible();
+    expect(unexpected).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("drops selected cleanup actions when the library changes before submit", async ({ page }) => {
+    await mockSignedInShell(page);
+    let currentPath = "/old-library";
+    let currentKey = "old-library-key";
+    let cleanupSubmissions = 0;
+
+    await page.route("**/api/media/health", (route) =>
+      route.fulfill({
+        json: {
+          ...report(),
+          libraryPath: currentPath,
+          libraryKey: currentKey,
+        },
+      }),
+    );
+    await page.route("**/api/media/cleanup", (route) => {
+      cleanupSubmissions++;
+      return route.fulfill({ status: 202, json: { job: job(503, "HEALTH_CLEANUP", "RUNNING") } });
+    });
+    const unexpected = await blockUnexpectedApiRequests(page, [
+      /^GET \/api\/media\/health$/,
+      /^POST \/api\/media\/cleanup$/,
+    ]);
+
+    await openHealthCenter(page);
+    const emptyFolderCheckbox = page.getByRole("checkbox", { name: "Remove empty folders" });
+    await emptyFolderCheckbox.check();
+    currentPath = "/new-library";
+    currentKey = "new-library-key";
+
+    await page.getByRole("button", { name: "Run Cleanup" }).click();
+    await expect(page.getByText("/new-library")).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "The library location changed" })).toBeVisible();
+    await expect(emptyFolderCheckbox).not.toBeChecked();
+    expect(cleanupSubmissions).toBe(0);
+    expect(unexpected).toEqual([]);
+  });
+
   test("shows and tracks a cleanup follow-up job through successful completion", async ({ page }) => {
     await mockSignedInShell(page);
     let parentPolls = 0;
@@ -338,7 +436,7 @@ test.describe("Health Center durable jobs", () => {
     );
     await page.route("**/api/media/cleanup", async (route) => {
       expect(route.request().method()).toBe("POST");
-      expect(route.request().postDataJSON()).toEqual({ actions: ["missingThumbnails"] });
+      expect(route.request().postDataJSON()).toEqual({ actions: ["missingThumbnails"], libraryKey: "test-library-key" });
       return route.fulfill({
         status: 202,
         json: {

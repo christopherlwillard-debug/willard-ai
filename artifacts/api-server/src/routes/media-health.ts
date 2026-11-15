@@ -683,6 +683,9 @@ router.post("/media/cleanup", async (req, res) => {
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
   const library = await getActiveLibraryContext();
   if (!library) return res.status(409).json({ error: "No library is configured" });
+  if (req.body?.libraryKey !== library.libraryKey) {
+    return res.status(409).json({ error: "The library location changed. Refresh Health Center before starting cleanup." });
+  }
 
   let started: Awaited<ReturnType<typeof startHealthCleanupJob>>;
   try {
