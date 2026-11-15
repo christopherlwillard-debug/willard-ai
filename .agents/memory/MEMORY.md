@@ -59,3 +59,4 @@
 - [Desktop loading readiness](desktop-loading-readiness.md) — the native launcher must own readiness and explicitly open the web app after closing its file-based loading window
 - [Windows addon file descriptors](windows-addon-fd-boundary.md) — use libuv conversion for handles passed from native addons to Node's filesystem APIs
 - [pnpm patch install verification](pnpm-patch-install-verification.md) — `git apply --check` does not prove a `patchedDependencies` change installs through pnpm
+- [Post-install NAS setup](nas-settings-after-install.md) — Windows users connect their mapped Z: drive after installing, then manage backup and restore through existing Settings

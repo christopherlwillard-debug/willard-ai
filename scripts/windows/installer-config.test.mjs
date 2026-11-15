@@ -136,6 +136,14 @@ const replacementRecoverySmoke = await readFile(
   new URL("./replacement-recovery-smoke.ps1", import.meta.url),
   "utf8",
 );
+const nasSettingsRecoverySmoke = await readFile(
+  new URL("./nas-settings-recovery-smoke.ps1", import.meta.url),
+  "utf8",
+);
+const settingsPage = await readFile(
+  new URL("../../artifacts/willard-ai/src/pages/settings.tsx", import.meta.url),
+  "utf8",
+);
 
 function selectImportedCertificateCleanupCandidates({
   snapshotSucceeded,
@@ -1310,6 +1318,7 @@ test("Windows startup smoke test covers readiness, ownership, and web failure di
 
 test("Windows release runs replacement recovery from the packaged payload", () => {
   assert.match(workflow, /replacement-recovery-smoke\.ps1/);
+  assert.match(replacementRecoverySmoke, /nas-settings-recovery-smoke\.ps1/);
   assert.match(replacementRecoverySmoke, /source checkout, package manager/);
   assert.match(replacementRecoverySmoke, /runtime\\node\.exe/);
   assert.match(replacementRecoverySmoke, /desktop\\database-backup\.mjs/);
@@ -1326,6 +1335,24 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(replacementRecoverySmoke, /\/api\/healthz/);
   assert.match(replacementRecoverySmoke, /New-LocalUser/);
   assert.match(replacementRecoverySmoke, /-Credential \$Credential -LoadUserProfile -UseNewEnvironment/);
+  assert.match(nasSettingsRecoverySmoke, /build\\installer\\WillardMediaCenter-\$Version-Setup\.exe/);
+  assert.match(nasSettingsRecoverySmoke, /Assert-True \(-not \(Test-Path -LiteralPath "Z:\\"\)\) "Z: must be disconnected before installing Willard\."/);
+  assert.match(nasSettingsRecoverySmoke, /subst "Z:" \$nasBackingRoot/);
+  assert.match(nasSettingsRecoverySmoke, /Invoke-Api "POST" "\/settings\/test-nas"/);
+  assert.match(nasSettingsRecoverySmoke, /Invoke-Api "PUT" "\/settings" @\{ nasPath = \$nasPath \}/);
+  assert.match(nasSettingsRecoverySmoke, /Settings did not persist Z: after an app restart/);
+  assert.match(nasSettingsRecoverySmoke, /Invoke-ManualBackup \$session "PENDING"/);
+  assert.match(nasSettingsRecoverySmoke, /Invoke-ManualBackup \$session "PROTECTED"/);
+  assert.match(nasSettingsRecoverySmoke, /--library-root/);
+  assert.match(nasSettingsRecoverySmoke, /\$env:WILLARD_RESTORE_DATABASE_URL = \$restoreDatabaseUrl/);
+  assert.match(nasSettingsRecoverySmoke, /"--library-root" \$savedNasPath/);
+  assert.doesNotMatch(nasSettingsRecoverySmoke, /INSERT INTO app_settings|UPDATE app_settings/);
+  assert.match(nasSettingsRecoverySmoke, /This Settings-driven NAS smoke must run on Windows/);
+  assert.match(nasSettingsRecoverySmoke, /function Wait-SettingsPage/);
+  assert.match(nasSettingsRecoverySmoke, /http:\/\/127\.0\.0\.1:5000\/settings/);
+  assert.match(settingsPage, /value=\{form\.nasPath\}/);
+  assert.match(settingsPage, /updateMutation\.mutate\(\{ data: form \}\)/);
+  assert.match(settingsPage, /testNasMutation\.mutate\(\{ data: \{ path: form\.nasPath \} \}\)/);
 });
 
 test("installer coordinates upgrades and repair reports failures", async () => {

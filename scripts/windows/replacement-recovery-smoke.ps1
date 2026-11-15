@@ -315,8 +315,13 @@ exit $LASTEXITCODE
   Assert-True $ready "The packaged app did not become healthy after the verified replacement restore."
   $stop = Invoke-AsRecoveryUser "stop" "stop"
   Assert-True ($stop.exitCode -eq 0) ("Packaged activation could not be stopped:`n" + $stop.output)
+  Write-Host "Replacement payload recovery checks passed; starting the installed Settings-driven Z: workflow."
+  $settingsSmoke = Join-Path $PSScriptRoot "nas-settings-recovery-smoke.ps1"
+  Assert-True (Test-Path -LiteralPath $settingsSmoke -PathType Leaf) `
+    "The Settings-driven mapped-NAS recovery smoke is missing: $settingsSmoke"
+  & $settingsSmoke
   $script:RecoveryPassed = $true
-  Write-Host "Replacement recovery smoke passed: portable import, safe failures, NAS verification, and activation."
+  Write-Host "Replacement recovery smoke passed: portable import, safe failures, installed Settings, mapped-Z backup, reconnect, restore, and activation."
 } finally {
   try {
     if (Test-Path $Runner) { Invoke-AsRecoveryUser "stop" "cleanup-stop" | Out-Null }
