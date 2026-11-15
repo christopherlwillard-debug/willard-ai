@@ -1314,6 +1314,10 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(replacementRecoverySmoke, /runtime\\node\.exe/);
   assert.match(replacementRecoverySmoke, /desktop\\database-backup\.mjs/);
   assert.match(replacementRecoverySmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
+  assert.match(
+    replacementRecoverySmoke,
+    /if \(\$Mode -eq "missing-nas" -or \$Mode -eq "partial-backup"\) \{\s*\$env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "replacement-laptop-export-passphrase"/,
+  );
   assert.match(replacementRecoverySmoke, /wrong-passphrase/);
   assert.match(replacementRecoverySmoke, /missing-nas/);
   assert.match(replacementRecoverySmoke, /partial-backup/);

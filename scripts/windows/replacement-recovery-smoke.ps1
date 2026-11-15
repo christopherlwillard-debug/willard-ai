@@ -215,6 +215,9 @@ $common = @(
   "--library-root", $nas, "--confirm-library-id", "__LIBRARY_ID__",
   "--recovery-export", $export
 )
+if ($Mode -eq "missing-nas" -or $Mode -eq "partial-backup") {
+  $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "replacement-laptop-export-passphrase"
+}
 if ($Mode -eq "wrong-passphrase") {
   $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "wrong-replacement-passphrase"
   & $node @common
