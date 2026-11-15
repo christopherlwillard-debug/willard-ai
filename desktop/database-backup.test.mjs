@@ -15,6 +15,7 @@ import {
   overwriteFileWithZeroes,
   readRegularFileNoFollow,
   runTool,
+  SUPPORTED_APPLICATION_SCHEMA_VERSION,
 } from "./database-backup.mjs";
 import {
   LIBRARY_IDENTITY_RELATIVE_PATH,
@@ -34,6 +35,14 @@ import {
 import { waitForExportedSnapshot } from "./postgres-snapshot-process.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("backup recovery compatibility follows the current application schema", async () => {
+  const setupDbPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "setup-db.cjs");
+  const setupSource = await readFile(setupDbPath, "utf8");
+  const schemaVersion = setupSource.match(/const SCHEMA_VERSION = (\d+);/);
+  assert.ok(schemaVersion, "setup-db.cjs must declare its schema version");
+  assert.equal(SUPPORTED_APPLICATION_SCHEMA_VERSION, Number(schemaVersion[1]));
+});
 
 test("concurrent NAS identity initialization never replaces the first published identity", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "willard-identity-race-"));
@@ -475,7 +484,7 @@ test(
           INSERT INTO app_settings VALUES
             (1, ${sqlLiteral(nasRoot)}, ${sqlLiteral(path.join(nasRoot, "photos"))}, '', '', '', NULL);
           CREATE TABLE willard_schema_versions (version integer PRIMARY KEY);
-          INSERT INTO willard_schema_versions VALUES (2);
+          INSERT INTO willard_schema_versions VALUES (4);
           CREATE TABLE media_files (
             id integer PRIMARY KEY, nas_path text NOT NULL, relative_path text NOT NULL,
             content_hash text, favorite boolean NOT NULL DEFAULT false, name text NOT NULL,
@@ -581,7 +590,7 @@ test(
       assert.equal(manifest.library.catalogInventoryScope, "active");
       assert.equal(manifest.library.catalogMediaCount, 1, "recycled and deleted rows are not active canonical media");
       assert.equal(manifest.library.mediaSamples.length, 1);
-      assert.equal(manifest.compatibility.applicationSchemaVersion, 2);
+      assert.equal(manifest.compatibility.applicationSchemaVersion, 4);
       assert.equal(manifest.verification.rowCounts["public.catalog_items"], "2");
       assert.equal(manifest.verification.rowCounts["public.media_files"], "3");
       assert.equal(manifest.verification.rowCounts["public.empty_table"], "0");

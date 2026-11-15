@@ -51,7 +51,8 @@ import { releaseExportedSnapshot, waitForExportedSnapshot } from "./postgres-sna
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FORMAT = "willard-postgresql-backup";
 const SCHEMA_VERSION = 2;
-const SUPPORTED_APPLICATION_SCHEMA_VERSION = 2;
+// Keep aligned with setup-db.cjs; database-backup.test.mjs enforces this.
+const SUPPORTED_APPLICATION_SCHEMA_VERSION = 4;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_KEEP = 12;
 const DEFAULT_OUTPUT_DIR = path.join(ROOT, "backups", "database");
