@@ -85,7 +85,39 @@ function Wait-PortClosed($port, $timeoutSeconds = 30) {
     if ($probeCompleted -and -not $connected) { return }
     Start-Sleep -Seconds 1
   }
-  throw "Willard still accepts connections on port $port after uninstall."
+  throw "Willard still accepts connections on port $port after uninstall. $(Get-PortListenerDiagnostics $port)"
+}
+
+function Get-PortListenerDiagnostics($port) {
+  $details = @()
+  try {
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop)
+    foreach ($listener in $listeners) {
+      $processId = [int]$listener.OwningProcess
+      $owner = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
+      if ($owner) {
+        $details += "Listener PID $processId; name='$($owner.Name)'; path='$($owner.ExecutablePath)'; command='$($owner.CommandLine)'"
+      } else {
+        $details += "Listener PID $processId; process details unavailable"
+      }
+    }
+  } catch {
+    $details += "Listener lookup failed: $($_.Exception.Message)"
+  }
+
+  $servicesPath = if ($script:DataRoot) { Join-Path $script:DataRoot "services.json" } else { $null }
+  if ($servicesPath -and (Test-Path -LiteralPath $servicesPath -PathType Leaf)) {
+    try {
+      $serviceState = Get-Content -LiteralPath $servicesPath -Raw -ErrorAction Stop
+      $details += "services.json at '$servicesPath': $serviceState"
+    } catch {
+      $details += "Could not read services.json at '$servicesPath': $($_.Exception.Message)"
+    }
+  } else {
+    $details += "services.json is absent"
+  }
+  if ($details.Count -eq 0) { return "No listener details were available." }
+  return $details -join "; "
 }
 
 function Invoke-AsLifecycleUser($filePath, $argumentLine, $label, $timeoutSeconds = $LifecycleProcessTimeoutSeconds) {
@@ -458,6 +490,7 @@ exit $launcherExitCode
   Assert-True ($uninstallStart.exitCode -eq 0) ("Could not start Willard before uninstall:`n" + $uninstallStart.output)
   Wait-Http "http://127.0.0.1:8080/api/healthz" { param($body) $body -match '"status"\s*:\s*"ok"' }
   Wait-Http "http://127.0.0.1:5000/" { param($body) $body -match "<html|<!doctype html" }
+  Write-Host ("Uninstall precondition listeners: API={0}; web={1}" -f (Get-PortListenerDiagnostics 8080), (Get-PortListenerDiagnostics 5000))
 
   Write-LifecycleStage "uninstall"
   $uninstaller = Join-Path $InstallRoot "unins000.exe"
