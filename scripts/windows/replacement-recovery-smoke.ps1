@@ -74,7 +74,7 @@ function Invoke-AsRecoveryUser($mode, $label) {
   $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
   $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -Mode $mode"
   $process = Start-Process -FilePath $powershell -ArgumentList $arguments `
-    -Credential $Credential -LoadUserProfile -WorkingDirectory $TempRoot `
+    -Credential $Credential -LoadUserProfile -UseNewEnvironment -WorkingDirectory $TempRoot `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
   if (-not $process.WaitForExit($script:RecoveryProcessTimeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue

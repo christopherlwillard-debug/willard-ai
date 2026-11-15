@@ -1325,7 +1325,7 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(replacementRecoverySmoke, /"COMPLETE"/);
   assert.match(replacementRecoverySmoke, /\/api\/healthz/);
   assert.match(replacementRecoverySmoke, /New-LocalUser/);
-  assert.match(replacementRecoverySmoke, /-Credential \$Credential -LoadUserProfile/);
+  assert.match(replacementRecoverySmoke, /-Credential \$Credential -LoadUserProfile -UseNewEnvironment/);
 });
 
 test("installer coordinates upgrades and repair reports failures", async () => {
