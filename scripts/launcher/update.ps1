@@ -257,8 +257,29 @@ function Prepare-DeveloperCandidate($candidate) {
         $buildCode = Invoke-PreparationCommand "Building the updated library service..." $buildLog {
             & $pnpmCommand --filter @workspace/api-server run build
         }
-        if ($buildCode -ne 0 -or -not (Test-WillardApiBuild $candidate)) {
-            throw "The API rebuild failed. See $buildLog."
+        $apiArtifactsPresent = Test-WillardApiBuild $candidate
+        if ($buildCode -ne 0 -or -not $apiArtifactsPresent) {
+            $preservedBuildLog = Join-Path $LogDir "update-build-failure.log"
+            $diagnosticStatus = "The candidate API build log was not available at $buildLog."
+            try {
+                if (Test-Path -LiteralPath $buildLog -PathType Leaf) {
+                    Copy-Item -LiteralPath $buildLog -Destination $preservedBuildLog -Force -ErrorAction Stop | Out-Null
+                    $diagnosticStatus = "Candidate API build details were preserved at $preservedBuildLog."
+                }
+            } catch {
+                $diagnosticStatus = "Could not preserve the candidate API build log: " + $_.Exception.Message
+            }
+            $diagnosticMessage = (
+                "[update] API candidate build exit code: " + $buildCode +
+                "; required artifacts present: " + $apiArtifactsPresent +
+                ". " + $diagnosticStatus
+            )
+            try {
+                Add-Content -LiteralPath $updateLog -Value $diagnosticMessage -ErrorAction Stop
+            } catch {
+                $diagnosticStatus = "Could not append update diagnostics: " + $_.Exception.Message
+            }
+            throw "The API rebuild failed (exit code $buildCode; required artifacts present: $apiArtifactsPresent). $diagnosticStatus"
         }
         Test-InjectedUpdateFailure "build"
     } finally {

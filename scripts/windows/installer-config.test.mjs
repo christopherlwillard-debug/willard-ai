@@ -1476,6 +1476,9 @@ test("Windows update smoke test exercises Git, preservation, and rollback on a r
   assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);
   assert.doesNotMatch(updateSmoke, /git -C \$Remote branch --show-current/);
   assert.match(updateSmoke, /function Wait-ForUpdateSwap/);
+  assert.match(updateSmoke, /function Write-UpdaterFailureDiagnostics/);
+  assert.match(updateSmoke, /update-build-failure\.log/);
+  assert.match(updateSmoke, /Write-UpdaterFailureDiagnostics \$Install/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install/);
   assert.match(updateSmoke, /Wait-ForUpdateSwap \$Install 60 "failed"/);
   assert.match(
@@ -1486,6 +1489,9 @@ test("Windows update smoke test exercises Git, preservation, and rollback on a r
   assert.match(updateSmoke, /Local changes were not protected/);
   assert.match(updateSmoke, /unreachable\/willard-ai/);
   assert.match(updateSmoke, /failed rebuild did not restore/);
+  assert.match(updater, /Copy-Item -LiteralPath \$buildLog -Destination \$preservedBuildLog/);
+  assert.match(updater, /update-build-failure\.log/);
+  assert.match(updater, /API candidate build exit code/);
   assert.match(updateSmoke, /postgres-data\.marker/);
   assert.match(updateSmoke, /media-path\.txt/);
   assert.match(updateSmoke, /New-WillardShortcut/);

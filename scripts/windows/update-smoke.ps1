@@ -19,6 +19,39 @@ function Read-Text($path) {
   return ""
 }
 
+function Write-UpdaterFailureDiagnostics($installPath) {
+  $logs = @()
+  foreach ($entry in @(
+    @{ Name = "update.log"; Tail = 80 },
+    @{ Name = "update-build-failure.log"; Tail = 160 }
+  )) {
+    $path = Join-Path $installPath ("logs\" + $entry.Name)
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+      $logs += [PSCustomObject]@{
+        Name = $entry.Name
+        Path = $path
+        Tail = $entry.Tail
+      }
+    }
+  }
+
+  if ($logs.Count -eq 0) {
+    Write-Host "No updater diagnostic logs were available before cleanup."
+    return
+  }
+
+  foreach ($log in $logs) {
+    Write-Host ""
+    Write-Host "----- $($log.Name) (last $($log.Tail) lines) -----"
+    try {
+      Get-Content -LiteralPath $log.Path -Tail $log.Tail -ErrorAction Stop |
+        ForEach-Object { Write-Host $_ }
+    } catch {
+      Write-Host "Could not read $($log.Name): $($_.Exception.Message)"
+    }
+  }
+}
+
 function Wait-ForUpdateSwap($installPath, $timeoutSeconds = 60, $expectedStatus = "ok") {
   $parent = Split-Path -Parent $installPath
   $leaf = Split-Path -Leaf $installPath
@@ -135,7 +168,11 @@ try {
   Push-Location $Install
   try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Install "scripts\launcher\update.ps1")
-    Assert-True ($LASTEXITCODE -eq 0) "A clean Git update failed."
+    $updateExitCode = $LASTEXITCODE
+    if ($updateExitCode -ne 0) {
+      Write-UpdaterFailureDiagnostics $Install
+    }
+    Assert-True ($updateExitCode -eq 0) "A clean Git update failed."
   } finally { Pop-Location }
   Wait-ForUpdateSwap $Install
   Assert-True (Test-Path (Join-Path $Install "update-smoke-marker.txt")) "The pushed commit was not installed."
