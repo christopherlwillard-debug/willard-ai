@@ -607,7 +607,16 @@ test(
       });
       const discoveredBackups = JSON.parse(discovered.stdout);
       assert.equal(discoveredBackups.length, 1);
-      assert.equal(discoveredBackups[0].backupDir, backupDir);
+      const [discoveredBackupStat, expectedBackupStat] = await Promise.all([
+        stat(discoveredBackups[0].backupDir, { bigint: true }),
+        stat(backupDir, { bigint: true }),
+      ]);
+      assert.equal(discoveredBackupStat.dev, expectedBackupStat.dev);
+      assert.equal(
+        discoveredBackupStat.ino,
+        expectedBackupStat.ino,
+        "discovery must identify the same backup directory despite Windows long/8.3 path spellings",
+      );
       assert.equal(discoveredBackups[0].verified, true);
       const sourceIdentityPath = path.join(nasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);
       const reattachedIdentityPath = path.join(reattachedNasRoot, LIBRARY_IDENTITY_RELATIVE_PATH);
