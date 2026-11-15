@@ -216,6 +216,7 @@ $common = @(
   "--recovery-export", $export
 )
 if ($Mode -eq "missing-nas" -or $Mode -eq "partial-backup") {
+  $env:WILLARD_RESTORE_DATABASE_URL = $targetUrl
   $env:WILLARD_RECOVERY_EXPORT_PASSPHRASE = "replacement-laptop-export-passphrase"
 }
 if ($Mode -eq "wrong-passphrase") {
