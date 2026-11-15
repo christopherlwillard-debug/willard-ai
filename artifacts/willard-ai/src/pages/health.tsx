@@ -247,16 +247,16 @@ export default function Health() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-mono uppercase tracking-widest text-primary">Library maintenance</p>
-          <h1 className="text-3xl font-bold tracking-tight mt-1">Health Center</h1>
+          <h1 className="mt-1 text-3xl font-bold tracking-tight">Health Center</h1>
           <p className="text-muted-foreground mt-1">Review index, cache, metadata, and folder integrity without touching original media.</p>
         </div>
-         <Button variant="outline" onClick={() => void startScan()} disabled={loading || running}><RefreshCw className="mr-2 h-4 w-4" /> Verify now</Button>
+        <Button className="w-full sm:w-auto" variant="outline" onClick={() => void startScan()} disabled={loading || running}><RefreshCw className="mr-2 h-4 w-4" /> Verify now</Button>
       </div>
 
       <Card className="border-border">
         <CardContent className="flex flex-wrap items-center gap-4 py-5">
           {report?.status === "healthy" ? <CheckCircle2 className="h-10 w-10 text-emerald-400" /> : <AlertTriangle className={`h-10 w-10 ${statusColor}`} />}
-          <div className="flex-1 min-w-[220px]">
+          <div className="min-w-0 flex-1 basis-full sm:basis-auto sm:min-w-[220px]">
             <p className={`text-xl font-semibold ${statusColor}`}>{loading ? "Loading health status…" : running && activeJob?.jobType === "HEALTH_SCAN" ? "Verifying library…" : statusLabel}</p>
              <p className="text-sm text-muted-foreground">
                {report?.libraryPath ?? "No library configured"}
@@ -264,23 +264,23 @@ export default function Health() {
                {issueCount > 0 ? ` · ${issueCount.toLocaleString()} issue${issueCount === 1 ? "" : "s"} found` : ""}
              </p>
           </div>
-          <div className="text-right text-xs text-muted-foreground font-mono">
+          <div className="min-w-0 break-words text-left text-xs text-muted-foreground font-mono sm:ml-auto sm:text-right">
             <p>LAST VERIFIED</p><p>{report?.checkedAt ? new Date(report.checkedAt).toLocaleString() : "—"}</p>
           </div>
         </CardContent>
       </Card>
 
-      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
-      {notice && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
+      {error && <div role="alert" className="break-words rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</div>}
+      {notice && <div role="status" className="break-words rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{notice}</div>}
       {activeJob && (running || activeJob.retryAvailable) && <div role={running ? "status" : "alert"} aria-live="polite" className={`rounded-lg border p-4 ${activeJob.retryAvailable && !running ? "border-amber-500/30 bg-amber-500/10" : "border-primary/30 bg-primary/5"}`}>
         <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
           {running
             ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
             : <AlertTriangle className="h-4 w-4 text-amber-400" />}
-          <span>{activeJob.message ?? `Running ${activeJob.jobType.toLowerCase().replaceAll("_", " ")}…`}</span>
-          {activeJob.retryAvailable && <Button size="sm" variant="outline" className="ml-auto" onClick={() => void retryCleanup()} disabled={running}>Retry cleanup</Button>}
+          <span className="min-w-0 flex-1 break-words">{activeJob.message ?? `Running ${activeJob.jobType.toLowerCase().replaceAll("_", " ")}…`}</span>
+          {activeJob.retryAvailable && <Button size="sm" variant="outline" className="ml-auto shrink-0" onClick={() => void retryCleanup()} disabled={running}>Retry cleanup</Button>}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">Task #{activeJob.id} · {activeJob.phase ?? activeJob.status.toLowerCase()}</p>
+        <p className="mt-1 break-words text-xs text-muted-foreground">Task #{activeJob.id} · {activeJob.phase ?? activeJob.status.toLowerCase()}</p>
         {activeJob.retryAvailable && <p className="mt-2 text-xs text-muted-foreground">Retry rechecks the library and skips changes that are already complete. Selected actions: {(activeJob.actions ?? []).map(action => actions.find(([key]) => key === action)?.[1] ?? action).join(", ") || "none"}.</p>}
         {activeJob.total !== null && <div className="mt-2">
           <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.min(100, (activeJob.processed / Math.max(activeJob.total, 1)) * 100)}%` }} /></div>
@@ -304,8 +304,8 @@ export default function Health() {
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-primary" /> Selective cleanup</CardTitle><p className="text-sm text-muted-foreground">Only checked maintenance actions will run. Original NAS media is never deleted. Run a thumbnail rebuild or metadata refresh separately; other actions can be combined.</p></CardHeader>
         <CardContent className="space-y-3">
-          {actions.map(([key, label]) => <label key={key} className="flex items-center gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-muted/40"><input type="checkbox" checked={selected.includes(key)} disabled={running} onChange={(e) => setSelected(current => e.target.checked ? [...current, key] : current.filter(item => item !== key))} /><span className="text-sm">{label}</span></label>)}
-          <Button onClick={() => void runCleanup()} disabled={running || selected.length === 0}><Trash2 className="mr-2 h-4 w-4" /> {running ? "Running cleanup…" : "Run Cleanup"}</Button>
+          {actions.map(([key, label]) => <label key={key} className="flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 hover:bg-muted/40"><input className="mt-1 shrink-0" type="checkbox" checked={selected.includes(key)} disabled={running} onChange={(e) => setSelected(current => e.target.checked ? [...current, key] : current.filter(item => item !== key))} /><span className="min-w-0 break-words text-sm">{label}</span></label>)}
+          <Button className="w-full sm:w-auto" onClick={() => void runCleanup()} disabled={running || selected.length === 0}><Trash2 className="mr-2 h-4 w-4" /> {running ? "Running cleanup…" : "Run Cleanup"}</Button>
         </CardContent>
       </Card>
 

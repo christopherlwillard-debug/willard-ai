@@ -16,6 +16,7 @@ type HealthJob = {
   message: string | null;
   summary: Record<string, unknown> | null;
   error: string | null;
+  retryAvailable?: boolean;
   actions?: string[];
 };
 
@@ -130,6 +131,140 @@ async function openHealthCenter(page: Page): Promise<void> {
 }
 
 test.describe("Health Center durable jobs", () => {
+  for (const width of [320, 375, 390]) {
+    test(`keeps progress, cleanup recovery, and controls usable at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await mockSignedInShell(page);
+
+      const actionableError = "One folder could not be checked. Reconnect the NAS and retry cleanup.";
+      let failCleanup = false;
+      let cleanupStarts = 0;
+
+      await page.route("**/api/media/health", (route) =>
+        route.fulfill({
+          json: {
+            ...report(),
+            recoverableCleanup: failCleanup
+              ? job(401, "HEALTH_CLEANUP", "FAILED", {
+                  processed: 1,
+                  total: 2,
+                  phase: "interrupted",
+                  message: "Cleanup stopped after a partial result",
+                  error: actionableError,
+                  retryAvailable: true,
+                  actions: ["emptyFolders"],
+                  summary: { partial: true, failedItems: 1 },
+                })
+              : null,
+          },
+        }),
+      );
+      await page.route("**/api/media/cleanup", (route) =>
+        {
+          cleanupStarts++;
+          const id = cleanupStarts === 1 ? 401 : 404;
+          return route.fulfill({
+          status: 202,
+          json: {
+            alreadyRunning: false,
+            job: job(id, "HEALTH_CLEANUP", "RUNNING", {
+              processed: cleanupStarts === 1 ? 1 : 0,
+              total: 2,
+              phase: cleanupStarts === 1 ? "checking" : "retrying",
+              message: cleanupStarts === 1 ? "Checking selected folders" : "Checking selected folders again",
+              actions: ["emptyFolders"],
+            }),
+          },
+          });
+        },
+      );
+      await page.route("**/api/media/health/jobs/401", (route) =>
+        route.fulfill({
+          json: {
+            job: failCleanup
+              ? job(401, "HEALTH_CLEANUP", "FAILED", {
+                  processed: 1,
+                  total: 2,
+                  phase: "interrupted",
+                  message: "Cleanup stopped after a partial result",
+                  error: actionableError,
+                  retryAvailable: true,
+                  actions: ["emptyFolders"],
+                  summary: { partial: true, failedItems: 1 },
+                })
+              : job(401, "HEALTH_CLEANUP", "RUNNING", {
+                  processed: 1,
+                  total: 2,
+                  phase: "checking",
+                  message: "Checking selected folders",
+                  actions: ["emptyFolders"],
+                }),
+          },
+        }),
+      );
+      await page.route("**/api/media/health/scan", (route) =>
+        route.fulfill({
+          status: 202,
+          json: { job: job(403, "HEALTH_SCAN", "RUNNING", { message: "Refreshing the health report" }) },
+        }),
+      );
+      await page.route("**/api/media/health/jobs/403", (route) =>
+        route.fulfill({
+          json: {
+            job: job(403, "HEALTH_SCAN", "DONE", {
+              processed: 2,
+              total: 2,
+              phase: "complete",
+              message: "Health report refreshed",
+            }),
+          },
+        }),
+      );
+      await page.route("**/api/media/health/jobs/404", (route) =>
+        route.fulfill({
+          json: {
+            job: job(404, "HEALTH_CLEANUP", "RUNNING", {
+              processed: 0,
+              total: 2,
+              phase: "retrying",
+              message: "Checking selected folders again",
+              actions: ["emptyFolders"],
+            }),
+          },
+        }),
+      );
+      const unexpected = await blockUnexpectedApiRequests(page, [
+        /^GET \/api\/media\/health$/,
+        /^POST \/api\/media\/cleanup$/,
+        /^GET \/api\/media\/health\/jobs\/401$/,
+        /^POST \/api\/media\/health\/scan$/,
+        /^GET \/api\/media\/health\/jobs\/403$/,
+        /^GET \/api\/media\/health\/jobs\/404$/,
+      ]);
+
+      await openHealthCenter(page);
+      const emptyFolderCheckbox = page.getByRole("checkbox", { name: "Remove empty folders" });
+      await emptyFolderCheckbox.check();
+      await expect(page.getByRole("button", { name: "Run Cleanup" })).toBeEnabled();
+      await page.getByRole("button", { name: "Run Cleanup" }).click();
+
+      await expect(page.getByText("Checking selected folders")).toBeVisible();
+      await expect(page.getByText("1 / 2")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+
+      failCleanup = true;
+      await expect(page.getByRole("status").filter({ hasText: actionableError })).toBeVisible({ timeout: 10_000 });
+      await expect(emptyFolderCheckbox).toBeChecked();
+      await expect(page.getByRole("button", { name: "Run Cleanup" })).toBeEnabled();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+
+      await page.getByRole("button", { name: "Run Cleanup" }).click();
+      await expect(page.getByText("Checking selected folders again")).toBeVisible();
+      expect(cleanupStarts).toBe(2);
+      expect(unexpected).toEqual([]);
+    });
+  }
+
   test("reattaches to a running scan after reload and displays persisted progress", async ({ page }) => {
     await mockSignedInShell(page);
     let healthStatusReads = 0;
