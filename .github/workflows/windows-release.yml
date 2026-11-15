@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       validate_only:
-        description: "Build, sign, and test the Windows installer without publishing a GitHub release."
+        description: "Build and test an unsigned Windows installer without publishing a GitHub release."
         required: false
         type: boolean
         default: true
@@ -382,6 +382,7 @@ jobs:
         shell: pwsh
         env:
           WILLARD_REQUIRE_WINDOWS_SIGNING: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
+          WILLARD_SKIP_WINDOWS_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_only == true }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\compile-installer.ps1
@@ -445,6 +446,7 @@ jobs:
         env:
           PGPASSWORD: "postgres"
           WILLARD_REQUIRE_WINDOWS_SIGNING: ${{ github.event_name != 'workflow_dispatch' || inputs.validate_only != true }}
+          WILLARD_SKIP_WINDOWS_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_only == true }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: .\scripts\windows\installer-lifecycle-smoke.ps1

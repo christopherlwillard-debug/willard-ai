@@ -63,9 +63,14 @@ function Find-SignTool {
 $certificateBase64 = $env:WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64
 $certificatePassword = $env:WILLARD_WINDOWS_SIGNING_CERTIFICATE_PASSWORD
 $signingRequired = $env:WILLARD_REQUIRE_WINDOWS_SIGNING -eq "true"
-$signingRequested = $signingRequired -or
+$skipSigning = $env:WILLARD_SKIP_WINDOWS_SIGNING -eq "true"
+$certificateMaterialPresent =
   -not [string]::IsNullOrWhiteSpace($certificateBase64) -or
   -not [string]::IsNullOrWhiteSpace($certificatePassword)
+if ($skipSigning -and $signingRequired) {
+  throw "WILLARD_SKIP_WINDOWS_SIGNING cannot be true when a signed installer is required."
+}
+$signingRequested = $signingRequired -or ($certificateMaterialPresent -and -not $skipSigning)
 
 if ($signingRequested) {
   if ([string]::IsNullOrWhiteSpace($certificateBase64)) {
@@ -202,7 +207,11 @@ if ($signingRequested) {
     }
   }
 } else {
-  Write-Host "Installer signing skipped for this local build; CI release builds require signing."
+  if ($skipSigning) {
+    Write-Host "Installer signing skipped for this validation-only build; published release builds require signing."
+  } else {
+    Write-Host "Installer signing skipped for this local build; CI release builds require signing."
+  }
 }
 
 Write-Host "Installer ready: $setup" -ForegroundColor Green

@@ -350,6 +350,10 @@ test("Windows release workflow builds and publishes the versioned package", () =
   );
   assert.match(
     workflow,
+    /validate_only:\s*\n\s+description:\s*"Build and test an unsigned Windows installer without publishing a GitHub release\."/,
+  );
+  assert.match(
+    workflow,
     /if:\s*\$\{\{\s*github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true\s*\}\}/,
   );
   assert.match(workflow, /runs-on: windows-latest/);
@@ -377,6 +381,11 @@ test("Windows release workflow builds and publishes the versioned package", () =
   assert.match(installerCompiler, /\$installerPublisher -ne \$ExpectedPublisher/);
   assert.match(installerCompiler, /\$installerProduct -ne \$ExpectedPublisher/);
   assert.match(installerCompiler, /WILLARD_REQUIRE_WINDOWS_SIGNING/);
+  assert.match(installerCompiler, /WILLARD_SKIP_WINDOWS_SIGNING/);
+  assert.match(
+    installerCompiler,
+    /if \(\$skipSigning -and \$signingRequired\)[\s\S]*cannot be true when a signed installer is required/,
+  );
   assert.match(installerCompiler, /WILLARD_WINDOWS_SIGNING_CERTIFICATE_BASE64/);
   assert.match(
     installerCompiler,
@@ -1560,6 +1569,15 @@ test("Windows release stages only hash-verified official 7-Zip binaries", () => 
 
 test("manual Windows installer validation can skip release publication", () => {
   assert.match(workflow, /validate_only:[\s\S]*?type: boolean[\s\S]*?default: true/);
+  assert.equal(
+    (workflow.match(/WILLARD_SKIP_WINDOWS_SIGNING:/g) ?? []).length,
+    2,
+    "Both validation builds and their lifecycle upgrade compile must skip signing.",
+  );
+  assert.match(
+    workflow,
+    /WILLARD_SKIP_WINDOWS_SIGNING:\s*\$\{\{\s*github\.event_name == 'workflow_dispatch' && inputs\.validate_only == true\s*\}\}/,
+  );
   assert.match(
     workflow,
     /if: \$\{\{ github\.event_name != 'workflow_dispatch' \|\| inputs\.validate_only != true \}\}/,
