@@ -1687,9 +1687,10 @@ test("installed lifecycle smoke uninstalls while both packaged services are runn
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 8080/);
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 5000/);
   assert.match(installedLifecycleSmoke, /function Wait-PortClosed\(\$port, \$timeoutSeconds = 90\)/);
-  assert.match(installedLifecycleSmoke, /Port \$port still accepts connections after \$elapsedSeconds seconds:/);
+  assert.match(installedLifecycleSmoke, /Port \$port remains in LISTEN state after \$elapsedSeconds seconds:/);
   assert.match(installedLifecycleSmoke, /services\.json/);
-  assert.match(installedLifecycleSmoke, /Get-NetTCPConnection -State Listen -LocalPort \$port/);
+  assert.match(installedLifecycleSmoke, /function Get-PortListeners\(\$port\)/);
+  assert.match(installedLifecycleSmoke, /Get-CimInstance -Namespace "root\/StandardCimv2" -ClassName "MSFT_NetTCPConnection"/);
   assert.match(installedLifecycleSmoke, /Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = \$processId"/);
   assert.match(installedLifecycleSmoke, /Uninstall precondition listeners:/);
   assert.match(installedLifecycleSmoke, /Listener PID \$processId/);

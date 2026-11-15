@@ -62,43 +62,31 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
   throw "Timed out waiting for $url"
 }
 
+function Get-PortListeners($port) {
+  return @(Get-CimInstance -Namespace "root/StandardCimv2" -ClassName "MSFT_NetTCPConnection" -Filter "LocalPort = $port AND State = 2" -ErrorAction Stop)
+}
+
 function Wait-PortClosed($port, $timeoutSeconds = 90) {
   $startedAt = Get-Date
   $until = (Get-Date).AddSeconds($timeoutSeconds)
   $nextDiagnosticSeconds = 0
   while ((Get-Date) -lt $until) {
-    $client = New-Object System.Net.Sockets.TcpClient
-    $connected = $false
-    $probeCompleted = $false
-    $pending = $null
-    try {
-      $pending = $client.BeginConnect("127.0.0.1", $port, $null, $null)
-      if ($pending.AsyncWaitHandle.WaitOne(500)) {
-        $probeCompleted = $true
-        try {
-          $client.EndConnect($pending)
-          $connected = $client.Connected
-        } catch {}
-      }
-    } catch {} finally {
-      if ($pending -and $pending.AsyncWaitHandle) { $pending.AsyncWaitHandle.Close() }
-      $client.Close()
-    }
-    if ($probeCompleted -and -not $connected) { return }
+    $listeners = @(Get-PortListeners $port)
+    if ($listeners.Count -eq 0) { return }
     $elapsedSeconds = [int]((Get-Date) - $startedAt).TotalSeconds
-    if ($probeCompleted -and $connected -and $elapsedSeconds -ge $nextDiagnosticSeconds) {
-      Write-Host "Port $port still accepts connections after $elapsedSeconds seconds: $(Get-PortListenerDiagnostics $port)"
+    if ($elapsedSeconds -ge $nextDiagnosticSeconds) {
+      Write-Host "Port $port remains in LISTEN state after $elapsedSeconds seconds: $(Get-PortListenerDiagnostics $port)"
       $nextDiagnosticSeconds += 10
     }
     Start-Sleep -Seconds 1
   }
-  throw "Willard still accepts connections on port $port after uninstall. $(Get-PortListenerDiagnostics $port)"
+  throw "Willard still has a listener on port $port after uninstall. $(Get-PortListenerDiagnostics $port)"
 }
 
 function Get-PortListenerDiagnostics($port) {
   $details = @()
   try {
-    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+    $listeners = @(Get-PortListeners $port)
     if ($listeners.Count -eq 0) {
       $details += "No TCP listener was reported for port $port."
     }
