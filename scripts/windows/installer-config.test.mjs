@@ -1471,6 +1471,8 @@ test("Fast Validation updater smoke checks out complete Git history for its loca
 });
 
 test("Windows update smoke test exercises Git, preservation, and rollback on a real runner", () => {
+  assert.match(updateSmoke, /\$tempId = \[guid\]::NewGuid\(\)\.ToString\("N"\)\.Substring\(0, 12\)/);
+  assert.match(updateSmoke, /\$TempRoot = Join-Path \$env:RUNNER_TEMP "wus-\$tempId"/);
   assert.match(updateSmoke, /git clone/);
   assert.match(updateSmoke, /\$remoteBranch = "smoke-update-\$\(\[guid\]::NewGuid\(\)\.ToString\('N'\)\)"/);
   assert.match(updateSmoke, /git -C \$Remote checkout --quiet -b \$remoteBranch/);

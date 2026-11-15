@@ -3,7 +3,8 @@
 # file preservation, command discovery, and rollback without network access.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$TempRoot = Join-Path $env:RUNNER_TEMP "willard-update-smoke-$([guid]::NewGuid().ToString())"
+$tempId = [guid]::NewGuid().ToString("N").Substring(0, 12)
+$TempRoot = Join-Path $env:RUNNER_TEMP "wus-$tempId"
 $Remote = Join-Path $TempRoot "remote"
 $Install = Join-Path $TempRoot "install"
 $Source = Join-Path $TempRoot "source"
