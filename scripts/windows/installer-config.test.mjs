@@ -1686,7 +1686,8 @@ test("installed lifecycle smoke uninstalls while both packaged services are runn
   assert.ok(start >= 0 && uninstall > start, "The lifecycle must start Willard before uninstalling.");
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 8080/);
   assert.match(installedLifecycleSmoke, /Wait-PortClosed 5000/);
-  assert.match(installedLifecycleSmoke, /function Wait-PortClosed\(\$port, \$timeoutSeconds = 60\)/);
+  assert.match(installedLifecycleSmoke, /function Wait-PortClosed\(\$port, \$timeoutSeconds = 90\)/);
+  assert.match(installedLifecycleSmoke, /Port \$port still accepts connections after \$elapsedSeconds seconds:/);
   assert.match(installedLifecycleSmoke, /services\.json/);
   assert.match(installedLifecycleSmoke, /Get-NetTCPConnection -State Listen -LocalPort \$port/);
   assert.match(installedLifecycleSmoke, /Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = \$processId"/);

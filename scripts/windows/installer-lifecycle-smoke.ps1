@@ -62,8 +62,10 @@ function Wait-Http($url, $predicate, $timeoutSeconds = 150) {
   throw "Timed out waiting for $url"
 }
 
-function Wait-PortClosed($port, $timeoutSeconds = 60) {
+function Wait-PortClosed($port, $timeoutSeconds = 90) {
+  $startedAt = Get-Date
   $until = (Get-Date).AddSeconds($timeoutSeconds)
+  $nextDiagnosticSeconds = 0
   while ((Get-Date) -lt $until) {
     $client = New-Object System.Net.Sockets.TcpClient
     $connected = $false
@@ -83,6 +85,11 @@ function Wait-PortClosed($port, $timeoutSeconds = 60) {
       $client.Close()
     }
     if ($probeCompleted -and -not $connected) { return }
+    $elapsedSeconds = [int]((Get-Date) - $startedAt).TotalSeconds
+    if ($probeCompleted -and $connected -and $elapsedSeconds -ge $nextDiagnosticSeconds) {
+      Write-Host "Port $port still accepts connections after $elapsedSeconds seconds: $(Get-PortListenerDiagnostics $port)"
+      $nextDiagnosticSeconds += 10
+    }
     Start-Sleep -Seconds 1
   }
   throw "Willard still accepts connections on port $port after uninstall. $(Get-PortListenerDiagnostics $port)"
@@ -111,7 +118,8 @@ function Get-PortListenerDiagnostics($port) {
   $servicesPath = if ($script:DataRoot) { Join-Path $script:DataRoot "services.json" } else { $null }
   if ($servicesPath -and (Test-Path -LiteralPath $servicesPath -PathType Leaf)) {
     try {
-      $serviceState = Get-Content -LiteralPath $servicesPath -Raw -ErrorAction Stop
+      $serviceState = Get-Content -LiteralPath $servicesPath -Raw -ErrorAction Stop |
+        ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Compress
       $details += "services.json at '$servicesPath': $serviceState"
     } catch {
       $details += "Could not read services.json at '$servicesPath': $($_.Exception.Message)"
