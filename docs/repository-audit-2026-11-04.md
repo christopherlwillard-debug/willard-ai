@@ -4361,3 +4361,15 @@ This entry records the earlier recovery checkpoint; its branch and working-tree 
 - Current audit branch is `audit/full-repository-review-2026-11` at `fb9a17b52c39fc76d36fc48096ec131ff6d02550`, two commits ahead of `origin/audit/full-repository-review-2026-11` at `7d0fc7a54fde924ae0e9962ae08a5a5ce23dcf3f`. Changes remain unstaged; no commit or push was made.
 - Correction to the prior branch snapshot: local `main` is now at `517847e8d3941ae58a76d266aa0de9628b299f1f`, a one-parent commit dated November 10 03:18 UTC whose parent is the previously recorded `5ce1269c9576482da7baa3df03f09a2274a8bf23`. Its reflog entry predates this remediation run. `origin/main` remains `117ef63882285c99928d80595064cfca25d54006`. The audit branch and local `main` diverge at `1a971f7cd647b8c3688e115635a48839dcbf21af`; this batch did not move either ref or merge the local-main-only work.
 - This batch does not close the Windows update-bootstrap blocker, Windows reparse-point race, request-bound archive/Health Center lifecycle, or unpatched deepmerge advisory.
+
+## November 15 — Post-install mapped NAS Settings workflow
+
+### Audit requirement — keep the existing Settings-driven NAS setup
+
+- Required user sequence: install and launch Willard AI without the NAS connected; then, under the same Windows account used to run Willard, map the NAS as `Z:`, set the existing NAS Root Path in Settings to `Z:\` (or a folder below it), test the path, and save it. No new NAS setup flow or UNC path is required.
+- Verify Settings returns the saved `app_settings.nas_path` after reload and app restart. Windows must normalize a bare `Z:` to the mapped drive root `Z:\`.
+- Verify scheduled and manual backups derive `WillardAI\backups` from the saved Settings path. When `Z:` is disconnected, status must remain safely pending/offline, avoid creating a misleading local `Z:` directory, and retry successfully after the same mapping reconnects.
+- Verify restore uses the configured NAS/library root and existing library identity. `WILLARD_RESTORE_DATABASE_URL` identifies the disposable PostgreSQL restore target; it is not the user's NAS path or a replacement for Settings.
+- Run Windows coverage in the same logon context where the drive is mapped. The packaged launcher starts its API and web processes as child processes of the launching user; a test using a different credential/logon must create the mapped drive inside that test user's session before launching Willard.
+- Add a Windows-path example such as `Z:\` to the Settings help text, which currently shows only Unix-style mount examples.
+- **Current coverage gap:** `replacement-recovery-smoke.ps1` seeds `app_settings.nas_path` directly with SQL and passes `--library-root` to the restore CLI. It checks portable restore and path remapping, but does not exercise saving/reloading the path through Settings or visibility of a mapped `Z:` drive. Keep the unpushed recovery-test fixture edits under review until that real Settings-driven flow is covered.
