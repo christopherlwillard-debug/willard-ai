@@ -11942,6 +11942,296 @@ export function useGetMediaHealth<TData = Awaited<ReturnType<typeof getMediaHeal
 
 
 
+export const getGetMediaHealthJobsActiveUrl = () => {
+
+
+
+
+  return `/api/media/health/jobs/active`
+}
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const getMediaHealthJobsActive = async ( options?: Parameters<typeof customFetch>[1]): Promise<RuntimeJsonResult> => {
+
+  return customFetch<RuntimeJsonResult>(getGetMediaHealthJobsActiveUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMediaHealthJobsActiveQueryKey = () => {
+    return [
+    `/api/media/health/jobs/active`
+    ] as const;
+    }
+
+
+export const getGetMediaHealthJobsActiveQueryOptions = <TData = Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError = ErrorType<ErrorResult>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMediaHealthJobsActiveQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMediaHealthJobsActive>>> = ({ signal }) => getMediaHealthJobsActive({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetMediaHealthJobsActiveQueryResult = NonNullable<Awaited<ReturnType<typeof getMediaHealthJobsActive>>>
+export type GetMediaHealthJobsActiveQueryError = ErrorType<ErrorResult>
+
+
+export function useGetMediaHealthJobsActive<TData = Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError = ErrorType<ErrorResult>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMediaHealthJobsActive>>,
+          TError,
+          Awaited<ReturnType<typeof getMediaHealthJobsActive>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMediaHealthJobsActive<TData = Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError = ErrorType<ErrorResult>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMediaHealthJobsActive>>,
+          TError,
+          Awaited<ReturnType<typeof getMediaHealthJobsActive>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMediaHealthJobsActive<TData = Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError = ErrorType<ErrorResult>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Runtime JSON endpoint
+ */
+
+export function useGetMediaHealthJobsActive<TData = Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError = ErrorType<ErrorResult>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsActive>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetMediaHealthJobsActiveQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetMediaHealthJobsJobIdUrl = (jobId: number,) => {
+
+
+
+
+  return `/api/media/health/jobs/${jobId}`
+}
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const getMediaHealthJobsJobId = async (jobId: number, options?: Parameters<typeof customFetch>[1]): Promise<RuntimeJsonResult> => {
+
+  return customFetch<RuntimeJsonResult>(getGetMediaHealthJobsJobIdUrl(jobId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMediaHealthJobsJobIdQueryKey = (jobId: number,) => {
+    return [
+    `/api/media/health/jobs/${jobId}`
+    ] as const;
+    }
+
+
+export const getGetMediaHealthJobsJobIdQueryOptions = <TData = Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError = ErrorType<ErrorResult>>(jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMediaHealthJobsJobIdQueryKey(jobId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>> = ({ signal }) => getMediaHealthJobsJobId(jobId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: jobId !== null && jobId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetMediaHealthJobsJobIdQueryResult = NonNullable<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>>
+export type GetMediaHealthJobsJobIdQueryError = ErrorType<ErrorResult>
+
+
+export function useGetMediaHealthJobsJobId<TData = Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError = ErrorType<ErrorResult>>(
+ jobId: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMediaHealthJobsJobId>>,
+          TError,
+          Awaited<ReturnType<typeof getMediaHealthJobsJobId>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMediaHealthJobsJobId<TData = Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError = ErrorType<ErrorResult>>(
+ jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMediaHealthJobsJobId>>,
+          TError,
+          Awaited<ReturnType<typeof getMediaHealthJobsJobId>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMediaHealthJobsJobId<TData = Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError = ErrorType<ErrorResult>>(
+ jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Runtime JSON endpoint
+ */
+
+export function useGetMediaHealthJobsJobId<TData = Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError = ErrorType<ErrorResult>>(
+ jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMediaHealthJobsJobId>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetMediaHealthJobsJobIdQueryOptions(jobId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateMediaHealthScanUrl = () => {
+
+
+
+
+  return `/api/media/health/scan`
+}
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const createMediaHealthScan = async (runtimeJsonInput?: RuntimeJsonInput, options?: Parameters<typeof customFetch>[1]): Promise<RuntimeJsonResult> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<RuntimeJsonResult>(getCreateMediaHealthScanUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(runtimeJsonInput)
+  }
+);}
+
+
+
+
+
+export const getCreateMediaHealthScanMutationKey = () => ['createMediaHealthScan'] as const;
+
+export const getCreateMediaHealthScanMutationOptions = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMediaHealthScan>>, TError,CreateMediaHealthScanMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createMediaHealthScan>>, TError,CreateMediaHealthScanMutationVariables, TContext> => {
+
+const mutationKey = getCreateMediaHealthScanMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMediaHealthScan>>, CreateMediaHealthScanMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  createMediaHealthScan(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateMediaHealthScanMutationResult = NonNullable<Awaited<ReturnType<typeof createMediaHealthScan>>>
+    export type CreateMediaHealthScanMutationBody = BodyType<RuntimeJsonInput> | undefined
+    export type CreateMediaHealthScanMutationError = ErrorType<ErrorResult>
+    export type CreateMediaHealthScanMutationVariables = {data?: BodyType<RuntimeJsonInput>}
+
+    /**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const useCreateMediaHealthScan = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMediaHealthScan>>, TError,CreateMediaHealthScanMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createMediaHealthScan>>,
+        TError,
+        CreateMediaHealthScanMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCreateMediaHealthScanMutationOptions(options), queryClient);
+    }
+
 export const getCreateMediaCleanupUrl = () => {
 
 
@@ -12028,6 +12318,95 @@ export const useCreateMediaCleanup = <TError = ErrorType<ErrorResult>,
         TContext
       > => {
       return useMutation(getCreateMediaCleanupMutationOptions(options), queryClient);
+    }
+
+export const getCreateMediaCleanupJobsJobIdRetryUrl = (jobId: number,) => {
+
+
+
+
+  return `/api/media/cleanup/jobs/${jobId}/retry`
+}
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const createMediaCleanupJobsJobIdRetry = async (jobId: number,
+    runtimeJsonInput?: RuntimeJsonInput, options?: Parameters<typeof customFetch>[1]): Promise<RuntimeJsonResult> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<RuntimeJsonResult>(getCreateMediaCleanupJobsJobIdRetryUrl(jobId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(runtimeJsonInput)
+  }
+);}
+
+
+
+
+
+export const getCreateMediaCleanupJobsJobIdRetryMutationKey = () => ['createMediaCleanupJobsJobIdRetry'] as const;
+
+export const getCreateMediaCleanupJobsJobIdRetryMutationOptions = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>, TError,CreateMediaCleanupJobsJobIdRetryMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>, TError,CreateMediaCleanupJobsJobIdRetryMutationVariables, TContext> => {
+
+const mutationKey = getCreateMediaCleanupJobsJobIdRetryMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>, CreateMediaCleanupJobsJobIdRetryMutationVariables> = (props) => {
+          const {jobId,data} = props ?? {};
+
+          return  createMediaCleanupJobsJobIdRetry(jobId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateMediaCleanupJobsJobIdRetryMutationResult = NonNullable<Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>>
+    export type CreateMediaCleanupJobsJobIdRetryMutationBody = BodyType<RuntimeJsonInput> | undefined
+    export type CreateMediaCleanupJobsJobIdRetryMutationError = ErrorType<ErrorResult>
+    export type CreateMediaCleanupJobsJobIdRetryMutationVariables = {jobId: number;data?: BodyType<RuntimeJsonInput>}
+
+    /**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const useCreateMediaCleanupJobsJobIdRetry = <TError = ErrorType<ErrorResult>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>, TError,CreateMediaCleanupJobsJobIdRetryMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof createMediaCleanupJobsJobIdRetry>>,
+        TError,
+        CreateMediaCleanupJobsJobIdRetryMutationVariables,
+        TContext
+      > => {
+      return useMutation(getCreateMediaCleanupJobsJobIdRetryMutationOptions(options), queryClient);
     }
 
 export const getGetMediaFilesUrl = () => {

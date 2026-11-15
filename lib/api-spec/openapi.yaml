@@ -2003,8 +2003,22 @@ paths:
   /media/health:
     get: {<<: *runtimeJsonGetOperation, operationId: getMediaHealth}
 
+  /media/health/jobs/active:
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaHealthJobsActive}
+
+  /media/health/jobs/{jobId}:
+    parameters: [{name: jobId, in: path, required: true, schema: {type: integer}}]
+    get: {<<: *runtimeJsonGetOperation, operationId: getMediaHealthJobsJobId}
+
+  /media/health/scan:
+    post: {<<: *runtimeJsonMutationOperation, operationId: createMediaHealthScan}
+
   /media/cleanup:
     post: {<<: *runtimeJsonMutationOperation, operationId: createMediaCleanup}
+
+  /media/cleanup/jobs/{jobId}/retry:
+    parameters: [{name: jobId, in: path, required: true, schema: {type: integer}}]
+    post: {<<: *runtimeJsonMutationOperation, operationId: createMediaCleanupJobsJobIdRetry}
 
   /media/files:
     get: {<<: *runtimeJsonGetOperation, operationId: getMediaFiles}

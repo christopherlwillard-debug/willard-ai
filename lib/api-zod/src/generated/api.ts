@@ -2297,11 +2297,47 @@ export const GetMediaHealthResponse = zod.union([zod.record(zod.string(), zod.un
 
 
 /**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaHealthJobsActiveResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON endpoint
+ */
+export const GetMediaHealthJobsJobIdParams = zod.object({
+  "jobId": zod.coerce.number().int()
+})
+
+export const GetMediaHealthJobsJobIdResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaHealthScanBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaHealthScanResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
  * @summary Runtime JSON mutation endpoint
  */
 export const CreateMediaCleanupBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
 
 export const CreateMediaCleanupResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
+
+
+/**
+ * @summary Runtime JSON mutation endpoint
+ */
+export const CreateMediaCleanupJobsJobIdRetryParams = zod.object({
+  "jobId": zod.coerce.number().int()
+})
+
+export const CreateMediaCleanupJobsJobIdRetryBody = zod.record(zod.string(), zod.unknown()).describe('Generic JSON object accepted by a runtime route until its endpoint-specific schema is promoted.')
+
+export const CreateMediaCleanupJobsJobIdRetryResponse = zod.union([zod.record(zod.string(), zod.unknown()),zod.array(zod.unknown()),zod.string(),zod.number(),zod.boolean(),zod.null()])
 
 
 /**
