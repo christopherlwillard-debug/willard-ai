@@ -12,6 +12,7 @@ import {
 const officialVersion = async () => "26.05";
 
 const resolverSource = readFileSync(new URL("../lib/sevenzip.ts", import.meta.url), "utf8");
+const fakeApiRuntime = path.join(path.parse(process.cwd()).root, "tmp", "willard", "api-runtime");
 
 test("production 7-Zip version probing uses the tracked asynchronous runner", () => {
   assert.ok(resolverSource.includes('runMediaToolAsync(candidate, ["i"]'));
@@ -109,8 +110,8 @@ test("Windows resolves official system 7-Zip instead of a legacy bundled executa
 });
 
 test("packaged official Windows binary takes precedence at api-runtime/vendor/7zip", async () => {
-  const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
-  const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7z.exe");
+  const moduleUrl = pathToFileURL(path.join(fakeApiRuntime, "dist", "index.mjs")).href;
+  const packaged = path.join(fakeApiRuntime, "vendor", "7zip", "7z.exe");
   assert.equal(
     await resolveSevenZipPath({
       platform: "win32",
@@ -124,8 +125,8 @@ test("packaged official Windows binary takes precedence at api-runtime/vendor/7z
 });
 
 test("compiled API resolves the bundled official 7-Zip folder beside api-runtime", async () => {
-  const moduleUrl = pathToFileURL("/tmp/willard/api-runtime/dist/index.mjs").href;
-  const packaged = path.join("/tmp/willard/api-runtime", "vendor", "7zip", "7zzs");
+  const moduleUrl = pathToFileURL(path.join(fakeApiRuntime, "dist", "index.mjs")).href;
+  const packaged = path.join(fakeApiRuntime, "vendor", "7zip", "7zzs");
   assert.equal(
     await resolveSevenZipPath({
       platform: "linux",
