@@ -8,6 +8,7 @@ import {
   generateThumbnail,
   getThumbnailDir,
   isThumbnailFileValid,
+  isThumbnailFileValidAsync,
   getThumbnailCacheStats,
   enforceThumbnailCacheQuota,
   cleanStaleThumbnailPartials,
@@ -49,6 +50,7 @@ describe("thumbnail publication", { concurrency: false }, () => {
     assert.ok(results.every(result => result.destPath === results[0]!.destPath));
     const dest = results[0]!.destPath;
     assert.ok(dest && isThumbnailFileValid(dest));
+    assert.equal(await isThumbnailFileValidAsync(dest!), true);
     const files = fs.readdirSync(getThumbnailDir(root));
     assert.deepEqual(files, ["41.webp"]);
   });
@@ -69,10 +71,12 @@ describe("thumbnail publication", { concurrency: false }, () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "42.webp"), Buffer.alloc(2048, 7));
 
+    assert.equal(await isThumbnailFileValidAsync(path.join(dir, "42.webp")), false);
     const result = await generateThumbnail(42, source, "jpg", root);
 
     assert.equal(result.error, null);
     assert.ok(isThumbnailFileValid(result.destPath));
+    assert.equal(await isThumbnailFileValidAsync(result.destPath!), true);
   });
 
   test("does not leave a final or temporary file after generation fails", async () => {

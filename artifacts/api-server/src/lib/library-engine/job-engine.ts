@@ -3317,13 +3317,13 @@ export function startThumbnailReconciliation(nasPath: string): void {
       }
 
       cursor = rows[rows.length - 1]!.id;
-      const missingFlags = await Promise.all(rows.map(r => {
-        if (!r.thumbnailPath) return Promise.resolve(false);
+      const missingFlags = await Promise.all(rows.map(async (r) => {
+        if (!r.thumbnailPath) return false;
         try {
           const safePath = resolveWithinRoot(r.thumbnailPath, getWillardAIDir(nasPath));
           return !(await isThumbnailFileValidAsync(safePath));
         } catch {
-          return Promise.resolve(true);
+          return true;
         }
       }));
       const missing = rows.filter((_, i) => missingFlags[i]);

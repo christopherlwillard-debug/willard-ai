@@ -168,8 +168,12 @@ test.describe("Media viewer", () => {
     await page.goto("/media");
     await dismissDevelopmentBanner(page);
 
-    await expect(page.locator("img[alt='sunset.jpg']").first()).toBeVisible({ timeout: 20_000 });
-    await page.locator("img[alt='sunset.jpg']").first().click();
+    const firstCard = page.getByRole("button", { name: "Open sunset.jpg" });
+    const firstThumbnail = firstCard.locator("img");
+    await expect(firstThumbnail).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => firstThumbnail.evaluate((image: HTMLImageElement) => image.naturalWidth))
+      .toBeGreaterThan(0);
+    await firstCard.click();
 
     const viewer = page.getByRole("dialog");
     await expect(viewer).toHaveAttribute("aria-label", "Viewing sunset.jpg");
