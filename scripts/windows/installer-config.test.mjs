@@ -230,7 +230,7 @@ test("installer shortcuts invoke the native launcher, not a developer script", (
   assert.match(launcher, /Wait-Ready \$WebUrl "Media Center" \$webProc/);
   assert.match(
     launcher,
-    /Wait-Ready \$WebUrl "Media Center" \$webProc[\s\S]*Close-LoadingScreen[\s\S]*Start-Process \$WebUrl/,
+    /Wait-Ready \$WebUrl "Media Center" \$webProc[\s\S]*Close-LoadingScreen[\s\S]*Open-MediaCenter/,
   );
   assert.match(launcher, /swap-journal\.json/);
   assert.match(launcher, /Invoke-PackagedVersionSwap/);
@@ -624,7 +624,7 @@ test("installed launcher serializes fresh starts and skips updates for an existi
     "the startup lock must be acquired before the running-instance check and update check");
 
   const existingFlow = launcher.slice(existingCheck, updateCheck);
-  assert.match(existingFlow, /Start-Process \$WebUrl/);
+  assert.match(existingFlow, /Open-MediaCenter/);
   assert.match(existingFlow, /return/);
   assert.doesNotMatch(existingFlow, /Try-Update/);
 
@@ -646,6 +646,15 @@ test("installed updater verifies signed metadata before SemVer comparison", () =
 });
 
 test("packaged startup closes its owned loader and preserves actionable diagnostics on failure", () => {
+  assert.match(
+    launcher,
+    /function Open-MediaCenter\s*\{\s*if \(\$env:WILLARD_SKIP_BROWSER -ne "1"\)\s*\{\s*Start-Process \$WebUrl\s*\}\s*\}/,
+  );
+  assert.equal(
+    (launcher.match(/Open-MediaCenter/g) ?? []).length,
+    3,
+    "both packaged startup paths should use the browser-suppressible opener",
+  );
   assert.match(launcher, /function Start-LoadingScreen/);
   assert.match(launcher, /Start-Process -FilePath \$LoadingScreen -PassThru/);
   assert.match(launcher, /function Close-LoadingScreen/);
@@ -1375,6 +1384,9 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(nasSettingsRecoverySmoke, /This Settings-driven NAS smoke must run on Windows/);
   assert.match(nasSettingsRecoverySmoke, /function Wait-SettingsPage/);
   assert.match(nasSettingsRecoverySmoke, /http:\/\/127\.0\.0\.1:5000\/settings/);
+  assert.match(nasSettingsRecoverySmoke, /\$env:WILLARD_SKIP_BROWSER = "1"/);
+  assert.match(nasSettingsRecoverySmoke, /function Write-TestProgress/);
+  assert.match(nasSettingsRecoverySmoke, /Get-Content -LiteralPath \$stdout -Tail 80/);
   assert.match(nasSettingsRecoverySmoke, /\$output = & \$launcher -InstallRoot \$installRoot 2>&1/);
   assert.match(nasSettingsRecoverySmoke, /\$output = & \$launcher -InstallRoot \$installRoot -Stop 2>&1/);
   assert.match(nasSettingsRecoverySmoke, /& \$launcher -InstallRoot \$installRoot -Stop 2>&1 \| Out-Null/);

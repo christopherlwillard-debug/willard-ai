@@ -71,7 +71,9 @@ function Invoke-AsNasTestUser($mode, $label, $timeoutSeconds = 900) {
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
   if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "$label timed out after $timeoutSeconds seconds."
+    $stdoutTail = if (Test-Path $stdout) { (Get-Content -LiteralPath $stdout -Tail 80 | Out-String).TrimEnd() } else { "" }
+    $stderrTail = if (Test-Path $stderr) { (Get-Content -LiteralPath $stderr -Tail 80 | Out-String).TrimEnd() } else { "" }
+    throw "$label timed out after $timeoutSeconds seconds.`n--- stdout tail ---`n$stdoutTail`n--- stderr tail ---`n$stderrTail"
   }
   $process.Refresh()
   $stdoutContent = if (Test-Path $stdout) { Get-Content $stdout -Raw } else { "" }
@@ -173,6 +175,11 @@ function Assert-True($condition, $message) {
   if (-not $condition) { throw $message }
 }
 
+function Write-TestProgress([string]$message) {
+  [Console]::Out.WriteLine($message)
+  [Console]::Out.Flush()
+}
+
 function Invoke-Api($method, $path, $body, $webSession) {
   $parameters = @{
     Uri = "http://127.0.0.1:8080/api$path"
@@ -228,21 +235,26 @@ function Start-Willard {
     throw "Installed Willard bootstrap is missing: $launcher"
   }
   $script:AppStarted = $true
+  Write-TestProgress "launcher: invoking installed bootstrap"
   $output = & $launcher -InstallRoot $installRoot 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw ("Installed Willard did not start:`n" + ($output -join "`n"))
   }
+  Write-TestProgress "launcher: bootstrap returned"
   Wait-AppHealthy
+  Write-TestProgress "launcher: installed API is healthy"
 }
 
 function Stop-Willard {
   if (-not $script:AppStarted -or -not (Test-Path -LiteralPath $launcher -PathType Leaf)) { return }
+  Write-TestProgress "launcher: invoking stop"
   $output = & $launcher -InstallRoot $installRoot -Stop 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw ("Installed Willard did not stop:`n" + ($output -join "`n"))
   }
   Wait-AppStopped
   $script:AppStarted = $false
+  Write-TestProgress "launcher: services stopped"
 }
 
 function New-AuthenticatedSession {
@@ -292,6 +304,7 @@ function Write-TestEnvironment($databaseUrl) {
   $env:SESSION_SECRET = "nas-settings-disposable-session-secret"
   $env:WILLARD_LOCAL_SETUP = "true"
   $env:WILLARD_SKIP_UPDATE = "1"
+  $env:WILLARD_SKIP_BROWSER = "1"
   $env:WILLARD_NO_PAUSE = "1"
   $env:WILLARD_SUPPRESS_STARTUP_DIALOG = "1"
   $env:WILLARD_RECOVERY_EXPORT_PATH = $recoveryExport
@@ -310,8 +323,10 @@ try {
     $installArguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$installLog`" /DIR=`"$installRoot`""
     $install = Start-Process -FilePath $installer -ArgumentList $installArguments -Wait -PassThru -WindowStyle Hidden
     Assert-True ($install.ExitCode -eq 0) "Willard Setup.exe failed before the NAS was connected."
+    Write-TestProgress "settings-flow: installer completed with Z: disconnected"
     Assert-True (-not (Test-Path -LiteralPath "Z:\")) "The installer unexpectedly required a connected Z: drive."
 
+    Write-TestProgress "settings-flow: starting installed app for first-run setup"
     Start-Willard
     Assert-True (-not (Test-Path -LiteralPath "Z:\")) "Willard did not start while the NAS was disconnected."
     Wait-SettingsPage
@@ -344,7 +359,9 @@ try {
     $backupSettings = Invoke-Api "PUT" "/settings/backup" @{ enabled = $true; scheduleHours = 24 } $session
     Assert-True ($backupSettings.enabled -eq $true) "The NAS backup schedule could not be enabled."
     $backupRoot = Join-Path $nasPath "WillardAI\backups"
+    Write-TestProgress "settings-flow: creating protected backup on Z:"
     $firstBackup = Invoke-ManualBackup $session "PROTECTED"
+    Write-TestProgress "settings-flow: protected backup created"
     $firstGenerations = @(Get-ChildItem -LiteralPath $backupRoot -Directory -Filter "backup-*")
     Assert-True ($firstGenerations.Count -gt 0) "No backup was written beneath the NAS path saved in Settings."
     Assert-True (Test-Path -LiteralPath (Join-Path $firstGenerations[-1].FullName "manifest.json")) `
@@ -368,7 +385,9 @@ try {
     $reconnectedTest = Invoke-Api "POST" "/settings/test-nas" @{ path = $nasPath } $session
     Assert-True ($reconnectedTest.accessible -eq $true -and $reconnectedTest.writable -eq $true) `
       "Settings did not recover access after Z: was reconnected."
+    Write-TestProgress "settings-flow: creating protected backup after Z: reconnect"
     $recovered = Invoke-ManualBackup $session "PROTECTED"
+    Write-TestProgress "settings-flow: reconnect backup completed"
     $latestSettings = Invoke-Api "GET" "/settings" $null $session
     Assert-True ($latestSettings.nasPath -eq $nasPath) "Reconnect changed the saved NAS path."
     $latestStatus = Invoke-Api "GET" "/settings/backup" $null $session
@@ -497,7 +516,7 @@ finally {
       Get-ChildItem -LiteralPath $TempRoot -Recurse -File -Filter "*.log" -ErrorAction SilentlyContinue |
         ForEach-Object {
           Write-Host "NAS Settings log: $($_.FullName)"
-          Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue
+          Get-Content -LiteralPath $_.FullName -Tail 120 -ErrorAction SilentlyContinue
         }
     }
   }

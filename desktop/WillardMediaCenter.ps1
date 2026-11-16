@@ -154,6 +154,12 @@ function Initialize-BackupProtection {
     $exportPassphrase = $null
   }
 }
+function Open-MediaCenter {
+  if ($env:WILLARD_SKIP_BROWSER -ne "1") {
+    Start-Process $WebUrl
+  }
+}
+
 function Start-LoadingScreen {
   if (-not (Test-Path $LoadingScreen)) { return }
   try {
@@ -961,7 +967,7 @@ try {
   Assert-NoUntrackedPackagedServices $existing
   if ($existing -and (Is-Alive $existing.api) -and (Is-Alive $existing.web)) {
     Good "Willard Media Center is already running."
-    Start-Process $WebUrl
+    Open-MediaCenter
     return
   }
   if ($existing) { Say "Recovering from an interrupted start..."; Stop-Services }
@@ -1014,7 +1020,7 @@ try {
   }
   Good "Media Center is ready."
   Close-LoadingScreen
-  Start-Process $WebUrl
+  Open-MediaCenter
 } catch {
   $startupError = $_
   if ($args -contains "-Stop") {
