@@ -43,12 +43,31 @@ import {
 } from "../capacity-service.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
+import { forEachBounded } from "./bounded-work.ts";
+import { ActiveFileProgressTracker } from "./file-progress.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 const activeJobs = new Map<number, ActiveJobState>();
 const activeJobRuns = new Map<number, Promise<void>>();
+const activeFileProgressTrackers = new WeakMap<ActiveJobState, ActiveFileProgressTracker>();
+
+function beginFileProgress(state: ActiveJobState, workerKey: string, filePath: string): void {
+  let tracker = activeFileProgressTrackers.get(state);
+  if (!tracker) {
+    tracker = new ActiveFileProgressTracker((current) => {
+      state.currentPath = current?.path ?? "";
+      state.currentFileStartedAt = current?.startedAt ?? null;
+    });
+    activeFileProgressTrackers.set(state, tracker);
+  }
+  tracker.start(workerKey, filePath);
+}
+
+function finishFileProgress(state: ActiveJobState, workerKey: string): void {
+  activeFileProgressTrackers.get(state)?.finish(workerKey);
+}
 
 // ── Fast-path streak guard ────────────────────────────────────────────────────
 // After this many consecutive dir-cache-only exits, force a normal QUICK scan
@@ -697,6 +716,7 @@ async function resolveSkippedDirs(
   nasPath: string,
   seenPaths: Set<string>,
   profile: JobProfile,
+  scanConcurrencyCeiling: number,
 ): Promise<SkippedDirResult> {
   if (skippedDirs.length === 0) return { unchangedIds: [], filesToProcess: [] };
 
@@ -721,7 +741,10 @@ async function resolveSkippedDirs(
         or(...conditions),
       ));
 
-    for (const row of rows) {
+    await forEachBounded(
+      rows,
+      Math.max(1, Math.min(4, scanConcurrencyCeiling)),
+      async (row) => {
       try {
          const fullPath = resolveLibraryPath(nasPath, row.relativePath);
         const stat = await fs.promises.stat(fullPath);
@@ -741,7 +764,8 @@ async function resolveSkippedDirs(
       } catch {
         // File is gone — intentionally not added to seenPaths so deletion detection handles it
       }
-    }
+      },
+    );
   }
 
   return { unchangedIds, filesToProcess };
@@ -1649,7 +1673,6 @@ async function runScanJob(
         return { action: "SKIP", relativePath, name: f.name, skipReason: "Rejected unsafe library path" };
       }
       state.currentPath = relativePath;
-      state.currentFileStartedAt = Date.now();
 
       const existing = existingByPath.get(relativePath);
       let quickFingerprint: string | null = null;
@@ -1987,7 +2010,7 @@ async function runScanJob(
         sdbg('skipped_dirs_start', { skippedDirs: skippedDirs.length });
         const _t0SkipDirs = Date.now();
         const { unchangedIds, filesToProcess } = await resolveSkippedDirs(
-          skippedDirs, state.nasPath, seenPaths, state.profile,
+          skippedDirs, state.nasPath, seenPaths, state.profile, state.throttle.concurrencyCeiling,
         );
         stageTiming.skipped_dirs = Date.now() - _t0SkipDirs;
         sdbg('skipped_dirs_complete', { unchanged: unchangedIds.length, toProcess: filesToProcess.length, elapsedMs: stageTiming.skipped_dirs, ..._slow(stageTiming.skipped_dirs) });
@@ -2085,8 +2108,10 @@ async function runScanJob(
     let targetWorkerCount  = concCtrl.count;
     let activeWorkerCount  = 0;
     const activeWorkerPromises = new Set<Promise<void>>();
+    let nextWorkerId = 0;
 
     const spawnWorker = (): void => {
+      const workerKey = `scan-worker-${++nextWorkerId}`;
       activeWorkerCount++;
       const workerPromise = (async (): Promise<void> => {
         try {
@@ -2117,6 +2142,8 @@ async function runScanJob(
               recordSkip(state, relativePath, "Rejected unsafe library path");
               continue;
             }
+            beginFileProgress(state, workerKey, relativePath);
+            try {
             sdbg('worker_file_start', { relativePath, workerCount: activeWorkerCount });
             seenPaths.add(relativePath);
 
@@ -2186,6 +2213,9 @@ async function runScanJob(
                 .set({ processedFiles: state.filesProcessed })
                 .where(eq(libraryJobsTable.id, jobId));
               lastPersistAt = now;
+            }
+            } finally {
+              finishFileProgress(state, workerKey);
             }
           }
         } finally {
