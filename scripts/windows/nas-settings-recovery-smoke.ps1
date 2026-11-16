@@ -228,7 +228,7 @@ function Start-Willard {
     throw "Installed Willard bootstrap is missing: $launcher"
   }
   $script:AppStarted = $true
-  $output = & $launcher 2>&1
+  $output = & $launcher -InstallRoot $installRoot 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw ("Installed Willard did not start:`n" + ($output -join "`n"))
   }
@@ -237,7 +237,7 @@ function Start-Willard {
 
 function Stop-Willard {
   if (-not $script:AppStarted -or -not (Test-Path -LiteralPath $launcher -PathType Leaf)) { return }
-  $output = & $launcher -Stop 2>&1
+  $output = & $launcher -InstallRoot $installRoot -Stop 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw ("Installed Willard did not stop:`n" + ($output -join "`n"))
   }
@@ -420,7 +420,7 @@ try {
   }
   elseif ($Mode -eq "cleanup") {
     if (Test-Path -LiteralPath $launcher -PathType Leaf) {
-      try { & $launcher -Stop 2>&1 | Out-Null } catch {}
+      try { & $launcher -InstallRoot $installRoot -Stop 2>&1 | Out-Null } catch {}
     }
     $uninstaller = Join-Path $installRoot "unins000.exe"
     if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {

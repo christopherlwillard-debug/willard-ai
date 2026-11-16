@@ -1375,6 +1375,9 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(nasSettingsRecoverySmoke, /This Settings-driven NAS smoke must run on Windows/);
   assert.match(nasSettingsRecoverySmoke, /function Wait-SettingsPage/);
   assert.match(nasSettingsRecoverySmoke, /http:\/\/127\.0\.0\.1:5000\/settings/);
+  assert.match(nasSettingsRecoverySmoke, /\$output = & \$launcher -InstallRoot \$installRoot 2>&1/);
+  assert.match(nasSettingsRecoverySmoke, /\$output = & \$launcher -InstallRoot \$installRoot -Stop 2>&1/);
+  assert.match(nasSettingsRecoverySmoke, /& \$launcher -InstallRoot \$installRoot -Stop 2>&1 \| Out-Null/);
   assert.match(settingsPage, /value=\{form\.nasPath\}/);
   assert.match(settingsPage, /updateMutation\.mutate\(\{ data: form \}\)/);
   assert.match(settingsPage, /testNasMutation\.mutate\(\{ data: \{ path: form\.nasPath \} \}\)/);
