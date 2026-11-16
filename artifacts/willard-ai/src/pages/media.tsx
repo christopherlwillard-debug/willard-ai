@@ -218,6 +218,15 @@ const TYPE_TABS: { key: MediaType; label: string; icon: React.ComponentType<{ cl
   { key: "other",    label: "Other",     icon: File },
 ];
 
+function thumbnailRevision(file: Pick<MediaFile, "thumbnailPath" | "thumbnailGeneratedAt">): string {
+  return file.thumbnailGeneratedAt ?? (file.thumbnailPath ? "stored" : "pending");
+}
+
+function thumbnailUrl(file: Pick<MediaFile, "id" | "thumbnailPath" | "thumbnailGeneratedAt">): string {
+  const revision = encodeURIComponent(thumbnailRevision(file));
+  return apiUrl(`/media/thumbnail/${file.id}?v=${revision}`);
+}
+
 function mediaTypeFromSearch(search: string): MediaType {
   const value = new URLSearchParams(search).get("type");
   return TYPE_TABS.some(({ key }) => key === value) ? value as MediaType : "all";
@@ -248,7 +257,9 @@ function ThumbnailCard({
   onToggleSelect: () => void;
   onToggleFavorite?: (file: MediaFile) => void;
 }) {
-  const [thumbError, setThumbError] = useState(false);
+  const [failedThumbRevision, setFailedThumbRevision] = useState<string | null>(null);
+  const revision = thumbnailRevision(file);
+  const thumbError = failedThumbRevision === revision;
   const canThumb = file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf";
 
   return (
@@ -267,7 +278,7 @@ function ThumbnailCard({
         <div className="relative w-full aspect-square bg-muted flex items-center justify-center overflow-hidden">
           {canThumb ? (
             <img
-              src={apiUrl(`/media/thumbnail/${file.id}`)}
+              src={thumbnailUrl(file)}
               alt=""
               aria-hidden="true"
               loading="lazy"
@@ -275,7 +286,8 @@ function ThumbnailCard({
                 "w-full h-full object-cover transition-transform duration-200 group-hover:scale-105",
                 thumbError && "opacity-0",
               )}
-              onError={() => setThumbError(true)}
+              onError={() => setFailedThumbRevision(revision)}
+              onLoad={() => setFailedThumbRevision(null)}
             />
           ) : (
             <div className="flex flex-col items-center gap-1 text-muted-foreground p-2" aria-hidden="true">
@@ -928,6 +940,8 @@ function AddSelectedToAlbumDialog({
 
 function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }) {
   const [, navigate] = useLocation();
+  const [failedThumbRevision, setFailedThumbRevision] = useState<string | null>(null);
+  const revision = thumbnailRevision(file);
   const aiQuery = useQuery({
     queryKey: ["media-detail-ai", file.id],
     queryFn: async () => {
@@ -955,12 +969,21 @@ function DetailPanel({ file, onClose }: { file: MediaFile; onClose: () => void }
       {/* Thumbnail */}
       <div className="w-full aspect-square bg-muted flex items-center justify-center overflow-hidden border-b border-border shrink-0">
         {(file.mediaType === "photo" || file.mediaType === "video" || file.extension === "pdf") ? (
-          <img
-            src={apiUrl(`/media/thumbnail/${file.id}`)}
-            alt={file.name}
-            loading="lazy"
-            className="w-full h-full object-contain"
-          />
+          failedThumbRevision === revision ? (
+            <div className="flex flex-col items-center gap-2 text-muted-foreground" role="img" aria-label={`Preview unavailable for ${file.name}`}>
+              <MediaTypeIcon type={file.mediaType} className="w-10 h-10" />
+              <span className="text-xs font-mono">Preview unavailable</span>
+            </div>
+          ) : (
+            <img
+              src={thumbnailUrl(file)}
+              alt={file.name}
+              loading="lazy"
+              className="w-full h-full object-contain"
+              onError={() => setFailedThumbRevision(revision)}
+              onLoad={() => setFailedThumbRevision(null)}
+            />
+          )
         ) : (
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <MediaTypeIcon type={file.mediaType} className="w-10 h-10" />

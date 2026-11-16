@@ -150,6 +150,34 @@ export function isThumbnailFileValid(filePath: string): boolean {
   }
 }
 
+export async function isThumbnailFileValidAsync(filePath: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.promises.open>> | undefined;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= MIN_VALID_THUMBNAIL_BYTES) return false;
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    return bytesRead >= 12 &&
+      header.subarray(0, 4).toString("ascii") === "RIFF" &&
+      header.subarray(8, 12).toString("ascii") === "WEBP" &&
+      header.readUInt32LE(4) + 8 <= stat.size;
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -204,17 +232,17 @@ function uniqueThumbnailTempPath(destPath: string): string {
   return `${destPath}.${process.pid}.${Date.now()}.${++tempSequence}.tmp.webp`;
 }
 
-function publishThumbnail(tempPath: string, destPath: string): void {
-  if (!isThumbnailFileValid(tempPath)) {
+async function publishThumbnail(tempPath: string, destPath: string): Promise<void> {
+  if (!(await isThumbnailFileValidAsync(tempPath))) {
     throw new Error("Thumbnail generation produced a missing or corrupt WebP");
   }
   try {
-    fs.renameSync(tempPath, destPath);
+    await fs.promises.rename(tempPath, destPath);
   } catch (err: any) {
     // A valid destination wins rather than being overwritten by a second
     // process that did not observe the lock (for example, an older build).
-    if ((err?.code === "EEXIST" || err?.code === "EPERM") && isThumbnailFileValid(destPath)) {
-      fs.rmSync(tempPath, { force: true });
+    if ((err?.code === "EEXIST" || err?.code === "EPERM") && await isThumbnailFileValidAsync(destPath)) {
+      await fs.promises.rm(tempPath, { force: true });
       return;
     }
     throw err;
@@ -271,7 +299,7 @@ async function generateVideoThumbnail(
       tmpPng,
     ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
 
-    if (!fs.existsSync(tmpPng)) return "ffmpeg did not produce a video frame";
+  if (!(await fileExists(tmpPng))) return "ffmpeg did not produce a video frame";
     return await generateImageThumbnailFfmpeg(tmpPng, destPath, sizePx);
   } catch (error) {
     return formatMediaToolExecutionError("ffmpeg", error, 30_000);
@@ -296,7 +324,7 @@ async function generatePdfThumbnail(
       "-vf", `scale=${sizePx}:-2`,
       destPath,
     ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
-    return fs.existsSync(destPath) ? null : "ffmpeg did not produce a PDF thumbnail";
+    return (await fileExists(destPath)) ? null : "ffmpeg did not produce a PDF thumbnail";
   } catch (error) {
     return formatMediaToolExecutionError("ffmpeg", error, 30_000);
   }
@@ -321,7 +349,7 @@ async function generateImageThumbnailFfmpeg(
       "-frames:v", "1",
       destPath,
     ], { timeoutMs: 30_000, maxBufferBytes: 1024 * 1024 });
-    return fs.existsSync(destPath) ? null : "ffmpeg did not produce an image thumbnail";
+    return (await fileExists(destPath)) ? null : "ffmpeg did not produce an image thumbnail";
   } catch (error) {
     return formatMediaToolExecutionError("ffmpeg", error, 30_000);
   }
@@ -592,11 +620,11 @@ export async function generateThumbnail(
   const tempPath = uniqueThumbnailTempPath(destPath);
   try {
     // Re-check after acquiring the lock: another process may have published it.
-    if (isThumbnailFileValid(destPath)) {
+    if (await isThumbnailFileValidAsync(destPath)) {
       await onReady?.({ destPath, reused: true });
       return { destPath, error: null, reused: true };
     }
-    try { fs.rmSync(destPath, { force: true }); } catch { /* regenerate below */ }
+    try { await fs.promises.rm(destPath, { force: true }); } catch { /* regenerate below */ }
 
     const preset = qualityPreset(quality);
     const ext = extension.toLowerCase().replace(/^\./, "");
@@ -609,7 +637,7 @@ export async function generateThumbnail(
       if (error) {
         const sharpError = error;
         const ffmpegError = await generateImageThumbnailFfmpeg(sourcePath, tempPath, preset.sizePx);
-        if (!ffmpegError && isThumbnailFileValid(tempPath)) error = null;
+        if (!ffmpegError && await isThumbnailFileValidAsync(tempPath)) error = null;
         if (error) error = `sharp: ${sharpError}; ffmpeg: ${ffmpegError ?? "unknown"}`;
       }
     } else if (VIDEO_EXTS.has(ext)) {
@@ -621,7 +649,7 @@ export async function generateThumbnail(
     }
 
     if (error) return { destPath: "", error };
-    publishThumbnail(tempPath, destPath);
+    await publishThumbnail(tempPath, destPath);
     await onReady?.({ destPath, reused: false });
 
     // Do not hold this destination lock while quota eviction acquires locks

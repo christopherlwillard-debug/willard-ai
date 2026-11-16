@@ -26,6 +26,7 @@ import { checkNasReachableAsync, getWillardAIDir, resolveLibraryPath, resolveWit
 import { recordActivity, describeChanges } from "../library-activity.ts";
 import {
   clearThumbnailCache, getThumbnailDir, thumbnailFilename, generateThumbnail, qualityPreset, isThumbnailFileValid,
+  isThumbnailFileValidAsync,
   findReusableThumbnailPaths, THUMBNAIL_REUSE_PROBE_MAX_FILES,
   getThumbnailCacheStats, cleanStaleThumbnailPartials, enforceThumbnailCacheQuota,
 } from "../thumbnail-engine.ts";
@@ -3320,7 +3321,7 @@ export function startThumbnailReconciliation(nasPath: string): void {
         if (!r.thumbnailPath) return Promise.resolve(false);
         try {
           const safePath = resolveWithinRoot(r.thumbnailPath, getWillardAIDir(nasPath));
-          return Promise.resolve(!isThumbnailFileValid(safePath));
+          return !(await isThumbnailFileValidAsync(safePath));
         } catch {
           return Promise.resolve(true);
         }

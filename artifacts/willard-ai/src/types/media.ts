@@ -13,6 +13,7 @@ export interface MediaFile {
   orientation: number | null;
   durationSeconds: number | null;
   thumbnailPath: string | null;
+  thumbnailGeneratedAt: string | null;
   indexedAt: string;
   dateTaken: string | null;
   cameraMake: string | null;

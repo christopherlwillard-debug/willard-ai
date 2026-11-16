@@ -4,7 +4,8 @@ import * as path from "path";
 import { db } from "@workspace/db";
 import { mediaFilesTable, appSettingsTable, mediaTagsTable, mediaFileTagsTable } from "@workspace/db";
 import { eq, and, desc, asc, sql, count, isNotNull, inArray } from "drizzle-orm";
-import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValid } from "../lib/thumbnail-engine";
+import { generateThumbnail, getThumbnailDir, thumbnailFilename, isThumbnailFileValidAsync } from "../lib/thumbnail-engine";
+import { forEachBounded } from "../lib/library-engine/bounded-work.ts";
 import { StoragePolicyError } from "../lib/storage-policy.ts";
 import { canonicalizePath, getWillardAIDir, resolveLibraryPath, resolveWithinRoot } from "../lib/nas-storage";
 import { activeMediaCondition } from "../lib/media-scope.ts";
@@ -94,6 +95,7 @@ router.get("/media/tags", async (_req: Request, res: Response) => {
 // Eliminates the DB query + NAS fs.existsSync() on every subsequent request.
 
 const _thumbCache = new Map<number, { nasPath: string; path: string }>();
+const THUMBNAIL_CACHE_WARM_LIMIT = 120;
 
 export async function warmThumbnailCache(): Promise<void> {
   try {
@@ -102,16 +104,18 @@ export async function warmThumbnailCache(): Promise<void> {
     const rows = await db
       .select({ id: mediaFilesTable.id, thumbnailPath: mediaFilesTable.thumbnailPath })
       .from(mediaFilesTable)
-      .where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA, isNotNull(mediaFilesTable.thumbnailPath)));
-    for (const row of rows) {
-      if (!row.thumbnailPath) continue;
+      .where(and(eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA, isNotNull(mediaFilesTable.thumbnailPath)))
+      .orderBy(desc(mediaFilesTable.indexedAt))
+      .limit(THUMBNAIL_CACHE_WARM_LIMIT);
+    await forEachBounded(rows, 4, async (row) => {
+      if (!row.thumbnailPath) return;
       try {
         const thumbPath = resolveWithinRoot(row.thumbnailPath, getWillardAIDir(nasPath));
-        if (isThumbnailFileValid(thumbPath)) _thumbCache.set(row.id, { nasPath, path: thumbPath });
+        if (await isThumbnailFileValidAsync(thumbPath)) _thumbCache.set(row.id, { nasPath, path: thumbPath });
       } catch {
         // A stale or poisoned thumbnail path is ignored and regenerated on demand.
       }
-    }
+    });
     logger.info({ entries: _thumbCache.size, operation: "thumbnail_cache_warm" }, "Thumbnail cache warmed");
   } catch (err) {
     logger.warn({ err, operation: "thumbnail_cache_warm" }, "Thumbnail cache warm-up failed; continuing without full cache");
@@ -223,6 +227,7 @@ router.get("/media/files", async (req: Request, res: Response) => {
       orientation: mediaFilesTable.orientation,
       durationSeconds: mediaFilesTable.durationSeconds,
       thumbnailPath: mediaFilesTable.thumbnailPath,
+      thumbnailGeneratedAt: mediaFilesTable.thumbnailGeneratedAt,
       indexedAt: mediaFilesTable.indexedAt,
       dateTaken: mediaFilesTable.dateTaken,
       cameraMake: mediaFilesTable.cameraMake,
@@ -651,45 +656,34 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     res.status(404).json({ error: "NAS not configured" });
     return;
   }
-  const [activeFile] = await db
-    .select({ id: mediaFilesTable.id })
+  const [file] = await db
+    .select({
+      id: mediaFilesTable.id,
+      thumbnailPath: mediaFilesTable.thumbnailPath,
+      relativePath: mediaFilesTable.relativePath,
+      extension: mediaFilesTable.extension,
+    })
     .from(mediaFilesTable)
     .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
     .limit(1);
-  if (!activeFile) {
+  if (!file) {
     res.status(404).json({ error: "File not found" });
     return;
   }
   const cached = _thumbCache.get(id);
   if (cached?.nasPath === nasPath) {
-    if (isThumbnailFileValid(cached.path)) {
+    if (await isThumbnailFileValidAsync(cached.path)) {
       serveCachedThumb(res, cached.path, id);
       return;
     }
     _thumbCache.delete(id);
   }
 
-  const [file] = await db
-    .select({
-      id:            mediaFilesTable.id,
-      thumbnailPath: mediaFilesTable.thumbnailPath,
-      relativePath:  mediaFilesTable.relativePath,
-      extension:     mediaFilesTable.extension,
-    })
-    .from(mediaFilesTable)
-   .where(and(eq(mediaFilesTable.id, id), eq(mediaFilesTable.nasPath, nasPath), ACTIVE_MEDIA))
-    .limit(1);
-
-  if (!file) {
-    res.status(404).json({ error: "File not found" });
-    return;
-  }
-
   // Check DB-stored path
   if (file.thumbnailPath) {
     try {
       const thumbPath = resolveWithinRoot(file.thumbnailPath, getWillardAIDir(nasPath));
-       if (isThumbnailFileValid(thumbPath)) {
+      if (await isThumbnailFileValidAsync(thumbPath)) {
         _thumbCache.set(id, { nasPath, path: thumbPath });
         serveCachedThumb(res, thumbPath, id);
         return;
@@ -703,7 +697,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
   const thumbDir = getThumbnailDir(nasPath);
   const thumbFile = path.join(thumbDir, thumbnailFilename(id));
   const safeThumbFile = resolveWithinRoot(thumbFile, getWillardAIDir(nasPath));
-  if (isThumbnailFileValid(safeThumbFile)) {
+  if (await isThumbnailFileValidAsync(safeThumbFile)) {
     _thumbCache.set(id, { nasPath, path: safeThumbFile });
     db.update(mediaFilesTable)
       .set({ thumbnailPath: safeThumbFile, thumbnailGeneratedAt: new Date() })
@@ -721,7 +715,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Stored media path is outside the configured library" });
     return;
   }
-  if (!fs.existsSync(sourcePath)) {
+  if (!(await fs.promises.access(sourcePath).then(() => true, () => false))) {
     res.status(404).json({ error: "Source file not found on NAS" });
     return;
   }
@@ -743,7 +737,7 @@ router.get("/media/thumbnail/:id", async (req: Request, res: Response) => {
     }
     throw error;
   }
-  if (result.error || !result.destPath || !safeResultPath || !fs.existsSync(result.destPath)) {
+  if (result.error || !result.destPath || !safeResultPath || !(await isThumbnailFileValidAsync(result.destPath))) {
     res.status(500).json({ error: result.error ?? "Thumbnail generation failed" });
     return;
   }
