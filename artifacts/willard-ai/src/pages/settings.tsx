@@ -1293,7 +1293,7 @@ function ThumbnailManagerSection() {
   const [localQuality, setLocalQuality] = useState<string | null>(null);
   const displayQuality = localQuality ?? thumbnailQuality;
 
-  const [thumbStats, setThumbStats] = useState<{
+  const thumbStatsQuery = useQuery<{
     total: number;
     built: number;
     missing: number;
@@ -1303,26 +1303,27 @@ function ThumbnailManagerSection() {
     reclaimableBytes?: number;
     incompleteFiles?: number;
     incompleteBytes?: number;
-  } | null>(null);
-  const [thumbLoading, setThumbLoading] = useState(true);
-  const [thumbError, setThumbError] = useState<string | null>(null);
-
-  const fetchStats = async () => {
-    setThumbLoading(true);
-    setThumbError(null);
-    try {
+    activeJob?: {
+      status: string;
+      phase: string;
+      progress: number;
+      filesProcessed: number;
+      filesTotal: number;
+      counters: { thumbnailsFailed: number };
+    } | null;
+  }>({
+    queryKey: ["thumbnail-cache-status"],
+    queryFn: async () => {
       const res = await fetch(apiUrl("/library/thumbnails/status"));
-      if (!res.ok) throw new Error("Failed to fetch stats");
-      const data = await res.json();
-      setThumbStats(data);
-    } catch (err: any) {
-      setThumbError(err?.message ?? "Failed to load stats");
-    } finally {
-      setThumbLoading(false);
-    }
-  };
-
-  useEffect(() => { void fetchStats(); }, []);
+      if (!res.ok) throw new Error("Failed to fetch thumbnail status");
+      return res.json();
+    },
+    refetchInterval: (query) => query.state.data?.activeJob ? 5_000 : 30_000,
+  });
+  const thumbStats = thumbStatsQuery.data;
+  const thumbLoading = thumbStatsQuery.isLoading;
+  const thumbError = thumbStatsQuery.error instanceof Error ? thumbStatsQuery.error.message : null;
+  const fetchStats = () => { void thumbStatsQuery.refetch(); };
 
   const updateMutation = useMutation({
     mutationFn: async (q: string) => {
@@ -1483,6 +1484,29 @@ function ThumbnailManagerSection() {
                 Reclaimable NAS cache: {formatBytes(thumbStats.reclaimableBytes ?? thumbStats.cacheSizeBytes)}
                 {thumbStats.incompleteFiles ? ` · ${thumbStats.incompleteFiles} partial files (${formatBytes(thumbStats.incompleteBytes ?? 0)}) ignored` : ""}
               </p>
+              {thumbStats.activeJob && (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2" aria-live="polite" data-testid="thumbnail-job-progress">
+                  <div className="flex items-center justify-between gap-3 text-xs font-mono">
+                    <span className="text-foreground">
+                      {thumbStats.activeJob.status === "PAUSED" ? "Thumbnail generation paused" : "Generating thumbnails"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {thumbStats.activeJob.filesProcessed.toLocaleString()} / {thumbStats.activeJob.filesTotal.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.min(99, thumbStats.activeJob.progress)}%` }}
+                    />
+                  </div>
+                  {thumbStats.activeJob.counters.thumbnailsFailed > 0 && (
+                    <p className="text-xs text-amber-400">
+                      {thumbStats.activeJob.counters.thumbnailsFailed.toLocaleString()} could not be generated and will remain missing.
+                    </p>
+                  )}
+                </div>
+              )}
             </>
           ) : null}
 

@@ -36,7 +36,7 @@ import {
   ScanSearch,
   Tag,
 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { MediaViewer } from "@/components/media/MediaViewer";
 import type { MediaFile, MediaFilesResponse, MediaTag } from "@/types/media";
@@ -217,6 +217,11 @@ const TYPE_TABS: { key: MediaType; label: string; icon: React.ComponentType<{ cl
   { key: "document", label: "Documents", icon: FileText },
   { key: "other",    label: "Other",     icon: File },
 ];
+
+function mediaTypeFromSearch(search: string): MediaType {
+  const value = new URLSearchParams(search).get("type");
+  return TYPE_TABS.some(({ key }) => key === value) ? value as MediaType : "all";
+}
 
 function MediaTypeIcon({ type, className }: { type: string; className?: string }) {
   switch (type) {
@@ -625,14 +630,24 @@ function ScanBanner({
   }
 
   // ── Scan job running banner ──────────────────────────────────────────────────
-  const pct      = progress.progress;
+  const pct      = Math.min(99, Math.max(0, progress.progress));
   const isPaused = progress.status === "PAUSED";
   const isLoading = progress.phase === "loading" && !isPaused;
   const isWalking = progress.phase === "walking" && !isPaused;
   const isPreIndexing = (isLoading || isWalking) && !isPaused;
+  const isFinishing = ["detecting_moves", "detecting_deletions", "finalizing"].includes(progress.phase);
   const isStalled = !isPaused && !isPreIndexing
     && progress.currentFileStartedAt !== null
-    && Date.now() - progress.currentFileStartedAt > 4_000;
+    && Date.now() - progress.currentFileStartedAt > 15_000;
+  const phaseLabels: Record<string, string> = {
+    indexing: "Indexing files",
+    hashing: "Checking file contents",
+    metadata: "Reading file details",
+    detecting_moves: "Checking for moved files",
+    detecting_deletions: "Checking for missing files",
+    finalizing: "Finishing scan",
+  };
+  const showIndeterminateProgress = isPreIndexing || isFinishing;
 
   return (
     <div className="rounded-lg border border-blue-700/40 bg-blue-900/20 px-4 py-3 space-y-2 font-mono text-sm">
@@ -647,24 +662,24 @@ function ScanBanner({
             ? "Loading library index\u2026"
             : isWalking
               ? `Discovering files\u2026${progress.filesTotal > 0 ? ` ${progress.filesTotal.toLocaleString()} found so far` : ""}`
-              : `${progress.phase}${progress.currentPath ? ` \u2014 ${progress.currentPath.split("/").pop()}` : ""}`
+              : `${phaseLabels[progress.phase] ?? progress.phase}${progress.currentPath ? ` \u2014 ${progress.currentPath.split("/").pop()}` : ""}`
           }
         </span>
         {isStalled && (
-          <span className="text-xs text-amber-400 shrink-0 animate-pulse" title="This file is taking longer than usual">
-            slow file\u2026
+          <span className="text-xs text-amber-400 shrink-0 animate-pulse" title="This file has been taking longer than usual">
+            taking longer\u2026
           </span>
         )}
         {!isPreIndexing && (
-          <span className="text-xs text-blue-500 shrink-0" title="Files discovered on disk in this scan">
+          <span className="text-xs text-blue-500 shrink-0" title="Files processed so far; final checks can continue after indexing">
             {progress.filesProcessed.toLocaleString()}
-            {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} on disk
+            {progress.filesTotal > 0 ? ` / ${progress.filesTotal.toLocaleString()}` : ""} processed
           </span>
         )}
       </div>
 
-      {/* Progress bar — indeterminate pulse during loading/walk, determinate otherwise */}
-      {isPreIndexing ? (
+      {/* Discovery and final reconciliation do not have a reliable file-count percentage. */}
+      {showIndeterminateProgress ? (
         <div className="w-full bg-blue-900/50 rounded-full h-1.5 overflow-hidden">
           <div className="h-1.5 rounded-full bg-blue-400 animate-pulse w-full opacity-60" />
         </div>
@@ -683,12 +698,14 @@ function ScanBanner({
           ? <span className="text-blue-500">Loading index from database\u2026</span>
           : isWalking
             ? <span className="text-blue-500">Scanning folders\u2026</span>
-            : <span>{pct}%</span>
+            : isFinishing
+              ? <span className="text-blue-500">Reconciling the scan results\u2026</span>
+              : <span>{pct}%</span>
         }
-        {!isPreIndexing && progress.etaSeconds !== null && progress.etaSeconds > 0 && (
+        {!showIndeterminateProgress && progress.etaSeconds !== null && progress.etaSeconds > 0 && (
           <span>ETA {formatEta(progress.etaSeconds)}</span>
         )}
-        {!isPreIndexing && progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
+        {!showIndeterminateProgress && progress.speed > 0 && <span>{formatSpeed(progress.speed)}</span>}
         <div className="flex gap-2 ml-auto">
           {progress.counters.new       > 0 && <span className="text-green-400">+{progress.counters.new}</span>}
           {progress.counters.modified  > 0 && <span className="text-yellow-400">~{progress.counters.modified}</span>}
@@ -1278,8 +1295,10 @@ function EmptyState({ onScan, isScanning }: { onScan: () => void; isScanning: bo
 export default function Media() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
+  const searchParams = useSearch();
 
-  const [activeType, setActiveType]   = useState<MediaType>("all");
+  const [activeType, setActiveType]   = useState<MediaType>(() => mediaTypeFromSearch(searchParams));
   const [search, setSearch]           = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
@@ -1296,6 +1315,15 @@ export default function Media() {
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const LIMIT = 60;
+
+  useEffect(() => {
+    setActiveType(mediaTypeFromSearch(searchParams));
+  }, [searchParams]);
+
+  const selectMediaType = useCallback((type: MediaType) => {
+    setActiveType(type);
+    navigate(type === "all" ? "/media" : `/media?type=${encodeURIComponent(type)}`);
+  }, [navigate]);
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -1722,7 +1750,7 @@ export default function Media() {
             key={key}
             type="button"
             aria-pressed={activeType === key}
-            onClick={() => setActiveType(key)}
+            onClick={() => selectMediaType(key)}
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-mono rounded-t-md border-b-2 transition-colors whitespace-nowrap",
               activeType === key
@@ -1809,7 +1837,7 @@ export default function Media() {
                 variant="ghost"
                 size="sm"
                 className="font-mono text-xs"
-                 onClick={() => { setSearch(""); setActiveType("all"); setSelectedFolder(null); setSelectedTags([]); }}
+                 onClick={() => { setSearch(""); selectMediaType("all"); setSelectedFolder(null); setSelectedTags([]); }}
               >
                 Clear Filters
               </Button>

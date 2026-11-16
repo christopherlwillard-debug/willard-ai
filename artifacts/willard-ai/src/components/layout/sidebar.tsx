@@ -57,7 +57,7 @@ function SidebarBrand() {
 
 const primaryNavigation = [
   { name: "Home", href: "/", icon: LayoutDashboard },
-  { name: "Photos", href: "/media", icon: ImageIcon },
+  { name: "Photos", href: "/media?type=photo", icon: ImageIcon },
   { name: "Videos", href: "/media?type=video", icon: Film },
   { name: "Documents", href: "/documents", icon: FileText },
   { name: "Music", href: "/library?type=audio", icon: Music2 },

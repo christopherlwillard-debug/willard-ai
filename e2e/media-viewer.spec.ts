@@ -78,8 +78,9 @@ async function dismissDevelopmentBanner(page: Page): Promise<void> {
   });
 }
 
-async function mockLibrary(page: Page): Promise<void> {
+async function mockLibrary(page: Page): Promise<{ mediaTypeRequests: string[] }> {
   const files = [mediaFile(901, "sunset.jpg"), mediaFile(902, "beach.jpg")];
+  const mediaTypeRequests: string[] = [];
 
   await page.route("**/api/auth/status", (route) =>
     route.fulfill({ json: { setup: false, authenticated: true } }),
@@ -102,9 +103,10 @@ async function mockLibrary(page: Page): Promise<void> {
   await page.route("**/api/collections", (route) =>
     route.fulfill({ json: { collections: [] } }),
   );
-  await page.route("**/api/media/files?*", (route) =>
-    route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } }),
-  );
+  await page.route("**/api/media/files?*", (route) => {
+    mediaTypeRequests.push(new URL(route.request().url()).searchParams.get("mediaType") ?? "all");
+    return route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } });
+  });
   await page.route("**/api/library/jobs/active", (route) =>
     route.fulfill({ json: null }),
   );
@@ -141,9 +143,26 @@ async function mockLibrary(page: Page): Promise<void> {
     }
     return route.continue();
   });
+  return { mediaTypeRequests };
 }
 
 test.describe("Media viewer", () => {
+  test("sidebar photo and video links select distinct media filters", async ({ page }) => {
+    const { mediaTypeRequests } = await mockLibrary(page);
+    await page.goto("/media");
+    await dismissDevelopmentBanner(page);
+
+    await page.getByTestId("link-nav-photos").click();
+    await expect(page).toHaveURL(/\/media\?type=photo$/);
+    await expect(page.getByRole("button", { name: "Photos", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => mediaTypeRequests.at(-1)).toBe("photo");
+
+    await page.getByTestId("link-nav-videos").click();
+    await expect(page).toHaveURL(/\/media\?type=video$/);
+    await expect(page.getByRole("button", { name: "Videos", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => mediaTypeRequests.at(-1)).toBe("video");
+  });
+
   test("supports navigation, info, favorites, rename validation, filmstrip, and safe delete cancel", async ({ page }) => {
     await mockLibrary(page);
     await page.goto("/media");

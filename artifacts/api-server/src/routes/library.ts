@@ -570,9 +570,14 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
     activeMediaCondition,
   );
 
+  const activeJob = getAllJobProgress().find(
+    (job) => job.jobType === "THUMBNAILS" && (job.status === "RUNNING" || job.status === "PAUSED"),
+  ) ?? null;
+
   // Validate only one job-sized slice; never traverse the whole cache in a
-  // request. NULL pointers are ordered first, followed by stale stored paths.
-  await reconcileThumbnailPointers(nasPath);
+  // request. During generation the worker owns pointer updates, so avoid
+  // repeatedly probing NAS files while the UI polls its progress.
+  if (!activeJob) await reconcileThumbnailPointers(nasPath);
 
   const [{ total }] = await db
     .select({ total: sql<number>`count(*)::int` })
@@ -585,9 +590,6 @@ router.get("/library/thumbnails/status", async (_req: Request, res: Response) =>
     .where(and(eligibleFilter, sql`${mediaFilesTable.thumbnailPath} IS NOT NULL`));
 
   const cacheStats = getThumbnailCacheStats(nasPath);
-  const activeJob = getAllJobProgress().find(
-    (job) => job.jobType === "THUMBNAILS" && job.status === "RUNNING",
-  ) ?? null;
   const [lastThumbnailJob] = await db.select({ summary: libraryJobsTable.summary })
     .from(libraryJobsTable)
     .where(and(
