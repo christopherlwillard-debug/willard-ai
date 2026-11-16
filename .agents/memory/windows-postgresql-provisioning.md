@@ -45,3 +45,13 @@ updated with a valid path.
 
 **How to apply:** Seed the temporary library path before launching the API in
 the audit runner; do not mutate it after startup through SQL.
+
+Windows recovery smokes must explicitly set `PSQL_BIN`, `PGDUMP_BIN`, and
+`PGRESTORE_BIN` to the binaries matching the disposable PostgreSQL server.
+
+**Why:** A backup produced by a newer PostgreSQL client can include settings
+such as `transaction_timeout` that an older pinned restore server does not
+recognize. Separate standard-user processes may also have a different `PATH`.
+
+**How to apply:** Pass the pinned tool paths into both backup/restore processes
+and installed-app test launchers; do not rely on the runner's ambient `PATH`.

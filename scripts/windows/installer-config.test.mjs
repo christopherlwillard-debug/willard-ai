@@ -1331,6 +1331,15 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(replacementRecoverySmoke, /source checkout, package manager/);
   assert.match(replacementRecoverySmoke, /runtime\\node\.exe/);
   assert.match(replacementRecoverySmoke, /desktop\\database-backup\.mjs/);
+  assert.match(replacementRecoverySmoke, /\$PgDump = Join-Path \$PostgresBin "pg_dump\.exe"/);
+  assert.match(replacementRecoverySmoke, /\$PgRestore = Join-Path \$PostgresBin "pg_restore\.exe"/);
+  assert.match(replacementRecoverySmoke, /\$env:PSQL_BIN = "__PSQL__"/);
+  assert.match(replacementRecoverySmoke, /\$env:PGDUMP_BIN = "__PGDUMP__"/);
+  assert.match(replacementRecoverySmoke, /\$env:PGRESTORE_BIN = "__PGRESTORE__"/);
+  assert.match(replacementRecoverySmoke, /\.Replace\("__PGDUMP__", \$PgDump/);
+  assert.match(replacementRecoverySmoke, /\.Replace\("__PGRESTORE__", \$PgRestore/);
+  assert.match(replacementRecoverySmoke, /PGDUMP_BIN = \$PgDump/);
+  assert.match(replacementRecoverySmoke, /PGRESTORE_BIN = \$PgRestore/);
   assert.match(replacementRecoverySmoke, /WILLARD_RECOVERY_EXPORT_PASSPHRASE/);
   assert.match(
     replacementRecoverySmoke,
@@ -1354,6 +1363,13 @@ test("Windows release runs replacement recovery from the packaged payload", () =
   assert.match(nasSettingsRecoverySmoke, /Invoke-ManualBackup \$session "PROTECTED"/);
   assert.match(nasSettingsRecoverySmoke, /--library-root/);
   assert.match(nasSettingsRecoverySmoke, /\$env:WILLARD_RESTORE_DATABASE_URL = \$restoreDatabaseUrl/);
+  assert.match(nasSettingsRecoverySmoke, /\$env:PSQL_BIN = '__PSQL__'/);
+  assert.match(nasSettingsRecoverySmoke, /\$env:PGDUMP_BIN = '__PGDUMP__'/);
+  assert.match(nasSettingsRecoverySmoke, /\$env:PGRESTORE_BIN = '__PGRESTORE__'/);
+  assert.match(nasSettingsRecoverySmoke, /\$pgDumpLiteral = \$PgDump\.Replace/);
+  assert.match(nasSettingsRecoverySmoke, /\$pgRestoreLiteral = \$PgRestore\.Replace/);
+  assert.match(nasSettingsRecoverySmoke, /Token = "__PGDUMP__"; Value = \$pgDumpLiteral/);
+  assert.match(nasSettingsRecoverySmoke, /Token = "__PGRESTORE__"; Value = \$pgRestoreLiteral/);
   assert.match(nasSettingsRecoverySmoke, /"--library-root" \$savedNasPath/);
   assert.doesNotMatch(nasSettingsRecoverySmoke, /INSERT INTO app_settings|UPDATE app_settings/);
   assert.match(nasSettingsRecoverySmoke, /This Settings-driven NAS smoke must run on Windows/);

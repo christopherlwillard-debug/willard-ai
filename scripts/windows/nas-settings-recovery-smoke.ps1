@@ -9,6 +9,8 @@ $InstallerSource = Join-Path $Root "build\installer\WillardMediaCenter-$Version-
 $ReleaseRoot = Join-Path $Root "build\windows"
 $PostgresBin = Join-Path $env:RUNNER_TEMP "postgresql\pgsql\bin"
 $Psql = Join-Path $PostgresBin "psql.exe"
+$PgDump = Join-Path $PostgresBin "pg_dump.exe"
+$PgRestore = Join-Path $PostgresBin "pg_restore.exe"
 $Createdb = Join-Path $PostgresBin "createdb.exe"
 $Dropdb = Join-Path $PostgresBin "dropdb.exe"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-nas-settings-$([guid]::NewGuid().ToString())"
@@ -95,6 +97,8 @@ try {
   Assert-True (Test-Path -LiteralPath (Join-Path $ReleaseRoot "runtime\node.exe")) "The packaged Node runtime is missing."
   Assert-True (Test-Path -LiteralPath (Join-Path $ReleaseRoot "api-runtime\setup-db.cjs")) "The packaged database bootstrap is missing."
   Assert-True (Test-Path -LiteralPath $Psql -PathType Leaf) "PostgreSQL 16 client tools are missing."
+  Assert-True (Test-Path -LiteralPath $PgDump -PathType Leaf) "The pinned PostgreSQL 16 pg_dump tool is missing."
+  Assert-True (Test-Path -LiteralPath $PgRestore -PathType Leaf) "The pinned PostgreSQL 16 pg_restore tool is missing."
 
   New-Item -ItemType Directory -Force -Path $TempRoot, $NasBackingRoot | Out-Null
   Copy-Item -LiteralPath $InstallerSource -Destination $Installer
@@ -130,6 +134,8 @@ try {
   $nodeLiteral = $node.Replace("'", "''")
   $backupScriptLiteral = $backupScript.Replace("'", "''")
   $psqlLiteral = $Psql.Replace("'", "''")
+  $pgDumpLiteral = $PgDump.Replace("'", "''")
+  $pgRestoreLiteral = $PgRestore.Replace("'", "''")
   $exportPassphraseLiteral = $ExportPassphrase.Replace("'", "''")
   $setupPasswordLiteral = $SetupPassword.Replace("'", "''")
   $usernameLiteral = $UserName.Replace("'", "''")
@@ -151,6 +157,9 @@ $restoreDatabaseUrl = '__RESTORE_DATABASE_URL__'
 $node = '__NODE__'
 $backupScript = '__BACKUP_SCRIPT__'
 $psql = '__PSQL__'
+$env:PSQL_BIN = '__PSQL__'
+$env:PGDUMP_BIN = '__PGDUMP__'
+$env:PGRESTORE_BIN = '__PGRESTORE__'
 $exportPassphrase = '__EXPORT_PASSPHRASE__'
 $setupPassword = '__SETUP_PASSWORD__'
 $expectedUser = '__USERNAME__'
@@ -445,6 +454,8 @@ finally {
     @{ Token = "__NODE__"; Value = $nodeLiteral },
     @{ Token = "__BACKUP_SCRIPT__"; Value = $backupScriptLiteral },
     @{ Token = "__PSQL__"; Value = $psqlLiteral },
+    @{ Token = "__PGDUMP__"; Value = $pgDumpLiteral },
+    @{ Token = "__PGRESTORE__"; Value = $pgRestoreLiteral },
     @{ Token = "__EXPORT_PASSPHRASE__"; Value = $exportPassphraseLiteral },
     @{ Token = "__SETUP_PASSWORD__"; Value = $setupPasswordLiteral },
     @{ Token = "__USERNAME__"; Value = $usernameLiteral }

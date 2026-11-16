@@ -7,6 +7,8 @@ $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $ReleaseRoot = Join-Path $Root "build\windows"
 $PostgresBin = Join-Path $env:RUNNER_TEMP "postgresql\pgsql\bin"
 $Psql = Join-Path $PostgresBin "psql.exe"
+$PgDump = Join-Path $PostgresBin "pg_dump.exe"
+$PgRestore = Join-Path $PostgresBin "pg_restore.exe"
 $Createdb = Join-Path $PostgresBin "createdb.exe"
 $Dropdb = Join-Path $PostgresBin "dropdb.exe"
 $TempRoot = Join-Path $env:RUNNER_TEMP "willard-replacement-recovery-$([guid]::NewGuid().ToString())"
@@ -105,6 +107,8 @@ try {
     Assert-True (Test-Path $entry) "The staged release is missing $entry."
   }
   Assert-True (Test-Path $Psql) "PostgreSQL 16 client tools are missing."
+  Assert-True (Test-Path $PgDump) "The pinned PostgreSQL 16 pg_dump tool is missing."
+  Assert-True (Test-Path $PgRestore) "The pinned PostgreSQL 16 pg_restore tool is missing."
 
   New-Item -ItemType Directory -Force -Path $TempRoot, $SourceRoot, $AttachedRoot | Out-Null
   $sourceMedia = Join-Path $SourceRoot "photos\replacement-family.jpg"
@@ -147,6 +151,9 @@ VALUES ($sourceRootSql, $sourceRelativeSql, 'replacement-family.jpg', 'photo', 4
   ) @{
     DATABASE_URL = $sourceUrl
     WILLARD_BACKUP_PASSPHRASE = $backupSecret
+    PSQL_BIN = $Psql
+    PGDUMP_BIN = $PgDump
+    PGRESTORE_BIN = $PgRestore
   }
   $backupDirectory = @(Get-ChildItem $BackupRoot -Directory -Filter "backup-*")[0].FullName
   Assert-True $backupDirectory "The packaged backup command did not create a generation."
@@ -201,6 +208,9 @@ param(
 )
 $env:PGPASSWORD = "postgres"
 $env:WILLARD_SKIP_UPDATE = "1"
+$env:PSQL_BIN = "__PSQL__"
+$env:PGDUMP_BIN = "__PGDUMP__"
+$env:PGRESTORE_BIN = "__PGRESTORE__"
 $node = "__NODE__"
 $backupScript = "__BACKUP_SCRIPT__"
 $launcher = "__LAUNCHER__"
@@ -254,6 +264,9 @@ exit $LASTEXITCODE
   $runnerContents = $runnerContents.Replace("__NODE__", $replacementNode.Replace("'", "''"))
   $runnerContents = $runnerContents.Replace("__BACKUP_SCRIPT__", $replacementBackup.Replace("'", "''"))
   $runnerContents = $runnerContents.Replace("__LAUNCHER__", $replacementLauncher.Replace("'", "''"))
+  $runnerContents = $runnerContents.Replace("__PSQL__", $Psql.Replace("'", "''"))
+  $runnerContents = $runnerContents.Replace("__PGDUMP__", $PgDump.Replace("'", "''"))
+  $runnerContents = $runnerContents.Replace("__PGRESTORE__", $PgRestore.Replace("'", "''"))
   $runnerContents = $runnerContents.Replace("__RECOVERY_EXPORT__", $recoveryExportLiteral)
   $runnerContents = $runnerContents.Replace("__TARGET_URL__", $targetUrlLiteral)
   $runnerContents = $runnerContents.Replace("__BACKUP_DIR__", $backupDirectoryLiteral)
