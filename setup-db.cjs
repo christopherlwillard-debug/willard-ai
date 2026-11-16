@@ -139,7 +139,7 @@ const OPTIONAL_SQL = [
 // Increment this when a new ordered schema step is added. The history table
 // makes the bootstrap contract inspectable without relying on a local marker
 // file, while every step remains idempotent for existing installations.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS willard_schema_versions (
@@ -281,6 +281,7 @@ const SETUP_SQL = [
   `CREATE TABLE IF NOT EXISTS conversion_jobs (
     id               serial PRIMARY KEY,
     status           text NOT NULL DEFAULT 'pending',
+    active_attempt_id text,
     approved_exts    jsonb NOT NULL,
     backup_dir       text,
     nas_path         text NOT NULL,
@@ -294,6 +295,10 @@ const SETUP_SQL = [
     created_at       timestamp NOT NULL DEFAULT now(),
     completed_at     timestamp
   )`,
+  `ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS active_attempt_id text`,
+  `UPDATE conversion_jobs
+   SET active_attempt_id = 'legacy-' || id::text
+   WHERE status = 'awaiting_action' AND active_attempt_id IS NULL`,
 
   // media_scan_jobs
   `CREATE TABLE IF NOT EXISTS media_scan_jobs (

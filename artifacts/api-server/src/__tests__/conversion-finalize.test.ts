@@ -201,6 +201,93 @@ test("recycle uses the application's recoverable trash instead of an unrollbacka
 });
 
 
+test("finalization refuses to move files after filesystem ownership is lost", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const staged = write(path.join(f.stagingDir, "photos", "portrait.jpg"), "converted bytes");
+    let ownsFiles = true;
+
+    await assert.rejects(
+      () => finalizeConversionFiles({
+        ...input(f, "replace", [
+          { filePath: original, stagedPath: staged, status: "success" },
+        ]),
+        onMoveIntent: () => { ownsFiles = false; },
+        assertOwnership: () => {
+          if (!ownsFiles) throw new Error("filesystem ownership was lost");
+        },
+      }),
+      (error: unknown) =>
+        error instanceof ConversionFinalizationError &&
+        !error.rollbackComplete &&
+        /ownership was lost/.test(error.message),
+    );
+
+    assert.equal(fs.readFileSync(original, "utf8"), "original bytes");
+    assert.equal(fs.readFileSync(staged, "utf8"), "converted bytes");
+    assert.equal(fs.existsSync(path.join(f.root, "photos", "portrait.jpg")), false);
+    assert.equal(fs.existsSync(path.join(f.stagingDir, ".originals", "photos", "portrait.png")), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a recovered conversion attempt fences an old worker that resumes later", async () => {
+  const f = fixture();
+  try {
+    const original = write(path.join(f.root, "photos", "portrait.png"), "original bytes");
+    const oldStaging = path.join(f.root, "WillardAI", "conversions", "attempt-old");
+    const newStaging = path.join(f.root, "WillardAI", "conversions", "attempt-new");
+    const oldStaged = write(path.join(oldStaging, "photos", "portrait.jpg"), "stale conversion");
+    const newStaged = write(path.join(newStaging, "photos", "portrait.jpg"), "current conversion");
+    let owner = "old";
+    let announceIntent!: () => void;
+    let resumeOld!: () => void;
+    const intentReady = new Promise<void>((resolve) => { announceIntent = resolve; });
+    const oldMayResume = new Promise<void>((resolve) => { resumeOld = resolve; });
+    let oldCommitCount = 0;
+    let newCommitCount = 0;
+
+    const oldWorker = finalizeConversionFiles({
+      ...input(f, "replace", [{ filePath: original, stagedPath: oldStaged, status: "success" }]),
+      stagingDir: oldStaging,
+      onMoveIntent: async () => {
+        announceIntent();
+        await oldMayResume;
+      },
+      assertOwnership: () => {
+        if (owner !== "old") throw new Error("old conversion attempt lost its lease");
+      },
+      onMoveComplete: () => { oldCommitCount++; },
+    });
+
+    await intentReady;
+    owner = "new";
+    const currentAttempt = await finalizeConversionFiles({
+      ...input(f, "replace", [{ filePath: original, stagedPath: newStaged, status: "success" }]),
+      stagingDir: newStaging,
+      assertOwnership: () => {
+        if (owner !== "new") throw new Error("new conversion attempt lost its lease");
+      },
+      onMoveComplete: () => { newCommitCount++; },
+    });
+    assert.equal(newCommitCount, 2);
+
+    resumeOld();
+    await assert.rejects(oldWorker, (error: unknown) =>
+      error instanceof ConversionFinalizationError && /old conversion attempt lost its lease/.test(error.message),
+    );
+    assert.equal(oldCommitCount, 0);
+    assert.equal(fs.readFileSync(path.join(f.root, "photos", "portrait.jpg"), "utf8"), "current conversion");
+    assert.equal(fs.readFileSync(path.join(newStaging, ".originals", "photos", "portrait.png"), "utf8"), "original bytes");
+    assert.equal(fs.readFileSync(oldStaged, "utf8"), "stale conversion");
+    assert.equal(currentAttempt.outcomes.length, 1);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("finalization persists each move intent before mutation and checkpoints its verified result", async () => {
   const f = fixture();
   try {

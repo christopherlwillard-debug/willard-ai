@@ -92,7 +92,7 @@ test("media tool timeout is enforced and missing binaries stay actionable", asyn
 test("conversion and thumbnail routes await FFmpeg instead of running it synchronously", () => {
   assert.doesNotMatch(optimizeSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(optimizeSource, /runMediaToolAsync\(\s*"ffmpeg"/);
-  assert.match(optimizeSource, /convertError = await convertVideo\(fullPath, stagedPath\)/);
+  assert.match(optimizeSource, /convertError = await convertVideo\(fullPath, stagedPath, lockSignal\)/);
   assert.doesNotMatch(thumbnailSource, /spawnSync\s*\(\s*"ffmpeg"/);
   assert.match(thumbnailSource, /await runMediaToolAsync\("ffmpeg"/);
   assert.match(thumbnailSource, /error = await generateVideoThumbnail/);

@@ -3,6 +3,7 @@ import { pgTable, serial, text, integer, timestamp, jsonb } from "drizzle-orm/pg
 export const conversionJobsTable = pgTable("conversion_jobs", {
   id:              serial("id").primaryKey(),
   status:          text("status").notNull().default("pending"),
+  activeAttemptId: text("active_attempt_id"),
   approvedExts:    jsonb("approved_exts").notNull(),
   backupDir:       text("backup_dir"),
   nasPath:         text("nas_path").notNull(),

@@ -13,6 +13,7 @@ async function ensureConversionJobsTable(): Promise<void> {
     CREATE TABLE IF NOT EXISTS conversion_jobs (
       id serial PRIMARY KEY,
       status text NOT NULL DEFAULT 'pending',
+      active_attempt_id text,
       approved_exts jsonb NOT NULL DEFAULT '[]'::jsonb,
       backup_dir text,
       nas_path text NOT NULL,
@@ -28,6 +29,7 @@ async function ensureConversionJobsTable(): Promise<void> {
       completed_at timestamp
     )
   `);
+  await pool.query("ALTER TABLE conversion_jobs ADD COLUMN IF NOT EXISTS active_attempt_id text");
 }
 
 function createFixture(): { root: string; original: string; backup: string; cleanup: () => void } {
@@ -48,6 +50,7 @@ function createFixture(): { root: string; original: string; backup: string; clea
 async function insertAwaitingJob(nasPath: string, move: FileMoveRecord): Promise<number> {
   const [job] = await db.insert(conversionJobsTable).values({
     status: "awaiting_action",
+    activeAttemptId: "finalization-recovery-attempt",
     approvedExts: [],
     nasPath,
     resultJson: {

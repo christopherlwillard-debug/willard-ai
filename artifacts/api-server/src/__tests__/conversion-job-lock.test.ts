@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import {
   acquireConversionJobLock,
+  acquireConversionFilesystemJobLock,
   CONVERSION_JOB_LOCK_NAMESPACE,
+  assertConversionJobLockOwned,
+  getConversionJobLockSignal,
   releaseConversionJobLock,
   type ConversionJobLockClient,
 } from "../lib/conversion-job-lock.ts";
@@ -14,20 +22,21 @@ function makeClient(
   const calls: Array<{ text: string; values?: any[] }> = [];
   let releaseCalls = 0;
   let releaseError: Error | boolean | undefined;
-  const client: ConversionJobLockClient = {
-    async query(text, values) {
-      calls.push({ text, values });
-      if (queryError) throw queryError;
-      const row = responses.shift();
-      return { rows: row ? [row] : [] };
-    },
-    release(error) {
-      releaseCalls++;
-      releaseError = error;
-    },
+  const emitter = new EventEmitter();
+  const client = emitter as unknown as ConversionJobLockClient;
+  client.query = async (text, values) => {
+    calls.push({ text, values });
+    if (queryError) throw queryError;
+    const row = responses.shift();
+    return { rows: row ? [row] : [] };
+  };
+  client.release = (error) => {
+    releaseCalls++;
+    releaseError = error;
   };
   return {
     client,
+    emit: emitter.emit.bind(emitter),
     calls,
     get releaseCalls() { return releaseCalls; },
     get releaseError() { return releaseError; },
@@ -65,6 +74,20 @@ test("a failed lock query discards the connection", async () => {
   assert.equal(fake.releaseError, failure);
 });
 
+test("a PostgreSQL lock connection error aborts and fences the worker", async () => {
+  const fake = makeClient([{ locked: true }]);
+  const lock = await acquireConversionJobLock(8, async () => fake.client);
+  assert.ok(lock);
+  const signal = getConversionJobLockSignal(lock);
+  assert.equal(signal.aborted, false);
+
+  fake.emit("error", new Error("socket lost"));
+  assert.equal(signal.aborted, true);
+  assert.throws(() => assertConversionJobLockOwned(lock), /connection failed: socket lost/);
+  await assert.rejects(releaseConversionJobLock(lock, 8), /connection failed: socket lost/);
+  assert.ok(fake.releaseError instanceof Error);
+});
+
 test("an unverified unlock discards the connection instead of pooling a held lock", async () => {
   const fake = makeClient([{ locked: true }, { unlocked: false }]);
   const lock = await acquireConversionJobLock(7, async () => fake.client);
@@ -83,4 +106,115 @@ test("invalid conversion job IDs are rejected before opening a connection", asyn
     /Invalid conversion job ID/,
   );
   assert.equal(connected, false);
+});
+
+test("a database lock takeover cannot claim NAS mutations while the former process is alive", async () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-conversion-fence-"));
+  try {
+    const formerDatabaseOwner = makeClient([{ locked: true }]);
+    const firstDatabaseLock = await acquireConversionJobLock(83, async () => formerDatabaseOwner.client);
+    const firstFilesystemLock = acquireConversionFilesystemJobLock(nasPath, 83);
+    assert.ok(firstDatabaseLock);
+    assert.ok(firstFilesystemLock);
+
+    formerDatabaseOwner.emit("error", new Error("network partition"));
+    assert.throws(() => assertConversionJobLockOwned(firstDatabaseLock), /connection failed/);
+    const replacementDatabaseOwner = makeClient([{ locked: true }, { unlocked: true }]);
+    const secondDatabaseLock = await acquireConversionJobLock(83, async () => replacementDatabaseOwner.client);
+    assert.ok(secondDatabaseLock);
+    assert.equal(acquireConversionFilesystemJobLock(nasPath, 83), null);
+
+    firstFilesystemLock.release();
+    await assert.rejects(releaseConversionJobLock(firstDatabaseLock!, 83), /connection failed/);
+    const secondFilesystemLock = acquireConversionFilesystemJobLock(nasPath, 83);
+    assert.ok(secondFilesystemLock);
+    secondFilesystemLock.release();
+    await releaseConversionJobLock(secondDatabaseLock!, 83);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("a crashed process releases its NAS mutation ownership for safe recovery", async () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-conversion-crash-fence-"));
+  const moduleUrl = new URL("../lib/conversion-job-lock.ts", import.meta.url).href;
+  const childSource = `
+    import { acquireConversionFilesystemJobLock } from ${JSON.stringify(moduleUrl)};
+    const lock = acquireConversionFilesystemJobLock(${JSON.stringify(nasPath)}, 84);
+    if (!lock) process.exit(2);
+    process.stdout.write("LOCKED\\\\n");
+    setInterval(() => {}, 1000);
+  `;
+  const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", childSource], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("child did not acquire the conversion filesystem lock")), 10_000);
+      child.stdout!.setEncoding("utf8");
+      child.stdout!.on("data", (chunk: string) => {
+        if (chunk.includes("LOCKED")) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`child exited before acquiring the lock (code ${code})`));
+      });
+    });
+
+    assert.equal(acquireConversionFilesystemJobLock(nasPath, 84), null);
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+
+    const recoveredLock = acquireConversionFilesystemJobLock(nasPath, 84);
+    assert.ok(recoveredLock);
+    recoveredLock.release();
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    }
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("ownership assertion fails closed if the NAS claim is replaced", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-conversion-owner-check-"));
+  try {
+    const lock = acquireConversionFilesystemJobLock(nasPath, 85);
+    assert.ok(lock);
+    fs.rmSync(lock.lockPath, { recursive: true, force: true });
+    fs.mkdirSync(lock.lockPath);
+    fs.writeFileSync(path.join(lock.lockPath, "owner.json"), JSON.stringify({
+      host: os.hostname(),
+      pid: process.pid,
+      token: "another-owner",
+    }));
+    assert.throws(lock.assertOwned, /ownership was lost/);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
+});
+
+test("a lock left by another host is never stolen based on an unverifiable PID", () => {
+  const nasPath = fs.mkdtempSync(path.join(os.tmpdir(), "willard-conversion-remote-owner-"));
+  try {
+    const lockPath = path.join(nasPath, "WillardAI", "conversions", ".locks", "job-86");
+    fs.mkdirSync(lockPath, { recursive: true });
+    fs.writeFileSync(path.join(lockPath, "owner.json"), JSON.stringify({
+      host: "another-host",
+      pid: 999_999_999,
+      token: "remote-owner",
+    }));
+    assert.equal(acquireConversionFilesystemJobLock(nasPath, 86), null);
+    assert.equal(fs.existsSync(lockPath), true);
+  } finally {
+    fs.rmSync(nasPath, { recursive: true, force: true });
+  }
 });
