@@ -55,3 +55,4 @@
 - [Windows PowerShell standard-user compatibility](windows-powershell-standard-user-compatibility.md) — packaged launchers need explicit .NET assemblies and safe special-folder fallbacks under disposable profiles
 - [Desktop loading readiness](desktop-loading-readiness.md) — the native launcher must own readiness and explicitly open the web app after closing its file-based loading window
 - [Main branch workflow](main-branch-workflow.md) — keep Willard AI work on `main` as the single place for changes; do not infer commit or push approval
+- [Post-install NAS mapping](post-install-nas-mapping.md) — NAS is mapped after installation and configured through the existing Settings page; preserve reconnect support without reinstalling

@@ -208,7 +208,48 @@ router.get("/media/files", async (req: Request, res: Response) => {
   }
 
   const files = await db
-    .select()
+    .select({
+      id: mediaFilesTable.id,
+      nasPath: mediaFilesTable.nasPath,
+      relativePath: mediaFilesTable.relativePath,
+      name: mediaFilesTable.name,
+      extension: mediaFilesTable.extension,
+      mimeType: mediaFilesTable.mimeType,
+      mediaType: mediaFilesTable.mediaType,
+      sizeBytes: mediaFilesTable.sizeBytes,
+      modifiedAt: mediaFilesTable.modifiedAt,
+      width: mediaFilesTable.width,
+      height: mediaFilesTable.height,
+      orientation: mediaFilesTable.orientation,
+      durationSeconds: mediaFilesTable.durationSeconds,
+      thumbnailPath: mediaFilesTable.thumbnailPath,
+      indexedAt: mediaFilesTable.indexedAt,
+      dateTaken: mediaFilesTable.dateTaken,
+      cameraMake: mediaFilesTable.cameraMake,
+      cameraModel: mediaFilesTable.cameraModel,
+      lens: mediaFilesTable.lens,
+      iso: mediaFilesTable.iso,
+      aperture: mediaFilesTable.aperture,
+      exposure: mediaFilesTable.exposure,
+      focalLength: mediaFilesTable.focalLength,
+      flash: mediaFilesTable.flash,
+      colorProfile: mediaFilesTable.colorProfile,
+      gpsLatitude: mediaFilesTable.gpsLatitude,
+      gpsLongitude: mediaFilesTable.gpsLongitude,
+      placeName: mediaFilesTable.placeName,
+      videoCodec: mediaFilesTable.videoCodec,
+      videoBitrate: mediaFilesTable.videoBitrate,
+      fps: mediaFilesTable.fps,
+      audioCodec: mediaFilesTable.audioCodec,
+      dateCreated: mediaFilesTable.dateCreated,
+      pageCount: mediaFilesTable.pageCount,
+      pdfAuthor: mediaFilesTable.pdfAuthor,
+      pdfTitle: mediaFilesTable.pdfTitle,
+      pdfSubject: mediaFilesTable.pdfSubject,
+      pdfKeywords: mediaFilesTable.pdfKeywords,
+      favorite: mediaFilesTable.favorite,
+      favoritedAt: mediaFilesTable.favoritedAt,
+    })
     .from(mediaFilesTable)
     .where(where)
     .orderBy(orderBy)

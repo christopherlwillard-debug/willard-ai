@@ -35,3 +35,18 @@ export async function forEachBounded<T>(
 
   if (failed) throw firstError;
 }
+
+/**
+ * Scale cached-file existence checks with the selected scan profile. The
+ * balanced profile stays conservative; High can use up to eight parallel NAS
+ * stats, matching the documented limit for typical SMB shares.
+ */
+export function skippedFileStatConcurrency(scanConcurrencyCeiling: number): number {
+  if (!Number.isSafeInteger(scanConcurrencyCeiling) || scanConcurrencyCeiling < 1) {
+    throw new RangeError("Scan concurrency ceiling must be a positive integer");
+  }
+  return Math.min(
+    scanConcurrencyCeiling,
+    Math.max(2, Math.min(8, Math.ceil(scanConcurrencyCeiling * 0.4))),
+  );
+}

@@ -10,11 +10,16 @@ export interface ActiveFileProgress {
  */
 export class ActiveFileProgressTracker {
   private readonly active = new Map<string, ActiveFileProgress>();
+  private readonly onChange: (current: ActiveFileProgress | null) => void;
+  private readonly now: () => number;
 
   constructor(
-    private readonly onChange: (current: ActiveFileProgress | null) => void,
-    private readonly now: () => number = Date.now,
-  ) {}
+    onChange: (current: ActiveFileProgress | null) => void,
+    now: () => number = Date.now,
+  ) {
+    this.onChange = onChange;
+    this.now = now;
+  }
 
   start(workerKey: string, filePath: string): void {
     this.active.set(workerKey, { path: filePath, startedAt: this.now() });

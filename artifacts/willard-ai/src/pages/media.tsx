@@ -1348,6 +1348,7 @@ export default function Media() {
 
   const foldersQuery = useQuery({
     queryKey: ["media-folders"],
+    staleTime: 30_000,
     queryFn: async () => {
       const r = await fetch(apiUrl("/media/folders"));
       if (!r.ok) throw new Error("Failed to load folders");
@@ -1356,6 +1357,7 @@ export default function Media() {
   });
   const tagsQuery = useQuery({
     queryKey: ["media-tags"],
+    staleTime: 30_000,
     queryFn: async () => {
       const r = await fetch(apiUrl("/media/tags"));
       if (!r.ok) throw new Error("Failed to load tags");
@@ -1365,6 +1367,7 @@ export default function Media() {
 
   const filesQuery = useQuery({
     queryKey: ["media-files", activeType, debouncedSearch, selectedFolder, selectedTags, page, sort],
+    staleTime: 3_000,
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(LIMIT), page: String(page), sort });
       if (activeType !== "all") params.set("mediaType", activeType);

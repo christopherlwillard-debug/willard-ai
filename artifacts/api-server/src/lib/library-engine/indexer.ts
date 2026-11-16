@@ -3,6 +3,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 import { isSystemDir, checkSystemFile, type ScannerSettings, DEFAULT_SCANNER_SETTINGS } from "../system-filter.ts";
+import { formatMediaToolExecutionError, runMediaToolAsync } from "../media-tools.ts";
 
 export { isSystemDir };
 
@@ -310,19 +311,24 @@ const EMPTY_VIDEO_META: VideoMeta = {
   error: null,
 };
 
-export function extractVideoMeta(fullPath: string): VideoMeta {
-  const result = spawnSync("ffprobe", [
-    "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", fullPath,
-  ], { encoding: "utf8", timeout: 15000 });
-
-  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-    return { ...EMPTY_VIDEO_META };
+export async function extractVideoMeta(fullPath: string): Promise<VideoMeta> {
+  let stdout: string;
+  try {
+    ({ stdout } = await runMediaToolAsync("ffprobe", [
+      "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", fullPath,
+    ], { timeoutMs: 15_000 }));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { ...EMPTY_VIDEO_META };
+    return {
+      ...EMPTY_VIDEO_META,
+      error: formatMediaToolExecutionError("ffprobe", error, 15_000),
+    };
   }
-  if (result.status !== 0 || !result.stdout) {
+  if (!stdout) {
     return { ...EMPTY_VIDEO_META, error: "Unreadable video (corrupt file or unsupported codec)" };
   }
   try {
-    const json = JSON.parse(result.stdout);
+    const json = JSON.parse(stdout);
     const vs = (json.streams ?? []).find((s: any) => s.codec_type === "video");
     const as_ = (json.streams ?? []).find((s: any) => s.codec_type === "audio");
     const duration = parseFloat(json.format?.duration ?? "0") || null;

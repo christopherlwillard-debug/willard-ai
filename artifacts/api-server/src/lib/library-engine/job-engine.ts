@@ -43,7 +43,7 @@ import {
 } from "../capacity-service.ts";
 
 import { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS } from "./with-timeout.ts";
-import { forEachBounded } from "./bounded-work.ts";
+import { forEachBounded, skippedFileStatConcurrency } from "./bounded-work.ts";
 import { ActiveFileProgressTracker } from "./file-progress.ts";
 export { withTimeout, FINGERPRINT_TIMEOUT_MS, META_TIMEOUT_MS };
 
@@ -743,7 +743,7 @@ async function resolveSkippedDirs(
 
     await forEachBounded(
       rows,
-      Math.max(1, Math.min(4, scanConcurrencyCeiling)),
+      skippedFileStatConcurrency(scanConcurrencyCeiling),
       async (row) => {
       try {
          const fullPath = resolveLibraryPath(nasPath, row.relativePath);
@@ -1672,8 +1672,6 @@ async function runScanJob(
       } catch {
         return { action: "SKIP", relativePath, name: f.name, skipReason: "Rejected unsafe library path" };
       }
-      state.currentPath = relativePath;
-
       const existing = existingByPath.get(relativePath);
       let quickFingerprint: string | null = null;
       let action: "NEW" | "MODIFIED" | "MOVED";
@@ -1843,7 +1841,7 @@ async function runScanJob(
              gpsLatitude, gpsLongitude, exifJson } = meta);
           metaError = meta.error;
         } else if (VIDEO_META_EXTS.has(f.ext)) {
-          const meta = extractVideoMeta(safeFullPath);
+          const meta = await extractVideoMeta(safeFullPath);
           ({ width, height, durationSeconds, videoCodec, videoBitrate, fps, audioCodec, dateCreated } = meta);
           metaError = meta.error;
         } else if (f.ext === "pdf") {
@@ -2704,9 +2702,9 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
           recordSkip(state, row.relativePath, "Rejected unsafe library path");
           continue;
         }
-        state.currentPath = row.relativePath;
-        state.currentFileStartedAt = Date.now();
-
+        const progressKey = "metadata-worker";
+        beginFileProgress(state, progressKey, row.relativePath);
+        try {
         if (!(await fs.promises.access(fullPath).then(() => true, () => false))) {
           // File gone — leave for the next scan's deletion detection, but bump
           // the version so this job terminates.
@@ -2729,7 +2727,7 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
             gpsLatitude: meta.gpsLatitude, gpsLongitude: meta.gpsLongitude, exifJson: meta.exifJson,
           });
         } else if (VIDEO_META_EXTS.has(row.extension)) {
-          const meta = extractVideoMeta(fullPath);
+          const meta = await extractVideoMeta(fullPath);
           if (meta.error) recordSkip(state, row.relativePath, meta.error);
           else Object.assign(updates, {
             width: meta.width, height: meta.height, durationSeconds: meta.durationSeconds,
@@ -2749,6 +2747,9 @@ async function runMetadataRefreshJob(state: ActiveJobState): Promise<void> {
         reprocessed++;
         state.filesProcessed++;
         tickSpeed(state);
+        } finally {
+          finishFileProgress(state, progressKey);
+        }
       }
 
       await db.update(libraryJobsTable).set({ processedFiles: state.filesProcessed })
@@ -3070,10 +3071,10 @@ async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly
         state.filesProcessed++;
         return;
       }
-      state.currentPath = file.relativePath;
-      state.currentFileStartedAt = Date.now();
-      tickSpeed(state);
+      const progressKey = `thumbnail-${file.id}`;
+      beginFileProgress(state, progressKey, file.relativePath);
       try {
+        tickSpeed(state);
         let result: Awaited<ReturnType<typeof generateThumbnail>> | null = null;
         let lastError: string | null = null;
         for (let attempt = 0; attempt <= THUMBNAIL_RETRY_LIMIT; attempt++) {
@@ -3121,6 +3122,7 @@ async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly
             }, `[thumbnail-job] Failed to generate thumbnail: ${lastError ?? "unknown error"}`);
           }
         }
+        state.filesProcessed++;
       } catch (err: any) {
         state.counters.thumbnailsFailed++;
         if (state.counters.thumbnailsFailed <= 20) {
@@ -3133,8 +3135,9 @@ async function runThumbnailJob(state: ActiveJobState, rebuild = false, clearOnly
             failureCount: state.counters.thumbnailsFailed,
           }, `[thumbnail-job] Exception generating thumbnail: ${err?.message ?? err}`);
         }
+      } finally {
+        finishFileProgress(state, progressKey);
       }
-      state.filesProcessed++;
     };
 
     // Work through the whole catalog in bounded pages. The thumbnail pointer is

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forEachBounded } from "../lib/library-engine/bounded-work.ts";
+import {
+  forEachBounded,
+  skippedFileStatConcurrency,
+} from "../lib/library-engine/bounded-work.ts";
 import { ActiveFileProgressTracker } from "../lib/library-engine/file-progress.ts";
 
 test("bounded work overlaps I/O but never exceeds its concurrency limit", async () => {
@@ -41,6 +44,12 @@ test("bounded work rejects after already-started operations settle", async () =>
 
   assert.equal(active, 0);
   assert.ok(peak <= 2);
+});
+
+test("NAS stat concurrency follows scan profile without exceeding its ceiling", () => {
+  assert.equal(skippedFileStatConcurrency(2), 2);
+  assert.equal(skippedFileStatConcurrency(10), 4);
+  assert.equal(skippedFileStatConcurrency(20), 8);
 });
 
 test("active file progress reports the oldest live item and clears finished items", () => {

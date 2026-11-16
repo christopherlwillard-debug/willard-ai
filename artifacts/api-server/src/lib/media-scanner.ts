@@ -1,6 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
 import { db } from "@workspace/db";
 import { mediaFilesTable, mediaScanJobsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
@@ -11,6 +10,7 @@ import { getActiveAppSettings } from "./active-library.ts";
 
 // ── Media type classification ─────────────────────────────────────────────────
 import { classifyMediaType } from "./media-classification.ts";
+import { extractVideoMeta as extractIndexedVideoMeta } from "./library-engine/indexer.ts";
 export { classifyMediaType } from "./media-classification.ts";
 export type { MediaType } from "./media-classification.ts";
 
@@ -177,53 +177,8 @@ interface VideoMeta {
   dateCreated: Date | null;
 }
 
-function extractVideoMeta(fullPath: string): VideoMeta {
-  const result = spawnSync("ffprobe", [
-    "-v", "quiet",
-    "-print_format", "json",
-    "-show_streams",
-    "-show_format",
-    fullPath,
-  ], { encoding: "utf8", timeout: 15000 });
-
-  if (result.status !== 0 || !result.stdout) {
-    return { width: null, height: null, durationSeconds: null, videoCodec: null, videoBitrate: null, fps: null, audioCodec: null, dateCreated: null };
-  }
-  try {
-    const json = JSON.parse(result.stdout);
-    const videoStream = (json.streams ?? []).find((s: any) => s.codec_type === "video");
-    const audioStream = (json.streams ?? []).find((s: any) => s.codec_type === "audio");
-    const duration = parseFloat(json.format?.duration ?? "0") || null;
-
-    // FPS from avg_frame_rate e.g. "30000/1001"
-    let fps: number | null = null;
-    const fpsRaw: string = videoStream?.avg_frame_rate ?? "";
-    if (fpsRaw && fpsRaw !== "0/0") {
-      const [num, den] = fpsRaw.split("/").map(Number);
-      if (den && den !== 0) fps = Math.round((num / den) * 100) / 100;
-    }
-
-    // Date created from format tags
-    const creationRaw = json.format?.tags?.creation_time;
-    let dateCreated: Date | null = null;
-    if (creationRaw) {
-      const d = new Date(creationRaw);
-      if (!isNaN(d.getTime())) dateCreated = d;
-    }
-
-    return {
-      width:           videoStream?.width  ?? null,
-      height:          videoStream?.height ?? null,
-      durationSeconds: duration,
-      videoCodec:      videoStream?.codec_name ?? null,
-      videoBitrate:    json.format?.bit_rate ? Math.round(Number(json.format.bit_rate) / 1000) : null,
-      fps,
-      audioCodec:      audioStream?.codec_name ?? null,
-      dateCreated,
-    };
-  } catch {
-    return { width: null, height: null, durationSeconds: null, videoCodec: null, videoBitrate: null, fps: null, audioCodec: null, dateCreated: null };
-  }
+async function extractVideoMeta(fullPath: string): Promise<VideoMeta> {
+  return extractIndexedVideoMeta(fullPath);
 }
 
 // ── PDF metadata ───────────────────────────────────────────────────────────────
@@ -452,7 +407,7 @@ export async function runMediaScan(nasPath: string): Promise<number> {
               gpsLongitude = meta.gpsLongitude;
               exifJson     = meta.exifJson;
             } else if (VIDEO_META_EXTS.has(f.ext)) {
-              const meta = extractVideoMeta(safePath);
+              const meta = await extractVideoMeta(safePath);
               width           = meta.width;
               height          = meta.height;
               durationSeconds = meta.durationSeconds;

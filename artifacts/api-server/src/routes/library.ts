@@ -910,7 +910,7 @@ router.post("/library/scan/benchmark", async (req: Request, res: Response) => {
         const tMeta = Date.now();
         try {
           if (PHOTO_EXTS.has(f.ext)) await extractPhotoMeta(f.fullPath, f.ext);
-          else extractVideoMeta(f.fullPath);
+          else await extractVideoMeta(f.fullPath);
           metadataExtractionTimeMs += Date.now() - tMeta;
           metadataExtracted++;
         } catch { /* unreadable — skip */ }
