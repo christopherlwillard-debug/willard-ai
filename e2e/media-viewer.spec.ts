@@ -18,15 +18,15 @@ const png1x1 = Buffer.from(
   "base64",
 );
 
-function mediaFile(id: number, name: string, favorite = false) {
+function mediaFile(id: number, name: string, favorite = false, mediaType: "photo" | "video" = "photo") {
   return {
     id,
     nasPath: "/test-media",
     relativePath: name,
     name,
-    extension: "jpg",
-    mimeType: "image/jpeg",
-    mediaType: "photo",
+    extension: mediaType === "video" ? "mp4" : "jpg",
+    mimeType: mediaType === "video" ? "video/mp4" : "image/jpeg",
+    mediaType,
     sizeBytes: 1024,
     modifiedAt: "2026-01-01T00:00:00.000Z",
     width: 1,
@@ -79,7 +79,11 @@ async function dismissDevelopmentBanner(page: Page): Promise<void> {
 }
 
 async function mockLibrary(page: Page): Promise<{ mediaTypeRequests: string[] }> {
-  const files = [mediaFile(901, "sunset.jpg"), mediaFile(902, "beach.jpg")];
+  const files = [
+    mediaFile(901, "sunset.jpg"),
+    mediaFile(902, "beach.jpg"),
+    mediaFile(903, "trail.mp4", false, "video"),
+  ];
   const mediaTypeRequests: string[] = [];
 
   await page.route("**/api/auth/status", (route) =>
@@ -104,8 +108,12 @@ async function mockLibrary(page: Page): Promise<{ mediaTypeRequests: string[] }>
     route.fulfill({ json: { collections: [] } }),
   );
   await page.route("**/api/media/files?*", (route) => {
-    mediaTypeRequests.push(new URL(route.request().url()).searchParams.get("mediaType") ?? "all");
-    return route.fulfill({ json: { files, total: files.length, page: 1, limit: 60 } });
+    const mediaType = new URL(route.request().url()).searchParams.get("mediaType") ?? "all";
+    mediaTypeRequests.push(mediaType);
+    const filteredFiles = mediaType === "all"
+      ? files
+      : files.filter((file) => file.mediaType === mediaType);
+    return route.fulfill({ json: { files: filteredFiles, total: filteredFiles.length, page: 1, limit: 60 } });
   });
   await page.route("**/api/library/jobs/active", (route) =>
     route.fulfill({ json: null }),
@@ -147,20 +155,53 @@ async function mockLibrary(page: Page): Promise<{ mediaTypeRequests: string[] }>
 }
 
 test.describe("Media viewer", () => {
-  test("sidebar photo and video links select distinct media filters", async ({ page }) => {
+  test("photo and video navigation keeps URL, results, tabs, and sidebar in sync", async ({ page }) => {
     const { mediaTypeRequests } = await mockLibrary(page);
-    await page.goto("/media");
+    const photoLink = page.getByTestId("link-nav-photos");
+    const videoLink = page.getByTestId("link-nav-videos");
+    const photoTab = page.getByRole("button", { name: "Photos", exact: true });
+    const videoTab = page.getByRole("button", { name: "Videos", exact: true });
+
+    async function expectPhotosSelected() {
+      await expect(page).toHaveURL(/\/media\?type=photo$/);
+      await expect(photoTab).toHaveAttribute("aria-pressed", "true");
+      await expect(videoTab).toHaveAttribute("aria-pressed", "false");
+      await expect(photoLink).toHaveAttribute("aria-current", "page");
+      await expect(videoLink).not.toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("button", { name: "Open sunset.jpg" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open beach.jpg" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open trail.mp4" })).not.toBeVisible();
+      await expect.poll(() => mediaTypeRequests.includes("photo")).toBe(true);
+    }
+
+    async function expectVideosSelected() {
+      await expect(page).toHaveURL(/\/media\?type=video$/);
+      await expect(videoTab).toHaveAttribute("aria-pressed", "true");
+      await expect(photoTab).toHaveAttribute("aria-pressed", "false");
+      await expect(videoLink).toHaveAttribute("aria-current", "page");
+      await expect(photoLink).not.toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("button", { name: "Open trail.mp4" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open sunset.jpg" })).not.toBeVisible();
+      await expect(page.getByRole("button", { name: "Open beach.jpg" })).not.toBeVisible();
+      await expect.poll(() => mediaTypeRequests.includes("video")).toBe(true);
+    }
+
+    await page.goto("/media?type=photo");
     await dismissDevelopmentBanner(page);
+    await expectPhotosSelected();
 
-    await page.getByTestId("link-nav-photos").click();
-    await expect(page).toHaveURL(/\/media\?type=photo$/);
-    await expect(page.getByRole("button", { name: "Photos", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect.poll(() => mediaTypeRequests.at(-1)).toBe("photo");
+    await videoLink.click();
+    await expectVideosSelected();
 
-    await page.getByTestId("link-nav-videos").click();
-    await expect(page).toHaveURL(/\/media\?type=video$/);
-    await expect(page.getByRole("button", { name: "Videos", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect.poll(() => mediaTypeRequests.at(-1)).toBe("video");
+    await page.goBack();
+    await expectPhotosSelected();
+    await page.goForward();
+    await expectVideosSelected();
+
+    await page.goto("/media?type=photo");
+    await expectPhotosSelected();
+    await page.goto("/media?type=video");
+    await expectVideosSelected();
   });
 
   test("supports navigation, info, favorites, rename validation, filmstrip, and safe delete cancel", async ({ page }) => {
